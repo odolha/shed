@@ -32,6 +32,8 @@ pub struct AppState {
     windows: HashMap<BenchId, WindowHandle<BenchWindow>>,
     /// The Shed window, once open.
     shed_window: Option<WindowHandle<ShedWindow>>,
+    /// The keeper's last complaint, shown in the Shed window until dismissed.
+    pub notice: Option<String>,
     opening_shed: bool,
     /// Benches asked for with `Attach`, until their window is open.
     pending: HashSet<BenchId>,
@@ -71,6 +73,7 @@ impl AppState {
             panes: HashMap::new(),
             windows: HashMap::new(),
             shed_window: None,
+            notice: None,
             opening_shed: false,
             pending: HashSet::new(),
             opening: HashSet::new(),
@@ -128,6 +131,8 @@ impl AppState {
             }
             Frame::Keeper(KeeperMsg::Error(e)) => {
                 error!("keeper: {e}");
+                self.notice = Some(e.clone());
+                cx.notify();
                 if e.starts_with("protocol mismatch") {
                     eprintln!("shed: {e}. Run `shed stop` to restart the keeper.");
                     cx.quit();

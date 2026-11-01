@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -88,6 +88,16 @@ pub enum ClientMsg {
     /// The desktop prefers dark or light, for `theme = "auto"`: the keeper
     /// answers apps' colour queries from the theme in effect.
     SetAppearance { dark: bool },
+    /// Changes a closed bench's saved file.
+    EditSaved { name: String, edit: SavedEdit },
+}
+
+/// What can change in a closed bench without opening it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SavedEdit {
+    Rename(String),
+    Color(BenchColor),
+    Badge(Option<String>),
 }
 
 /// Which aliases to set.

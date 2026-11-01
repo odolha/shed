@@ -225,3 +225,36 @@ fn closing_shed_closes_every_bench_and_auto_restore_reopens_them() {
     let tree = tree_until(&mut c, "both back", |t| t.bench(front).is_some() && t.bench(back).is_some());
     assert_eq!(tree.benches.len(), 2);
 }
+
+#[test]
+fn closed_benches_change_in_place_and_launchers_still_find_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let bench = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("docs".into()), cwd: None });
+    tree_until(&mut c, "docs", |t| t.bench(bench).is_some());
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed", |t| t.bench(bench).is_none());
+
+    let done = |c: &mut Client, what: &str| {
+        c.until(what, |f, _| match f {
+            Frame::Keeper(KeeperMsg::Done(text)) => Some(text.clone()),
+            Frame::Keeper(KeeperMsg::Error(e)) => panic!("{what}: {e}"),
+            _ => None,
+        })
+    };
+    c.msg(ClientMsg::EditSaved { name: "docs".into(), edit: shed_proto::SavedEdit::Color(shed_model::BenchColor::Teal) });
+    done(&mut c, "recoloured");
+    c.msg(ClientMsg::EditSaved { name: "docs".into(), edit: shed_proto::SavedEdit::Rename("notes".into()) });
+    assert_eq!(done(&mut c, "renamed"), "renamed docs to notes");
+    let saved = std::fs::read_to_string(dir.path().join("benches/notes.toml")).unwrap();
+    assert!(saved.contains("name = \"notes\"") && saved.contains("color = \"teal\"") && saved.contains("launcher = \"docs\""), "{saved}");
+    assert!(!dir.path().join("benches/docs.toml").exists());
+
+    // A pinned launcher still says `shed load docs`, its launcher key.
+    let shown = show_and_attach(&mut c, ShowTarget::Load { name: "docs".into() });
+    assert_eq!(shown, bench);
+    let tree = tree_until(&mut c, "loaded", |t| t.bench(bench).is_some());
+    let b = tree.bench(bench).unwrap();
+    assert_eq!((b.name.as_str(), b.color), ("notes", shed_model::BenchColor::Teal));
+}

@@ -7,7 +7,7 @@ use gpui::{
     prelude::*, px, svg,
 };
 use shed_model::config::{AliasLevel, resolve_aliases};
-use shed_model::{Aliases, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab};
+use shed_model::{Aliases, Bench, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId};
 use shed_proto::{AliasTarget, ClientMsg};
 use shed_save::{expand_home, home_relative};
 
@@ -65,8 +65,17 @@ fn parse_alias(text: &str) -> Option<Option<(String, String)>> {
     ok.then(|| Some((name.to_string(), value.to_string())))
 }
 
+fn shown_tab(bench: &Bench, pinned: Option<TabId>) -> Option<&Tab> {
+    match pinned {
+        Some(id) => bench.tabs.iter().find(|t| t.id == id),
+        None => bench.active_tab(),
+    }
+}
+
 pub struct SetupPanel {
     bench: BenchId,
+    /// The tab shown; `None` follows the bench's active tab.
+    pinned: Option<TabId>,
     state: Entity<AppState>,
     editing: Option<(Field, Entity<LineEditor>, [Subscription; 2])>,
     /// Where a new alias goes.
@@ -78,13 +87,13 @@ pub struct SetupPanel {
 impl EventEmitter<PanelEvent> for SetupPanel {}
 
 impl SetupPanel {
-    pub fn new(bench: BenchId, state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+    pub fn new(bench: BenchId, pinned: Option<TabId>, state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
-        Self { bench, state, editing: None, new_alias_level: AliasLevel::Tab, show_shell: false }
+        Self { bench, pinned, state, editing: None, new_alias_level: AliasLevel::Tab, show_shell: false }
     }
 
     fn tab<'a>(&self, cx: &'a Context<Self>) -> Option<&'a Tab> {
-        self.state.read(cx).tree.bench(self.bench).and_then(|b| b.active_tab())
+        shown_tab(self.state.read(cx).tree.bench(self.bench)?, self.pinned)
     }
 
     /// The tab's panes in layout order.
@@ -109,7 +118,7 @@ impl SetupPanel {
     fn aliases_at(&self, level: AliasLevel, cx: &Context<Self>) -> Option<(AliasTarget, Aliases)> {
         let state = self.state.read(cx);
         let bench = state.tree.bench(self.bench)?;
-        let tab = bench.active_tab()?;
+        let tab = shown_tab(bench, self.pinned)?;
         Some(match level {
             AliasLevel::Global => (AliasTarget::Global, state.tree.aliases.clone()),
             AliasLevel::Bench => (AliasTarget::Bench(bench.id), bench.aliases.clone()),
@@ -323,7 +332,7 @@ impl SetupPanel {
     fn render_aliases(&self, ui: &UiColors, accent: Rgb, cx: &mut Context<Self>) -> AnyElement {
         let state = self.state.read(cx);
         let Some(bench) = state.tree.bench(self.bench) else { return div().into_any_element() };
-        let Some(tab) = bench.active_tab() else { return div().into_any_element() };
+        let Some(tab) = shown_tab(bench, self.pinned) else { return div().into_any_element() };
         let shell = tab.active().map(|p| p.shell_aliases.clone()).unwrap_or_default();
         let rows = resolve_aliases(&shell, &state.tree.aliases, &bench.aliases, &tab.aliases);
         let mono = self.mono(cx);

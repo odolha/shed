@@ -19,7 +19,7 @@ use shed_model::config::{Config, FileWatch};
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
 use shed_proto::{
     AliasTarget, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
-    PROTOCOL_VERSION, PegboardInfo, ShowTarget, StoredBench,
+    PROTOCOL_VERSION, PegboardInfo, SavedEdit, ShowTarget, StoredBench,
 };
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -723,10 +723,16 @@ impl Keeper {
                     st.send(client, KeeperMsg::Error(problem));
                 } else if let Some(b) = st.tree.bench_mut(bench) {
                     let old = std::mem::replace(&mut b.name, name.clone());
-                    if let Some(store) = &self.cfg.store
-                        && let Err(e) = store.rename(&old, &name)
-                    {
-                        warn!("cannot rename the saved bench: {e}");
+                    if let Some(store) = &self.cfg.store {
+                        if let Err(e) = store.rename(&old, &name) {
+                            warn!("cannot rename the saved bench: {e}");
+                        }
+                        // At once, so the file never says the old name.
+                        for (saved, scrollback) in self.snapshot(&st, &[bench], false) {
+                            if let Err(e) = store.save(&saved, &scrollback) {
+                                warn!("cannot save bench {:?}: {e}", saved.name);
+                            }
+                        }
                     }
                     st.broadcast_tree();
                 }
@@ -785,6 +791,13 @@ impl Keeper {
                 if st.dark != dark {
                     st.dark = dark;
                     apply_theme(&mut st);
+                }
+            }
+            ClientMsg::EditSaved { name, edit } => {
+                let st = self.lock();
+                match self.edit_saved(&st, &name, edit) {
+                    Ok(done) => st.send(client, KeeperMsg::Done(done)),
+                    Err(e) => st.send(client, KeeperMsg::Error(e)),
                 }
             }
             ClientMsg::QuitShed => {
@@ -903,6 +916,7 @@ impl Keeper {
                 open
             }
             ShowTarget::Load { name } => {
+                let name = self.bench_name(&st, &name);
                 let running = st.tree.benches.iter().find(|b| b.name == name).map(|b| b.id);
                 match running.map(Ok).unwrap_or_else(|| self.load_bench(&mut st, &name)) {
                     Ok(id) => vec![id],
@@ -959,6 +973,54 @@ impl Keeper {
         }
         let base = shed_model::slug(name);
         std::iter::once(base.clone()).chain((2..).map(|i| format!("{base}-{i}"))).find(|l| !taken.contains(l)).unwrap()
+    }
+
+    /// The bench `key` means: a name, or else a launcher key, which pinned
+    /// launchers use because it stays the same when the bench is renamed.
+    fn bench_name(&self, st: &State, key: &str) -> String {
+        if st.tree.benches.iter().any(|b| b.name == key) || self.cfg.store.as_ref().is_some_and(|s| s.exists(key)) {
+            return key.to_string();
+        }
+        if let Some(b) = st.tree.benches.iter().find(|b| b.launcher == key) {
+            return b.name.clone();
+        }
+        let stored = self.cfg.store.as_ref().map(Store::list).unwrap_or_default();
+        stored.into_iter().find(|i| i.launcher == key).map_or_else(|| key.to_string(), |i| i.name)
+    }
+
+    /// Renames, recolours or rebadges a closed bench in its saved file.
+    fn edit_saved(&self, st: &State, name: &str, edit: SavedEdit) -> Result<String, String> {
+        let store = self.cfg.store.as_ref().ok_or("saving is turned off")?;
+        if st.tree.benches.iter().any(|b| b.name == name) {
+            return Err(format!("{name:?} is running; change it in its window"));
+        }
+        let mut saved = store.load(name).map_err(|e| format!("cannot read {name:?}: {e}"))?;
+        let done = match edit {
+            SavedEdit::Rename(new) => {
+                let new = new.trim().to_string();
+                if new == name {
+                    return Ok(format!("{name} kept its name"));
+                }
+                if let Some(problem) = self.name_problem(st, &new, Some(saved.id)) {
+                    return Err(problem);
+                }
+                store.rename(name, &new).map_err(|e| format!("cannot rename {name:?}: {e}"))?;
+                saved.name = new.clone();
+                format!("renamed {name} to {new}")
+            }
+            SavedEdit::Color(color) => {
+                saved.color = color.to_text();
+                format!("recoloured {name}")
+            }
+            SavedEdit::Badge(badge) => {
+                saved.badge = badge;
+                format!("rebadged {name}")
+            }
+        };
+        // Its scrollback stays as it is.
+        store.save(&saved, &[]).map_err(|e| format!("cannot save {:?}: {e}", saved.name))?;
+        self.stored_cache.lock().unwrap().remove(name);
+        Ok(done)
     }
 
     /// Why `name` cannot name a bench (other than `except`), if it can't.

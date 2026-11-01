@@ -13,6 +13,8 @@ pub enum EditorEvent {
 
 pub struct LineEditor {
     text: String,
+    /// All the text is selected: typing replaces it.
+    all_selected: bool,
     /// Cursor position in characters.
     cursor: usize,
     focus: FocusHandle,
@@ -29,7 +31,12 @@ impl Focusable for LineEditor {
 impl LineEditor {
     pub fn new(text: String, cx: &mut Context<Self>) -> Self {
         let cursor = text.chars().count();
-        Self { text, cursor, focus: cx.focus_handle() }
+        Self { text, all_selected: false, cursor, focus: cx.focus_handle() }
+    }
+
+    /// With the text selected, as for renaming: typing replaces it.
+    pub fn selected(text: String, cx: &mut Context<Self>) -> Self {
+        Self { all_selected: !text.is_empty(), ..Self::new(text, cx) }
     }
 
     pub fn text(&self) -> &str {
@@ -39,7 +46,16 @@ impl LineEditor {
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.text.clear();
         self.cursor = 0;
+        self.all_selected = false;
         cx.notify();
+    }
+
+    /// Typing or deleting over a selection takes it all away first.
+    fn replace_selection(&mut self) {
+        if std::mem::take(&mut self.all_selected) {
+            self.text.clear();
+            self.cursor = 0;
+        }
     }
 
     fn byte(&self, chars: usize) -> usize {
@@ -52,6 +68,8 @@ impl LineEditor {
         match ks.key.as_str() {
             "enter" => cx.emit(EditorEvent::Submit(self.text.trim().to_string())),
             "escape" => cx.emit(EditorEvent::Cancel),
+            "a" if ks.modifiers.control => self.all_selected = !self.text.is_empty(),
+            "backspace" | "delete" if self.all_selected => self.replace_selection(),
             "backspace" if self.cursor > 0 => {
                 let (a, b) = (self.byte(self.cursor - 1), self.byte(self.cursor));
                 self.text.replace_range(a..b, "");
@@ -61,6 +79,8 @@ impl LineEditor {
                 let (a, b) = (self.byte(self.cursor), self.byte(self.cursor + 1));
                 self.text.replace_range(a..b, "");
             }
+            "left" | "home" if std::mem::take(&mut self.all_selected) => self.cursor = 0,
+            "right" | "end" if std::mem::take(&mut self.all_selected) => self.cursor = len,
             "left" => self.cursor = self.cursor.saturating_sub(1),
             "right" => self.cursor = (self.cursor + 1).min(len),
             "home" => self.cursor = 0,
@@ -68,12 +88,14 @@ impl LineEditor {
             "v" if ks.modifiers.control => {
                 let Some(pasted) = cx.read_from_clipboard().and_then(|c| c.text()) else { return };
                 let pasted = pasted.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+                self.replace_selection();
                 let at = self.byte(self.cursor);
                 self.text.insert_str(at, &pasted);
                 self.cursor += pasted.chars().count();
             }
             _ => match ks.key_char.as_deref() {
                 Some(text) if !ks.modifiers.control && !ks.modifiers.platform && !text.chars().any(char::is_control) => {
+                    self.replace_selection();
                     let at = self.byte(self.cursor);
                     self.text.insert_str(at, text);
                     self.cursor += text.chars().count();
@@ -91,6 +113,8 @@ impl Render for LineEditor {
         let ui = crate::theme::current_ui(cx);
         let at = self.byte(self.cursor);
         let (before, after) = self.text.split_at(at);
+        let selection = self.all_selected.then(|| div().rounded_sm().bg(crate::theme::hsla_alpha(ui.accent_fallback, 0.3)).child(self.text.clone()));
+        let (before, after) = if self.all_selected { (String::new(), String::new()) } else { (before.to_string(), after.to_string()) };
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
@@ -103,8 +127,9 @@ impl Render for LineEditor {
             .border_color(hsla(ui.accent_fallback))
             .rounded_sm()
             .text_color(hsla(ui.text))
-            .child(before.to_string())
+            .children(selection)
+            .child(before)
             .child(div().w(px(1.5)).h(px(14.0)).bg(hsla(ui.text)))
-            .child(after.to_string())
+            .child(after)
     }
 }

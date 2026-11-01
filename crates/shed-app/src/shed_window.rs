@@ -113,6 +113,38 @@ impl Render for ShedWindow {
                 .bg(hsla(ui.tab_hover))
                 .child(text)
         });
+        // What the keeper last refused, until dismissed.
+        let notice = state.notice.clone().map(|text| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .mx_4()
+                .mt_2()
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .text_size(px(12.0))
+                .text_color(hsla(ui.text))
+                .bg(hsla_alpha(shed_model::Rgb::hex(0xF0566A), 0.18))
+                .child(div().flex_1().child(text))
+                .child(
+                    div()
+                        .id("dismiss-notice")
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hsla(ui.tab_hover)))
+                        .child("×")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state.update(cx, |state, cx| {
+                                state.notice = None;
+                                cx.notify();
+                            });
+                        })),
+                )
+        });
         div()
             .key_context("ShedWindow")
             .size_full()
@@ -139,6 +171,7 @@ impl Render for ShedWindow {
                     .child(switch),
             )
             .children(banner)
+            .children(notice)
             .child(div().flex_1().min_h_0().child(self.board.clone()))
     }
 }

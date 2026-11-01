@@ -11,10 +11,14 @@ Phases 1–6 are in place: the first pane, the keeper, bench windows with tabs a
 the logbook, saving and loading benches, and Shed's own window with the rest of phase 6.
 
 - **Shed** (`shed`, the Shed icon) is one window: the pegboard. It shows every bench,
-  open, hidden or closed, with its tabs and a live preview of each. From it you make
-  benches, open, hide, close and delete them, go to a tab, and drag tabs between
-  benches. Type to filter by bench, tab, tag, folder or tool; arrows and Enter (or a
-  click) go there. Nothing starts by itself: Shed opens with its benches closed, and
+  open, hidden or closed, with its tabs and a live preview of each, and manages them
+  all. Benches: make, open, hide, close and delete them; double-click a name to rename
+  it, click its colour dot to recolour it, and the ⋯ button (or a right-click) has the
+  rest, badge included; closed benches change in their saved files. Tabs: click to
+  go there, double-click a title to rename it, × to close it, "New tab" for another,
+  drag one onto another tab or bench to move it there; a right-click adds tags, makes
+  a tab private, or opens its Setup (startup, teardown, aliases). Type to filter by
+  bench, tab, tag, folder or tool; arrows and Enter go to the selected tab. Nothing starts by itself: Shed opens with its benches closed, and
   opening one brings back what was saved. With `auto_restore = true`, Shed reopens
   what was open or hidden when it last closed.
 - **Closing Shed closes everything**, after asking: every bench is saved, its programs

@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, MouseButton,
-    MouseDownEvent, MouseMoveEvent, Pixels, Point, PromptLevel, SharedString, Subscription, Window,
-    anchored, canvas, deferred, div, prelude::*, px, relative, svg,
+    MouseDownEvent, MouseMoveEvent, Pixels, PromptLevel, SharedString, Subscription, Window, canvas,
+    div, prelude::*, px, relative, svg,
 };
 use shed_model::{
     Bench, BenchColor, BenchId, Direction, PaneId, PaneNode, Rgb, SplitDir, Tab, TabId, Tag,
@@ -20,6 +20,7 @@ use shed_proto::ClientMsg;
 use crate::actions::*;
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
+use crate::menu::{self, Menu, MenuEntry, MenuHost, danger, swatch};
 use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
@@ -35,20 +36,18 @@ enum EditTarget {
     Badge,
 }
 
-type MenuAction = Rc<dyn Fn(&mut BenchWindow, &mut Window, &mut Context<BenchWindow>)>;
-
-enum MenuEntry {
-    Item { label: SharedString, swatch: Option<Rgb>, danger: bool, action: MenuAction },
-    Separator,
+/// `tags` with the one `text` describes added: "prod", or "prod red".
+pub fn with_tag(tags: &[Tag], text: &str) -> Option<Vec<Tag>> {
+    let mut words = text.split_whitespace();
+    let label = words.next()?;
+    let color = words.next().and_then(tag_color).unwrap_or_else(|| default_tag_color(label));
+    let mut tags: Vec<Tag> = tags.iter().filter(|t| t.label != label).cloned().collect();
+    tags.push(Tag { label: label.to_string(), color, tint_tab: false });
+    Some(tags)
 }
 
-fn item(label: impl Into<SharedString>, action: impl Fn(&mut BenchWindow, &mut Window, &mut Context<BenchWindow>) + 'static) -> MenuEntry {
-    MenuEntry::Item { label: label.into(), swatch: None, danger: false, action: Rc::new(action) }
-}
-
-struct Menu {
-    position: Point<Pixels>,
-    entries: Vec<MenuEntry>,
+fn item(label: impl Into<SharedString>, action: impl Fn(&mut BenchWindow, &mut Window, &mut Context<BenchWindow>) + 'static) -> MenuEntry<BenchWindow> {
+    menu::item(label, action)
 }
 
 /// A split border being dragged.
@@ -91,7 +90,7 @@ pub struct BenchWindow {
     focused: Option<PaneId>,
     title: String,
     editing: Option<(EditTarget, Entity<LineEditor>, Subscription)>,
-    menu: Option<Menu>,
+    menu: Option<Menu<Self>>,
     /// Where each split container was laid out last frame, by path in the tree.
     split_bounds: Rc<RefCell<HashMap<Vec<bool>, Bounds<Pixels>>>>,
     drag: Option<SplitDrag>,
@@ -123,7 +122,7 @@ impl BenchWindow {
 
     fn toggle_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.setup.take().is_none() {
-            let panel = cx.new(|cx| SetupPanel::new(self.bench, self.state.clone(), cx));
+            let panel = cx.new(|cx| SetupPanel::new(self.bench, None, self.state.clone(), cx));
             let sub = cx.subscribe_in(&panel, window, |this, _, event: &PanelEvent, window, cx| match event {
                 PanelEvent::Close => {
                     this.setup = None;
@@ -256,7 +255,7 @@ impl BenchWindow {
             EditTarget::Badge => self.bench(cx).map(|b| b.badge.clone().unwrap_or_default()),
         };
         let Some(current) = current else { return };
-        let editor = cx.new(|cx| LineEditor::new(current, cx));
+        let editor = cx.new(|cx| LineEditor::selected(current, cx));
         window.focus(&editor.read(cx).focus_handle(cx), cx);
         let sub = cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| {
             let Some((target, _, _)) = this.editing.take() else { return };
@@ -278,26 +277,15 @@ impl BenchWindow {
                 ClientMsg::SetBadge { bench: self.bench, badge: (!badge.is_empty()).then_some(badge) }
             }
             EditTarget::AddTag(tab) => {
-                // "prod" or "prod red".
-                let mut words = text.split_whitespace();
-                let Some(label) = words.next() else { return };
-                let color = words.next().and_then(tag_color).unwrap_or_else(|| default_tag_color(label));
                 let Some(t) = self.tab(tab, cx) else { return };
-                let mut tags: Vec<Tag> = t.tags.iter().filter(|t| t.label != label).cloned().collect();
-                tags.push(Tag { label: label.to_string(), color, tint_tab: false });
+                let Some(tags) = with_tag(&t.tags, &text) else { return };
                 ClientMsg::SetTags { tab, tags }
             }
         };
         self.send(msg, cx);
     }
 
-    fn open_menu(&mut self, position: Point<Pixels>, entries: Vec<MenuEntry>, cx: &mut Context<Self>) {
-        self.menu = Some(Menu { position, entries });
-        cx.stop_propagation();
-        cx.notify();
-    }
-
-    fn tab_menu(&self, tab_id: TabId, cx: &Context<Self>) -> Vec<MenuEntry> {
+    fn tab_menu(&self, tab_id: TabId, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let Some(tab) = self.tab(tab_id, cx) else { return Vec::new() };
         let mut entries = vec![
             item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)),
@@ -338,16 +326,11 @@ impl BenchWindow {
         }));
         // Moving a tab to another bench is the pegboard's: drag it there.
         entries.push(MenuEntry::Separator);
-        entries.push(MenuEntry::Item {
-            label: "Close Tab".into(),
-            swatch: None,
-            danger: true,
-            action: Rc::new(move |this, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)),
-        });
+        entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)));
         entries
     }
 
-    fn pane_menu(&self, pane: PaneId) -> Vec<MenuEntry> {
+    fn pane_menu(&self, pane: PaneId) -> Vec<MenuEntry<Self>> {
         vec![
             item("Copy", |_, window, cx| window.dispatch_action(Box::new(Copy), cx)),
             item("Paste", |_, window, cx| window.dispatch_action(Box::new(Paste), cx)),
@@ -355,16 +338,11 @@ impl BenchWindow {
             item("Split Right", move |this, _, cx| this.split_pane(pane, SplitDir::Right, cx)),
             item("Split Down", move |this, _, cx| this.split_pane(pane, SplitDir::Down, cx)),
             MenuEntry::Separator,
-            MenuEntry::Item {
-                label: "Close Pane".into(),
-                swatch: None,
-                danger: true,
-                action: Rc::new(move |this, _, cx| this.send(ClientMsg::ClosePane { pane }, cx)),
-            },
+            danger("Close Pane", move |this: &mut Self, _, cx| this.send(ClientMsg::ClosePane { pane }, cx)),
         ]
     }
 
-    fn bench_menu(&self, cx: &Context<Self>) -> Vec<MenuEntry> {
+    fn bench_menu(&self, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let current = self.bench(cx).map(|b| b.color);
         let mut entries = vec![
             item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)),
@@ -374,75 +352,14 @@ impl BenchWindow {
         for color in BenchColor::NAMED {
             let name = color.name().unwrap_or_default();
             let mark = if current == Some(color) { "✓ " } else { "" };
-            entries.push(MenuEntry::Item {
-                label: format!("{mark}{}{}", name[..1].to_uppercase(), &name[1..]).into(),
-                swatch: Some(color.accent()),
-                danger: false,
-                action: Rc::new(move |this, _, cx| {
+            entries.push(swatch(format!("{mark}{}{}", name[..1].to_uppercase(), &name[1..]), color.accent(), move |this: &mut Self, _, cx| {
                     this.send(ClientMsg::SetBenchColor { bench: this.bench, color }, cx);
-                }),
-            });
+            }));
         }
         entries.push(MenuEntry::Separator);
         entries.push(item("Show Shed", |this, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))));
-        entries.push(MenuEntry::Item {
-            label: "Close Bench…".into(),
-            swatch: None,
-            danger: true,
-            action: Rc::new(|this, window, cx| this.close_bench(window, cx)),
-        });
+        entries.push(danger("Close Bench…", |this: &mut Self, window, cx| this.close_bench(window, cx)));
         entries
-    }
-
-    fn render_menu(&self, menu: &Menu, cx: &mut Context<Self>) -> AnyElement {
-        let ui = &self.ui;
-        let mut list = div()
-            .id("menu")
-            .occlude()
-            .min_w(px(200.0))
-            .py_1()
-            .bg(hsla(ui.tab_active))
-            .border_1()
-            .border_color(hsla(ui.divider))
-            .rounded_md()
-            // No drop shadow: a blurred shadow is redrawn over the whole menu on
-            // every hover change, which tripled the cost of moving through it.
-            .text_size(px(13.0))
-            .text_color(hsla(ui.text))
-            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                this.menu = None;
-                this.refocus(window, cx);
-            }));
-        for (i, entry) in menu.entries.iter().enumerate() {
-            list = list.child(match entry {
-                MenuEntry::Separator => div().my_1().h(px(1.0)).bg(hsla(ui.divider)).into_any_element(),
-                MenuEntry::Item { label, swatch, danger, action } => {
-                    let action = action.clone();
-                    let color = if *danger { Rgb::hex(0xF0566A) } else { ui.text };
-                    div()
-                        .id(("menu-item", i))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .py_1()
-                        .text_color(hsla(color))
-                        .hover(|s| s.bg(hsla(ui.tab_hover)))
-                        .cursor_pointer()
-                        .when_some(*swatch, |el, c| el.child(div().size(px(10.0)).rounded_full().bg(hsla(c))))
-                        .child(label.clone())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.menu = None;
-                            action(this, window, cx);
-                            if this.editing.is_none() {
-                                this.refocus(window, cx);
-                            }
-                        }))
-                        .into_any_element()
-                }
-            });
-        }
-        deferred(anchored().position(menu.position).snap_to_window_with_margin(px(8.0)).child(list)).priority(1).into_any_element()
     }
 
     fn editor_for(&self, target: EditTarget) -> Option<Entity<LineEditor>> {
@@ -728,6 +645,19 @@ impl BenchWindow {
     }
 }
 
+impl MenuHost for BenchWindow {
+    fn menu_slot(&mut self) -> &mut Option<Menu<Self>> {
+        &mut self.menu
+    }
+
+    fn menu_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A choice may have opened a text field, which keeps the keyboard.
+        if self.editing.is_none() {
+            self.refocus(window, cx);
+        }
+    }
+}
+
 impl Render for BenchWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if crate::terminal_view::perf::enabled() {
@@ -743,7 +673,8 @@ impl Render for BenchWindow {
             Some(tab) => self.render_node(&tab.layout, Vec::new(), tab, accent, cx),
             None => div().into_any_element(),
         };
-        let menu = self.menu.as_ref().map(|m| self.render_menu(m, cx));
+        let ui = self.ui.clone();
+        let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
 
         div()
             .key_context("BenchWindow")
