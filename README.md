@@ -7,8 +7,8 @@ window (`shed`) is only a view onto it. See
 
 ## Status
 
-Phases 1–5 are in place: the first pane, the keeper, bench windows with tabs and splits,
-the logbook, and saving and loading benches.
+Phases 1–6 are in place: the first pane, the keeper, bench windows with tabs and splits,
+the logbook, saving and loading benches, and the pegboard with the rest of phase 6.
 
 - **The keeper** owns every PTY. Closing a window detaches its bench. The next `shed`
   reattaches it and replays each pane exactly: scrollback, both screens, cursor,
@@ -33,6 +33,27 @@ the logbook, and saving and loading benches.
   ran last; `shed load <name>` (and a pinned bench icon) loads one. Panes come back in
   their folders with their old scrollback dimmed above the prompt; tools on the rack
   restart, others are typed and wait for Enter, the never list is left out.
+- **Setup and teardown**: each pane can have a folder to start in, startup commands
+  (run one per prompt when the bench loads, instead of what was running; or typed,
+  waiting for Enter) and teardown commands. The Setup panel (Ctrl+Shift+S, the rack
+  button, or a tab's menu) shows and edits them for the current tab; so do
+  `shed setup` and `shed setup --edit`.
+- **Hide or close**: closing a window hides the bench, its tools keep running. Close
+  Bench saves it, stops each pane's tool (Ctrl+C, then SIGTERM), runs the teardown
+  commands at the prompt (`docker compose down`), and ends it; it stays saved.
+- **Aliases** at three levels, over the shell's own: global
+  (`~/.config/shed/aliases.toml`), bench and tab. Shells pick changes up at their next
+  prompt; taking one away brings the shell's version back. The Setup panel lists them
+  with what they override; `shed alias`, `shed alias add [--bench|--global] NAME CMD`
+  and `shed alias rm` work from a shell.
+- **Pegboard** (Super+Space or Ctrl+Shift+Space): every bench, open, detached or saved,
+  with its tabs and a live preview of each. Type to filter by bench, tab, tag, folder
+  or tool; arrows and Enter (or a click) go there, opening or loading the bench as
+  needed; drag a tab onto another bench to move it.
+- **Find in scrollback** (Ctrl+Shift+F): plain text, case-insensitive unless the query
+  has capitals; Enter goes to older matches, Shift+Enter to newer.
+- **Keyboard**: the kitty keyboard protocol for apps that ask for it, and input methods
+  (IBus, Fcitx) with the text being composed shown at the cursor.
 - Query replies triggered by binary output (`cat image.png`) are dropped.
 
 | Keys | Action |
@@ -47,6 +68,9 @@ the logbook, and saving and loading benches.
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
 | Up / Ctrl+Up / Ctrl+Shift+Up | Walk this tab's / bench's / all history |
 | Ctrl+R (at a prompt) | Search the logbook |
+| Ctrl+Shift+F | Find in scrollback |
+| Ctrl+Shift+S | Setup panel: startup, teardown, aliases |
+| Super+Space, Ctrl+Shift+Space | Pegboard |
 
 ```toml
 # ~/.config/shed/shed.toml (every key optional)
@@ -87,6 +111,8 @@ cargo build --release
 ./target/release/shed load web  # open a bench, loading it if it is saved
 ./target/release/shed save web --as web-template
 ./target/release/shed delete web
+./target/release/shed setup     # this tab's startup and teardown (--edit to change them)
+./target/release/shed alias     # aliases by level; alias add/rm to change them
 ```
 
 `shed` looks for `shedd` next to its own binary, then on `PATH`. The keeper
@@ -101,7 +127,9 @@ and prints a warning.
 
 - `SHED_RUNTIME_DIR=/tmp/shed-dev` runs a separate keeper beside your real one.
 - A running keeper keeps its old code: after changing `shed-keeper`, run `shed stop`.
-  A window refuses a keeper speaking another protocol version and says so.
+  A window refuses a keeper speaking another protocol version and says so. Messages
+  travel by enum position, so new ones go at the end; `shed stop` must keep working
+  against older keepers.
 - `crates/shed-emu/tests/recordings/` holds real program output (recorded with
   `script` at 40×12) that the replay tests cut at many points.
 - Logs: the keeper writes `~/.local/state/shed/shedd.log`; `SHED_LOG=debug` raises
