@@ -1,0 +1,14 @@
+Shed
+Copyright (c) 2026 odolha
+Licensed under the MIT license or the Apache License 2.0, at your option:
+see LICENSE-MIT and LICENSE-APACHE in this directory.
+
+Shed includes modified copies of these crates, each under its own license:
+
+- alacritty_terminal (Apache-2.0), Copyright The Alacritty Project
+- gpui_ce_wgpu and gpui_ce_linux (Apache-2.0), Copyright Zed Industries, Inc.
+  and the GPUI community edition contributors
+
+Their changes are listed in SHED_PATCHES.md in each crate's source. Shed's
+other Rust dependencies are linked statically under their own licenses,
+mostly MIT and Apache-2.0; `cargo tree` in the source lists them.

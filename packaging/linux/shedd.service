@@ -1,0 +1,24 @@
+# Optional: starts Shed's keeper at login, so the first Shed window opens at
+# once. Without it, `shed` starts the keeper when it is first needed.
+#
+#   systemctl --user enable --now shedd.service
+#
+# Shells in Shed's panes inherit the keeper's environment. Under systemd that
+# is the user manager's, which only has DISPLAY, WAYLAND_DISPLAY,
+# SSH_AUTH_SOCK and the like if the desktop imports them (GNOME and KDE do;
+# check with `systemctl --user show-environment`).
+[Unit]
+Description=Shed keeper: holds Shed's shells and the programs in them
+Documentation=file:///usr/share/doc/shed-terminal/README.md
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/shedd --foreground --persist
+# Stopping saves every bench first.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -51,12 +51,7 @@ pub fn icon_svg(color: BenchColor, badge: Option<&str>) -> String {
 
 /// Rasterizes an icon to straight (not premultiplied) RGBA, `size` × `size`.
 pub fn icon_rgba(svg: &str, size: u32) -> Option<Vec<u8>> {
-    let mut options = resvg::usvg::Options::default();
-    options.fontdb_mut().load_system_fonts();
-    let tree = resvg::usvg::Tree::from_str(svg, &options).ok()?;
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)?;
-    let scale = size as f32 / tree.size().width().max(tree.size().height());
-    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    let pixmap = render(svg, size)?;
     Some(
         pixmap
             .pixels()
@@ -67,6 +62,21 @@ pub fn icon_rgba(svg: &str, size: u32) -> Option<Vec<u8>> {
             })
             .collect(),
     )
+}
+
+/// Rasterizes an icon to PNG, `size` × `size`.
+pub fn icon_png(svg: &str, size: u32) -> Option<Vec<u8>> {
+    render(svg, size)?.encode_png().ok()
+}
+
+fn render(svg: &str, size: u32) -> Option<resvg::tiny_skia::Pixmap> {
+    let mut options = resvg::usvg::Options::default();
+    options.fontdb_mut().load_system_fonts();
+    let tree = resvg::usvg::Tree::from_str(svg, &options).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)?;
+    let scale = size as f32 / tree.size().width().max(tree.size().height());
+    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    Some(pixmap)
 }
 
 /// What a bench's launcher shows and runs.
@@ -124,9 +134,17 @@ impl Desktop {
         write_if_changed(&self.entry_path(bench.launcher), &entry)
     }
 
-    /// Writes Shed's own launcher and icon, which the Shed window goes by.
+    /// Writes Shed's own launcher and icon, which the Shed window goes by,
+    /// unless an installed package provides them; then any copy written
+    /// before, by a build run from its source tree, is removed.
     pub fn install_shed(&self, shed: &Path) -> io::Result<()> {
+        let entry_path = self.data_home.join("applications").join(format!("{SHED_APP_ID}.desktop"));
         let icon = self.data_home.join("icons/hicolor/scalable/apps").join(format!("{SHED_APP_ID}.svg"));
+        if packaged_launcher() {
+            let _ = std::fs::remove_file(&entry_path);
+            let _ = std::fs::remove_file(&icon);
+            return Ok(());
+        }
         write_if_changed(&icon, SHED_ICON)?;
         let entry = format!(
             "[Desktop Entry]\n\
@@ -141,7 +159,7 @@ impl Desktop {
             exe = desktop_quote(&shed.to_string_lossy()),
             icon = icon.display(),
         );
-        write_if_changed(&self.data_home.join("applications").join(format!("{SHED_APP_ID}.desktop")), &entry)
+        write_if_changed(&entry_path, &entry)
     }
 
     /// Removes a bench's desktop entry and icon.
@@ -149,6 +167,14 @@ impl Desktop {
         let _ = std::fs::remove_file(self.entry_path(launcher));
         let _ = std::fs::remove_file(self.icon_path(launcher));
     }
+}
+
+/// Whether an installed package provides Shed's launcher, in the system
+/// data directories (`XDG_DATA_DIRS`).
+fn packaged_launcher() -> bool {
+    let dirs = std::env::var("XDG_DATA_DIRS").ok().filter(|d| !d.is_empty());
+    let dirs = dirs.unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    dirs.split(':').any(|d| Path::new(d).join("applications").join(format!("{SHED_APP_ID}.desktop")).exists())
 }
 
 /// Quotes an `Exec` argument per the desktop entry spec.

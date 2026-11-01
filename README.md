@@ -110,28 +110,59 @@ tint_tab = true
 `alacritty_terminal` is vendored with read-only accessors the replay needs;
 see `vendor/alacritty_terminal/SHED_PATCHES.md`.
 
-## Build and run
+## Install
+
+The package is called `shed-terminal`: Debian, Ubuntu and Arch already have a `shed`
+(a hex editor) that also installs `/usr/bin/shed`, so the two conflict.
+
+**Debian, Ubuntu, Mint**: build the package, then install it.
 
 ```sh
-cargo build --release
-./target/release/shed           # starts shedd if needed, opens the Shed window
-./target/release/shed status    # what the keeper holds
-./target/release/shed stop      # save everything, then stop the keeper and its tools
-./target/release/shed list      # benches: open, hidden, closed
-./target/release/shed load web  # open a bench, loading it if it is saved
-./target/release/shed save web --as web-template
-./target/release/shed delete web
-./target/release/shed setup     # this tab's startup and teardown (--edit to change them)
-./target/release/shed alias     # aliases by level; alias add/rm to change them
+packaging/deb/build.sh
+sudo apt install ./target/debian/shed-terminal_0.1.0-1_amd64.deb
 ```
 
-`shed` looks for `shedd` next to its own binary, then on `PATH`. The keeper
-exits by itself once it holds no panes and no window is connected.
+**Arch**: `cd packaging/arch && makepkg -si` builds this source tree.
+
+Either installs `shed` and `shedd` in `/usr/bin`, Shed in the application menu
+(`dev.shed.desktop`, with icons in the hicolor theme), and an optional systemd user unit
+that starts the keeper at login:
+
+```sh
+systemctl --user enable --now shedd.service
+```
+
+Without it, `shed` starts the keeper when needed. Under systemd, the shells in Shed's
+panes inherit the user manager's environment, which only has `DISPLAY`,
+`SSH_AUTH_SOCK` and the like if the desktop imports them; check with
+`systemctl --user show-environment`.
+
+**From source, without a package**: `cargo build --release` and run
+`./target/release/shed`. Shed then writes its own launcher and icon to
+`~/.local/share` (and removes them once a package provides them).
 
 Build dependencies (Debian/Ubuntu): `libxkbcommon-dev libxkbcommon-x11-dev
 libwayland-dev libxcb1-dev libfontconfig-dev` and a Vulkan driver. Without
 `libxkbcommon-x11-dev`, `shed-app/build.rs` links the runtime library directly
 and prints a warning.
+
+## Use
+
+```sh
+shed                 # starts shedd if needed, opens the Shed window
+shed list            # benches: open, hidden, closed
+shed load web        # open a bench, loading it if it is closed
+shed new --name api  # a new bench
+shed save web --as web-template
+shed delete web
+shed setup           # this tab's startup and teardown (--edit to change them)
+shed alias           # aliases by level; alias add/rm to change them
+shed status          # what the keeper holds
+shed stop            # save everything, then stop the keeper and its tools
+```
+
+`shed` looks for `shedd` next to its own binary, then on `PATH`. The keeper
+exits by itself once it holds no panes and no window is connected.
 
 ## Development
 
@@ -146,6 +177,9 @@ and prints a warning.
   the level for both binaries (`shedd --foreground` logs to stderr).
 - `XDG_CONFIG_HOME` and `XDG_DATA_HOME` keep a test run's config and desktop entries
   away from your real ones.
+- Icons: `cargo run -p shed-desktop --example icon_preview -- <dir>` renders the bench
+  icon in every colour; `--example app_icons -- <dir>` writes the app icon's hicolor
+  tree, as the packages do.
 - `shed debug-type 'echo hi\r'` types into the first pane through the keeper,
   for testing without a keyboard.
 - `SHED_PERF=1` makes the window process print redraws per second and their cost.

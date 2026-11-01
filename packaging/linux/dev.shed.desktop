@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Shed
+GenericName=Terminal
+Comment=A terminal whose shells outlive its windows
+Exec=shed
+Icon=dev.shed
+StartupWMClass=dev.shed
+StartupNotify=false
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;prompt;command;console;bench;workspace;
+Actions=new-bench;
+
+[Desktop Action new-bench]
+Name=New Bench
+Exec=shed new
