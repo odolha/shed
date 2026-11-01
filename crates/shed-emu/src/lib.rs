@@ -6,6 +6,7 @@
 //! keeper or the windows.
 
 mod alacritty;
+pub mod binary;
 pub mod keys;
 pub mod mouse;
 mod palette;

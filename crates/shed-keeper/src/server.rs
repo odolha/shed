@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use shed_emu::binary::ReplyGuard;
 use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Palette};
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId};
 use shed_proto::{
@@ -59,6 +60,8 @@ struct PaneRt {
     bench: BenchId,
     /// The keeper's own copy of the screen: answers queries now, replays it on reattach later.
     emu: AlacrittyEmulator,
+    /// Keeps replies to queries that binary output happens to contain out of the shell's input.
+    reply_guard: ReplyGuard,
     input: mpsc::UnboundedSender<Vec<u8>>,
     master: Arc<AsyncFd<OwnedFd>>,
     pid: Option<u32>,
@@ -376,6 +379,7 @@ impl Keeper {
         st.panes.insert(pane_id, PaneRt {
             bench,
             emu: AlacrittyEmulator::new(GridSize::new(cols, rows), st.palette.clone()),
+            reply_guard: ReplyGuard::default(),
             input: input_tx,
             master: master.clone(),
             pid,
@@ -447,8 +451,13 @@ impl Keeper {
         let rt = st.panes.get_mut(&pane)?;
         rt.emu.advance(bytes);
         let replies = rt.emu.take_replies();
+        let suppress = rt.reply_guard.suppress(bytes, Instant::now());
         if !replies.is_empty() {
-            let _ = rt.input.send(replies);
+            if suppress {
+                debug!(?pane, len = replies.len(), "dropped replies to binary output");
+            } else {
+                let _ = rt.input.send(replies);
+            }
         }
         rt.emu.take_events();
         let deadline = rt.emu.tick();

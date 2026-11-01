@@ -160,3 +160,27 @@ fn tools_survive_detach_and_reattach() {
     second.send(Frame::Input { pane, bytes: b"echo $MARK\n".to_vec() });
     second.wait_output(pane, "kept-alive");
 }
+
+#[test]
+fn binary_output_does_not_type_into_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    // Binary with DECID (ESC Z) and DA (CSI c) queries buried in it.
+    let mut blob = Vec::new();
+    for i in 0..2000u32 {
+        blob.extend_from_slice(&[0x89, 0x00, (i % 251) as u8, 0xfe, 0x1b, b'Z', 0xc3, 0x28, 0x1b, b'[', b'c']);
+    }
+    std::fs::write(dir.path().join("blob.bin"), &blob).unwrap();
+
+    let socket = start_keeper(dir.path());
+    let mut client = Client::connect(&socket);
+    let (_bench, pane) = client.attach();
+    client.send(Frame::Input { pane, bytes: b"cat blob.bin; echo; echo cat-done\n".to_vec() });
+    client.wait_output(pane, "cat-done");
+    // Anything typed into the shell's input now would be read by `head`. The
+    // markers are split in the command so its echo does not match them.
+    let probe = "stty -icanon -echo min 0 time 3; printf 'input''->'; head -c 100 | od -An -c | tr -d ' \\n'; echo '<-''input'; stty sane\n";
+    client.send(Frame::Input { pane, bytes: probe.as_bytes().to_vec() });
+    let out = client.wait_output(pane, "<-input");
+    let typed = &out[out.rfind("input->").unwrap() + "input->".len()..out.rfind("<-input").unwrap()];
+    assert_eq!(typed, "", "replies leaked into the shell");
+}
