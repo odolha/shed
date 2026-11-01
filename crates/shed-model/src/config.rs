@@ -21,6 +21,7 @@ pub struct Config {
     /// Key → action name, or `"none"` to unbind. Merged over the defaults.
     pub keys: BTreeMap<String, String>,
     pub rack: RackConfig,
+    pub shell: ShellConfig,
     #[serde(rename = "tag_rule")]
     pub tag_rules: Vec<TagRule>,
     /// Seconds between autosaves of every bench.
@@ -65,6 +66,20 @@ pub struct WindowConfig {
 impl Default for WindowConfig {
     fn default() -> Self {
         Self { padding: 6.0, new_pane_dir: NewPaneDir::Current, icon_badges: false }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShellConfig {
+    /// Load Shed's shell integration into the shells Shed starts (bash only
+    /// for now). Without it, `eval "$(shed init bash)"` in ~/.bashrc does the same.
+    pub integration: bool,
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self { integration: true }
     }
 }
 

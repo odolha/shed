@@ -12,6 +12,7 @@ path = "src/main.rs"
 shed-model.workspace = true
 shed-proto.workspace = true
 shed-emu.workspace = true
+shed-logbook.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 nix.workspace = true

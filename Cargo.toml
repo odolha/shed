@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal", "process"] }
-nix = { version = "0.31", features = ["term", "process", "signal", "fs", "ioctl", "user"] }
+nix = { version = "0.31", features = ["term", "process", "signal", "fs", "ioctl", "user", "hostname"] }
 libc = "0.2"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
@@ -37,6 +37,8 @@ async-channel = "2"
 insta = "1"
 tempfile = "3"
 toml = "1"
+rusqlite = { version = "0.41", features = ["bundled"] }
+base64 = "0.22"
 
 # A vendored copy with read-only accessors for screen replay; see vendor/alacritty_terminal/SHED_PATCHES.md.
 [patch.crates-io]

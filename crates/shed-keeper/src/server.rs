@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 use shed_emu::binary::ReplyGuard;
 use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Palette};
 use shed_emu::EmuEvent;
+use shed_emu::marks::{Mark, MarkScanner};
+use shed_logbook::{Logbook, NewEntry};
 use shed_model::config::{Config, FileWatch};
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId};
 use shed_proto::{
@@ -48,6 +50,14 @@ pub struct KeeperConfig {
     pub home: PathBuf,
     /// Exit once no panes and no clients remain.
     pub exit_when_idle: bool,
+    /// The logbook database; `None` keeps no logbook.
+    pub logbook: Option<PathBuf>,
+    /// Shed's state directory, where per-tab history files go.
+    pub state_dir: PathBuf,
+    /// The `shed` binary the shell hook calls to walk history.
+    pub shed_bin: Option<PathBuf>,
+    /// Extra environment for every pane (tests use it for a private HOME).
+    pub env: Vec<(OsString, OsString)>,
 }
 
 type ClientId = u64;
@@ -59,6 +69,11 @@ pub struct Keeper {
     stopping: AtomicBool,
     /// Wakes the task that broadcasts batched tree changes.
     tree_dirty: Notify,
+    /// Finished commands, on their way to the logbook writer thread.
+    logbook: Option<std::sync::mpsc::Sender<NewEntry>>,
+    /// The bash startup file that loads ~/.bashrc and then Shed's hook.
+    bash_rc: Option<PathBuf>,
+    host: String,
 }
 
 struct State {
@@ -81,6 +96,17 @@ struct PaneRt {
     input: mpsc::UnboundedSender<Vec<u8>>,
     master: Arc<AsyncFd<OwnedFd>>,
     pid: Option<u32>,
+    /// Shell-integration marks in the output.
+    marks: MarkScanner,
+    /// The command running, from its mark until it finishes.
+    running: Option<Running>,
+}
+
+struct Running {
+    command: String,
+    cwd: String,
+    started_ms: i64,
+    started: Instant,
 }
 
 struct ClientRt {
@@ -164,6 +190,28 @@ impl State {
 
 impl Keeper {
     pub fn new(cfg: KeeperConfig) -> Arc<Self> {
+        let logbook = cfg.logbook.as_ref().and_then(|path| match Logbook::open(path) {
+            Ok(book) => {
+                let (tx, rx) = std::sync::mpsc::channel::<NewEntry>();
+                std::thread::Builder::new()
+                    .name("logbook".into())
+                    .spawn(move || {
+                        while let Ok(entry) = rx.recv() {
+                            if let Err(e) = book.insert(&entry) {
+                                warn!("logbook write failed: {e}");
+                            }
+                        }
+                    })
+                    .ok()?;
+                Some(tx)
+            }
+            Err(e) => {
+                warn!("no logbook ({}): {e}", path.display());
+                None
+            }
+        });
+        let bash_rc = write_bash_rc(cfg.socket.parent().unwrap_or(Path::new("/tmp")));
+        let host = nix::unistd::gethostname().ok().and_then(|h| h.into_string().ok()).unwrap_or_default();
         Arc::new(Self {
             cfg,
             state: Mutex::new(State {
@@ -179,6 +227,9 @@ impl Keeper {
             shutdown: Notify::new(),
             stopping: AtomicBool::new(false),
             tree_dirty: Notify::new(),
+            logbook,
+            bash_rc,
+            host,
         })
     }
 
@@ -649,8 +700,23 @@ impl Keeper {
         .map(|(k, v)| (k.into(), v.into()))
         .collect();
 
+        let mut env = env;
+        env.extend(self.cfg.env.iter().cloned());
+        env.push(("SHED_STATE_DIR".into(), self.cfg.state_dir.clone().into()));
+        if let Some(bin) = &self.cfg.shed_bin {
+            env.push(("SHED_BIN".into(), bin.clone().into()));
+        }
+        let mut args = Vec::new();
+        let is_bash = program.file_name().is_some_and(|n| n == "bash");
+        if is_bash
+            && st.config.shell.integration
+            && let Some(rc) = &self.bash_rc
+        {
+            args = vec!["--rcfile".into(), rc.clone().into()];
+        }
+
         let cwd = if cwd.is_dir() { cwd } else { self.cfg.home.clone() };
-        let pty = pty::spawn(SpawnOptions { program, args: vec![], cwd: cwd.clone(), env, cols, rows })?;
+        let pty = pty::spawn(SpawnOptions { program, args, cwd: cwd.clone(), env, cols, rows })?;
         let pid = pty.child.id();
         // SAFETY: the `OwnedFd` moves into the `AsyncFd`, so it stays open and
         // unchanged for the `AsyncFd`'s whole life.
@@ -666,6 +732,8 @@ impl Keeper {
             input: input_tx,
             master: master.clone(),
             pid,
+            marks: MarkScanner::new(),
+            running: None,
         });
         tokio::spawn(write_loop(master.clone(), input_rx));
         tokio::spawn(self.clone().pane_loop(pane_id, master, pty.child));
@@ -727,6 +795,47 @@ impl Keeper {
         self.check_idle();
     }
 
+    /// Follows a pane's shell through its commands, and logs each one as it finishes.
+    fn on_mark(&self, st: &mut State, pane: PaneId, mark: Mark) {
+        match mark {
+            Mark::Cwd(dir) => {
+                if let Some(p) = st.tree.pane_mut(pane)
+                    && p.cwd.as_os_str() != dir.as_str()
+                {
+                    p.cwd = dir.into();
+                    self.tree_dirty.notify_one();
+                }
+            }
+            Mark::Command(command) => {
+                let cwd = st.tree.pane(pane).map(|p| p.cwd.display().to_string()).unwrap_or_default();
+                if let Some(rt) = st.panes.get_mut(&pane) {
+                    rt.running = Some(Running { command, cwd, started_ms: unix_ms(), started: Instant::now() });
+                }
+            }
+            Mark::Finished(exit) => {
+                let Some(run) = st.panes.get_mut(&pane).and_then(|rt| rt.running.take()) else { return };
+                let (Some(tx), Some((bench, tab_id))) = (&self.logbook, st.tree.locate_pane(pane)) else { return };
+                let Some(tab) = st.tree.tab(tab_id) else { return };
+                let entry = NewEntry {
+                    command: run.command,
+                    cwd: run.cwd,
+                    exit,
+                    started_ms: run.started_ms,
+                    duration_ms: Some(run.started.elapsed().as_millis() as i64),
+                    pane: pane.to_string(),
+                    tab: tab_id.to_string(),
+                    tab_title: tab.display_title(),
+                    bench: bench.to_string(),
+                    tags: tab.all_tags().map(|t| t.label.clone()).collect(),
+                    host: self.host.clone(),
+                    private: tab.private,
+                };
+                let _ = tx.send(entry);
+            }
+            Mark::PromptStart | Mark::InputStart | Mark::Executed | Mark::Walk(_) | Mark::WalkEnd => {}
+        }
+    }
+
     /// Feeds output to the keeper's emulator and forwards it to attached windows.
     /// Returns when the emulator next needs a tick.
     fn on_output(&self, pane: PaneId, bytes: &[u8]) -> Option<Instant> {
@@ -748,7 +857,12 @@ impl Keeper {
         });
         let deadline = rt.emu.tick();
         let bench = rt.bench;
+        let mut marks = Vec::new();
+        rt.marks.scan(bytes, &mut marks);
         st.broadcast_to_bench(bench, Frame::encode_output(pane, bytes).into());
+        for mark in marks {
+            self.on_mark(&mut st, pane, mark);
+        }
         if let Some(title) = title
             && let Some(p) = st.tree.pane_mut(pane)
             && p.title != title
@@ -791,6 +905,28 @@ async fn write_loop(master: Arc<AsyncFd<OwnedFd>>, mut rx: mpsc::UnboundedReceiv
                 Ok(Err(_)) => return,
                 Err(_would_block) => {}
             }
+        }
+    }
+}
+
+fn unix_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+/// Writes the startup file bash runs in Shed's panes: the user's ~/.bashrc,
+/// then Shed's hook. (/etc/bash.bashrc is still read by bash itself.)
+fn write_bash_rc(dir: &Path) -> Option<PathBuf> {
+    let path = dir.join("shed-bashrc");
+    let contents = format!(
+        "# Written by shedd: your ~/.bashrc, then Shed's shell integration.\n\
+         [ -f ~/.bashrc ] && . ~/.bashrc\n\n{}",
+        shed_logbook::BASH_HOOK
+    );
+    match std::fs::write(&path, contents) {
+        Ok(()) => Some(path),
+        Err(e) => {
+            warn!("cannot write {}: {e}", path.display());
+            None
         }
     }
 }

@@ -9,6 +9,7 @@ mod alacritty;
 pub mod binary;
 pub mod keys;
 pub mod links;
+pub mod marks;
 pub mod mouse;
 mod palette;
 mod snapshot;

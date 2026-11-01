@@ -100,6 +100,10 @@ fn start_keeper(dir: &Path) -> std::path::PathBuf {
             let keeper = Keeper::new(KeeperConfig {
                 socket: listener_path,
                 config_file: home.join("shed.toml"),
+                logbook: Some(home.join("logbook.sqlite")),
+                state_dir: home.join("state"),
+                shed_bin: None,
+                env: Vec::new(),
                 shell: Some("/bin/sh".into()),
                 home,
                 exit_when_idle: false,

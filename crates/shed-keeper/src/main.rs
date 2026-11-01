@@ -50,6 +50,10 @@ fn main() -> anyhow::Result<()> {
         let keeper = Keeper::new(KeeperConfig {
             socket: socket.clone(),
             config_file: shed_model::config::Config::path(),
+            logbook: Some(shed_logbook::default_path()),
+            state_dir: paths::state_dir(),
+            shed_bin: std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("shed"))).filter(|p| p.exists()),
+            env: Vec::new(),
             shell: args.shell,
             home,
             exit_when_idle: !args.persist,

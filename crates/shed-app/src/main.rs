@@ -5,6 +5,7 @@ mod assets;
 mod bench_window;
 mod keeper_conn;
 mod line_editor;
+mod logbook;
 mod settings;
 mod state;
 mod terminal_view;
@@ -63,6 +64,23 @@ enum Command {
         #[command(subcommand)]
         action: TagAction,
     },
+    /// Print the shell integration, for shells Shed did not start:
+    /// eval "$(shed init bash)"
+    Init { shell: String },
+    /// Show commands from the logbook, most recent first.
+    Log {
+        /// local, bench or global (local and bench need to run inside Shed).
+        #[arg(long, default_value = "global")]
+        scope: String,
+        /// How many to show.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        count: usize,
+        /// Only commands tagged with this.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only commands containing this.
+        query: Option<String>,
+    },
     /// Show whether the keeper is running, and what it holds.
     Status,
     /// Stop the keeper and every tool it holds.
@@ -70,6 +88,26 @@ enum Command {
     /// Types text into the first bench's active pane (for testing; `\r` is Enter).
     #[command(hide = true)]
     DebugType { text: String },
+    /// Called by the shell hook.
+    #[command(hide = true)]
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookAction {
+    /// Prints step `pos` of walking `scope`'s history from the current tab:
+    /// "<pos> <total> <source tab, base64>", then the command.
+    Walk {
+        #[arg(long)]
+        scope: String,
+        #[arg(long)]
+        pos: usize,
+        #[arg(long, default_value = "")]
+        prefix: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -100,6 +138,21 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Tag { action }) => tag(action),
         Some(Command::Stop) => stop(),
         Some(Command::DebugType { text }) => debug_type(&text),
+        Some(Command::Init { shell }) => match shell.as_str() {
+            "bash" => {
+                print!("{}", shed_logbook::BASH_HOOK);
+                Ok(())
+            }
+            other => bail!("no integration for {other:?} yet; only bash"),
+        },
+        Some(Command::Log { scope, count, tag, query }) => logbook::print_log(&scope, count, tag.as_deref(), query.as_deref()),
+        Some(Command::Hook { action: HookAction::Walk { scope, pos, prefix } }) => {
+            // The hook treats any failure as "nothing to show".
+            match logbook::hook_walk(&scope, pos, &prefix) {
+                Ok(true) => Ok(()),
+                _ => std::process::exit(1),
+            }
+        }
     }
 }
 
