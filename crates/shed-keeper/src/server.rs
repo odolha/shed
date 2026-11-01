@@ -1,6 +1,6 @@
 //! The keeper's state and socket server.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
@@ -18,8 +18,8 @@ use shed_save::{PaneExtras, Relaunch, SavedBench, Store};
 use shed_model::config::{Config, FileWatch};
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId};
 use shed_proto::{
-    ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus, PROTOCOL_VERSION,
-    ShowTarget,
+    AliasTarget, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
+    PROTOCOL_VERSION, ShowTarget,
 };
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -45,6 +45,9 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// How long a loaded pane waits for its shell's first prompt before typing
 /// its saved command anyway (shells without Shed's hook send no prompt mark).
 const PROMPT_WAIT: Duration = Duration::from_secs(3);
+
+/// The longest a bench's close waits for a pane's teardown.
+const TEARDOWN_LIMIT: Duration = Duration::from_secs(120);
 
 /// How often each pane's tool and directory are read from `/proc`.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -74,6 +77,8 @@ pub struct KeeperConfig {
     pub store: Option<Store>,
     /// Desktop entries to remove when a bench is deleted.
     pub desktop: Option<shed_desktop::Desktop>,
+    /// Shed's global aliases, reloaded when the file changes.
+    pub aliases_file: PathBuf,
 }
 
 type ClientId = u64;
@@ -85,6 +90,8 @@ pub struct Keeper {
     stopping: AtomicBool,
     /// `finish` has run.
     finished: AtomicBool,
+    /// Asks the autosave task to save now (after setup or alias edits).
+    save_soon: Notify,
     /// Wakes the task that broadcasts batched tree changes.
     tree_dirty: Notify,
     /// Finished commands, on their way to the logbook writer thread.
@@ -97,6 +104,9 @@ pub struct Keeper {
 struct State {
     config: Config,
     config_watch: FileWatch,
+    aliases_watch: FileWatch,
+    /// What each tab's alias file holds, to rewrite it only on change.
+    alias_files: HashMap<TabId, String>,
     tree: Shed,
     panes: HashMap<PaneId, PaneRt>,
     clients: HashMap<ClientId, ClientRt>,
@@ -120,8 +130,12 @@ struct PaneRt {
     running: Option<Running>,
     /// The last command to finish, and when.
     last_finished: Option<(String, Instant)>,
-    /// A saved command to type at the first prompt, and whether to run it.
-    after_prompt: Option<(String, bool)>,
+    /// Commands to type at the next prompts, one per prompt, and whether to run each.
+    after_prompt: VecDeque<(String, bool)>,
+    /// Ticks at every prompt, for closing a bench step by step.
+    prompts: tokio::sync::watch::Sender<u64>,
+    /// The shell has shown a prompt mark: it runs Shed's hook.
+    hooked: bool,
 }
 
 /// How to start a pane.
@@ -132,12 +146,12 @@ struct PaneSpec {
     rows: u16,
     /// Bytes shown before the shell starts: a loaded pane's old scrollback.
     restore: Option<Vec<u8>>,
-    after_prompt: Option<(String, bool)>,
+    after_prompt: VecDeque<(String, bool)>,
 }
 
 impl PaneSpec {
     fn fresh(cwd: PathBuf) -> Self {
-        PaneSpec { id: PaneId::new(), cwd, cols: 80, rows: 24, restore: None, after_prompt: None }
+        PaneSpec { id: PaneId::new(), cwd, cols: 80, rows: 24, restore: None, after_prompt: VecDeque::new() }
     }
 }
 
@@ -249,6 +263,8 @@ impl Keeper {
             state: Mutex::new(State {
                 config: Config::default(),
                 config_watch: FileWatch::default(),
+                aliases_watch: FileWatch::default(),
+                alias_files: HashMap::new(),
                 tree: Shed::default(),
                 panes: HashMap::new(),
                 clients: HashMap::new(),
@@ -259,6 +275,7 @@ impl Keeper {
             shutdown: Notify::new(),
             stopping: AtomicBool::new(false),
             finished: AtomicBool::new(false),
+            save_soon: Notify::new(),
             tree_dirty: Notify::new(),
             logbook,
             bash_rc,
@@ -303,6 +320,16 @@ impl Keeper {
             tick.tick().await;
             let mut st = self.lock();
             let mut changed = false;
+            if st.aliases_watch.changed(&self.cfg.aliases_file) {
+                match shed_model::config::load_aliases(&self.cfg.aliases_file) {
+                    Ok(aliases) => {
+                        st.tree.aliases = aliases;
+                        self.sync_alias_files(&mut st);
+                        changed = true;
+                    }
+                    Err(e) => warn!("global aliases not loaded: {e}"),
+                }
+            }
             if st.config_watch.changed(&self.cfg.config_file) {
                 match Config::load_from(&self.cfg.config_file) {
                     Ok(config) => {
@@ -520,6 +547,7 @@ impl Keeper {
                         let b = st.tree.bench_mut(bench).unwrap();
                         b.tabs.insert(index, tab);
                         b.active_tab = tab_id;
+                        self.sync_alias_files(&mut st);
                         st.broadcast_tree();
                     }
                     Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
@@ -546,17 +574,40 @@ impl Keeper {
                 }
             }
             ClientMsg::CloseBench { bench } => {
+                tokio::spawn(self.clone().close_bench(bench));
+            }
+            ClientMsg::SetPaneSetup { pane, setup } => {
                 let mut st = self.lock();
-                info!(?bench, "closing bench");
-                // Saved first, then taken out of the tree, so it loads as it was.
-                if let Some(store) = &self.cfg.store {
-                    for (saved, scrollback) in self.snapshot(&st, &[bench], false) {
-                        if let Err(e) = store.save(&saved, &scrollback) {
-                            warn!("cannot save bench {:?}: {e}", saved.name);
-                        }
-                    }
+                if let Some(p) = st.tree.pane_mut(pane) {
+                    p.setup = setup;
+                    st.broadcast_tree();
+                    self.save_soon.notify_one();
                 }
-                self.drop_bench(&mut st, bench);
+            }
+            ClientMsg::SetAliases { level, aliases } => {
+                let mut st = self.lock();
+                match level {
+                    AliasTarget::Global => {
+                        if let Err(e) = shed_model::config::save_aliases(&self.cfg.aliases_file, &aliases) {
+                            st.send(client, KeeperMsg::Error(format!("cannot save global aliases: {e}")));
+                            return;
+                        }
+                        st.aliases_watch.changed(&self.cfg.aliases_file);
+                        st.tree.aliases = aliases;
+                    }
+                    AliasTarget::Bench(b) => match st.tree.bench_mut(b) {
+                        Some(b) => b.aliases = aliases,
+                        None => return,
+                    },
+                    AliasTarget::Tab(t) => match st.tree.tab_mut(t) {
+                        Some(t) => t.aliases = aliases,
+                        None => return,
+                    },
+                }
+                self.sync_alias_files(&mut st);
+                st.broadcast_tree();
+                self.save_soon.notify_one();
+                st.send(client, KeeperMsg::Done("aliases set".into()));
             }
             ClientMsg::DeleteBench { name } => {
                 let mut st = self.lock();
@@ -656,6 +707,7 @@ impl Keeper {
                 let mut st = self.lock();
                 let Some(from) = st.tree.bench_of_tab(tab) else { return };
                 if st.tree.move_tab(tab, bench, index) {
+                    self.sync_alias_files(&mut st);
                     if from != bench {
                         // The tab's panes now belong to another bench's windows.
                         let ids: Vec<PaneId> = st.tree.tab(tab).unwrap().panes.iter().map(|p| p.id).collect();
@@ -830,20 +882,29 @@ impl Keeper {
             for pane in &mut tab.panes {
                 let sp = panes.iter().find(|(id, _)| *id == pane.id).map(|(_, p)| p.clone());
                 let restore = store.scrollback(&saved.name, pane.id).map(|text| shed_save::restored_scrollback(&text, &saved.saved));
-                let tool = sp.as_ref().and_then(|p| p.tool.clone());
-                let after_prompt = tool.as_ref().and_then(|cmd| match shed_save::relaunch(&st.config.rack, cmd) {
-                    Relaunch::Run => Some((cmd.clone(), true)),
-                    Relaunch::Prefill => Some((cmd.clone(), false)),
-                    Relaunch::Skip => None,
-                });
-                let waiting = after_prompt.as_ref().filter(|(_, run)| !run).map(|(cmd, _)| cmd.clone());
-                let cwd = if pane.cwd.is_dir() { pane.cwd.clone() } else { bench.cwd.clone() };
+                // The pane's own startup wins over whatever was running at save time.
+                let after_prompt: VecDeque<(String, bool)> = if !pane.setup.startup.is_empty() {
+                    pane.setup.startup.iter().map(|c| (c.clone(), !pane.setup.wait)).collect()
+                } else {
+                    let tool = sp.as_ref().and_then(|p| p.tool.clone());
+                    tool.and_then(|cmd| match shed_save::relaunch(&st.config.rack, &cmd) {
+                        Relaunch::Run => Some((cmd, true)),
+                        Relaunch::Prefill => Some((cmd, false)),
+                        Relaunch::Skip => None,
+                    })
+                    .into_iter()
+                    .collect()
+                };
+                let cwd = [pane.setup.start_in.clone(), Some(pane.cwd.clone()), Some(bench.cwd.clone())]
+                    .into_iter()
+                    .flatten()
+                    .find(|d| d.is_dir())
+                    .unwrap_or_else(|| self.cfg.home.clone());
                 let spec = PaneSpec { id: pane.id, cwd, cols: pane.cols, rows: pane.rows, restore, after_prompt };
                 match self.spawn_pane_spec(st, bench.id, tab.id, spec) {
                     Ok(spawned) => {
                         started.push(pane.id);
                         pane.cwd = spawned.cwd;
-                        pane.waiting = waiting;
                     }
                     Err(e) => {
                         st.hang_up(&started);
@@ -855,24 +916,144 @@ impl Keeper {
         let id = bench.id;
         info!(name = %bench.name, panes = started.len(), "bench loaded");
         st.tree.benches.push(bench);
+        self.sync_alias_files(st);
         Ok(id)
     }
 
-    /// Types a loaded pane's saved command, once.
+    /// Types the next queued command at a prompt: run, or left waiting for Enter.
     fn send_after_prompt(&self, st: &mut State, pane: PaneId) {
         let Some(rt) = st.panes.get_mut(&pane) else { return };
-        let Some((command, run)) = rt.after_prompt.take() else { return };
+        let Some((command, run)) = rt.after_prompt.pop_front() else { return };
         // Pasted, so a multi-line command is not run line by line.
         let mut bytes = shed_emu::keys::encode_paste(&command, rt.emu.modes());
         if run {
             bytes.push(b'\r');
         }
         let _ = rt.input.send(bytes);
+        if !run && let Some(p) = st.tree.pane_mut(pane) {
+            p.waiting = Some(command);
+            self.tree_dirty.notify_one();
+        }
     }
 
+    /// For shells that never show a prompt mark: types the first command anyway.
     fn type_after_prompt(&self, pane: PaneId) {
         let mut st = self.lock();
-        self.send_after_prompt(&mut st, pane);
+        if st.panes.get(&pane).is_some_and(|rt| !rt.hooked) {
+            self.send_after_prompt(&mut st, pane);
+        }
+    }
+
+    /// Writes each tab's alias file (global, then bench, then tab aliases)
+    /// where its shells read it at every prompt. Unchanged files are left alone.
+    fn sync_alias_files(&self, st: &mut State) {
+        let dir = self.cfg.state_dir.join("aliases");
+        let mut wanted: Vec<(TabId, String)> = Vec::new();
+        for bench in &st.tree.benches {
+            for tab in &bench.tabs {
+                let merged = shed_model::config::shed_aliases(&st.tree.aliases, &bench.aliases, &tab.aliases);
+                let text: String = merged
+                    .iter()
+                    .filter(|(name, _)| !name.is_empty() && !name.contains(['\t', '\n', '=', ' ']))
+                    .map(|(name, value)| format!("{name}\t{}\n", value.replace(['\n', '\t'], " ")))
+                    .collect();
+                wanted.push((tab.id, text));
+            }
+        }
+        for (tab, text) in wanted {
+            if st.alias_files.get(&tab) == Some(&text) {
+                continue;
+            }
+            let path = dir.join(tab.to_string());
+            let written = std::fs::create_dir_all(&dir).and_then(|()| {
+                let tmp = path.with_extension("tmp");
+                std::fs::write(&tmp, &text)?;
+                std::fs::rename(tmp, &path)
+            });
+            match written {
+                Ok(()) => {
+                    st.alias_files.insert(tab, text);
+                }
+                Err(e) => warn!("cannot write aliases for tab {tab}: {e}"),
+            }
+        }
+    }
+
+    /// Closes a bench: saves it as it is, then in every pane stops the
+    /// running tool (Ctrl+C, then SIGTERM), runs the pane's teardown commands
+    /// one by one at the prompt, and hangs up. The window shows it happening.
+    async fn close_bench(self: Arc<Self>, bench: BenchId) {
+        let panes = {
+            let mut st = self.lock();
+            if let Some(store) = &self.cfg.store {
+                for (saved, scrollback) in self.snapshot(&st, &[bench], false) {
+                    if let Err(e) = store.save(&saved, &scrollback) {
+                        warn!("cannot save bench {:?}: {e}", saved.name);
+                    }
+                }
+            }
+            let Some(b) = st.tree.bench_mut(bench) else { return };
+            if b.closing {
+                return;
+            }
+            b.closing = true;
+            st.broadcast_tree();
+            st.pane_rt_ids_in(bench)
+        };
+        info!(?bench, "closing bench");
+        let steps: Vec<_> = panes.into_iter().map(|p| tokio::spawn(self.clone().teardown_pane(p))).collect();
+        for step in steps {
+            let _ = tokio::time::timeout(TEARDOWN_LIMIT, step).await;
+        }
+        let mut st = self.lock();
+        self.drop_bench(&mut st, bench);
+        info!(?bench, "bench closed");
+    }
+
+    async fn teardown_pane(self: Arc<Self>, pane: PaneId) {
+        let (mut prompts, running, teardown, hooked) = {
+            let st = self.lock();
+            let Some(rt) = st.panes.get(&pane) else { return };
+            let tree_pane = st.tree.pane(pane);
+            let running = rt.running.is_some() || tree_pane.is_some_and(|p| p.tool.is_some());
+            let teardown = tree_pane.map(|p| p.setup.teardown.clone()).unwrap_or_default();
+            (rt.prompts.subscribe(), running, teardown, rt.hooked)
+        };
+        let send = |bytes: &[u8]| {
+            if let Some(rt) = self.lock().panes.get(&pane) {
+                let _ = rt.input.send(bytes.to_vec());
+            }
+        };
+        // Waits for the shell's next prompt; without Shed's hook, just a pause.
+        async fn next_prompt(rx: &mut tokio::sync::watch::Receiver<u64>, hooked: bool, limit: Duration) -> bool {
+            if !hooked {
+                tokio::time::sleep(Duration::from_millis(800)).await;
+                return true;
+            }
+            rx.borrow_and_update();
+            tokio::time::timeout(limit, rx.changed()).await.is_ok_and(|r| r.is_ok())
+        }
+
+        if running {
+            send(b"\x03");
+            if !next_prompt(&mut prompts, hooked, Duration::from_secs(5)).await {
+                // Still running: ask the foreground job to terminate.
+                let pgrp = self.lock().panes.get(&pane).and_then(|rt| pty::foreground_pgrp(rt.master.get_ref()));
+                if let Some(pg) = pgrp {
+                    let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(-pg.as_raw()), nix::sys::signal::Signal::SIGTERM);
+                }
+                next_prompt(&mut prompts, hooked, Duration::from_secs(3)).await;
+            }
+        }
+        for command in teardown {
+            let mut bytes = command.into_bytes();
+            bytes.push(b'\r');
+            send(&bytes);
+            if !next_prompt(&mut prompts, hooked, TEARDOWN_LIMIT).await {
+                warn!(?pane, "a teardown command did not finish in time");
+                break;
+            }
+        }
     }
 
     /// What each bench looks like now, ready to write.
@@ -926,7 +1107,11 @@ impl Keeper {
     async fn autosave_loop(self: Arc<Self>) {
         loop {
             let secs = self.lock().config.autosave_seconds.unwrap_or(60).max(5);
-            tokio::time::sleep(Duration::from_secs(secs)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(secs)) => {}
+                // Edits to setup and aliases are saved within a second.
+                _ = self.save_soon.notified() => tokio::time::sleep(Duration::from_secs(1)).await,
+            }
             // Collect under the lock, write without it.
             let (store, work, names) = {
                 let st = self.lock();
@@ -983,7 +1168,10 @@ impl Keeper {
             cwd,
             tabs: vec![tab],
             active_tab: tab_id,
+            aliases: Default::default(),
+            closing: false,
         });
+        self.sync_alias_files(st);
         Ok(id)
     }
 
@@ -1050,7 +1238,7 @@ impl Keeper {
         if let Some(bytes) = &spec.restore {
             emu.advance(bytes);
         }
-        if spec.after_prompt.is_some() {
+        if !spec.after_prompt.is_empty() {
             // Shells without Shed's hook never send a prompt mark.
             let keeper = self.clone();
             tokio::spawn(async move {
@@ -1069,6 +1257,8 @@ impl Keeper {
             running: None,
             last_finished: None,
             after_prompt: spec.after_prompt,
+            prompts: tokio::sync::watch::channel(0).0,
+            hooked: false,
         });
         tokio::spawn(write_loop(master.clone(), input_rx));
         tokio::spawn(self.clone().pane_loop(pane_id, master, pty.child));
@@ -1149,7 +1339,17 @@ impl Keeper {
                 }
             }
             Mark::InputStart => {
+                if let Some(rt) = st.panes.get_mut(&pane) {
+                    rt.hooked = true;
+                    rt.prompts.send_modify(|n| *n += 1);
+                }
                 self.send_after_prompt(st, pane);
+            }
+            Mark::ShellAliases(text) => {
+                if let Some(p) = st.tree.pane_mut(pane) {
+                    p.shell_aliases = shed_emu::marks::parse_alias_list(&text).into_iter().collect();
+                    self.tree_dirty.notify_one();
+                }
             }
             // Any command running ends the wait, even one bash leaves out of
             // history (and so sends no command text for).

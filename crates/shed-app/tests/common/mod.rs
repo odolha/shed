@@ -131,6 +131,7 @@ pub fn start_in(dir: &Path, socket_name: &str) -> Env {
         ],
         store: Some(shed_save::Store::new(dir.join("benches"))),
         desktop: None,
+        aliases_file: dir.join("aliases.toml"),
     };
     let listen = socket.clone();
     std::thread::spawn(move || {

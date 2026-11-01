@@ -106,6 +106,7 @@ fn start_keeper(dir: &Path) -> std::path::PathBuf {
                 env: Vec::new(),
                 store: None,
                 desktop: None,
+                aliases_file: home.join("aliases.toml"),
                 shell: Some("/bin/sh".into()),
                 home,
                 exit_when_idle: false,

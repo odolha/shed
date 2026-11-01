@@ -56,6 +56,7 @@ fn main() -> anyhow::Result<()> {
             env: Vec::new(),
             store: Some(shed_save::Store::default()),
             desktop: Some(shed_desktop::Desktop::new(paths::data_home())),
+            aliases_file: shed_model::config::aliases_path(),
             shell: args.shell,
             home,
             exit_when_idle: !args.persist,

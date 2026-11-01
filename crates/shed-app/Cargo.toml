@@ -21,6 +21,8 @@ image = { version = "0.25", default-features = false }
 gpui.workspace = true
 gpui_platform.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+toml.workspace = true
 clap.workspace = true
 libc.workspace = true
 async-channel.workspace = true

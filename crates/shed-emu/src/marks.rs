@@ -29,6 +29,8 @@ pub enum Mark {
     Walk(WalkState),
     /// The walk ended (back at what was typed).
     WalkEnd,
+    /// The shell's own aliases, as `alias -p` prints them.
+    ShellAliases(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +147,10 @@ fn parse(osc: &[u8]) -> Option<Mark> {
                     let bytes = BASE64.decode(parts.next()?).ok()?;
                     Some(Mark::Command(String::from_utf8_lossy(&bytes).into_owned()))
                 }
+                "aliases" => {
+                    let bytes = BASE64.decode(parts.next().unwrap_or("")).ok()?;
+                    Some(Mark::ShellAliases(String::from_utf8_lossy(&bytes).into_owned()))
+                }
                 "walk" => {
                     let scope = parts.next()?;
                     if scope == "end" {
@@ -183,6 +189,21 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Parses `alias -p` output: `alias ll='ls -alF'` per line.
+pub fn parse_alias_list(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("alias ")?;
+            let (name, value) = rest.split_once('=')?;
+            let value = match value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+                Some(quoted) => quoted.replace(r"'\''", "'"),
+                None => value.to_string(),
+            };
+            Some((name.to_string(), value))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -238,6 +259,17 @@ mod tests {
                 Mark::Finished(None),
             ]
         );
+    }
+
+    #[test]
+    fn alias_lists() {
+        let list = "alias ll='ls -alF'\nalias say='echo '\\''hi'\\'''\nnot an alias";
+        assert_eq!(
+            parse_alias_list(list),
+            vec![("ll".into(), "ls -alF".into()), ("say".into(), "echo 'hi'".into())]
+        );
+        let stream = format!("\x1b]7777;shed;aliases;{}\x07", BASE64.encode("alias a='b'"));
+        assert_eq!(scan_all(&[stream.as_bytes()]), vec![Mark::ShellAliases("alias a='b'".into())]);
     }
 
     #[test]

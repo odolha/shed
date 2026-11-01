@@ -9,6 +9,7 @@ mod logbook;
 mod logbook_view;
 mod prompt;
 mod settings;
+mod setup_cli;
 mod state;
 mod terminal_view;
 mod theme;
@@ -100,6 +101,17 @@ enum Command {
         /// Only commands containing this.
         query: Option<String>,
     },
+    /// Show this tab's startup and teardown (run inside Shed).
+    Setup {
+        /// Edit it in $EDITOR instead.
+        #[arg(long)]
+        edit: bool,
+    },
+    /// List Shed's aliases and the shell's, or add and remove them.
+    Alias {
+        #[command(subcommand)]
+        action: Option<AliasAction>,
+    },
     /// Show whether the keeper is running, and what it holds.
     Status,
     /// Stop the keeper and every tool it holds.
@@ -113,6 +125,51 @@ enum Command {
         #[command(subcommand)]
         action: HookAction,
     },
+}
+
+#[derive(Subcommand)]
+enum AliasAction {
+    /// Set an alias. Inside Shed it applies to this tab unless told otherwise.
+    Add {
+        name: String,
+        command: String,
+        #[command(flatten)]
+        level: AliasLevelArgs,
+    },
+    /// Remove an alias from a level.
+    Rm {
+        name: String,
+        #[command(flatten)]
+        level: AliasLevelArgs,
+    },
+}
+
+#[derive(clap::Args)]
+#[group(multiple = false)]
+struct AliasLevelArgs {
+    /// Everywhere.
+    #[arg(long)]
+    global: bool,
+    /// Every tab of this bench.
+    #[arg(long)]
+    bench: bool,
+    /// This tab (the default inside Shed).
+    #[arg(long)]
+    tab: bool,
+}
+
+impl AliasLevelArgs {
+    fn level(&self) -> Option<setup_cli::Level> {
+        if self.global {
+            Some(setup_cli::Level::Global)
+        } else if self.bench {
+            Some(setup_cli::Level::Bench)
+        } else if self.tab {
+            Some(setup_cli::Level::Tab)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -188,6 +245,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(Command::List) => list(),
+        Some(Command::Setup { edit: false }) => setup_cli::show_setup(),
+        Some(Command::Setup { edit: true }) => setup_cli::edit_setup(),
+        Some(Command::Alias { action: None }) => setup_cli::list_aliases(),
+        Some(Command::Alias { action: Some(AliasAction::Add { name, command, level }) }) => {
+            setup_cli::change_alias(&name, Some(&command), level.level())
+        }
+        Some(Command::Alias { action: Some(AliasAction::Rm { name, level }) }) => setup_cli::change_alias(&name, None, level.level()),
         Some(Command::Status) => status(),
         Some(Command::Tag { action }) => tag(action),
         Some(Command::Stop) => stop(),

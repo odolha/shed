@@ -5491,6 +5491,7 @@ dependencies = [
  "gpui_ce_platform",
  "image",
  "libc",
+ "serde",
  "shed-desktop",
  "shed-emu",
  "shed-keeper",
@@ -5500,6 +5501,7 @@ dependencies = [
  "shed-save",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

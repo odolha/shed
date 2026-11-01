@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,8 @@ use crate::{BenchColor, BenchId, PaneId, Rgb, TabId};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Shed {
     pub benches: Vec<Bench>,
+    /// Shed's global aliases (from aliases.toml).
+    pub aliases: Aliases,
 }
 
 impl Shed {
@@ -124,7 +127,14 @@ pub struct Bench {
     pub cwd: PathBuf,
     pub tabs: Vec<Tab>,
     pub active_tab: TabId,
+    /// Aliases for every shell in the bench (over global ones, under a tab's).
+    pub aliases: Aliases,
+    /// The bench is being closed: its tools are stopping and teardowns running.
+    pub closing: bool,
 }
+
+/// Shed-level aliases: name → command. They override the shell's own.
+pub type Aliases = BTreeMap<String, String>;
 
 impl Bench {
     pub fn active_tab(&self) -> Option<&Tab> {
@@ -150,6 +160,8 @@ pub struct Tab {
     pub layout: PaneNode,
     pub panes: Vec<Pane>,
     pub active_pane: PaneId,
+    /// Aliases for this tab's shells, over the bench's and global ones.
+    pub aliases: Aliases,
 }
 
 impl Tab {
@@ -164,6 +176,7 @@ impl Tab {
             layout: PaneNode::Leaf(pane.id),
             active_pane: pane.id,
             panes: vec![pane],
+            aliases: Aliases::new(),
         }
     }
 
@@ -233,11 +246,46 @@ pub struct Pane {
     pub tool: Option<Tool>,
     /// A command typed at the prompt by a bench load, waiting for Enter.
     pub waiting: Option<String>,
+    /// What the pane runs when its bench loads, and when it closes.
+    pub setup: PaneSetup,
+    /// The aliases the shell itself defines (from ~/.bashrc and the like).
+    pub shell_aliases: Aliases,
+}
+
+/// A pane's own startup and teardown, set by the user.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneSetup {
+    /// Where the pane starts when its bench loads; otherwise where its shell
+    /// was when the bench was last saved.
+    pub start_in: Option<PathBuf>,
+    /// Run one after another at the prompt when the bench loads, instead of
+    /// whatever was running when it was saved.
+    pub startup: Vec<String>,
+    /// Type the startup commands but wait for Enter instead of running them.
+    pub wait: bool,
+    /// Run when the bench is closed, after the running tool is stopped.
+    pub teardown: Vec<String>,
+}
+
+impl PaneSetup {
+    pub fn is_empty(&self) -> bool {
+        self.start_in.is_none() && self.startup.is_empty() && self.teardown.is_empty()
+    }
 }
 
 impl Pane {
     pub fn new(id: PaneId, cwd: PathBuf) -> Self {
-        Self { id, cwd, cols: 80, rows: 24, title: None, tool: None, waiting: None }
+        Self {
+            id,
+            cwd,
+            cols: 80,
+            rows: 24,
+            title: None,
+            tool: None,
+            waiting: None,
+            setup: PaneSetup::default(),
+            shell_aliases: Aliases::new(),
+        }
     }
 }
 
@@ -471,6 +519,8 @@ mod tests {
             cwd: "/".into(),
             active_tab: tabs[0].id,
             tabs,
+            aliases: Aliases::new(),
+            closing: false,
         }
     }
 
@@ -478,7 +528,7 @@ mod tests {
     fn removing_last_pane_removes_tab_and_bench() {
         let p = pane();
         let pid = p.id;
-        let mut shed = Shed { benches: vec![bench(vec![Tab::with_pane(p)])] };
+        let mut shed = Shed { benches: vec![bench(vec![Tab::with_pane(p)])], ..Default::default() };
         assert!(shed.remove_pane(pid).is_some());
         assert!(shed.benches.is_empty());
     }
@@ -489,7 +539,7 @@ mod tests {
         let ids: Vec<TabId> = tabs.iter().map(|t| t.id).collect();
         let mut b = bench(tabs);
         b.active_tab = ids[1];
-        let mut shed = Shed { benches: vec![b] };
+        let mut shed = Shed { benches: vec![b], ..Default::default() };
         shed.take_tab(ids[1]);
         assert_eq!(shed.benches[0].active_tab, ids[2]);
         shed.take_tab(ids[2]);
@@ -501,7 +551,7 @@ mod tests {
         let a = bench(vec![Tab::with_pane(pane())]);
         let b = bench(vec![Tab::with_pane(pane())]);
         let (tab, target) = (a.tabs[0].id, b.id);
-        let mut shed = Shed { benches: vec![a, b] };
+        let mut shed = Shed { benches: vec![a, b], ..Default::default() };
         assert!(shed.move_tab(tab, target, 0));
         assert_eq!(shed.benches.len(), 1);
         assert_eq!(shed.benches[0].tabs[0].id, tab);

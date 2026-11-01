@@ -24,6 +24,12 @@
 //! [[tabs.panes]]
 //! cwd = "~/code/api"
 //! tool = "cargo watch -x run"
+//!
+//! # Set by you: start here and run these instead of the saved tool, and
+//! # run the teardown when the bench is closed.
+//! start_in = "~/code/api"
+//! startup = ["docker compose up -d", "npm run dev"]
+//! teardown = ["docker compose down"]
 //! ```
 //!
 //! IDs are kept too, so a loaded tab finds its own history file and logbook
@@ -37,7 +43,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use shed_model::config::RackConfig;
-use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Rgb, Tab, TabId, Tag, paths, tag_color};
+use shed_model::{Aliases, Bench, BenchColor, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId, Tag, paths, tag_color};
 
 pub use layout::{format_layout, parse_layout};
 
@@ -54,6 +60,8 @@ pub struct SavedBench {
     pub saved: String,
     #[serde(default)]
     pub active_tab: usize,
+    #[serde(default, skip_serializing_if = "Aliases::is_empty")]
+    pub aliases: Aliases,
     pub tabs: Vec<SavedTab>,
 }
 
@@ -71,6 +79,8 @@ pub struct SavedTab {
     pub layout: String,
     #[serde(default)]
     pub active_pane: usize,
+    #[serde(default, skip_serializing_if = "Aliases::is_empty")]
+    pub aliases: Aliases,
     pub panes: Vec<SavedPane>,
 }
 
@@ -93,6 +103,18 @@ pub struct SavedPane {
     /// The command running in the pane, as it was typed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// Where the pane starts on load, instead of `cwd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_in: Option<String>,
+    /// Commands to run on load instead of `tool`, one after another.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub startup: Vec<String>,
+    /// Type the startup commands and wait for Enter.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wait: bool,
+    /// Commands to run when the bench is closed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teardown: Vec<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -131,6 +153,10 @@ impl SavedBench {
                         cols: p.cols,
                         rows: p.rows,
                         tool: extras(p.id).tool,
+                        start_in: p.setup.start_in.as_deref().map(home_relative),
+                        startup: p.setup.startup.clone(),
+                        wait: p.setup.wait,
+                        teardown: p.setup.teardown.clone(),
                     })
                     .collect();
                 SavedTab {
@@ -144,6 +170,7 @@ impl SavedBench {
                     private: tab.private,
                     layout: format_layout(&tab.layout, &order),
                     active_pane: order.iter().position(|id| *id == tab.active_pane).unwrap_or(0),
+                    aliases: tab.aliases.clone(),
                     panes,
                 }
             })
@@ -156,6 +183,7 @@ impl SavedBench {
             cwd: home_relative(&bench.cwd),
             saved: utc_now(),
             active_tab: bench.tab_index(bench.active_tab).unwrap_or(0),
+            aliases: bench.aliases.clone(),
             tabs,
         }
     }
@@ -179,6 +207,12 @@ impl SavedBench {
                     let mut pane = Pane::new(sp.id, expand_home(&sp.cwd));
                     pane.cols = sp.cols;
                     pane.rows = sp.rows;
+                    pane.setup = PaneSetup {
+                        start_in: sp.start_in.as_deref().map(expand_home),
+                        startup: sp.startup.clone(),
+                        wait: sp.wait,
+                        teardown: sp.teardown.clone(),
+                    };
                     pane
                 })
                 .collect();
@@ -200,6 +234,7 @@ impl SavedBench {
                 active_pane: ids.get(st.active_pane).copied().unwrap_or(ids[0]),
                 layout,
                 panes,
+                aliases: st.aliases.clone(),
             });
         }
         if tabs.is_empty() {
@@ -214,6 +249,8 @@ impl SavedBench {
             cwd,
             tabs,
             active_tab,
+            aliases: self.aliases.clone(),
+            closing: false,
         };
         Ok((bench, panes_out))
     }
@@ -513,6 +550,13 @@ mod tests {
         tab.split(first, Pane::new(PaneId::new(), home.join("code/api")), SplitDir::Right);
         tab.layout.set_ratio(&[], 0.6);
         tab.name = Some("api".into());
+        tab.aliases.insert("t".into(), "cargo test".into());
+        tab.panes[0].setup = PaneSetup {
+            start_in: Some(home.join("code")),
+            startup: vec!["docker compose up -d".into(), "npm run dev".into()],
+            wait: false,
+            teardown: vec!["docker compose down".into()],
+        };
         tab.tags.push(Tag { label: "dev".into(), color: tag_color("green").unwrap(), tint_tab: false });
         let second = Tab::with_pane(Pane::new(PaneId::new(), "/tmp".into()));
         Bench {
@@ -523,6 +567,8 @@ mod tests {
             cwd: home.join("code"),
             active_tab: second.id,
             tabs: vec![tab, second],
+            aliases: [("up".to_string(), "docker compose up -d".to_string())].into(),
+            closing: false,
         }
     }
 
@@ -535,12 +581,17 @@ mod tests {
         assert!(text.contains("layout = \"right 0.6 (0) (1)\""), "{text}");
         assert!(text.contains("tool = \"nvim src/main.rs\""));
         assert!(text.contains("cwd = \"~/code/api\""));
+        assert!(text.contains("teardown = [\"docker compose down\"]"), "{text}");
+        assert!(text.contains("[aliases]") && text.contains("[tabs.aliases]"), "{text}");
 
         let (loaded, panes) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
         assert_eq!(loaded.tabs.len(), 2);
         assert_eq!(loaded.active_tab, bench.active_tab);
         assert_eq!(loaded.tabs[0].layout, bench.tabs[0].layout);
         assert_eq!(panes[0].1.tool.as_deref(), Some("nvim src/main.rs"));
+        assert_eq!(loaded.tabs[0].panes[0].setup, bench.tabs[0].panes[0].setup);
+        assert_eq!(loaded.aliases, bench.aliases);
+        assert_eq!(loaded.tabs[0].aliases, bench.tabs[0].aliases);
 
         let again = SavedBench::from_bench(&loaded, |id| PaneExtras { tool: panes.iter().find(|p| p.0 == id).and_then(|p| p.1.tool.clone()) });
         let again = SavedBench { saved: saved.saved.clone(), ..again };

@@ -167,7 +167,7 @@ impl TerminalView {
                 }
                 Mark::Walk(w) => self.walk = Some(w),
                 Mark::WalkEnd => self.walk = None,
-                Mark::Finished(_) | Mark::Cwd(_) | Mark::Command(_) => {}
+                Mark::Finished(_) | Mark::Cwd(_) | Mark::Command(_) | Mark::ShellAliases(_) => {}
             }
         }
         self.emu.advance(bytes);

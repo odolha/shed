@@ -9,10 +9,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use shed_model::{BenchColor, BenchId, PaneId, PaneNode, Shed, SplitDir, TabId, Tag};
+use shed_model::{Aliases, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -57,6 +57,10 @@ pub enum ClientMsg {
     CloseBench { bench: BenchId },
     /// Stops the bench if it runs, and removes its saved file and launcher.
     DeleteBench { name: String },
+    /// A pane's startup and teardown; used the next time its bench loads or closes.
+    SetPaneSetup { pane: PaneId, setup: PaneSetup },
+    /// Replaces the Shed aliases at one level.
+    SetAliases { level: AliasTarget, aliases: Aliases },
     /// Saves a bench now; with `as_name`, also saves a copy under that name.
     SaveBench { bench: BenchId, as_name: Option<String> },
     FocusPane { pane: PaneId },
@@ -74,6 +78,14 @@ pub enum ClientMsg {
     Status,
     /// Stop the keeper and every tool it holds.
     Shutdown,
+}
+
+/// Which aliases to set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AliasTarget {
+    Global,
+    Bench(BenchId),
+    Tab(TabId),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

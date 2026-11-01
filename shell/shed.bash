@@ -36,10 +36,33 @@ __shed_preexec() {
     builtin printf '\e]133;C\a'
 }
 
+# Shed's aliases (global, bench, tab) come from a file the keeper keeps for
+# this tab, one "name<TAB>command" per line. They are applied over the
+# shell's own aliases; removing one brings the shell's version back.
+__shed_shell_aliases=$(builtin alias -p)
+builtin printf '\e]7777;shed;aliases;%s\a' "$(builtin printf '%s' "$__shed_shell_aliases" | command base64 -w0)"
+__shed_alias_names=()
+__shed_alias_sync() {
+    local file="${SHED_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/shed}/aliases/${SHED_TAB:-none}" content=
+    [[ -r $file ]] && IFS= builtin read -r -d '' content <"$file"
+    [[ $content == "${__shed_alias_last-}" ]] && return
+    __shed_alias_last=$content
+    local name value
+    for name in "${__shed_alias_names[@]}"; do builtin unalias "$name" 2>/dev/null; done
+    builtin eval "$__shed_shell_aliases"
+    __shed_alias_names=()
+    while IFS=$'\t' builtin read -r name value; do
+        [[ -n $name ]] || continue
+        builtin alias "$name=$value"
+        __shed_alias_names+=("$name")
+    done <<<"$content"
+}
+
 # Runs first at every prompt: the last command's exit code, the directory.
 __shed_precmd() {
     local status=$?
     builtin printf '\e]133;D;%s\a\e]7;file://%s%s\a' "$status" "${HOSTNAME:-}" "$PWD"
+    __shed_alias_sync
     builtin history -a
     __shed_hist_next=$HISTCMD
     return $status

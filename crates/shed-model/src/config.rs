@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 use serde::Deserialize;
 
-use crate::{Rgb, Tag, Tool, default_tag_color, paths, tag_color};
+use crate::{Aliases, Rgb, Tag, Tool, default_tag_color, paths, tag_color};
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -266,6 +266,81 @@ impl Config {
     }
 }
 
+/// `~/.config/shed/aliases.toml`: Shed's global aliases, `name = "command"`.
+/// Kept apart from shed.toml so Shed can rewrite it without touching yours.
+pub fn aliases_path() -> PathBuf {
+    paths::config_dir().join("aliases.toml")
+}
+
+/// Reads global aliases; a missing file is none.
+pub fn load_aliases(path: &Path) -> Result<Aliases, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Aliases::new()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+pub fn save_aliases(path: &Path, aliases: &Aliases) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let body = toml::to_string(aliases).map_err(std::io::Error::other)?;
+    std::fs::write(path, format!("# Shed's global aliases: name = \"command\". Benches and tabs can override them.\n{body}"))
+}
+
+/// Where an alias comes from, weakest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AliasLevel {
+    /// Defined by the shell itself (~/.bashrc).
+    Shell,
+    Global,
+    Bench,
+    Tab,
+}
+
+impl AliasLevel {
+    pub fn name(self) -> &'static str {
+        match self {
+            AliasLevel::Shell => "shell",
+            AliasLevel::Global => "global",
+            AliasLevel::Bench => "bench",
+            AliasLevel::Tab => "tab",
+        }
+    }
+}
+
+/// Every alias a tab's shells see, with the level that wins and the ones it hides.
+pub fn resolve_aliases(
+    shell: &Aliases,
+    global: &Aliases,
+    bench: &Aliases,
+    tab: &Aliases,
+) -> Vec<(String, String, AliasLevel, Vec<AliasLevel>)> {
+    let levels = [(AliasLevel::Shell, shell), (AliasLevel::Global, global), (AliasLevel::Bench, bench), (AliasLevel::Tab, tab)];
+    let mut names: Vec<&String> = levels.iter().flat_map(|(_, a)| a.keys()).collect();
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| {
+            let defined: Vec<(AliasLevel, &String)> =
+                levels.iter().filter_map(|(level, a)| a.get(name).map(|v| (*level, v))).collect();
+            let (level, value) = *defined.last().unwrap();
+            let hidden = defined[..defined.len() - 1].iter().map(|(l, _)| *l).collect();
+            (name.clone(), value.clone(), level, hidden)
+        })
+        .collect()
+}
+
+/// The aliases Shed sets in a tab's shells: global, then bench, then tab.
+pub fn shed_aliases(global: &Aliases, bench: &Aliases, tab: &Aliases) -> Aliases {
+    let mut out = global.clone();
+    out.extend(bench.iter().map(|(k, v)| (k.clone(), v.clone())));
+    out.extend(tab.iter().map(|(k, v)| (k.clone(), v.clone())));
+    out
+}
+
 /// Watches a file by modification time: cheap enough to call every second.
 #[derive(Debug, Default)]
 pub struct FileWatch {
@@ -340,6 +415,27 @@ mod tests {
         let (theme, err) = Config { theme: Some("missing".into()), ..Default::default() }.theme();
         assert_eq!(theme, Theme::load("shed-dark").unwrap());
         assert!(err.is_some());
+    }
+
+    #[test]
+    fn alias_levels() {
+        let a = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Aliases>();
+        let shell = a(&[("ll", "ls -l"), ("gs", "git status")]);
+        let global = a(&[("ll", "ls -la")]);
+        let bench = a(&[("up", "docker compose up -d")]);
+        let tab = a(&[("ll", "ls -lah")]);
+        let r = resolve_aliases(&shell, &global, &bench, &tab);
+        let ll = r.iter().find(|x| x.0 == "ll").unwrap();
+        assert_eq!((ll.1.as_str(), ll.2), ("ls -lah", AliasLevel::Tab));
+        assert_eq!(ll.3, vec![AliasLevel::Shell, AliasLevel::Global]);
+        assert_eq!(r.iter().find(|x| x.0 == "gs").unwrap().2, AliasLevel::Shell);
+        assert_eq!(shed_aliases(&global, &bench, &tab).len(), 2);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("aliases.toml");
+        assert!(load_aliases(&path).unwrap().is_empty());
+        save_aliases(&path, &global).unwrap();
+        assert_eq!(load_aliases(&path).unwrap(), global);
     }
 
     #[test]
