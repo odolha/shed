@@ -202,6 +202,8 @@ exits by itself once it holds no panes and no window is connected.
   tree, as the packages do.
 - `shed debug-type 'echo hi\r'` types into the first pane through the keeper,
   for testing without a keyboard.
+- Release builds carry no debug info; `cargo build --profile profiling` keeps line
+  tables, for profilers.
 - `SHED_PERF=1` makes the window process print redraws per second and their cost.
   It only applies to the process that owns the windows, so close every Shed window
   first, or use a separate `SHED_RUNTIME_DIR`. Per-process GPU time is in
