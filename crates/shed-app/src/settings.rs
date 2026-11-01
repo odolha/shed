@@ -18,17 +18,20 @@ pub struct Settings {
     pub keys: BTreeMap<String, String>,
     /// Problems with the config, shown in every window until fixed.
     pub errors: Vec<String>,
+    pub config: Config,
+    /// The desktop prefers dark, which `theme = "auto"` follows.
+    pub dark: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self::from_config(&Config::default())
+        Self::from_config(&Config::default(), true)
     }
 }
 
 impl Settings {
-    pub fn from_config(config: &Config) -> Self {
-        let (theme, error) = config.theme();
+    pub fn from_config(config: &Config, dark: bool) -> Self {
+        let (theme, error) = config.theme(dark);
         Self {
             font: config.font.clone().into(),
             palette: Palette::from_theme(&theme),
@@ -38,13 +41,15 @@ impl Settings {
             icon_badges: config.window.icon_badges,
             keys: config.keys.clone(),
             errors: error.into_iter().collect(),
+            config: config.clone(),
+            dark,
         }
     }
 
     /// Reads `shed.toml`; a broken file keeps `previous` and reports why.
     pub fn load(previous: &Settings) -> Settings {
         match Config::load_from(&Config::path()) {
-            Ok(config) => Settings::from_config(&config),
+            Ok(config) => Settings::from_config(&config, previous.dark),
             Err(e) => Settings { errors: vec![e], ..previous.clone() },
         }
     }

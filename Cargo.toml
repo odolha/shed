@@ -38,6 +38,7 @@ async-channel = "2"
 insta = "1"
 tempfile = "3"
 toml = "1"
+toml_edit = "0.25"
 rusqlite = { version = "0.41", features = ["bundled"] }
 base64 = "0.22"
 zstd = "0.13"

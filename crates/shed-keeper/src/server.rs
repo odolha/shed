@@ -130,6 +130,8 @@ struct State {
     /// Benches with a window, as last known: a window process that goes away
     /// without detaching (logout, a crash) leaves its benches here.
     shown: HashSet<BenchId>,
+    /// The desktop prefers dark, as the window process last said.
+    dark: bool,
 }
 
 struct PaneRt {
@@ -289,6 +291,7 @@ impl Keeper {
                 started: Instant::now(),
                 palette: Palette::default(),
                 shown: HashSet::new(),
+                dark: true,
             }),
             shutdown: Notify::new(),
             stopping: AtomicBool::new(false),
@@ -341,16 +344,8 @@ impl Keeper {
         if st.config_watch.changed(&self.cfg.config_file) {
             match Config::load_from(&self.cfg.config_file) {
                 Ok(config) => {
-                    let (theme, error) = config.theme();
-                    if let Some(e) = error {
-                        warn!("{e}");
-                    }
-                    st.palette = Palette::from_theme(&theme);
-                    let palette = st.palette.clone();
-                    for rt in st.panes.values_mut() {
-                        rt.emu.set_palette(palette.clone());
-                    }
                     st.config = config;
+                    apply_theme(st);
                     info!("config loaded");
                 }
                 Err(e) => warn!("config not loaded: {e}"),
@@ -784,6 +779,13 @@ impl Keeper {
                     tree: st.tree.clone(),
                 };
                 st.send(client, KeeperMsg::Status(status));
+            }
+            ClientMsg::SetAppearance { dark } => {
+                let mut st = self.lock();
+                if st.dark != dark {
+                    st.dark = dark;
+                    apply_theme(&mut st);
+                }
             }
             ClientMsg::QuitShed => {
                 info!(client, "closing Shed");
@@ -1661,4 +1663,17 @@ fn preview(text: &str) -> Vec<String> {
 /// The benches running now, and which have a window.
 fn session_of(st: &State) -> Vec<SessionBench> {
     st.tree.benches.iter().map(|b| SessionBench { name: b.name.clone(), open: st.shown.contains(&b.id) }).collect()
+}
+
+/// The colours the keeper answers apps' queries with: the theme in effect.
+fn apply_theme(st: &mut State) {
+    let (theme, error) = st.config.theme(st.dark);
+    if let Some(e) = error {
+        warn!("{e}");
+    }
+    st.palette = Palette::from_theme(&theme);
+    let palette = st.palette.clone();
+    for rt in st.panes.values_mut() {
+        rt.emu.set_palette(palette.clone());
+    }
 }

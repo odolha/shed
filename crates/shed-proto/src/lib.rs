@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -85,6 +85,9 @@ pub enum ClientMsg {
     /// Closes Shed: records which benches run (and which have windows) for
     /// `auto_restore`, closes each bench as `CloseBench` does, then stops.
     QuitShed,
+    /// The desktop prefers dark or light, for `theme = "auto"`: the keeper
+    /// answers apps' colour queries from the theme in effect.
+    SetAppearance { dark: bool },
 }
 
 /// Which aliases to set.

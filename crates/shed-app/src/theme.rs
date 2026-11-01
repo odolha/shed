@@ -72,6 +72,16 @@ impl UiColors {
     }
 }
 
+/// The chrome colours of the theme in effect.
+pub fn current_ui(cx: &gpui::App) -> UiColors {
+    cx.try_global::<crate::prompt::CurrentUi>().map(|u| u.0.clone()).unwrap_or_default()
+}
+
+/// Whether the desktop prefers dark.
+pub fn is_dark(appearance: gpui::WindowAppearance) -> bool {
+    matches!(appearance, gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark)
+}
+
 /// `c` at `alpha` opacity.
 pub fn hsla_alpha(c: Rgb, alpha: f32) -> Hsla {
     let mut h = hsla(c);

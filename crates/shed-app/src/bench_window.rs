@@ -67,8 +67,8 @@ pub struct DraggedTab {
 }
 
 impl Render for DraggedTab {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let ui = UiColors::default();
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let ui = crate::theme::current_ui(cx);
         div()
             .px_3()
             .py_1()
@@ -835,8 +835,8 @@ impl Render for BenchWindow {
 struct Tooltip(SharedString);
 
 impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let ui = UiColors::default();
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let ui = crate::theme::current_ui(cx);
         div()
             .px_2()
             .py_1()

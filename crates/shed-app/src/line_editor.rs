@@ -4,7 +4,7 @@ use gpui::{
     Context, EventEmitter, FocusHandle, Focusable, KeyDownEvent, Window, div, prelude::*, px,
 };
 
-use crate::theme::{UiColors, hsla};
+use crate::theme::hsla;
 
 pub enum EditorEvent {
     Submit(String),
@@ -88,7 +88,7 @@ impl LineEditor {
 
 impl Render for LineEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let ui = UiColors::default();
+        let ui = crate::theme::current_ui(cx);
         let at = self.byte(self.cursor);
         let (before, after) = self.text.split_at(at);
         div()

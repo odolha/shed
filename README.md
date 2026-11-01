@@ -33,6 +33,9 @@ the logbook, saving and loading benches, and Shed's own window with the rest of 
 - **Mouse**: selection (Shift overrides apps' mouse mode), copy to the primary selection,
   Ctrl+click for links and paths, and right-click menus. Split borders drag.
 - **Config**: `~/.config/shed/shed.toml` reloads live. It sets fonts, themes, keys, tag rules and the rack.
+- **Light and dark**: Shed follows the desktop's light or dark preference by default
+  (`theme = "auto"`), switching live; the Appearance switch in the Shed window sets
+  Auto, Light or Dark (it edits `shed.toml`, keeping the rest of the file).
 - **Logbook**: every command run in bash is kept with its directory, exit code, time,
   tab, bench and tags. Up walks this tab's history, Ctrl+Up the bench's, Ctrl+Shift+Up
   everything; typing first narrows the walk to commands starting with it. Ctrl+R at a
@@ -83,7 +86,9 @@ the logbook, saving and loading benches, and Shed's own window with the rest of 
 
 ```toml
 # ~/.config/shed/shed.toml (every key optional)
-theme = "shed-dark"            # or shed-light, or themes/<name>.toml
+theme = "auto"                 # follows the desktop; or shed-light, shed-dark, themes/<name>.toml
+theme_light = "shed-light"     # what auto uses in light mode
+theme_dark = "shed-dark"       # and in dark mode
 autosave_seconds = 60
 auto_restore = false           # reopen what was open or hidden when Shed last closed
 [font]

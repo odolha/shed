@@ -258,6 +258,26 @@ impl AppState {
         cx.notify();
     }
 
+    /// The desktop switched between light and dark.
+    pub fn set_dark(&mut self, dark: bool, cx: &mut Context<Self>) {
+        if self.settings.dark == dark {
+            return;
+        }
+        self.conn.send_msg(ClientMsg::SetAppearance { dark });
+        let settings = Settings::load(&Settings { dark, ..self.settings.clone() });
+        self.apply_settings(settings, cx);
+    }
+
+    /// Switches between following the desktop and always light or dark.
+    pub fn set_appearance(&mut self, appearance: shed_model::config::Appearance, cx: &mut Context<Self>) {
+        if let Err(e) = self.settings.config.set_appearance(&Config::path(), appearance) {
+            warn!("cannot change the appearance: {e}");
+            return;
+        }
+        let settings = Settings::load(&self.settings);
+        self.apply_settings(settings, cx);
+    }
+
     /// Reloads `shed.toml` (and its theme) whenever either changes.
     pub async fn watch_config(state: Entity<AppState>, cx: &mut AsyncApp) {
         let mut config_watch = FileWatch::default();
@@ -265,10 +285,10 @@ impl AppState {
         config_watch.changed(&Config::path());
         loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
+            let dark = state.read_with(cx, |state, _| state.settings.dark);
             let theme_file = Config::load_from(&Config::path())
                 .ok()
-                .and_then(|c| c.theme)
-                .map(|name| shed_model::paths::config_dir().join("themes").join(format!("{name}.toml")));
+                .map(|c| shed_model::paths::config_dir().join("themes").join(format!("{}.toml", c.theme_name(dark))));
             let theme_changed = theme_file.as_deref().is_some_and(|p| theme_watch.changed(p));
             if config_watch.changed(&Config::path()) || theme_changed {
                 state.update(cx, |state, cx| {

@@ -1,14 +1,15 @@
 //! The Shed window: the pegboard, with the Shed icon. It lives as long as
 //! Shed does; closing it closes every bench and Shed with them.
 
-use gpui::{Context, Entity, PromptLevel, Window, div, prelude::*, px, svg};
+use gpui::{Context, Entity, PromptLevel, SharedString, Window, div, prelude::*, px, svg};
+use shed_model::config::Appearance;
 use shed_proto::{ClientMsg, ShowTarget};
 
 use crate::actions::NewBench;
 use crate::assets::icon;
 use crate::pegboard::Pegboard;
 use crate::state::AppState;
-use crate::theme::hsla;
+use crate::theme::{hsla, hsla_alpha, is_dark};
 
 pub struct ShedWindow {
     state: Entity<AppState>,
@@ -26,6 +27,12 @@ impl ShedWindow {
             false
         });
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        // `theme = "auto"` follows the desktop as it switches.
+        cx.observe_window_appearance(window, |this, window, cx| {
+            let dark = is_dark(window.appearance());
+            this.state.update(cx, |state, cx| state.set_dark(dark, cx));
+        })
+        .detach();
         let board = cx.new(|cx| Pegboard::new(state.clone(), window, cx));
         Self { state, board, quitting: false }
     }
@@ -73,6 +80,24 @@ impl Render for ShedWindow {
         let state = self.state.read(cx);
         let ui = state.settings.ui.clone();
         let running = state.tree.benches.len();
+        let current = state.settings.config.appearance();
+        let switch = div().flex().items_center().gap_1().text_size(px(12.0)).children(
+            [(Appearance::Auto, "Auto"), (Appearance::Light, "Light"), (Appearance::Dark, "Dark")].map(|(appearance, label)| {
+                let on = current == Some(appearance);
+                div()
+                    .id(SharedString::from(format!("appearance-{label}")))
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(hsla_alpha(ui.accent_fallback, 0.2)).text_color(hsla(ui.accent_fallback)))
+                    .when(!on, |d| d.text_color(hsla(ui.text_dim)).hover(|s| s.bg(hsla(ui.tab_hover))))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.state.update(cx, |state, cx| state.set_appearance(appearance, cx));
+                    }))
+            }),
+        );
         let banner = self.quitting.then(|| {
             let text = if running == 0 {
                 "Closing Shed…".to_string()
@@ -108,7 +133,10 @@ impl Render for ShedWindow {
                     .px_4()
                     .pt_3()
                     .child(svg().path(icon("shed")).size(px(18.0)).text_color(hsla(ui.accent_fallback)))
-                    .child(div().text_size(px(16.0)).child("Shed")),
+                    .child(div().text_size(px(16.0)).child("Shed"))
+                    .child(div().flex_1())
+                    .child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child("Appearance"))
+                    .child(switch),
             )
             .children(banner)
             .child(div().flex_1().min_h_0().child(self.board.clone()))

@@ -323,7 +323,10 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx: &mut App| {
             prompt::install(cx);
-            let settings = settings::Settings::load(&settings::Settings::default());
+            // `theme = "auto"` follows the desktop, which can change while Shed runs.
+            let dark = theme::is_dark(cx.window_appearance());
+            let settings = settings::Settings::load(&settings::Settings { dark, ..Default::default() });
+            conn.send_msg(ClientMsg::SetAppearance { dark });
             let state = cx.new(|_| AppState::new(conn, settings.clone()));
             state.update(cx, |state, cx| state.apply_settings(settings, cx));
             let receiving = state.clone();

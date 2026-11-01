@@ -15,8 +15,12 @@ use crate::{Aliases, Rgb, Tag, Tool, default_tag_color, paths, tag_color};
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub font: FontConfig,
-    /// A theme name: `shed-dark`, `shed-light`, or a file in `themes/`.
+    /// `auto` (the default) follows the desktop's light or dark preference;
+    /// or a theme name: `shed-dark`, `shed-light`, or a file in `themes/`.
     pub theme: Option<String>,
+    /// The themes `auto` picks between (`shed-light` and `shed-dark`).
+    pub theme_light: Option<String>,
+    pub theme_dark: Option<String>,
     pub window: WindowConfig,
     /// Key → action name, or `"none"` to unbind. Merged over the defaults.
     pub keys: BTreeMap<String, String>,
@@ -249,12 +253,55 @@ impl Config {
     }
 
     /// The theme the config names, falling back to the default with a message.
-    pub fn theme(&self) -> (Theme, Option<String>) {
-        let name = self.theme.as_deref().unwrap_or("shed-dark");
-        match Theme::load(name) {
+    /// The theme in effect when the desktop prefers dark (`dark`) or not.
+    pub fn theme(&self, dark: bool) -> (Theme, Option<String>) {
+        match Theme::load(&self.theme_name(dark)) {
             Ok(t) => (t, None),
-            Err(e) => (Theme::load("shed-dark").expect("built-in theme"), Some(e)),
+            Err(e) => (Theme::load(if dark { "shed-dark" } else { "shed-light" }).expect("built-in theme"), Some(e)),
         }
+    }
+
+    pub fn theme_name(&self, dark: bool) -> String {
+        match self.theme.as_deref() {
+            None | Some("auto") if dark => self.theme_dark.clone().unwrap_or_else(|| "shed-dark".into()),
+            None | Some("auto") => self.theme_light.clone().unwrap_or_else(|| "shed-light".into()),
+            Some(name) => name.to_string(),
+        }
+    }
+
+    /// Where the appearance switch stands; `None` for another theme of one's own.
+    pub fn appearance(&self) -> Option<Appearance> {
+        match self.theme.as_deref() {
+            None | Some("auto") => Some(Appearance::Auto),
+            Some(name) if name == self.light_name() => Some(Appearance::Light),
+            Some(name) if name == self.dark_name() => Some(Appearance::Dark),
+            Some(_) => None,
+        }
+    }
+
+    fn light_name(&self) -> String {
+        self.theme_light.clone().unwrap_or_else(|| "shed-light".into())
+    }
+
+    fn dark_name(&self) -> String {
+        self.theme_dark.clone().unwrap_or_else(|| "shed-dark".into())
+    }
+
+    /// Sets the appearance in the `shed.toml` at `path`, leaving the rest of
+    /// the file (comments too) as it is.
+    pub fn set_appearance(&self, path: &Path, appearance: Appearance) -> Result<(), String> {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
+        let theme = match appearance {
+            Appearance::Auto => "auto".to_string(),
+            Appearance::Light => self.light_name(),
+            Appearance::Dark => self.dark_name(),
+        };
+        doc["theme"] = toml_edit::value(theme);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Tags the rules give a tab whose panes run these tools in these directories.
@@ -267,6 +314,14 @@ impl Config {
         }
         tags
     }
+}
+
+/// Light or dark, or as the desktop prefers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Appearance {
+    Auto,
+    Light,
+    Dark,
 }
 
 /// `~/.config/shed/aliases.toml`: Shed's global aliases, `name = "command"`.
@@ -415,9 +470,36 @@ mod tests {
     fn builtin_themes_load() {
         assert!(Theme::load("shed-dark").is_ok());
         assert!(Theme::load("shed-light").is_ok());
-        let (theme, err) = Config { theme: Some("missing".into()), ..Default::default() }.theme();
+        let (theme, err) = Config { theme: Some("missing".into()), ..Default::default() }.theme(true);
         assert_eq!(theme, Theme::load("shed-dark").unwrap());
         assert!(err.is_some());
+    }
+
+    #[test]
+    fn auto_follows_the_desktop() {
+        let auto = Config::default();
+        assert_eq!((auto.theme_name(true), auto.theme_name(false)), ("shed-dark".into(), "shed-light".into()));
+        assert_eq!(auto.appearance(), Some(Appearance::Auto));
+        let fixed = Config { theme: Some("shed-light".into()), ..Default::default() };
+        assert_eq!(fixed.theme_name(true), "shed-light");
+        assert_eq!(fixed.appearance(), Some(Appearance::Light));
+        let mine = Config { theme: Some("solarized".into()), ..Default::default() };
+        assert_eq!(mine.appearance(), None);
+    }
+
+    #[test]
+    fn setting_the_appearance_keeps_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shed.toml");
+        std::fs::write(&path, "# my settings\nautosave_seconds = 30 # often\n\n[font]\nsize = 15\n").unwrap();
+        let config = Config::load_from(&path).unwrap();
+        config.set_appearance(&path, Appearance::Dark).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# my settings") && text.contains("# often") && text.contains("size = 15"), "{text}");
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!((config.appearance(), config.autosave_seconds), (Some(Appearance::Dark), Some(30)));
+        config.set_appearance(&path, Appearance::Auto).unwrap();
+        assert_eq!(Config::load_from(&path).unwrap().appearance(), Some(Appearance::Auto));
     }
 
     #[test]
