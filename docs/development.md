@@ -63,7 +63,8 @@ cargo clippy --all-targets
   costs about 4 ms on an integrated GPU with fractional scaling.
 - **Docs**: a change people can see updates the [User Guide](user-guide.md) (and
   its screenshots); a change in how things work updates
-  [How Shed works](architecture.md).
+  [How Shed works](architecture.md). `CLAUDE.md`, the briefing for AI coding
+  agents, follows changes to commands, structure and these rules.
 
 ## Screenshots and icons
 
