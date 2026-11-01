@@ -1,6 +1,7 @@
 //! The window's connection to the keeper, starting the keeper if needed.
 
 use std::io::{BufReader, BufWriter, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -10,12 +11,23 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use shed_model::paths;
-use shed_proto::{ClientKind, ClientMsg, Frame, PROTOCOL_VERSION, read_frame};
+use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, PROTOCOL_VERSION, ProtoError, read_frame};
+
+/// Reported when the keeper speaks another protocol: it is from an older
+/// or newer build of Shed.
+pub const OTHER_VERSION: &str = "the running keeper is from another version of Shed";
+
+/// Whether a keeper error means it is from another version of Shed.
+pub fn is_other_version(error: &str) -> bool {
+    error.starts_with(OTHER_VERSION) || error.starts_with("protocol mismatch")
+}
 
 /// Sends frames to the keeper. Cheap to clone; a writer thread does the I/O.
 #[derive(Clone)]
 pub struct KeeperConn {
     tx: mpsc::Sender<Frame>,
+    /// The keeper's process, read from the socket, so known whatever its version.
+    pub keeper_pid: Option<u32>,
 }
 
 impl KeeperConn {
@@ -59,19 +71,56 @@ pub fn connect(kind: ClientKind, start_keeper: bool) -> anyhow::Result<(KeeperCo
         }
     })?;
 
+    let keeper_pid = peer_pid(&stream);
     let (in_tx, in_rx) = async_channel::unbounded();
     let mut reader = BufReader::with_capacity(256 * 1024, stream);
     std::thread::Builder::new().name("keeper-read".into()).spawn(move || {
-        while let Ok(frame) = read_frame(&mut reader) {
+        loop {
+            let frame = match read_frame(&mut reader) {
+                // Messages travel by position, so another version's may not
+                // decode at all, or its error may read as something else; its
+                // welcome always says which version it is.
+                Ok(Frame::Keeper(KeeperMsg::Welcome { version, .. })) if version != PROTOCOL_VERSION => {
+                    Frame::Keeper(KeeperMsg::Error(format!("{OTHER_VERSION} (protocol {version}, this one {PROTOCOL_VERSION})")))
+                }
+                Ok(frame) => frame,
+                Err(ProtoError::Io(_)) => break,
+                Err(_) => {
+                    let _ = in_tx.send_blocking(Frame::Keeper(KeeperMsg::Error(OTHER_VERSION.into())));
+                    break;
+                }
+            };
             if in_tx.send_blocking(frame).is_err() {
                 break;
             }
         }
     })?;
 
-    let conn = KeeperConn { tx: out_tx };
+    let conn = KeeperConn { tx: out_tx, keeper_pid };
     conn.send_msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind });
     Ok((conn, in_rx))
+}
+
+/// The process at the other end of a Unix socket (`SO_PEERCRED`).
+fn peer_pid(stream: &UnixStream) -> Option<u32> {
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `cred` and `len` describe a writable buffer of the size the option fills.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    (rc == 0 && cred.pid > 0).then_some(cred.pid as u32)
+}
+
+/// Whether a process is still running (a zombie counts as gone).
+pub fn alive(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| !s.contains(") Z "))
 }
 
 fn keeper_binary() -> PathBuf {

@@ -286,9 +286,18 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
     let windows = loop {
         match rx.recv_blocking() {
             Ok(Frame::Keeper(KeeperMsg::Status(s))) => break s.windows,
+            Ok(Frame::Keeper(KeeperMsg::Error(e))) if keeper_conn::is_other_version(&e) => {
+                if offer_restart(&e)? {
+                    return run_app(target);
+                }
+                bail!("{e}. Run `shed stop` to restart it (benches are saved first).");
+            }
             Ok(Frame::Keeper(KeeperMsg::Error(e))) => bail!("keeper: {e}. Run `shed stop` to restart it."),
             Ok(_) => {}
-            Err(_) => bail!("the keeper closed the connection"),
+            Err(_) => bail!(
+                "the keeper closed the connection. If Shed was just rebuilt or updated, \
+                 run `shed stop` to restart it (benches are saved first)."
+            ),
         }
     };
     if windows > 0 {
@@ -422,6 +431,30 @@ fn list() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// From a terminal, asks to restart a keeper from another version of Shed;
+/// returns whether it was stopped.
+fn offer_restart(error: &str) -> anyhow::Result<bool> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return Ok(false);
+    }
+    eprint!(
+        "{error}.\nRestart it now? Every bench is saved first; programs running in them stop, \
+         and come back as a load brings them. [y/N] "
+    );
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        return Ok(false);
+    }
+    stop()?;
+    Ok(true)
+}
+
+/// Stops the keeper, whatever version of Shed it is from. It is asked
+/// first; a keeper from another version may not understand the request
+/// (messages travel by position), so if it is still running after a while
+/// it gets SIGTERM, on which a keeper saves its benches and exits too.
 fn stop() -> anyhow::Result<()> {
     let (conn, rx) = match keeper_conn::connect(ClientKind::Cli, false) {
         Ok(c) => c,
@@ -431,15 +464,49 @@ fn stop() -> anyhow::Result<()> {
         }
     };
     conn.send_msg(ClientMsg::Shutdown);
-    // The keeper closes the connection as it exits.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        if rx.recv_blocking().is_err() {
-            println!("keeper: stopped");
-            return Ok(());
+    let Some(pid) = conn.keeper_pid else {
+        // No process to watch: the keeper closes the connection as it exits.
+        return match futures_lite_timeout(&rx, Duration::from_secs(5)) {
+            Ok(Err(_)) => {
+                println!("keeper: stopped");
+                Ok(())
+            }
+            _ => bail!("the keeper did not stop"),
+        };
+    };
+    let gone = |timeout: Duration| {
+        let deadline = std::time::Instant::now() + timeout;
+        while keeper_conn::alive(pid) {
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        true
+    };
+    // Another version says so at once; it would not understand the request.
+    let mut other_version = false;
+    while let Ok(Ok(frame)) = futures_lite_timeout(&rx, Duration::from_millis(300)) {
+        if let Frame::Keeper(KeeperMsg::Error(e)) = frame
+            && keeper_conn::is_other_version(&e)
+        {
+            other_version = true;
+            break;
         }
     }
-    bail!("the keeper did not stop")
+    if other_version || !gone(Duration::from_secs(5)) {
+        let why = if other_version { "is from another version of Shed" } else { "did not answer" };
+        eprintln!("keeper: pid {pid} {why}; stopping it with SIGTERM");
+        // SAFETY: kill(2) has no memory effects; `pid` is the keeper at the
+        // other end of the socket, still running a moment ago.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        if !gone(Duration::from_secs(10)) {
+            bail!("the keeper (pid {pid}) did not stop");
+        }
+    }
+    drop(rx);
+    println!("keeper: stopped");
+    Ok(())
 }
 
 fn debug_type(text: &str) -> anyhow::Result<()> {
