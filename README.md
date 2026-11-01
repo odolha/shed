@@ -1,141 +1,67 @@
 # Shed
 
-A GPU-accelerated Linux terminal whose shells outlive its windows. A small
-background process, the keeper (`shedd`), holds every shell and program; the
-window (`shed`) is only a view onto it. See
-[`docs/initial/Shed — Implementation Plan.md`](docs/initial/Shed%20—%20Implementation%20Plan.md).
+A GPU-accelerated terminal for Linux whose shells outlive its windows, and which
+organises your work into **benches**: workspaces with their own window, colour and
+taskbar icon, saved with everything needed to bring them back.
 
-## Status
+![The Shed window: every bench, open, hidden or closed, with live previews of its tabs](docs/images/shed.png)
 
-Phases 1–6 are in place: the first pane, the keeper, bench windows with tabs and splits,
-the logbook, saving and loading benches, and Shed's own window with the rest of phase 6.
+## What it is
 
-- **Shed** (`shed`, the Shed icon) is one window: the pegboard. It shows every bench,
-  open, hidden or closed, with its tabs and a live preview of each, and manages them
-  all. Benches: make, open, hide, close and delete them; double-click a name to rename
-  it, click its colour dot to recolour it, and the ⋯ button (or a right-click) has the
-  rest, badge included; closed benches change in their saved files. Tabs: click to
-  go there, double-click a title to rename it, × to close it, "New tab" for another,
-  drag one onto another tab or bench to move it there; a right-click adds tags, makes
-  a tab private, or opens its Setup (startup, teardown, aliases). Type to filter by
-  bench, tab, tag, folder or tool; arrows and Enter go to the selected tab. Nothing starts by itself: Shed opens with its benches closed, and
-  opening one brings back what was saved. With `auto_restore = true`, Shed reopens
-  what was open or hidden when it last closed.
-- **Closing Shed closes everything**, after asking: every bench is saved, its programs
-  stop and its teardown commands run, then Shed quits.
-- **Benches** each get their own window, colour and taskbar icon (a workbench in the
-  bench colour). A bench's window manages only its own tabs and panes; Super+Space or
-  the house button brings Shed forward. Closing a bench's window hides the bench: it
-  keeps running, and Shed can show it again. Every bench writes a hidden desktop entry
-  and icon (`dev.shed.bench.<key>`) to `~/.local/share`, so docks show one icon per
-  bench, and pinning one gives a launcher (`shed load <name>`), which also starts Shed.
-- **The keeper** (`shedd`) owns every PTY, so a hidden bench, or one whose window
-  crashed, keeps running and comes back exactly: scrollback, both screens, cursor,
-  modes, colours and title.
-- **Tabs and splits**: tags (by hand, from `shed tag`, or from tag rules), tinting,
-  private tabs, inline rename, drag to reorder.
-- **Mouse**: selection (Shift overrides apps' mouse mode), copy to the primary selection,
-  Ctrl+click for links and paths, and right-click menus. Split borders drag.
-- **Config**: `~/.config/shed/shed.toml` reloads live. It sets fonts, themes, keys, tag rules and the rack.
-- **Light and dark**: Shed follows the desktop's light or dark preference by default
-  (`theme = "auto"`), switching live; the Appearance switch in the Shed window sets
-  Auto, Light or Dark (it edits `shed.toml`, keeping the rest of the file).
-- **Logbook**: every command run in bash is kept with its directory, exit code, time,
-  tab, bench and tags. Up walks this tab's history, Ctrl+Up the bench's, Ctrl+Shift+Up
-  everything; typing first narrows the walk to commands starting with it. Ctrl+R at a
-  prompt opens a search (Tab cycles scopes, `tag:prod` filters, Enter inserts,
-  Alt+Enter runs). Commands typed with a leading space are not kept. `shed log` lists
-  entries from a shell.
-- **Saved benches**: every bench saves itself every minute and when the keeper stops
-  (`shed stop`, logout, reboot) to `~/.local/share/shed/benches/<name>.toml`, with each
-  pane's scrollback beside it. Opening a closed bench (from Shed, `shed load <name>` or
-  a pinned bench icon) loads it. Panes come back in
-  their folders with their old scrollback dimmed above the prompt; tools on the rack
-  restart, others are typed and wait for Enter, the never list is left out.
-- **Setup and teardown**: each pane can have a folder to start in, startup commands
-  (run one per prompt when the bench loads, instead of what was running; or typed,
-  waiting for Enter) and teardown commands. The Setup panel (Ctrl+Shift+S, the rack
-  button, or a tab's menu) shows and edits them for the current tab; so do
-  `shed setup` and `shed setup --edit`.
-- **Hide or close**: hiding a bench (closing its window) keeps its tools running. Closing
-  it (from Shed or the bench's menu) saves it, stops each pane's tool (Ctrl+C, then
-  SIGTERM), runs the teardown commands at the prompt (`docker compose down`), and ends
-  it; it stays saved.
-- **Aliases** at three levels, over the shell's own: global
-  (`~/.config/shed/aliases.toml`), bench and tab. Shells pick changes up at their next
-  prompt; taking one away brings the shell's version back. The Setup panel lists them
-  with what they override; `shed alias`, `shed alias add [--bench|--global] NAME CMD`
-  and `shed alias rm` work from a shell.
-- **Find in scrollback** (Ctrl+Shift+F): plain text, case-insensitive unless the query
-  has capitals; Enter goes to older matches, Shift+Enter to newer.
-- **Keyboard**: the kitty keyboard protocol for apps that ask for it, and input methods
-  (IBus, Fcitx) with the text being composed shown at the cursor.
-- Query replies triggered by binary output (`cat image.png`) are dropped.
+Most terminals tie your shells to a window: close it, and everything running in it
+stops. Shed keeps every shell and program in a small background process, the
+**keeper**, so windows come and go while your dev servers, editors and SSH sessions
+keep running.
 
-| Keys | Action |
-| --- | --- |
-| Ctrl+Shift+T / Ctrl+Shift+W | New tab / close pane |
-| Ctrl+Shift+E / Ctrl+Shift+O | Split right / split down |
-| Alt+arrows | Move between panes |
-| Ctrl+Tab, Ctrl+1…9 | Switch tabs |
-| Ctrl+Shift+N (in Shed) / Ctrl+Shift+Q | New bench / close bench (stops its tools) |
-| Super+1…9 | Raise bench windows |
-| F2 / Shift+F2 | Rename tab / bench |
-| Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
-| Up / Ctrl+Up / Ctrl+Shift+Up | Walk this tab's / bench's / all history |
-| Ctrl+R (at a prompt) | Search the logbook |
-| Ctrl+Shift+F | Find in scrollback |
-| Ctrl+Shift+S | Setup panel: startup, teardown, aliases |
-| Super+Space, Ctrl+Shift+Space | Bring Shed forward |
+On top of that, Shed groups your work the way you think about it:
 
-```toml
-# ~/.config/shed/shed.toml (every key optional)
-theme = "auto"                 # follows the desktop; or shed-light, shed-dark, themes/<name>.toml
-theme_light = "shed-light"     # what auto uses in light mode
-theme_dark = "shed-dark"       # and in dark mode
-autosave_seconds = 60
-auto_restore = false           # reopen what was open or hidden when Shed last closed
-[font]
-family = "DejaVu Sans Mono"
-size = 14
-[window]
-new_pane_dir = "current"       # or "bench"
-icon_badges = false
-[keys]
-"ctrl-shift-d" = "split_right"
-"alt-left" = "none"
-[shell]
-integration = true             # load Shed's bash hook into panes
-[rack]                         # what restarts by itself when a bench loads
-auto = ["nvim", "vim", "hx", "ssh", "htop", "btop", "less", "tail -f", "cargo watch", "npm run dev"]
-never = ["rm", "git push", "sudo"]
-[[tag_rule]]
-tool = "ssh *prod*"
-tag = "prod"
-color = "red"
-tint_tab = true
-```
+- **Benches** are workspaces, one per project or job. Each has its own window,
+  colour and taskbar icon, its tabs and split panes, its folder, and its own aliases.
+- **The Shed window** shows every bench and tab at a glance, with a live preview of
+  each, and is where you make, open, hide, close, rename and recolour them.
+- **Benches are saved** with their layout, folders and scrollback. Opening one brings
+  it back as it was: its startup commands run (`docker compose up -d`, `npm run
+  dev`), editors and watchers restart, and anything risky is typed but waits for
+  Enter. Closing one runs its teardown (`docker compose down`).
+- **The logbook** keeps every command you run, with its folder, exit status and
+  where it ran. Up walks this tab's history, Ctrl+Up the bench's, Ctrl+Shift+Up
+  everything; Ctrl+R searches it all.
 
-`alacritty_terminal` is vendored with read-only accessors the replay needs;
-see `vendor/alacritty_terminal/SHED_PATCHES.md`.
+![A bench: a dev server and a shell side by side](docs/images/bench.png)
+
+## Highlights
+
+- **Shells that outlive windows.** Close a bench's window and it keeps running,
+  hidden; open it again and every pane is exactly as you left it, screen and all.
+- **Workspaces you can reproduce.** Per pane: a folder to start in, startup
+  commands, and teardown commands, all editable in a Setup panel or by hand in a
+  plain TOML file.
+- **Distinct windows.** Sixteen bench colours (or any colour of your own), shown in
+  the tab bar, the focused pane's border and a taskbar icon per bench. Pin one to
+  your dock and it opens that bench.
+- **History across tabs and benches**, with prefix matching, a search overlay, tags
+  (`prod`, `staging`) and private tabs that keep their history to themselves.
+- **Aliases at three levels**, global, per bench and per tab, layered over your
+  shell's own.
+- **Light and dark**, following your desktop by default.
+- **Fast**: GPU rendering; on the machine it was measured on, it printed output
+  faster than GNOME Terminal and kitty. Kitty keyboard protocol, input methods,
+  find in scrollback, clickable links and paths, OSC 52 clipboard.
+
+Shed runs on Linux, under X11 or Wayland, with a Vulkan driver. Its shell
+integration (logbook, history keys, aliases) is for bash.
 
 ## Install
 
-From GitHub, in one of three ways. The commands are `shed` and `shedd`; the package is
-called `shed-terminal`, because Debian, Ubuntu and Arch already have a `shed` (a hex
-editor) that also installs `/usr/bin/shed`, so the two conflict.
+The commands are `shed` and `shedd`. The package is called `shed-terminal`, because
+Debian, Ubuntu and Arch already have a hex editor named `shed`.
 
-**With Cargo** (any distribution, no root): needs Rust 1.95 or newer
-([rustup](https://rustup.rs)) and the build dependencies below.
+**With Cargo** (any distribution, no root; Rust 1.95 or newer):
 
 ```sh
 cargo install --locked --git https://github.com/odolha/shed shed-app shed-keeper
 shed
 ```
-
-This puts `shed` and `shedd` in `~/.cargo/bin`. The first run adds Shed to the
-application menu (a launcher and icon in `~/.local/share`). To update, run the same
-`cargo install` again; to remove, `cargo uninstall shed-app shed-keeper`.
 
 **As a Debian, Ubuntu or Mint package:**
 
@@ -145,91 +71,40 @@ packaging/deb/build.sh
 sudo apt install ./target/debian/shed-terminal_*.deb
 ```
 
-**On Arch**, `packaging/arch/PKGBUILD` builds the latest commit from GitHub
-(`shed-terminal-git`):
+**On Arch:** `cd shed/packaging/arch && makepkg -si` builds the latest commit.
 
-```sh
-git clone https://github.com/odolha/shed && cd shed/packaging/arch
-makepkg -si
-```
+Building needs `build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev
+libwayland-dev libxcb1-dev libfontconfig-dev` on Debian-likes, or `base-devel
+libxkbcommon-x11 wayland fontconfig` on Arch.
 
-The packages install `shed` and `shedd` in `/usr/bin`, Shed in the application menu
-(`dev.shed.desktop`, with icons in the hicolor theme), and an optional systemd user
-unit that starts the keeper at login:
+After updating, run `shed stop` once (or let `shed` offer to): the keeper still
+running is the old one. Every bench is saved first.
 
-```sh
-systemctl --user enable --now shedd.service
-```
+## Getting started
 
-Without it, `shed` starts the keeper when needed. Under systemd, the shells in Shed's
-panes inherit the user manager's environment, which only has `DISPLAY`,
-`SSH_AUTH_SOCK` and the like if the desktop imports them; check with
-`systemctl --user show-environment`.
+Run `shed`. The Shed window opens; make a bench with **New bench**, and it opens in a
+window of its own. From there:
 
-**After an update**, the keeper still running is the old one: `shed` from a terminal
-offers to restart it, or run `shed stop` (every bench is saved first).
-
-**Build dependencies**: on Debian, Ubuntu and Mint, `build-essential pkg-config
-libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libfontconfig-dev`;
-on Arch, `base-devel libxkbcommon-x11 wayland fontconfig`. Running needs a Vulkan
-driver (Mesa's is installed on most desktops). Without `libxkbcommon-x11-dev`,
-`shed-app/build.rs` links the runtime library directly and prints a warning.
-
-## Use
-
-```sh
-shed                 # starts shedd if needed, opens the Shed window
-shed list            # benches: open, hidden, closed
-shed load web        # open a bench, loading it if it is closed
-shed new --name api  # a new bench
-shed save web --as web-template
-shed delete web
-shed setup           # this tab's startup and teardown (--edit to change them)
-shed alias           # aliases by level; alias add/rm to change them
-shed status          # what the keeper holds
-shed stop            # save everything, then stop the keeper and its tools
-```
-
-`shed` looks for `shedd` next to its own binary, then on `PATH`. The keeper
-exits by itself once it holds no panes and no window is connected.
-
-## Development
-
-- `SHED_RUNTIME_DIR=/tmp/shed-dev` runs a separate keeper beside your real one.
-- A running keeper keeps its old code: after changing `shed-keeper`, run `shed stop`.
-  A window refuses a keeper speaking another protocol version and says so. Messages
-  travel by enum position, so new ones go at the end; `shed stop` must keep working
-  against older keepers.
-- `crates/shed-emu/tests/recordings/` holds real program output (recorded with
-  `script` at 40×12) that the replay tests cut at many points.
-- Logs: the keeper writes `~/.local/state/shed/shedd.log`; `SHED_LOG=debug` raises
-  the level for both binaries (`shedd --foreground` logs to stderr).
-- `XDG_CONFIG_HOME` and `XDG_DATA_HOME` keep a test run's config and desktop entries
-  away from your real ones.
-- Icons: `cargo run -p shed-desktop --example icon_preview -- <dir>` renders the bench
-  icon in every colour; `--example app_icons -- <dir>` writes the app icon's hicolor
-  tree, as the packages do.
-- `shed debug-type 'echo hi\r'` types into the first pane through the keeper,
-  for testing without a keyboard.
-- Release builds carry no debug info; `cargo build --profile profiling` keeps line
-  tables, for profilers.
-- `SHED_PERF=1` makes the window process print redraws per second and their cost.
-  It only applies to the process that owns the windows, so close every Shed window
-  first, or use a separate `SHED_RUNTIME_DIR`. Per-process GPU time is in
-  `/proc/<pid>/fdinfo/*` (`drm-engine-render`).
-- `gpui_ce_wgpu` is vendored with one renderer patch (window-sized backgrounds become
-  the clear colour); see `vendor/gpui_ce_wgpu/SHED_PATCHES.md`. `gpui_ce_linux` is
-  vendored so X11 key releases are not lost; see `vendor/gpui_ce_linux/SHED_PATCHES.md`. Keep Shed's frames at
-  one window-sized layer: GPUI's quad shader costs ~4 ms per full-window quad on an
-  integrated GPU.
-
-| Crate | Role |
+| Keys | |
 | --- | --- |
-| `shed-model` | The bench → tab → pane tree, IDs, colours, config and themes, XDG paths |
-| `shed-proto` | Socket messages and framing (raw bytes for terminal I/O) |
-| `shed-emu` | The `Emulator` trait, the `alacritty_terminal` backend, key and mouse encoding |
-| `shed-keeper` | `shedd`: PTYs, socket server |
-| `shed-desktop` | Bench icons and desktop entries |
-| `shed-app` | `shed`: GPUI windows and the CLI |
-| `shed-logbook` | The logbook (SQLite) and the bash hook (`shell/shed.bash`) |
-| `shed-save` | Saved bench files, layouts as text, rack rules, scrollback |
+| Ctrl+Shift+T / Ctrl+Shift+W | New tab / close pane |
+| Ctrl+Shift+E / Ctrl+Shift+O | Split right / split down |
+| Ctrl+Shift+S | Setup: startup, teardown and aliases |
+| Ctrl+R | Search the logbook |
+| Up / Ctrl+Up / Ctrl+Shift+Up | Walk this tab's / bench's / all history |
+| Ctrl+Shift+F | Find in scrollback |
+| Super+Space | Bring Shed forward |
+
+The [User Guide](docs/user-guide.md) walks through everything, with the full list
+of keys, commands and settings.
+
+## Documentation
+
+- [User Guide](docs/user-guide.md): how Shed is used, with screenshots.
+- [Architecture](docs/architecture.md): how it works inside.
+- [Development](docs/development.md): building, testing and working on Shed.
+
+## License
+
+Shed is available under either the [MIT](LICENSE-MIT) or the
+[Apache 2.0](LICENSE-APACHE) license, at your option.
