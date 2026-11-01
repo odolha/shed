@@ -18,9 +18,14 @@ pub fn config_dir() -> PathBuf {
     xdg("XDG_CONFIG_HOME", ".config").join("shed")
 }
 
+/// `~/.local/share`: where desktop entries and icons go.
+pub fn data_home() -> PathBuf {
+    xdg("XDG_DATA_HOME", ".local/share")
+}
+
 /// `~/.local/share/shed`
 pub fn data_dir() -> PathBuf {
-    xdg("XDG_DATA_HOME", ".local/share").join("shed")
+    data_home().join("shed")
 }
 
 /// `~/.local/state/shed`

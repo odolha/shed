@@ -58,11 +58,13 @@ pub struct WindowConfig {
     /// Space between the window edge and the grid, in pixels.
     pub padding: f32,
     pub new_pane_dir: NewPaneDir,
+    /// Draw each bench's badge (or its initials) on its taskbar icon.
+    pub icon_badges: bool,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
-        Self { padding: 6.0, new_pane_dir: NewPaneDir::Current }
+        Self { padding: 6.0, new_pane_dir: NewPaneDir::Current, icon_badges: false }
     }
 }
 

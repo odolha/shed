@@ -12,6 +12,9 @@ path = "src/main.rs"
 shed-model.workspace = true
 shed-proto.workspace = true
 shed-emu.workspace = true
+shed-desktop.workspace = true
+# Must match the version gpui-ce uses, for window icons.
+image = { version = "0.25", default-features = false }
 gpui.workspace = true
 gpui_platform.workspace = true
 anyhow.workspace = true

@@ -56,6 +56,8 @@ enum Command {
         #[arg(long)]
         cwd: Option<std::path::PathBuf>,
     },
+    /// Open a bench by name, in its window.
+    Load { name: String },
     /// Tag the current tab (run inside Shed).
     Tag {
         #[command(subcommand)]
@@ -79,6 +81,20 @@ fn main() -> anyhow::Result<()> {
         Some(Command::New { name, cwd }) => {
             let cwd = cwd.map(std::path::absolute).transpose()?;
             run_app(ShowTarget::NewBench { name, cwd })
+        }
+        Some(Command::Load { name }) => {
+            let tree = request(ClientMsg::Status, |m| match m {
+                KeeperMsg::Status(s) => Some(s.tree),
+                _ => None,
+            })
+            .ok()
+            .unwrap_or_default();
+            match tree.benches.iter().find(|b| b.name == name) {
+                Some(bench) => run_app(ShowTarget::Bench(bench.id)),
+                // Saved benches arrive in phase 5; until then, a launcher for a
+                // bench the keeper no longer holds starts it afresh.
+                None => run_app(ShowTarget::NewBench { name: Some(name), cwd: None }),
+            }
         }
         Some(Command::Status) => status(),
         Some(Command::Tag { action }) => tag(action),

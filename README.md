@@ -7,17 +7,50 @@ window (`shed`) is only a view onto it. See
 
 ## Status
 
-Phases 1 and 2 (first pane, the keeper) are in place:
+Phases 1–3 are in place: the first pane, the keeper, and bench windows with tabs and splits.
 
-- One window running your shell, drawn with GPUI (`gpui-ce`), emulated by `alacritty_terminal`.
-- The keeper owns every PTY. Closing the window detaches; the next `shed`
-  reattaches and gets each pane's exact state replayed (scrollback, primary
-  and alternate screens, cursor, modes, colours, title) before live output resumes.
-- Keyboard (xterm encoding, application cursor mode), paste (Ctrl+Shift+V,
-  bracketed when asked), wheel scrollback (Shift+PageUp/PageDown too), mouse
-  reporting to apps that ask, OSC 52 copy, font zoom (Ctrl+= / Ctrl+- / Ctrl+0).
-- Query replies triggered by binary output (`cat image.png`) are dropped, so
-  they never show up at the prompt.
+- **The keeper** owns every PTY. Closing a window detaches its bench. The next `shed`
+  reattaches it and replays each pane exactly: scrollback, both screens, cursor,
+  modes, colours and title.
+- **Benches** each get their own window, colour and taskbar icon. Every bench writes a
+  hidden desktop entry and icon (`dev.shed.bench.<name>`) to `~/.local/share`, so
+  docks show one icon per bench, and pinning one gives a launcher (`shed load <name>`).
+- **Tabs and splits**: tags (by hand, from `shed tag`, or from tag rules), tinting,
+  private tabs, inline rename, drag to reorder, and a menu to move a tab to another bench.
+- **Mouse**: selection (Shift overrides apps' mouse mode), copy to the primary selection,
+  Ctrl+click for links and paths, and right-click menus. Split borders drag.
+- **Config**: `~/.config/shed/shed.toml` reloads live. It sets fonts, themes, keys, tag rules and the rack.
+- Query replies triggered by binary output (`cat image.png`) are dropped.
+
+| Keys | Action |
+| --- | --- |
+| Ctrl+Shift+T / Ctrl+Shift+W | New tab / close pane |
+| Ctrl+Shift+E / Ctrl+Shift+O | Split right / split down |
+| Alt+arrows | Move between panes |
+| Ctrl+Tab, Ctrl+1…9 | Switch tabs |
+| Ctrl+Shift+N / Ctrl+Shift+Q | New bench / close bench (stops its tools) |
+| Super+1…9 | Raise bench windows |
+| F2 / Shift+F2 | Rename tab / bench |
+| Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
+
+```toml
+# ~/.config/shed/shed.toml (every key optional)
+theme = "shed-dark"            # or shed-light, or themes/<name>.toml
+[font]
+family = "DejaVu Sans Mono"
+size = 14
+[window]
+new_pane_dir = "current"       # or "bench"
+icon_badges = false
+[keys]
+"ctrl-shift-d" = "split_right"
+"alt-left" = "none"
+[[tag_rule]]
+tool = "ssh *prod*"
+tag = "prod"
+color = "red"
+tint_tab = true
+```
 
 `alacritty_terminal` is vendored with read-only accessors the replay needs;
 see `vendor/alacritty_terminal/SHED_PATCHES.md`.
@@ -48,15 +81,17 @@ and prints a warning.
   `script` at 40×12) that the replay tests cut at many points.
 - Logs: the keeper writes `~/.local/state/shed/shedd.log`; `SHED_LOG=debug` raises
   the level for both binaries (`shedd --foreground` logs to stderr).
-- `SHED_FONT` and `SHED_FONT_SIZE` override the font until `shed.toml` lands in phase 3.
+- `XDG_CONFIG_HOME` and `XDG_DATA_HOME` keep a test run's config and desktop entries
+  away from your real ones.
 - `shed debug-type 'echo hi\r'` types into the first pane through the keeper,
   for testing without a keyboard.
 
 | Crate | Role |
 | --- | --- |
-| `shed-model` | The bench → tab → pane tree, IDs, colours, XDG paths |
+| `shed-model` | The bench → tab → pane tree, IDs, colours, config and themes, XDG paths |
 | `shed-proto` | Socket messages and framing (raw bytes for terminal I/O) |
 | `shed-emu` | The `Emulator` trait, the `alacritty_terminal` backend, key and mouse encoding |
 | `shed-keeper` | `shedd`: PTYs, socket server |
+| `shed-desktop` | Bench icons and desktop entries |
 | `shed-app` | `shed`: GPUI windows and the CLI |
-| `shed-logbook`, `shed-save`, `shed-desktop` | Stubs for phases 3–5 |
+| `shed-logbook`, `shed-save` | Stubs for phases 4–5 |

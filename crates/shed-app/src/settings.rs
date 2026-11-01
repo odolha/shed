@@ -14,6 +14,7 @@ pub struct Settings {
     pub ui: UiColors,
     pub padding: f32,
     pub new_pane_dir: NewPaneDir,
+    pub icon_badges: bool,
     pub keys: BTreeMap<String, String>,
     /// Problems with the config, shown in every window until fixed.
     pub errors: Vec<String>,
@@ -34,6 +35,7 @@ impl Settings {
             ui: UiColors::from_theme(&theme),
             padding: config.window.padding.clamp(0.0, 64.0),
             new_pane_dir: config.window.new_pane_dir,
+            icon_badges: config.window.icon_badges,
             keys: config.keys.clone(),
             errors: error.into_iter().collect(),
         }

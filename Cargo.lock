@@ -5434,7 +5434,9 @@ dependencies = [
  "clap",
  "gpui-ce",
  "gpui_ce_platform",
+ "image",
  "libc",
+ "shed-desktop",
  "shed-emu",
  "shed-model",
  "shed-proto",
@@ -5445,6 +5447,11 @@ dependencies = [
 [[package]]
 name = "shed-desktop"
 version = "0.1.0"
+dependencies = [
+ "resvg",
+ "shed-model",
+ "tempfile",
+]
 
 [[package]]
 name = "shed-emu"

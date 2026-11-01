@@ -9,7 +9,8 @@ use gpui::{
     WindowOptions, px, size,
 };
 use shed_model::config::{Config, FileWatch};
-use shed_model::{BenchId, PaneId, Shed};
+use shed_desktop::{BenchIdentity, Desktop};
+use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed};
 use shed_proto::{ClientMsg, Frame, KeeperMsg};
 use tracing::{error, warn};
 
@@ -31,6 +32,28 @@ pub struct AppState {
     pending: HashSet<BenchId>,
     /// Windows being opened.
     opening: HashSet<BenchId>,
+    desktop: Desktop,
+    /// The identity last written for each bench, to rewrite only on change.
+    identities: HashMap<BenchId, Identity>,
+}
+
+#[derive(Clone, PartialEq)]
+struct Identity {
+    name: String,
+    color: BenchColor,
+    badge: Option<String>,
+}
+
+impl Identity {
+    fn of(bench: &Bench, badges: bool) -> Self {
+        let badge = badges.then(|| bench.badge.clone().unwrap_or_else(|| initials(&bench.name)));
+        Self { name: bench.name.clone(), color: bench.color, badge }
+    }
+}
+
+/// One or two letters for a bench's badge: `web-site` → `WS`, `backend` → `B`.
+fn initials(name: &str) -> String {
+    name.split(|c: char| !c.is_alphanumeric()).filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase()
 }
 
 impl AppState {
@@ -43,6 +66,8 @@ impl AppState {
             windows: HashMap::new(),
             pending: HashSet::new(),
             opening: HashSet::new(),
+            desktop: Desktop::new(shed_model::paths::data_home()),
+            identities: HashMap::new(),
         }
     }
 
@@ -141,11 +166,49 @@ impl AppState {
             }
         }
 
+        self.sync_identities(cx);
         let benches: Vec<BenchId> = self.windows.keys().copied().collect();
         for bench in benches {
             self.sync_window(bench, cx);
         }
         cx.notify();
+    }
+
+    /// Keeps every bench's desktop entry, icon and window app ID current.
+    fn sync_identities(&mut self, cx: &mut Context<Self>) {
+        let shed = std::env::current_exe().unwrap_or_else(|_| "shed".into());
+        let badges = self.settings.icon_badges;
+        for bench in &self.tree.benches {
+            let identity = Identity::of(bench, badges);
+            let previous = self.identities.get(&bench.id);
+            if previous == Some(&identity) {
+                continue;
+            }
+            if let Some(old) = previous.filter(|old| old.name != identity.name) {
+                self.desktop.remove(&old.name);
+                if let Some(handle) = self.windows.get(&bench.id) {
+                    let id = shed_desktop::app_id(&identity.name);
+                    handle.update(cx, |_, window, _| window.set_app_id(&id)).ok();
+                }
+            }
+            let written = self.desktop.install(&BenchIdentity {
+                name: &identity.name,
+                color: identity.color,
+                badge: identity.badge.as_deref(),
+                shed: &shed,
+            });
+            if let Err(e) = written {
+                warn!("cannot write the desktop entry for {}: {e}", identity.name);
+            }
+            self.identities.insert(bench.id, identity);
+        }
+        // Benches that are gone take their launchers with them.
+        let gone: Vec<BenchId> = self.identities.keys().filter(|id| self.tree.bench(**id).is_none()).copied().collect();
+        for id in gone {
+            if let Some(identity) = self.identities.remove(&id) {
+                self.desktop.remove(&identity.name);
+            }
+        }
     }
 
     fn sync_window(&mut self, bench: BenchId, cx: &mut Context<Self>) {
@@ -170,6 +233,7 @@ impl AppState {
             warn!("config: {e}");
         }
         self.settings = settings;
+        self.sync_identities(cx);
         for view in self.panes.values() {
             view.update(cx, |view, cx| view.apply(&self.settings, cx));
         }
@@ -218,7 +282,8 @@ impl AppState {
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(window_title(&bench.name).into()), ..Default::default() }),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(960.0), px(640.0)), cx))),
-            app_id: Some("dev.shed.Shed".into()),
+            app_id: Some(shed_desktop::app_id(&bench.name)),
+            icon: window_icon(&Identity::of(bench, self.settings.icon_badges)),
             ..Default::default()
         };
         // Opening a window renders it at once, and its render reads this
@@ -275,4 +340,12 @@ impl AppState {
 
 pub fn window_title(bench: &str) -> String {
     format!("{bench} — Shed")
+}
+
+/// The bench icon as a window icon (X11 `_NET_WM_ICON`, Wayland `xdg-toplevel-icon`).
+fn window_icon(identity: &Identity) -> Option<std::sync::Arc<image::RgbaImage>> {
+    const SIZE: u32 = 128;
+    let svg = shed_desktop::icon_svg(identity.color, identity.badge.as_deref());
+    let rgba = shed_desktop::icon_rgba(&svg, SIZE)?;
+    image::RgbaImage::from_raw(SIZE, SIZE, rgba).map(std::sync::Arc::new)
 }
