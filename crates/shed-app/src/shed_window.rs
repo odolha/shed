@@ -81,23 +81,35 @@ impl Render for ShedWindow {
         let ui = state.settings.ui.clone();
         let running = state.tree.benches.len();
         let current = state.settings.config.appearance();
-        let switch = div().flex().items_center().gap_1().text_size(px(12.0)).children(
-            [(Appearance::Auto, "Auto"), (Appearance::Light, "Light"), (Appearance::Dark, "Dark")].map(|(appearance, label)| {
+        let appearances = [
+            (Appearance::Auto, "theme-auto", "Follow the desktop's light or dark"),
+            (Appearance::Light, "theme-light", "Light"),
+            (Appearance::Dark, "theme-dark", "Dark"),
+        ];
+        let switch = div()
+            .flex()
+            .items_center()
+            .p_0p5()
+            .rounded_md()
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .children(appearances.map(|(appearance, glyph, tip)| {
                 let on = current == Some(appearance);
+                let tint = if on { ui.accent_fallback } else { ui.text_dim };
                 div()
-                    .id(SharedString::from(format!("appearance-{label}")))
-                    .px_2()
+                    .id(SharedString::from(format!("appearance-{glyph}")))
+                    .px_1p5()
                     .py_0p5()
                     .rounded_sm()
                     .cursor_pointer()
-                    .when(on, |d| d.bg(hsla_alpha(ui.accent_fallback, 0.2)).text_color(hsla(ui.accent_fallback)))
-                    .when(!on, |d| d.text_color(hsla(ui.text_dim)).hover(|s| s.bg(hsla(ui.tab_hover))))
-                    .child(label)
+                    .when(on, |d| d.bg(hsla_alpha(ui.accent_fallback, 0.2)))
+                    .when(!on, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
+                    .tooltip(crate::menu::tooltip(tip))
+                    .child(svg().path(icon(glyph)).size(px(15.0)).text_color(hsla(tint)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.state.update(cx, |state, cx| state.set_appearance(appearance, cx));
                     }))
-            }),
-        );
+            }));
         let banner = self.quitting.then(|| {
             let text = if running == 0 {
                 "Closing Shed…".to_string()
@@ -167,7 +179,6 @@ impl Render for ShedWindow {
                     .child(svg().path(icon("shed")).size(px(18.0)).text_color(hsla(ui.accent_fallback)))
                     .child(div().text_size(px(16.0)).child("Shed"))
                     .child(div().flex_1())
-                    .child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child("Appearance"))
                     .child(switch),
             )
             .children(banner)

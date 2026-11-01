@@ -327,14 +327,15 @@ impl Pegboard {
         let mut entries = Vec::new();
         let e = entry.clone();
         let open_label = if entry.status == Status::Open { "Go to Bench" } else { "Open Bench" };
-        entries.push(menu_item(open_label, move |this, _, cx| this.open(&e, None, cx)));
+        let open_icon = if entry.status == Status::Closed { "bench-load" } else { "go" };
+        entries.push(menu_item(open_label, move |this, _, cx| this.open(&e, None, cx)).icon(open_icon));
         if entry.status != Status::Closed {
             let id = bench.id;
-            entries.push(menu_item("New Tab", move |this, _, cx| this.send(ClientMsg::NewTab { bench: id, cwd: None }, cx)));
+            entries.push(menu_item("New Tab", move |this, _, cx| this.send(ClientMsg::NewTab { bench: id, cwd: None }, cx)).icon("tab-new"));
         }
         entries.push(MenuEntry::Separator);
         let (k, name) = (key.clone(), bench.name.clone());
-        entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::BenchName(k.clone()), name.clone(), window, cx)));
+        entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::BenchName(k.clone()), name.clone(), window, cx)).icon("pencil"));
         let (k, badge) = (key.clone(), bench.badge.clone().unwrap_or_default());
         entries.push(menu_item("Set Badge…", move |this, window, cx| this.start_edit(Edit::Badge(k.clone()), badge.clone(), window, cx)));
         entries.push(MenuEntry::Separator);
@@ -342,14 +343,14 @@ impl Pegboard {
         entries.push(MenuEntry::Separator);
         if entry.status == Status::Open {
             let id = bench.id;
-            entries.push(menu_item("Hide", move |this, _, cx| this.hide(id, cx)));
+            entries.push(menu_item("Hide", move |this, _, cx| this.hide(id, cx)).icon("detach"));
         }
         if entry.status != Status::Closed {
             let b = bench.clone();
-            entries.push(danger("Close Bench…", move |this: &mut Self, window, cx| this.close(&b, window, cx)));
+            entries.push(danger("Close Bench…", move |this: &mut Self, window, cx| this.close(&b, window, cx)).icon("power"));
         }
         let name = bench.name.clone();
-        entries.push(danger("Delete Bench…", move |this: &mut Self, window, cx| this.delete(name.clone(), window, cx)));
+        entries.push(danger("Delete Bench…", move |this: &mut Self, window, cx| this.delete(name.clone(), window, cx)).icon("trash"));
         entries
     }
 
@@ -370,20 +371,20 @@ impl Pegboard {
     fn tab_menu(&self, entry: &Entry, tab: &Tab) -> Vec<MenuEntry<Self>> {
         let tab_id = tab.id;
         let e = entry.clone();
-        let mut entries = vec![menu_item("Go to Tab", move |this, _, cx| this.open(&e, Some(tab_id), cx))];
+        let mut entries = vec![menu_item("Go to Tab", move |this, _, cx| this.open(&e, Some(tab_id), cx)).icon("go")];
         if entry.status == Status::Closed {
             // A closed bench's tabs change once it is open.
             return entries;
         }
         let bench = entry.bench.id;
         let title = tab.display_title();
-        entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::TabName(tab_id), title.clone(), window, cx)));
-        entries.push(menu_item("Setup…", move |this, window, cx| this.open_setup(bench, tab_id, window, cx)));
-        entries.push(menu_item("Add Tag…", move |this, window, cx| this.start_edit(Edit::AddTag(tab_id), String::new(), window, cx)));
+        entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::TabName(tab_id), title.clone(), window, cx)).icon("pencil"));
+        entries.push(menu_item("Setup…", move |this, window, cx| this.open_setup(bench, tab_id, window, cx)).icon("rack"));
+        entries.push(menu_item("Add Tag…", move |this, window, cx| this.start_edit(Edit::AddTag(tab_id), String::new(), window, cx)).icon("tag"));
         for tag in &tab.tags {
             let (label, tint) = (tag.label.clone(), tag.tint_tab);
             let l = label.clone();
-            entries.push(menu_item(format!("{} Tint for “{label}”", if tint { "✓" } else { "  " }), move |this, _, cx| {
+            entries.push(menu_item(format!("Tint for “{label}”{}", if tint { "  ✓" } else { "" }), move |this, _, cx| {
                 let Some(t) = this.running_tab(tab_id, cx) else { return };
                 let tags = t.tags.iter().cloned().map(|mut t| {
                     if t.label == l {
@@ -394,18 +395,24 @@ impl Pegboard {
                 let tags = tags.collect();
                 this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
             }));
-            entries.push(menu_item(format!("Remove Tag “{label}”"), move |this, _, cx| {
-                let Some(t) = this.running_tab(tab_id, cx) else { return };
-                let tags = t.tags.iter().filter(|t| t.label != label).cloned().collect();
-                this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
-            }));
+            entries.push(
+                menu_item(format!("Remove Tag “{label}”"), move |this, _, cx| {
+                    let Some(t) = this.running_tab(tab_id, cx) else { return };
+                    let tags = t.tags.iter().filter(|t| t.label != label).cloned().collect();
+                    this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
+                })
+                .icon("close"),
+            );
         }
         let private = tab.private;
-        entries.push(menu_item(if private { "✓ Private" } else { "   Private" }, move |this, _, cx| {
-            this.send(ClientMsg::SetPrivate { tab: tab_id, private: !private }, cx);
-        }));
+        entries.push(
+            menu_item(if private { "Private  ✓" } else { "Private" }, move |this, _, cx| {
+                this.send(ClientMsg::SetPrivate { tab: tab_id, private: !private }, cx);
+            })
+            .icon("private"),
+        );
         entries.push(MenuEntry::Separator);
-        entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)));
+        entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)).icon("close"));
         entries
     }
 
@@ -420,9 +427,11 @@ impl Pegboard {
         cx.notify();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn button(
         &self,
         id: String,
+        glyph: &'static str,
         label: &str,
         color: Rgb,
         filled: bool,
@@ -431,6 +440,9 @@ impl Pegboard {
     ) -> AnyElement {
         div()
             .id(SharedString::from(id))
+            .flex()
+            .items_center()
+            .gap_1()
             .px_2()
             .py_0p5()
             .rounded_sm()
@@ -439,7 +451,30 @@ impl Pegboard {
             .text_color(hsla(color))
             .when(filled, |d| d.bg(hsla_alpha(color, 0.2)))
             .hover(move |s| s.bg(hsla_alpha(color, 0.3)))
+            .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(color)))
             .child(label.to_string())
+            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
+            .into_any_element()
+    }
+
+    /// A button that is only an icon, with what it does in a tooltip.
+    fn icon_button(
+        &self,
+        id: String,
+        glyph: &'static str,
+        tip: &'static str,
+        color: Rgb,
+        cx: &mut Context<Self>,
+        on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> AnyElement {
+        div()
+            .id(SharedString::from(id))
+            .p_1()
+            .rounded_sm()
+            .cursor_pointer()
+            .hover(move |s| s.bg(hsla_alpha(color, 0.2)))
+            .tooltip(menu::tooltip(tip))
+            .child(svg().path(icon(glyph)).size(px(15.0)).text_color(hsla(color)))
             .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
             .into_any_element()
     }
@@ -510,32 +545,34 @@ impl Pegboard {
         if bench.closing {
             header = header.child(div().text_size(px(12.0)).text_color(hsla(accent)).child("closing…"));
         } else {
-            let open_label = if entry.status == Status::Open { "Go to" } else { "Open" };
+            let (open_icon, open_label) = if entry.status == Status::Open { ("go", "Go to") } else { ("bench-load", "Open") };
             let e = entry.clone();
-            header = header.child(self.button(format!("open-{id}"), open_label, accent, true, cx, move |this, _, cx| this.open(&e, None, cx)));
+            header = header.child(self.button(format!("open-{id}"), open_icon, open_label, accent, true, cx, move |this, _, cx| this.open(&e, None, cx)));
             if entry.status == Status::Open {
-                header = header.child(self.button(format!("hide-{id}"), "Hide", ui.text_dim, false, cx, move |this, _, cx| this.hide(id, cx)));
+                header = header.child(self.icon_button(format!("hide-{id}"), "detach", "Hide: the window closes, the bench keeps running", ui.text_dim, cx, move |this, _, cx| {
+                    this.hide(id, cx)
+                }));
             }
             if entry.status != Status::Closed {
                 let b = bench.clone();
-                header = header.child(self.button(format!("close-{id}"), "Close…", ui.text_dim, false, cx, move |this, window, cx| {
+                header = header.child(self.icon_button(format!("close-{id}"), "power", "Close: its programs stop and its teardown runs", ui.text_dim, cx, move |this, window, cx| {
                     this.close(&b, window, cx)
                 }));
             }
             let name = bench.name.clone();
-            header = header.child(self.button(format!("delete-{id}"), "Delete…", DANGER, false, cx, move |this, window, cx| {
+            header = header.child(self.icon_button(format!("delete-{id}"), "trash", "Delete: its saved file and launcher go too", DANGER, cx, move |this, window, cx| {
                 this.delete(name.clone(), window, cx)
             }));
             let e = entry.clone();
             header = header.child(
                 div()
                     .id(SharedString::from(format!("more-{id}")))
-                    .px_2()
+                    .p_1()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_color(hsla(ui.text_dim))
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
-                    .child("⋯")
+                    .tooltip(menu::tooltip("More: rename, badge, colour, new tab"))
+                    .child(svg().path(icon("more")).size(px(15.0)).text_color(hsla(ui.text_dim)))
                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                         let entries = this.bench_menu(&e);
                         this.open_menu(ev.position, entries, cx);
@@ -811,7 +848,7 @@ impl Render for Pegboard {
             list = list.child(div().text_color(hsla(ui.text_dim)).child(empty));
         }
 
-        let new_bench = self.button("new-bench".into(), "+ New bench", ui.accent_fallback, true, cx, |this, _, cx| {
+        let new_bench = self.button("new-bench".into(), "bench-new", "New bench", ui.accent_fallback, true, cx, |this, _, cx| {
             this.send(ClientMsg::Show(ShowTarget::NewBench { name: None, cwd: None }), cx);
         });
         let search = div()

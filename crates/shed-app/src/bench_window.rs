@@ -288,19 +288,20 @@ impl BenchWindow {
     fn tab_menu(&self, tab_id: TabId, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let Some(tab) = self.tab(tab_id, cx) else { return Vec::new() };
         let mut entries = vec![
-            item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)),
-            item("Add Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)),
+            item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)).icon("pencil"),
+            item("Add Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)).icon("tag"),
             item("Setup…", move |this, window, cx| {
                 this.send(ClientMsg::FocusTab { tab: tab_id }, cx);
                 if this.setup.is_none() {
                     this.toggle_setup(window, cx);
                 }
-            }),
+            })
+            .icon("rack"),
         ];
         for tag in &tab.tags {
             let label = tag.label.clone();
             let tint = tag.tint_tab;
-            entries.push(item(format!("{} Tint for “{}”", if tint { "✓" } else { "  " }, tag.label), {
+            entries.push(item(format!("Tint for “{}”{}", tag.label, if tint { "  ✓" } else { "" }), {
                 let label = label.clone();
                 move |this, _, cx| {
                     let Some(t) = this.tab(tab_id, cx) else { return };
@@ -314,19 +315,25 @@ impl BenchWindow {
                     this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
                 }
             }));
-            entries.push(item(format!("Remove Tag “{}”", tag.label), move |this, _, cx| {
-                let Some(t) = this.tab(tab_id, cx) else { return };
-                let tags = t.tags.iter().filter(|t| t.label != label).cloned().collect();
-                this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
-            }));
+            entries.push(
+                item(format!("Remove Tag “{}”", tag.label), move |this, _, cx| {
+                    let Some(t) = this.tab(tab_id, cx) else { return };
+                    let tags = t.tags.iter().filter(|t| t.label != label).cloned().collect();
+                    this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
+                })
+                .icon("close"),
+            );
         }
         let private = tab.private;
-        entries.push(item(if private { "✓ Private" } else { "   Private" }, move |this, _, cx| {
-            this.send(ClientMsg::SetPrivate { tab: tab_id, private: !private }, cx);
-        }));
+        entries.push(
+            item(if private { "Private  ✓" } else { "Private" }, move |this, _, cx| {
+                this.send(ClientMsg::SetPrivate { tab: tab_id, private: !private }, cx);
+            })
+            .icon("private"),
+        );
         // Moving a tab to another bench is the pegboard's: drag it there.
         entries.push(MenuEntry::Separator);
-        entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)));
+        entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)).icon("close"));
         entries
     }
 
@@ -335,17 +342,17 @@ impl BenchWindow {
             item("Copy", |_, window, cx| window.dispatch_action(Box::new(Copy), cx)),
             item("Paste", |_, window, cx| window.dispatch_action(Box::new(Paste), cx)),
             MenuEntry::Separator,
-            item("Split Right", move |this, _, cx| this.split_pane(pane, SplitDir::Right, cx)),
-            item("Split Down", move |this, _, cx| this.split_pane(pane, SplitDir::Down, cx)),
+            item("Split Right", move |this, _, cx| this.split_pane(pane, SplitDir::Right, cx)).icon("split-right"),
+            item("Split Down", move |this, _, cx| this.split_pane(pane, SplitDir::Down, cx)).icon("split-down"),
             MenuEntry::Separator,
-            danger("Close Pane", move |this: &mut Self, _, cx| this.send(ClientMsg::ClosePane { pane }, cx)),
+            danger("Close Pane", move |this: &mut Self, _, cx| this.send(ClientMsg::ClosePane { pane }, cx)).icon("close"),
         ]
     }
 
     fn bench_menu(&self, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let current = self.bench(cx).map(|b| b.color);
         let mut entries = vec![
-            item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)),
+            item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)).icon("pencil"),
             item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
             MenuEntry::Separator,
         ];
@@ -357,8 +364,8 @@ impl BenchWindow {
             }));
         }
         entries.push(MenuEntry::Separator);
-        entries.push(item("Show Shed", |this, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))));
-        entries.push(danger("Close Bench…", |this: &mut Self, window, cx| this.close_bench(window, cx)));
+        entries.push(item("Show Shed", |this, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))).icon("shed"));
+        entries.push(danger("Close Bench…", |this: &mut Self, window, cx| this.close_bench(window, cx)).icon("power"));
         entries
     }
 
@@ -501,7 +508,7 @@ impl BenchWindow {
                 .px_2()
                 .cursor_pointer()
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
-                .tooltip(|_, cx| cx.new(|_| Tooltip("Show Shed: every bench".into())).into())
+                .tooltip(menu::tooltip("Show Shed: every bench"))
                 .on_click(cx.listener(|this, _, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))))
                 .child(svg().path(icon("shed")).size(px(16.0)).text_color(hsla(ui.text_dim))),
         )
@@ -514,7 +521,7 @@ impl BenchWindow {
                 .cursor_pointer()
                 .when(self.setup.is_some(), |d| d.bg(hsla(ui.tab_active)))
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
-                .tooltip(|_, cx| cx.new(|_| Tooltip("Setup: startup, teardown, aliases".into())).into())
+                .tooltip(menu::tooltip("Setup: startup, teardown, aliases"))
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_setup(window, cx)))
                 .child(svg().path(icon("rack")).size(px(16.0)).text_color(hsla(if self.setup.is_some() { accent } else { ui.text_dim }))),
         )
@@ -762,21 +769,3 @@ impl Render for BenchWindow {
     }
 }
 
-/// A one-line tooltip.
-struct Tooltip(SharedString);
-
-impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let ui = crate::theme::current_ui(cx);
-        div()
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .bg(hsla(ui.tab_active))
-            .border_1()
-            .border_color(hsla(ui.divider))
-            .text_size(px(12.0))
-            .text_color(hsla(ui.text))
-            .child(self.0.clone())
-    }
-}
