@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use shed_keeper::{Keeper, KeeperConfig};
+use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Palette};
 use shed_model::{BenchId, PaneId, Shed};
 use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, PROTOCOL_VERSION, read_frame, write_frame};
 
@@ -183,4 +184,64 @@ fn binary_output_does_not_type_into_the_shell() {
     let out = client.wait_output(pane, "<-input");
     let typed = &out[out.rfind("input->").unwrap() + "input->".len()..out.rfind("<-input").unwrap()];
     assert_eq!(typed, "", "replies leaked into the shell");
+}
+
+/// A window attaching mid-session must end up with the same screen as one
+/// that watched everything, full-screen apps included.
+#[test]
+fn reattach_replays_the_screen_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+
+    let mut watcher = Client::connect(&socket);
+    let (_bench, pane) = watcher.attach();
+    let mut seen = AlacrittyEmulator::new(GridSize::new(80, 24), Palette::default());
+    let feed_until = |client: &Client, emu: &mut AlacrittyEmulator, needle: &str| {
+        let mut text = String::new();
+        client.expect(needle, |f| match f {
+            Frame::Output { pane: p, bytes } if p == pane => {
+                emu.advance(&bytes);
+                text.push_str(&String::from_utf8_lossy(&bytes));
+                text.contains(needle).then_some(())
+            }
+            _ => None,
+        });
+    };
+    feed_until(&watcher, &mut seen, "$ ");
+
+    // Scrollback, colours, then a full-screen app with its own modes and region.
+    let setup = "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do printf '\\033[3%dmline %s\\033[0m\\n' $((i % 8)) $i; done; \
+        printf '\\033[?1049h\\033[?1h\\033[2;20r\\033[H\\033[7m status \\033[0m\\033[10;5Hin the app'; echo; echo setup''-done\n";
+    watcher.send(Frame::Input { pane, bytes: setup.as_bytes().to_vec() });
+    feed_until(&watcher, &mut seen, "setup-done");
+
+    let mut late = Client::connect(&socket);
+    late.send(Frame::Client(ClientMsg::Attach { bench: None }));
+    let (cols, rows, replay) = late.expect("replay", |f| match f {
+        Frame::Keeper(KeeperMsg::Replay { pane: p, cols, rows, bytes }) if p == pane => Some((cols, rows, bytes)),
+        _ => None,
+    });
+    let mut restored = AlacrittyEmulator::new(GridSize::new(cols, rows), Palette::default());
+    restored.advance(&replay);
+
+    // Leave the alt screen and print more; both windows see it live.
+    watcher.send(Frame::Input { pane, bytes: b"printf '\\033[r\\033[?1049l'; echo after''-app\n".to_vec() });
+    feed_until(&watcher, &mut seen, "after-app");
+    feed_until(&late, &mut restored, "after-app");
+    // Let any trailing prompt arrive at both.
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(Frame::Output { bytes, .. }) = watcher.frames.try_recv() {
+        seen.advance(&bytes);
+    }
+    while let Ok(Frame::Output { bytes, .. }) = late.frames.try_recv() {
+        restored.advance(&bytes);
+    }
+
+    assert_eq!(restored.dump_text(), seen.dump_text());
+    assert!(restored.dump_text().contains("line 30"), "primary screen came back:\n{}", restored.dump_text());
+    assert_eq!(restored.modes(), seen.modes());
+    seen.scroll_display(i32::MAX);
+    restored.scroll_display(i32::MAX);
+    assert_eq!(restored.display_offset(), seen.display_offset(), "scrollback length");
+    assert_eq!(restored.dump_text(), seen.dump_text(), "oldest scrollback page");
 }

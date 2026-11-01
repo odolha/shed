@@ -102,6 +102,11 @@ pub trait Emulator: Send {
     /// Fills `out` with the visible grid, colours resolved through `palette`.
     fn snapshot(&self, palette: &Palette, out: &mut Snapshot);
 
+    /// Bytes that bring a fresh emulator of the same size to this state:
+    /// scrollback, both screens, cursor, pen, modes, colours and title.
+    /// A synchronized update in progress is applied first.
+    fn replay(&mut self) -> Vec<u8>;
+
     /// The visible grid as plain text, one line per row, trailing blanks trimmed.
     fn dump_text(&self) -> String;
 }

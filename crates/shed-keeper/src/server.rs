@@ -80,6 +80,14 @@ impl State {
         }
     }
 
+    fn send_replay(&mut self, client: ClientId, pane: PaneId) {
+        let Some(rt) = self.panes.get_mut(&pane) else { return };
+        let size = rt.emu.size();
+        let bytes = rt.emu.replay();
+        debug!(?pane, len = bytes.len(), "replay");
+        self.send(client, KeeperMsg::Replay { pane, cols: size.cols, rows: size.rows, bytes });
+    }
+
     fn broadcast_tree(&self) {
         let frame: Arc<[u8]> = Frame::Keeper(KeeperMsg::TreeChanged(self.tree.clone())).encode().into();
         for c in self.clients.values().filter(|c| c.kind == ClientKind::Window) {
@@ -266,8 +274,14 @@ impl Keeper {
                 }
                 st.send(client, KeeperMsg::TreeChanged(st.tree.clone()));
                 st.send(client, KeeperMsg::Attached { bench });
+                // Still under the lock: each replay precedes that pane's next output.
+                let panes: Vec<PaneId> = st.panes.iter().filter(|(_, rt)| rt.bench == bench).map(|(id, _)| *id).collect();
+                for pane in panes {
+                    st.send_replay(client, pane);
+                }
                 info!(client, ?bench, "attached");
             }
+            ClientMsg::Replay { pane } => self.lock().send_replay(client, pane),
             ClientMsg::Detach { bench } => {
                 let mut st = self.lock();
                 if let Some(c) = st.clients.get_mut(&client) {

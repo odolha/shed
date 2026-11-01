@@ -67,6 +67,11 @@ impl AppState {
                 self.sync_windows(cx);
             }
             Frame::Keeper(KeeperMsg::Attached { bench }) => self.open_bench_window(bench, cx),
+            Frame::Keeper(KeeperMsg::Replay { pane, cols, rows, bytes }) => {
+                if let Some(view) = self.panes.get(&pane).and_then(|v| v.upgrade()) {
+                    view.update(cx, |view, cx| view.restore(cols, rows, &bytes, cx));
+                }
+            }
             Frame::Keeper(KeeperMsg::Error(e)) => {
                 error!("keeper: {e}");
                 if e.starts_with("protocol mismatch") {

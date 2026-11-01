@@ -1,0 +1,42 @@
+total 20
+drwxrwxr-x 4 user   user   4096 nov  1 11:19 [0m[01;34m.[0m
+drwxrwxr-x 3 user   user   4096 nov  1 11:19 [01;34m..[0m
+-rw-rw-r-- 1 user   user      0 nov  1 11:19 [01;31marchive.tar.gz[0m
+lrwxrwxrwx 1 user   user      7 nov  1 11:19 [40;31;01mbroken[0m -> [40;31;01mmissing[0m
+drwxrwxr-x 2 user   user   4096 nov  1 11:19 [01;34mdir1[0m
+drwxrwxr-x 2 user   user   4096 nov  1 11:19 [01;34mdir2[0m
+-rw-rw-r-- 1 user   user      0 nov  1 11:19 [01;35mimage.png[0m
+lrwxrwxrwx 1 user   user      9 nov  1 11:19 [01;36mlink[0m -> plain.txt
+-rw-rw-r-- 1 user   user      0 nov  1 11:19 plain.txt
+-rwxrwxr-x 1 user   user     10 nov  1 11:19 [01;32mrun.sh[0m
+demo:
+[0m[01;31marchive.tar.gz[0m  [40;31;01mbroken[0m  [01;34mdir1[0m  [01;34mdir2[0m  [01;35mimage.png[0m  [01;36mlink[0m  plain.txt  [01;32mrun.sh[0m
+
+/usr/share/doc:
+[01;34m2to3[0m
+[01;34m7zip[0m
+[01;34maccountsservice[0m
+[01;34macl[0m
+[01;34madduser[0m
+[01;34madwaita-icon-theme[0m
+[01;34malsa-base[0m
+[01;34malsa-topology-conf[0m
+[01;34malsa-ucm-conf[0m
+[01;34malsa-utils[0m
+[01;34mamd64-microcode[0m
+[01;34manacron[0m
+[01;34mapache2[0m
+[01;34mapache2-bin[0m
+[01;34mapache2-data[0m
+[01;34mapache2-utils[0m
+[01;34mapg[0m
+[01;34mapparmor[0m
+[01;34mapp-install-data[0m
+[01;34mappstream[0m
+[01;34mapt[0m
+[01;34maptdaemon[0m
+[01;34maptdaemon-data[0m
+[01;34maptitude[0m
+[01;34maptitude-common[0m
+[01;34maptkit[0m
+

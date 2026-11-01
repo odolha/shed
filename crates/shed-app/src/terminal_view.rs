@@ -72,6 +72,15 @@ impl TerminalView {
         &self.focus
     }
 
+    /// Rebuilds the screen from the keeper's replay of this pane. The grid
+    /// takes the keeper's size; the next layout resizes it to fit the window.
+    pub fn restore(&mut self, cols: u16, rows: u16, bytes: &[u8], cx: &mut Context<Self>) {
+        let size = self.emu.size();
+        let size = GridSize::new(cols, rows).with_cell(size.cell_width, size.cell_height);
+        self.emu = AlacrittyEmulator::new(size, self.palette.clone());
+        self.feed(bytes, cx);
+    }
+
     /// Output from the keeper.
     pub fn feed(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         self.emu.advance(bytes);

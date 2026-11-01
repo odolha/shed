@@ -1,0 +1,29 @@
+[?1049h[22;0;0t[>4;2m[?1h=[?2004h[?1004h[1;12r[?12h[?12l[22;2t[22;1t[27m[23m[29m[m[H[2J[?25l[12;1H"file.txt" 200L, 3092B[2;1H▽[6n[2;1H  [3;1HPzz\[0%m[6n[3;1H           [1;1H[>c]11;?[1;1Hline number 1
+line number 2[2;14H[K[3;1Hline number 3[3;14H[K[4;1Hline number 4
+line number 5
+line number 6
+line number 7
+line number 8
+line number 9
+line number 10
+line number 11[1;1H[?25h[?4m
+
+
+[?25line number 4[4;13H[K[4;1H[?25h[?25l[12;1H[K[12;1H:set nu[1;1H[38;5;130m      1 [mline number 1
+[38;5;130m      2 [mline number 2
+[38;5;130m      3 [mline number 3
+[38;5;130m      4 [mine number 4
+[38;5;130m      5 [mline number 5
+[38;5;130m      6 [mline number 6
+[38;5;130m      7 [mline number 7
+[38;5;130m      8 [mline number 8
+[38;5;130m      9 [mline number 9
+[38;5;130m     10 [mline number 10
+[38;5;130m     11 [mline number 11[4;9H[?25h[?25l[1;11r[1;1H[4M[1;12r[8;1H[38;5;130m     12 [mline number 12
+[38;5;130m     13 [mline number 13
+[38;5;130m     14 [mline number 14
+[38;5;130m     15 [mline number 15[12;1H[K[11;9H[?25h[?25l[13C6[11;9H[?25h[?25l
+[1m-- INSERT --[m[12;1H[K[11;14H[1;11r[11;1H
+[1;12r[11;1H[38;5;130m     16 [mtyped
+[1m-- INSERT --[11;15H[?25h[?25l[m[12;1H[K[11;14H[?25h[?25l
+:q![?2004l[>4;m[23;2t[23;1t[12;1H[K[12;1H[?1004l[?2004l[?1l>[?1049l[23;0;0t[?25h[>4;m

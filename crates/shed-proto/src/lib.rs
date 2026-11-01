@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{BenchId, PaneId, Shed};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -41,6 +41,8 @@ pub enum ClientMsg {
     Detach { bench: BenchId },
     /// The pane's new grid size, plus the cell size in pixels for apps that ask.
     Resize { pane: PaneId, cols: u16, rows: u16, cell_width: u16, cell_height: u16 },
+    /// Ask for a pane's current screen again (see [`KeeperMsg::Replay`]).
+    Replay { pane: PaneId },
     NewBench { name: Option<String>, cwd: Option<PathBuf> },
     Status,
     /// Stop the keeper and every tool it holds.
@@ -54,6 +56,11 @@ pub enum KeeperMsg {
     /// The whole tree, sent on attach and after every change.
     TreeChanged(Shed),
     Attached { bench: BenchId },
+    /// A pane's whole state (scrollback, screens, modes) as terminal bytes:
+    /// fed to a fresh emulator of `cols` × `rows`, it shows the pane exactly
+    /// as the keeper sees it. Sent for every pane of a bench on attach, before
+    /// any of that pane's live output.
+    Replay { pane: PaneId, cols: u16, rows: u16, bytes: Vec<u8> },
     PaneExited { pane: PaneId, code: Option<i32> },
     Status(KeeperStatus),
     Error(String),

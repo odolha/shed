@@ -7,15 +7,20 @@ window (`shed`) is only a view onto it. See
 
 ## Status
 
-Phase 1 (skeleton and first pane) is in place:
+Phases 1 and 2 (first pane, the keeper) are in place:
 
 - One window running your shell, drawn with GPUI (`gpui-ce`), emulated by `alacritty_terminal`.
-- The keeper owns the PTY from day one: closing the window detaches, and the
-  next `shed` reattaches to the same running shell. Screen replay on reattach
-  is phase 2, so until then a reattached pane repaints only when its program redraws.
+- The keeper owns every PTY. Closing the window detaches; the next `shed`
+  reattaches and gets each pane's exact state replayed (scrollback, primary
+  and alternate screens, cursor, modes, colours, title) before live output resumes.
 - Keyboard (xterm encoding, application cursor mode), paste (Ctrl+Shift+V,
   bracketed when asked), wheel scrollback (Shift+PageUp/PageDown too), mouse
   reporting to apps that ask, OSC 52 copy, font zoom (Ctrl+= / Ctrl+- / Ctrl+0).
+- Query replies triggered by binary output (`cat image.png`) are dropped, so
+  they never show up at the prompt.
+
+`alacritty_terminal` is vendored with read-only accessors the replay needs;
+see `vendor/alacritty_terminal/SHED_PATCHES.md`.
 
 ## Build and run
 
@@ -38,6 +43,9 @@ and prints a warning.
 
 - `SHED_RUNTIME_DIR=/tmp/shed-dev` runs a separate keeper beside your real one.
 - A running keeper keeps its old code: after changing `shed-keeper`, run `shed stop`.
+  A window refuses a keeper speaking another protocol version and says so.
+- `crates/shed-emu/tests/recordings/` holds real program output (recorded with
+  `script` at 40×12) that the replay tests cut at many points.
 - Logs: the keeper writes `~/.local/state/shed/shedd.log`; `SHED_LOG=debug` raises
   the level for both binaries (`shedd --foreground` logs to stderr).
 - `SHED_FONT` and `SHED_FONT_SIZE` override the font until `shed.toml` lands in phase 3.

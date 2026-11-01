@@ -15,6 +15,8 @@ use crate::{
     Palette, Snapshot,
 };
 
+mod replay;
+
 /// Scrollback kept per pane, in lines.
 const SCROLLBACK: usize = 10_000;
 
@@ -300,6 +302,15 @@ impl Emulator for AlacrittyEmulator {
                 wide: out.cells[row * cols + col].flags.wide,
             }
         };
+    }
+
+    fn replay(&mut self) -> Vec<u8> {
+        // Bytes held back by a synchronized update would never reach the
+        // new emulator; apply them now.
+        if self.processor.sync_timeout().sync_timeout().is_some() {
+            self.processor.stop_sync(&mut self.term);
+        }
+        replay::serialize(&self.term)
     }
 
     fn dump_text(&self) -> String {
