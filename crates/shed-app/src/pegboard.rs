@@ -18,7 +18,7 @@ use shed_save::home_relative;
 use crate::assets::icon;
 use crate::bench_window::{DraggedTab, with_tag};
 use crate::line_editor::{EditorEvent, LineEditor};
-use crate::menu::{self, Menu, MenuEntry, MenuHost, danger, swatch};
+use crate::menu::{self, Menu, MenuEntry, MenuHost, danger};
 use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
@@ -76,6 +76,8 @@ enum Edit {
     Badge(BenchKey),
     TabName(TabId),
     AddTag(TabId),
+    /// A colour of one's own: `#rrggbb` or a colour's name.
+    Color(BenchKey),
 }
 
 fn menu_item(label: impl Into<SharedString>, action: impl Fn(&mut Pegboard, &mut Window, &mut Context<Pegboard>) + 'static) -> MenuEntry<Pegboard> {
@@ -298,6 +300,16 @@ impl Pegboard {
                 let Some(tags) = with_tag(&t.tags, &text) else { return };
                 ClientMsg::SetTags { tab, tags }
             }
+            Edit::Color(key) => {
+                match BenchColor::parse(&text) {
+                    Some(color) => self.set_color(&key, color, cx),
+                    None => self.state.update(cx, |state, cx| {
+                        state.notice = Some(format!("“{text}” is not a colour: use #rrggbb or a name such as teal"));
+                        cx.notify();
+                    }),
+                }
+                return;
+            }
         };
         self.send(msg, cx);
         self.refresh(cx);
@@ -354,17 +366,20 @@ impl Pegboard {
     }
 
     fn color_entries(&self, key: &BenchKey, current: BenchColor) -> Vec<MenuEntry<Self>> {
-        BenchColor::NAMED
+        let palette = BenchColor::NAMED
             .into_iter()
             .map(|color| {
-                let name = color.name().unwrap_or_default();
-                let mark = if current == color { "✓ " } else { "" };
                 let key = key.clone();
-                swatch(format!("{mark}{}{}", name[..1].to_uppercase(), &name[1..]), color.accent(), move |this: &mut Self, _, cx| {
+                menu::swatch_of(color.accent(), color.name().unwrap_or_default(), current == color, move |this: &mut Self, _, cx| {
                     this.set_color(&key, color, cx)
                 })
             })
-            .collect()
+            .collect();
+        let (k, hex) = (key.clone(), format!("#{:06X}", current.accent().to_hex()));
+        vec![
+            MenuEntry::Palette(palette),
+            menu_item("Custom Colour…", move |this, window, cx| this.start_edit(Edit::Color(k.clone()), hex.clone(), window, cx)).icon("bench-color"),
+        ]
     }
 
     fn tab_menu(&self, entry: &Entry, tab: &Tab) -> Vec<MenuEntry<Self>> {
@@ -522,8 +537,8 @@ impl Pegboard {
                     .into_any_element()
             }
         };
-        let badge = match self.editor_for(&Edit::Badge(key.clone())) {
-            Some(editor) => Some(div().w(px(60.0)).child(editor).into_any_element()),
+        let badge = match self.editor_for(&Edit::Badge(key.clone())).or_else(|| self.editor_for(&Edit::Color(key.clone()))) {
+            Some(editor) => Some(div().w(px(110.0)).child(editor).into_any_element()),
             None => bench.badge.clone().map(|badge| {
                 div().px_1().rounded_sm().text_size(px(12.0)).bg(hsla_alpha(accent, 0.25)).text_color(hsla(accent)).child(badge).into_any_element()
             }),

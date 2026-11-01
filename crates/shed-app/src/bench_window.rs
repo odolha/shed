@@ -20,7 +20,7 @@ use shed_proto::ClientMsg;
 use crate::actions::*;
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
-use crate::menu::{self, Menu, MenuEntry, MenuHost, danger, swatch};
+use crate::menu::{self, Menu, MenuEntry, MenuHost, danger};
 use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
@@ -34,6 +34,8 @@ enum EditTarget {
     BenchName,
     AddTag(TabId),
     Badge,
+    /// A colour of one's own: `#rrggbb` or a colour's name.
+    Color,
 }
 
 /// `tags` with the one `text` describes added: "prod", or "prod red".
@@ -253,6 +255,7 @@ impl BenchWindow {
             EditTarget::BenchName => self.bench(cx).map(|b| b.name.clone()),
             EditTarget::AddTag(_) => Some(String::new()),
             EditTarget::Badge => self.bench(cx).map(|b| b.badge.clone().unwrap_or_default()),
+            EditTarget::Color => self.bench(cx).map(|b| format!("#{:06X}", b.color.accent().to_hex())),
         };
         let Some(current) = current else { return };
         let editor = cx.new(|cx| LineEditor::selected(current, cx));
@@ -272,6 +275,10 @@ impl BenchWindow {
         let msg = match target {
             EditTarget::TabName(tab) => ClientMsg::RenameTab { tab, name: Some(text) },
             EditTarget::BenchName => ClientMsg::RenameBench { bench: self.bench, name: text },
+            EditTarget::Color => match BenchColor::parse(&text) {
+                Some(color) => ClientMsg::SetBenchColor { bench: self.bench, color },
+                None => return,
+            },
             EditTarget::Badge => {
                 let badge: String = text.chars().filter(|c| !c.is_whitespace()).take(2).collect();
                 ClientMsg::SetBadge { bench: self.bench, badge: (!badge.is_empty()).then_some(badge) }
@@ -356,13 +363,17 @@ impl BenchWindow {
             item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
             MenuEntry::Separator,
         ];
-        for color in BenchColor::NAMED {
-            let name = color.name().unwrap_or_default();
-            let mark = if current == Some(color) { "✓ " } else { "" };
-            entries.push(swatch(format!("{mark}{}{}", name[..1].to_uppercase(), &name[1..]), color.accent(), move |this: &mut Self, _, cx| {
-                    this.send(ClientMsg::SetBenchColor { bench: this.bench, color }, cx);
-            }));
-        }
+        entries.push(MenuEntry::Palette(
+            BenchColor::NAMED
+                .into_iter()
+                .map(|color| {
+                    menu::swatch_of(color.accent(), color.name().unwrap_or_default(), current == Some(color), move |this: &mut Self, _, cx| {
+                        this.send(ClientMsg::SetBenchColor { bench: this.bench, color }, cx);
+                    })
+                })
+                .collect(),
+        ));
+        entries.push(item("Custom Colour…", |this, window, cx| this.start_edit(EditTarget::Color, window, cx)).icon("bench-color"));
         entries.push(MenuEntry::Separator);
         entries.push(item("Show Shed", |this, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))).icon("shed"));
         entries.push(danger("Close Bench…", |this: &mut Self, window, cx| this.close_bench(window, cx)).icon("power"));
@@ -529,7 +540,8 @@ impl BenchWindow {
     }
 
     fn render_bench_label(&self, bench: &Bench, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(editor) = self.editor_for(EditTarget::BenchName).or_else(|| self.editor_for(EditTarget::Badge)) {
+        let editor = [EditTarget::BenchName, EditTarget::Badge, EditTarget::Color].into_iter().find_map(|t| self.editor_for(t));
+        if let Some(editor) = editor {
             return div().flex().items_center().px_2().child(editor).into_any_element();
         }
         let accent = bench.color.accent();

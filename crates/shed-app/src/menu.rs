@@ -13,8 +13,22 @@ use crate::theme::{UiColors, current_ui, hsla};
 pub type MenuAction<V> = Rc<dyn Fn(&mut V, &mut Window, &mut Context<V>)>;
 
 pub enum MenuEntry<V> {
-    Item { label: SharedString, icon: Option<&'static str>, swatch: Option<Rgb>, danger: bool, action: MenuAction<V> },
+    Item { label: SharedString, icon: Option<&'static str>, danger: bool, action: MenuAction<V> },
+    /// Colours to pick from, as a grid of dots.
+    Palette(Vec<Swatch<V>>),
     Separator,
+}
+
+pub struct Swatch<V> {
+    pub color: Rgb,
+    /// Its name, shown on hover.
+    pub name: &'static str,
+    pub current: bool,
+    pub action: MenuAction<V>,
+}
+
+pub fn swatch_of<V>(color: Rgb, name: &'static str, current: bool, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> Swatch<V> {
+    Swatch { color, name, current, action: Rc::new(action) }
 }
 
 impl<V> MenuEntry<V> {
@@ -28,17 +42,12 @@ impl<V> MenuEntry<V> {
 }
 
 pub fn item<V>(label: impl Into<SharedString>, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> MenuEntry<V> {
-    MenuEntry::Item { label: label.into(), icon: None, swatch: None, danger: false, action: Rc::new(action) }
+    MenuEntry::Item { label: label.into(), icon: None, danger: false, action: Rc::new(action) }
 }
 
 /// An item in red, for what stops or removes things.
 pub fn danger<V>(label: impl Into<SharedString>, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> MenuEntry<V> {
-    MenuEntry::Item { label: label.into(), icon: None, swatch: None, danger: true, action: Rc::new(action) }
-}
-
-/// An item with a colour dot.
-pub fn swatch<V>(label: impl Into<SharedString>, color: Rgb, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> MenuEntry<V> {
-    MenuEntry::Item { label: label.into(), icon: None, swatch: Some(color), danger: false, action: Rc::new(action) }
+    MenuEntry::Item { label: label.into(), icon: None, danger: true, action: Rc::new(action) }
 }
 
 /// A one-line tooltip: `.tooltip(tooltip("Close"))`.
@@ -102,18 +111,44 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
             this.menu_closed(window, cx);
         }));
     // With icons on some items, every label starts at the same place.
-    let icons = menu.entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::Item { swatch: Some(_), .. }));
+    let icons = menu.entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. }));
     for (i, entry) in menu.entries.iter().enumerate() {
         list = list.child(match entry {
             MenuEntry::Separator => div().my_1().h(px(1.0)).bg(hsla(ui.divider)).into_any_element(),
-            MenuEntry::Item { label, icon: glyph, swatch, danger, action } => {
+            MenuEntry::Palette(swatches) => div()
+                .flex()
+                .flex_wrap()
+                .gap_1p5()
+                .px_3()
+                .py_1()
+                .max_w(px(8.0 * 26.0 + 24.0))
+                .children(swatches.iter().enumerate().map(|(j, s)| {
+                    let action = s.action.clone();
+                    let ring = if s.current { ui.text } else { ui.tab_active };
+                    div()
+                        .id(("swatch", i * 1000 + j))
+                        .size(px(20.0))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(hsla(ring))
+                        .bg(hsla(s.color))
+                        .cursor_pointer()
+                        .hover(|st| st.border_color(hsla(ui.text_dim)))
+                        .tooltip(tooltip(s.name))
+                        .on_click(cx.listener(move |this: &mut V, _, window, cx| {
+                            *this.menu_slot() = None;
+                            action(this, window, cx);
+                            this.menu_closed(window, cx);
+                        }))
+                }))
+                .into_any_element(),
+            MenuEntry::Item { label, icon: glyph, danger, action } => {
                 let action = action.clone();
                 let color = if *danger { ui.danger } else { ui.text };
-                let lead = match (glyph, swatch) {
-                    (Some(name), _) => Some(svg().path(icon(name)).size(px(14.0)).text_color(hsla(if *danger { color } else { ui.text_dim })).into_any_element()),
-                    (None, Some(c)) => Some(div().size(px(10.0)).mx(px(2.0)).rounded_full().bg(hsla(*c)).into_any_element()),
-                    (None, None) if icons => Some(div().size(px(14.0)).into_any_element()),
-                    (None, None) => None,
+                let lead = match glyph {
+                    Some(name) => Some(svg().path(icon(name)).size(px(14.0)).text_color(hsla(if *danger { color } else { ui.text_dim })).into_any_element()),
+                    None if icons => Some(div().size(px(14.0)).into_any_element()),
+                    None => None,
                 };
                 div()
                     .id(("menu-item", i))

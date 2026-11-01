@@ -155,6 +155,12 @@ struct PaneRt {
     prompts: tokio::sync::watch::Sender<u64>,
     /// The shell has shown a prompt mark: it runs Shed's hook.
     hooked: bool,
+    /// The shell reported a command's end (or its first prompt) since the
+    /// last prompt mark: the next prompt is a new one, not a redraw.
+    /// Readline redraws its prompt, marks and all, when the window resizes.
+    new_prompt: bool,
+    /// The shell reports ends at all; one that does not counts every prompt.
+    reports_ends: bool,
 }
 
 /// How to start a pane.
@@ -1477,6 +1483,8 @@ impl Keeper {
             after_prompt: spec.after_prompt,
             prompts: tokio::sync::watch::channel(0).0,
             hooked: false,
+            new_prompt: false,
+            reports_ends: false,
         });
         tokio::spawn(write_loop(master.clone(), input_rx));
         tokio::spawn(self.clone().pane_loop(pane_id, master, pty.child));
@@ -1566,11 +1574,12 @@ impl Keeper {
                 }
             }
             Mark::InputStart => {
-                if let Some(rt) = st.panes.get_mut(&pane) {
-                    rt.hooked = true;
+                let Some(rt) = st.panes.get_mut(&pane) else { return };
+                rt.hooked = true;
+                if std::mem::take(&mut rt.new_prompt) || !rt.reports_ends {
                     rt.prompts.send_modify(|n| *n += 1);
+                    self.send_after_prompt(st, pane);
                 }
-                self.send_after_prompt(st, pane);
             }
             Mark::ShellAliases(text) => {
                 if let Some(p) = st.tree.pane_mut(pane) {
@@ -1595,6 +1604,9 @@ impl Keeper {
             }
             Mark::Finished(exit) => {
                 let Some(rt) = st.panes.get_mut(&pane) else { return };
+                // Sent before every new prompt, never with a redraw.
+                rt.new_prompt = true;
+                rt.reports_ends = true;
                 let Some(run) = rt.running.take() else { return };
                 rt.last_finished = Some((run.command.clone(), Instant::now()));
                 let (Some(tx), Some((bench, tab_id))) = (&self.logbook, st.tree.locate_pane(pane)) else { return };

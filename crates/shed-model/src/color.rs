@@ -27,7 +27,7 @@ impl Rgb {
     }
 }
 
-/// A bench's colour: one of the eight named options, or any custom colour.
+/// A bench's colour: one of the sixteen named options, or any custom colour.
 ///
 /// Named colours carry the two-tone gradient used by the bench icons; the
 /// `top` stop is the bright one used for UI accents.
@@ -42,12 +42,20 @@ pub enum BenchColor {
     Green,
     Teal,
     Slate,
+    Red,
+    Orange,
+    Lime,
+    Cyan,
+    Indigo,
+    Magenta,
+    Brown,
+    Olive,
     Custom(Rgb),
 }
 
 impl BenchColor {
-    /// The eight named colours, in the order new benches take them.
-    pub const NAMED: [BenchColor; 8] = [
+    /// The named colours, in the order new benches take them.
+    pub const NAMED: [BenchColor; 16] = [
         BenchColor::Blue,
         BenchColor::Violet,
         BenchColor::Pink,
@@ -56,6 +64,14 @@ impl BenchColor {
         BenchColor::Green,
         BenchColor::Teal,
         BenchColor::Slate,
+        BenchColor::Red,
+        BenchColor::Orange,
+        BenchColor::Lime,
+        BenchColor::Cyan,
+        BenchColor::Indigo,
+        BenchColor::Magenta,
+        BenchColor::Brown,
+        BenchColor::Olive,
     ];
 
     /// The next named colour not already in `used`, cycling when all are taken.
@@ -67,7 +83,8 @@ impl BenchColor {
             .unwrap_or(Self::NAMED[used.len() % Self::NAMED.len()])
     }
 
-    /// Gradient stops `(top, bottom)`, matching `assets/icons/bench/shed-bench-<colour>.svg`.
+    /// Gradient stops `(top, bottom)` for the bench icon; the first eight
+    /// match `assets/icons/bench/shed-bench-<colour>.svg`.
     pub fn gradient(self) -> (Rgb, Rgb) {
         let (top, bottom) = match self {
             BenchColor::Blue => (0x5CB2FF, 0x2459E8),
@@ -78,6 +95,14 @@ impl BenchColor {
             BenchColor::Green => (0x7BE38E, 0x1F9D57),
             BenchColor::Teal => (0x4BE0C4, 0x0B9A9A),
             BenchColor::Slate => (0xB3BAC7, 0x5F6878),
+            BenchColor::Red => (0xFF6B7A, 0xD62F45),
+            BenchColor::Orange => (0xFFB066, 0xF26B1D),
+            BenchColor::Lime => (0xC6EF5A, 0x7DB51F),
+            BenchColor::Cyan => (0x5FE3FF, 0x1492C9),
+            BenchColor::Indigo => (0x8C9BFF, 0x4A4FD8),
+            BenchColor::Magenta => (0xF28CFF, 0xB236D6),
+            BenchColor::Brown => (0xD9A47A, 0x8A5A3B),
+            BenchColor::Olive => (0xD2CC6E, 0x847E2C),
             BenchColor::Custom(c) => return (c, c),
         };
         (Rgb::hex(top), Rgb::hex(bottom))
@@ -112,6 +137,14 @@ impl BenchColor {
             BenchColor::Green => "green",
             BenchColor::Teal => "teal",
             BenchColor::Slate => "slate",
+            BenchColor::Red => "red",
+            BenchColor::Orange => "orange",
+            BenchColor::Lime => "lime",
+            BenchColor::Cyan => "cyan",
+            BenchColor::Indigo => "indigo",
+            BenchColor::Magenta => "magenta",
+            BenchColor::Brown => "brown",
+            BenchColor::Olive => "olive",
             BenchColor::Custom(_) => return None,
         })
     }
@@ -152,6 +185,16 @@ mod tests {
         assert_eq!(BenchColor::next_unused(&[BenchColor::Blue, BenchColor::Pink]), BenchColor::Violet);
         let all = BenchColor::NAMED;
         assert_eq!(BenchColor::next_unused(&all), BenchColor::Blue);
+    }
+
+    #[test]
+    fn colours_round_trip_by_name_and_hex() {
+        for c in BenchColor::NAMED {
+            assert_eq!(BenchColor::parse(&c.to_text()), Some(c));
+        }
+        assert_eq!(BenchColor::parse("Indigo"), Some(BenchColor::Indigo));
+        assert_eq!(BenchColor::parse("#123456"), Some(BenchColor::Custom(Rgb::hex(0x123456))));
+        assert_eq!(BenchColor::Custom(Rgb::hex(0x123456)).to_text(), "#123456");
     }
 
     #[test]

@@ -81,7 +81,7 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// List benches: open, detached and saved.
+    /// List benches: open, hidden and closed.
     List,
     /// Tag the current tab (run inside Shed).
     Tag {
