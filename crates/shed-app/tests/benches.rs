@@ -232,7 +232,8 @@ fn closed_benches_change_in_place_and_launchers_still_find_them() {
     let env = start_in(dir.path(), "shedd.sock");
     let mut c = Client::connect(&env.socket);
     let bench = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("docs".into()), cwd: None });
-    tree_until(&mut c, "docs", |t| t.bench(bench).is_some());
+    let tree = tree_until(&mut c, "docs", |t| t.bench(bench).is_some());
+    let first = tree.bench(bench).unwrap().tabs[0].id;
     c.msg(ClientMsg::CloseBench { bench });
     tree_until(&mut c, "closed", |t| t.bench(bench).is_none());
 
@@ -251,10 +252,32 @@ fn closed_benches_change_in_place_and_launchers_still_find_them() {
     assert!(saved.contains("name = \"notes\"") && saved.contains("color = \"teal\"") && saved.contains("launcher = \"docs\""), "{saved}");
     assert!(!dir.path().join("benches/docs.toml").exists());
 
+    // Its tabs change too: a new one, the first renamed and moved after it.
+    use shed_proto::SavedEdit::{MoveTab, NewTab, RemoveTab, RenameTab};
+    c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: NewTab });
+    done(&mut c, "new tab");
+    c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: RenameTab { tab: first, name: Some("main".into()) } });
+    done(&mut c, "tab renamed");
+    c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: MoveTab { tab: first, index: 1 } });
+    done(&mut c, "tab moved");
+
     // A pinned launcher still says `shed load docs`, its launcher key.
     let shown = show_and_attach(&mut c, ShowTarget::Load { name: "docs".into() });
     assert_eq!(shown, bench);
     let tree = tree_until(&mut c, "loaded", |t| t.bench(bench).is_some());
     let b = tree.bench(bench).unwrap();
     assert_eq!((b.name.as_str(), b.color), ("notes", shed_model::BenchColor::Teal));
+    assert_eq!(b.tabs.len(), 2);
+    assert_eq!((b.tabs[1].id, b.tabs[1].name.as_deref()), (first, Some("main")));
+
+    // A running bench is changed in its window, and a bench keeps one tab.
+    c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: NewTab });
+    c.until("refused", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Error(_))).then_some(()));
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed again", |t| t.bench(bench).is_none());
+    let other = b.tabs[0].id;
+    c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: RemoveTab { tab: other } });
+    done(&mut c, "tab removed");
+    c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: RemoveTab { tab: first } });
+    c.until("last tab kept", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Error(_))).then_some(()));
 }

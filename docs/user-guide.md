@@ -51,29 +51,29 @@ Run `shed`, or pick Shed from your application menu.
 
 ![The Shed window](images/shed.png)
 
-Every bench is listed by name, with its state and its tabs. Each tab is a card with
-a live preview of its screen: running programs update as you watch, and closed
-benches show what was on screen when they were saved.
+Every bench is listed by name, with its state and its tabs. The state is a
+coloured badge beside the name: green **Open**, amber **Hidden** ("running without
+a window"), grey **Closed** (with when it was saved). Each tab is a card with a live
+preview of its screen: running programs update as you watch, and closed benches
+show, dimmed, what was on screen when they were saved.
 
 **Benches** (the row above the cards):
 
 - **Open** opens a closed or hidden bench in its window; **Go to** brings an open
-  one forward. The icons beside it **hide** the bench (its window closes, it keeps
-  running), **close** it (its programs stop and its teardown runs) and **delete** it.
+  one forward. Beside it, **Hide** closes its window and keeps it running,
+  **Close…** stops its programs and runs its teardown, and **Delete…** removes it;
+  the last two ask first.
 - Double-click the **name** to rename the bench.
 - Click the **colour dot** to pick another colour.
 - **⋯**, or a right-click anywhere on the bench, has everything else: new tab,
   rename, badge, colours, hide, close, delete.
 - **New bench**, top right, makes a bench and opens it.
 
-Closed benches can be renamed, recoloured and given a badge too; the change goes
-into their saved file.
-
 **Tabs** (the cards):
 
 - Click a card to go to that tab, opening the bench if needed.
 - Double-click its title to rename it; the **×** in its corner closes it.
-- **New tab** at the end of a running bench's cards adds one.
+- **New tab** at the end of a bench's cards adds one.
 - Drag a card onto another card to put it there, or onto another bench to move it
   there. A tab moves with everything running in it.
 - Right-click a card for its menu:
@@ -82,6 +82,12 @@ into their saved file.
 
 **Setup…** opens the tab's [Setup](#setup-startup-teardown-and-aliases) right in
 Shed.
+
+**Closed benches** are managed the same way: rename, recolour or badge them; add,
+rename, tag, reorder or remove their tabs; change their setup and aliases. Each
+change goes into the bench's saved file, and the bench opens with it next time. Two
+things need the bench running: going to a tab (which opens the bench), and moving
+a tab to another bench (open both first).
 
 Type in the field at the top to filter: by bench, tab, tag, folder or the program
 running. Up and Down move through the tabs shown; Enter goes to the selected one;

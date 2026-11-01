@@ -5,9 +5,14 @@ use std::path::PathBuf;
 
 use shed_model::Tool;
 
-/// A process's working directory.
+/// A process's working directory. A deleted one is still named by its path
+/// (the kernel adds " (deleted)"), so a folder made again there is used.
 pub fn cwd(pid: u32) -> Option<PathBuf> {
-    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    match path.to_str().and_then(|p| p.strip_suffix(" (deleted)")) {
+        Some(p) => Some(p.into()),
+        None => Some(path),
+    }
 }
 
 /// A process's command line.

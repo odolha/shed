@@ -1022,6 +1022,44 @@ impl Keeper {
                 saved.badge = badge;
                 format!("rebadged {name}")
             }
+            SavedEdit::RenameTab { tab, name: title } => {
+                saved.tab_mut(tab).ok_or("no such tab")?.name = title.filter(|n| !n.trim().is_empty());
+                format!("renamed a tab of {name}")
+            }
+            SavedEdit::TabTags { tab, tags } => {
+                saved.tab_mut(tab).ok_or("no such tab")?.tags = shed_save::saved_tags(&tags);
+                format!("tagged a tab of {name}")
+            }
+            SavedEdit::TabPrivate { tab, private } => {
+                saved.tab_mut(tab).ok_or("no such tab")?.private = private;
+                format!("changed a tab of {name}")
+            }
+            SavedEdit::NewTab => {
+                saved.add_tab();
+                format!("added a tab to {name}")
+            }
+            SavedEdit::RemoveTab { tab } => {
+                saved.remove_tab(tab)?;
+                format!("removed a tab from {name}")
+            }
+            SavedEdit::MoveTab { tab, index } => {
+                saved.move_tab(tab, index);
+                format!("moved a tab of {name}")
+            }
+            SavedEdit::PaneSetup { pane, setup } => {
+                if !saved.set_pane_setup(pane, &setup) {
+                    return Err("no such pane".into());
+                }
+                format!("set up a pane of {name}")
+            }
+            SavedEdit::Aliases { tab: None, aliases } => {
+                saved.aliases = aliases;
+                format!("set the aliases of {name}")
+            }
+            SavedEdit::Aliases { tab: Some(tab), aliases } => {
+                saved.tab_mut(tab).ok_or("no such tab")?.aliases = aliases;
+                format!("set a tab's aliases in {name}")
+            }
         };
         // Its scrollback stays as it is.
         store.save(&saved, &[]).map_err(|e| format!("cannot save {:?}: {e}", saved.name))?;

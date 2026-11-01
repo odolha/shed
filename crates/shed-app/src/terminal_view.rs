@@ -956,7 +956,7 @@ impl Render for TerminalView {
                         .rounded_sm()
                         .text_size(px(12.0))
                         .bg(hsla_alpha(accent, 0.22))
-                        .text_color(hsla(accent))
+                        .text_color(hsla(self.ui.ink(accent)))
                         .child(label),
                 )
             })

@@ -133,6 +133,11 @@ fn default_rows() -> u16 {
     24
 }
 
+/// Tags as saved: colours as `#rrggbb`.
+pub fn saved_tags(tags: &[Tag]) -> Vec<SavedTag> {
+    tags.iter().map(|t| SavedTag { label: t.label.clone(), color: format!("#{:06X}", t.color.to_hex()), tint: t.tint_tab }).collect()
+}
+
 /// What the keeper knows about a pane beyond the tree.
 #[derive(Clone, Debug, Default)]
 pub struct PaneExtras {
@@ -263,6 +268,64 @@ impl SavedBench {
 
     pub fn launcher(&self) -> String {
         if self.launcher.is_empty() { slug(&self.name) } else { self.launcher.clone() }
+    }
+
+    pub fn tab_mut(&mut self, tab: TabId) -> Option<&mut SavedTab> {
+        self.tabs.iter_mut().find(|t| t.id == tab)
+    }
+
+    /// A pane's start folder, startup and teardown, as the Setup panel edits them.
+    pub fn set_pane_setup(&mut self, pane: PaneId, setup: &PaneSetup) -> bool {
+        let Some(p) = self.tabs.iter_mut().flat_map(|t| &mut t.panes).find(|p| p.id == pane) else { return false };
+        p.start_in = setup.start_in.as_deref().map(home_relative);
+        p.startup = setup.startup.clone();
+        p.wait = setup.wait;
+        p.teardown = setup.teardown.clone();
+        true
+    }
+
+    /// Adds a tab with one pane in the bench's folder.
+    pub fn add_tab(&mut self) -> TabId {
+        let id = TabId::new();
+        self.tabs.push(SavedTab {
+            id,
+            name: None,
+            tags: Vec::new(),
+            private: false,
+            layout: "0".into(),
+            active_pane: 0,
+            aliases: Aliases::new(),
+            panes: vec![SavedPane {
+                id: PaneId::new(),
+                cwd: self.cwd.clone(),
+                cols: default_cols(),
+                rows: default_rows(),
+                tool: None,
+                start_in: None,
+                startup: Vec::new(),
+                wait: false,
+                teardown: Vec::new(),
+            }],
+        });
+        id
+    }
+
+    pub fn remove_tab(&mut self, tab: TabId) -> Result<(), String> {
+        let Some(i) = self.tabs.iter().position(|t| t.id == tab) else { return Err("no such tab".into()) };
+        if self.tabs.len() == 1 {
+            return Err("a bench keeps at least one tab; delete the bench instead".into());
+        }
+        self.tabs.remove(i);
+        self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        Ok(())
+    }
+
+    /// Moves a tab to `index` among the others.
+    pub fn move_tab(&mut self, tab: TabId, index: usize) -> bool {
+        let Some(i) = self.tabs.iter().position(|t| t.id == tab) else { return false };
+        let t = self.tabs.remove(i);
+        self.tabs.insert(index.min(self.tabs.len()), t);
+        true
     }
 
     /// A copy under another name, with fresh IDs so both can be open at
@@ -685,6 +748,28 @@ mod tests {
         // Something done after a restore keeps its divider.
         let busy = ["$", &d("12:38"), "$ ls", "a b", "$"].join("\n");
         assert_eq!(skip_idle_restores(busy.lines()).len(), 5);
+    }
+
+    #[test]
+    fn closed_benches_change_tab_by_tab() {
+        let mut saved = SavedBench::from_bench(&sample(), |_| PaneExtras::default());
+        let (first, second) = (saved.tabs[0].id, saved.tabs[1].id);
+        let added = saved.add_tab();
+        assert_eq!(saved.tabs.len(), 3);
+        assert_eq!(saved.tabs[2].panes[0].cwd, saved.cwd);
+        assert!(saved.move_tab(added, 0));
+        assert_eq!(saved.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [added, first, second]);
+        saved.remove_tab(first).unwrap();
+        saved.remove_tab(second).unwrap();
+        assert!(saved.remove_tab(added).is_err(), "the last tab stays");
+        let pane = saved.tabs[0].panes[0].id;
+        let setup = PaneSetup { start_in: None, startup: vec!["make".into()], wait: true, teardown: vec!["make clean".into()] };
+        assert!(saved.set_pane_setup(pane, &setup));
+        let (bench, _) = saved.to_bench().unwrap();
+        assert_eq!(bench.tabs[0].panes[0].setup, setup);
+        let tags = [Tag { label: "prod".into(), color: Rgb::hex(0xF0566A), tint_tab: true }];
+        saved.tab_mut(added).unwrap().tags = saved_tags(&tags);
+        assert_eq!(saved.to_bench().unwrap().0.tabs[0].tags, tags);
     }
 
     #[test]

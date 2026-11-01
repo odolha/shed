@@ -465,7 +465,7 @@ impl BenchWindow {
                         .rounded_sm()
                         .text_size(px(11.0))
                         .bg(hsla_alpha(tag.color, 0.25))
-                        .text_color(hsla(tag.color))
+                        .text_color(hsla(self.ui.ink(tag.color)))
                         .child(tag.label.clone()),
                 );
             }
@@ -552,7 +552,7 @@ impl BenchWindow {
             .gap_1p5()
             .px_3()
             .cursor_pointer()
-            .text_color(hsla(accent))
+            .text_color(hsla(self.ui.ink(accent)))
             .hover(|s| s.bg(hsla(self.ui.tab_hover)))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 let entries = this.bench_menu(cx);
@@ -562,7 +562,7 @@ impl BenchWindow {
                 let entries = this.bench_menu(cx);
                 this.open_menu(e.position, entries, cx);
             }))
-            .child(svg().path(icon("bench")).size(px(14.0)).text_color(hsla(accent)))
+            .child(svg().path(icon("bench")).size(px(14.0)).text_color(hsla(self.ui.ink(accent))))
             .child(bench.name.clone())
             .when_some(bench.badge.clone(), |el, badge| {
                 el.child(div().px_1().rounded_sm().bg(hsla_alpha(accent, 0.25)).child(badge))

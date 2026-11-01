@@ -184,7 +184,7 @@ impl Render for LogbookSearch {
             div()
                 .px_1p5()
                 .rounded_sm()
-                .when(on, |d| d.bg(hsla_alpha(self.accent, 0.25)).text_color(hsla(self.accent)))
+                .when(on, |d| d.bg(hsla_alpha(self.accent, 0.25)).text_color(hsla(self.ui.ink(self.accent))))
                 .child(s.name())
         }));
         let header = div()

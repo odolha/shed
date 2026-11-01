@@ -9,13 +9,15 @@ set -euo pipefail
 repo=$(pwd)
 demo=${DEMO:-/tmp/shed-demo}
 shed=$repo/target/debug/shed
+# A demo Shed left from an earlier run stops first, while its socket still exists.
+SHED_RUNTIME_DIR=$demo/run "$shed" stop >/dev/null 2>&1 || true
 "$repo/tools/screenshots/demo-world.sh" "$demo" >/dev/null
 export HOME=$demo/home SHED_RUNTIME_DIR=$demo/run XDG_CONFIG_HOME=$demo/xdg/config XDG_DATA_HOME=$demo/xdg/data XDG_STATE_HOME=$demo/xdg/state
 
 # Windows of this Shed only, by owning process.
 mine() { for p in $(pgrep -x shed); do tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -qx "SHED_RUNTIME_DIR=$SHED_RUNTIME_DIR" && echo $p; done; }
 win() { for _ in $(seq 50); do for p in $(mine); do w=$(wmctrl -lp | awk -v pid=$p '$3==pid' | grep -F "$1" | head -1 | awk '{print $1}'); [ -n "$w" ] && { echo $w; return; }; done; sleep 0.2; done; echo "no window: $1" >&2; exit 1; }
-grab() { ffmpeg -loglevel error -y -f x11grab -window_id "$1" -i :0 -frames:v 1 "$demo/$2.png"; }
+grab() { ffmpeg -loglevel error -y -f x11grab -draw_mouse 0 -window_id "$1" -i :0 -frames:v 1 "$demo/$2.png"; }
 
 # Every bench runs once, so closed ones have scrollback to preview.
 (setsid "$shed" >"$demo/app.log" 2>&1 &)

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -98,6 +98,16 @@ pub enum SavedEdit {
     Rename(String),
     Color(BenchColor),
     Badge(Option<String>),
+    RenameTab { tab: TabId, name: Option<String> },
+    TabTags { tab: TabId, tags: Vec<Tag> },
+    TabPrivate { tab: TabId, private: bool },
+    /// Adds a tab with one pane in the bench's folder.
+    NewTab,
+    RemoveTab { tab: TabId },
+    MoveTab { tab: TabId, index: usize },
+    PaneSetup { pane: PaneId, setup: PaneSetup },
+    /// The bench's aliases (`tab: None`) or a tab's.
+    Aliases { tab: Option<TabId>, aliases: Aliases },
 }
 
 /// Which aliases to set.

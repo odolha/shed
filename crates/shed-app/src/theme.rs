@@ -45,8 +45,8 @@ pub struct UiColors {
     pub text_dim: Rgb,
     /// Lines between panes.
     pub divider: Rgb,
-    /// Shed's own highlight, where no bench colour applies. Blue by default:
-    /// far from `danger`, and from the coral cursor.
+    /// Shed's own highlight, where no bench colour applies: coral, like the
+    /// app icon, and clearly apart from `danger`'s red.
     pub accent: Rgb,
     /// For what stops or removes things.
     pub danger: Rgb,
@@ -74,6 +74,30 @@ impl UiColors {
             danger: pick(&ui.danger, &t.ansi[1]),
         }
     }
+
+    /// `c` for text and icons on this chrome. Bench and tag colours are bright,
+    /// which reads on dark themes; on light ones `c` is darkened until it does.
+    pub fn ink(&self, c: Rgb) -> Rgb {
+        let background = luminance(self.background);
+        if background < 0.5 {
+            return c;
+        }
+        let mut c = c;
+        while (background + 0.05) / (luminance(c) + 0.05) < 4.0 && c != Rgb::default() {
+            let darker = |v: u8| (v as f32 * 0.9) as u8;
+            c = Rgb { r: darker(c.r), g: darker(c.g), b: darker(c.b) };
+        }
+        c
+    }
+}
+
+/// Relative luminance, as WCAG defines it.
+fn luminance(c: Rgb) -> f32 {
+    let linear = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
 }
 
 /// The chrome colours of the theme in effect.

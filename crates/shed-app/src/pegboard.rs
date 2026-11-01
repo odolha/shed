@@ -69,6 +69,14 @@ enum BenchKey {
     Closed(String),
 }
 
+/// What can change about a tab, whether its bench runs or not.
+enum TabChange {
+    Rename(Option<String>),
+    Tags(Vec<shed_model::Tag>),
+    Private(bool),
+    Close,
+}
+
 /// What the inline text field is editing.
 #[derive(Clone, PartialEq)]
 enum Edit {
@@ -165,8 +173,75 @@ impl Pegboard {
         self.state.read(cx).conn.send_msg(msg);
     }
 
-    fn running_tab<'a>(&self, tab: TabId, cx: &'a Context<Self>) -> Option<&'a Tab> {
-        self.state.read(cx).tree.tab(tab)
+    /// A tab and its bench, running or closed.
+    fn find_tab(&self, tab: TabId, cx: &Context<Self>) -> Option<(BenchKey, Tab)> {
+        let state = self.state.read(cx);
+        for b in &state.tree.benches {
+            if let Some(t) = b.tabs.iter().find(|t| t.id == tab) {
+                return Some((BenchKey::Running(b.id), t.clone()));
+            }
+        }
+        let stored = cx.try_global::<PegboardData>()?;
+        stored.0.stored.iter().filter(|s| state.tree.bench(s.bench.id).is_none()).find_map(|s| {
+            let t = s.bench.tabs.iter().find(|t| t.id == tab)?;
+            Some((BenchKey::Closed(s.bench.name.clone()), t.clone()))
+        })
+    }
+
+    /// Changes a tab: through the keeper if its bench runs, in its saved file if not.
+    fn change_tab(&mut self, tab: TabId, change: TabChange, cx: &mut Context<Self>) {
+        let Some((key, _)) = self.find_tab(tab, cx) else { return };
+        let msg = match key {
+            BenchKey::Running(_) => match change {
+                TabChange::Rename(name) => ClientMsg::RenameTab { tab, name },
+                TabChange::Tags(tags) => ClientMsg::SetTags { tab, tags },
+                TabChange::Private(private) => ClientMsg::SetPrivate { tab, private },
+                TabChange::Close => ClientMsg::CloseTab { tab },
+            },
+            BenchKey::Closed(name) => ClientMsg::EditSaved {
+                name,
+                edit: match change {
+                    TabChange::Rename(name) => SavedEdit::RenameTab { tab, name },
+                    TabChange::Tags(tags) => SavedEdit::TabTags { tab, tags },
+                    TabChange::Private(private) => SavedEdit::TabPrivate { tab, private },
+                    TabChange::Close => SavedEdit::RemoveTab { tab },
+                },
+            },
+        };
+        self.send(msg, cx);
+        self.refresh(cx);
+    }
+
+    fn new_tab(&mut self, key: &BenchKey, cx: &mut Context<Self>) {
+        self.send(
+            match key {
+                BenchKey::Running(bench) => ClientMsg::NewTab { bench: *bench, cwd: None },
+                BenchKey::Closed(name) => ClientMsg::EditSaved { name: name.clone(), edit: SavedEdit::NewTab },
+            },
+            cx,
+        );
+        self.refresh(cx);
+    }
+
+    /// Puts a tab at `index` in a bench. Between running benches it moves with
+    /// whatever runs in it; a closed bench's tabs move within it.
+    fn move_tab(&mut self, tab: TabId, to: &BenchKey, index: usize, cx: &mut Context<Self>) {
+        let Some((from, _)) = self.find_tab(tab, cx) else { return };
+        let msg = match (&from, to) {
+            (BenchKey::Running(_), BenchKey::Running(bench)) => ClientMsg::MoveTab { tab, bench: *bench, index },
+            (BenchKey::Closed(a), BenchKey::Closed(b)) if a == b => {
+                ClientMsg::EditSaved { name: a.clone(), edit: SavedEdit::MoveTab { tab, index } }
+            }
+            _ => {
+                self.state.update(cx, |state, cx| {
+                    state.notice = Some("To move a tab to another bench, open both benches first.".into());
+                    cx.notify();
+                });
+                return;
+            }
+        };
+        self.send(msg, cx);
+        self.refresh(cx);
     }
 
     /// Every bench by name, each with the tabs the filter matches.
@@ -294,11 +369,11 @@ impl Pegboard {
                 }
             }
             // Empty goes back to the title the shell sets.
-            Edit::TabName(tab) => ClientMsg::RenameTab { tab, name: (!text.is_empty()).then_some(text) },
+            Edit::TabName(tab) => return self.change_tab(tab, TabChange::Rename((!text.is_empty()).then_some(text)), cx),
             Edit::AddTag(tab) => {
-                let Some(t) = self.running_tab(tab, cx) else { return };
+                let Some((_, t)) = self.find_tab(tab, cx) else { return };
                 let Some(tags) = with_tag(&t.tags, &text) else { return };
-                ClientMsg::SetTags { tab, tags }
+                return self.change_tab(tab, TabChange::Tags(tags), cx);
             }
             Edit::Color(key) => {
                 match BenchColor::parse(&text) {
@@ -340,10 +415,8 @@ impl Pegboard {
         let open_label = if entry.status == Status::Open { "Go to Bench" } else { "Open Bench" };
         let open_icon = if entry.status == Status::Closed { "bench-load" } else { "go" };
         entries.push(menu_item(open_label, move |this, _, cx| this.open(&e, None, cx)).icon(open_icon));
-        if entry.status != Status::Closed {
-            let id = bench.id;
-            entries.push(menu_item("New Tab", move |this, _, cx| this.send(ClientMsg::NewTab { bench: id, cwd: None }, cx)).icon("tab-new"));
-        }
+        let k = key.clone();
+        entries.push(menu_item("New Tab", move |this, _, cx| this.new_tab(&k, cx)).icon("tab-new"));
         entries.push(MenuEntry::Separator);
         let (k, name) = (key.clone(), bench.name.clone());
         entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::BenchName(k.clone()), name.clone(), window, cx)).icon("pencil"));
@@ -385,11 +458,8 @@ impl Pegboard {
     fn tab_menu(&self, entry: &Entry, tab: &Tab) -> Vec<MenuEntry<Self>> {
         let tab_id = tab.id;
         let e = entry.clone();
-        let mut entries = vec![menu_item("Go to Tab", move |this, _, cx| this.open(&e, Some(tab_id), cx)).icon("go")];
-        if entry.status == Status::Closed {
-            // A closed bench's tabs change once it is open.
-            return entries;
-        }
+        let go = if entry.status == Status::Closed { "Open at This Tab" } else { "Go to Tab" };
+        let mut entries = vec![menu_item(go, move |this, _, cx| this.open(&e, Some(tab_id), cx)).icon("go")];
         let bench = entry.bench.id;
         let title = tab.display_title();
         entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::TabName(tab_id), title.clone(), window, cx)).icon("pencil"));
@@ -399,21 +469,20 @@ impl Pegboard {
             let (label, tint) = (tag.label.clone(), tag.tint_tab);
             let l = label.clone();
             entries.push(menu_item(format!("Tint for “{label}”{}", if tint { "  ✓" } else { "" }), move |this, _, cx| {
-                let Some(t) = this.running_tab(tab_id, cx) else { return };
-                let tags = t.tags.iter().cloned().map(|mut t| {
+                let Some((_, t)) = this.find_tab(tab_id, cx) else { return };
+                let tags = t.tags.into_iter().map(|mut t| {
                     if t.label == l {
                         t.tint_tab = !t.tint_tab;
                     }
                     t
                 });
-                let tags = tags.collect();
-                this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
+                this.change_tab(tab_id, TabChange::Tags(tags.collect()), cx);
             }));
             entries.push(
                 menu_item(format!("Remove Tag “{label}”"), move |this, _, cx| {
-                    let Some(t) = this.running_tab(tab_id, cx) else { return };
-                    let tags = t.tags.iter().filter(|t| t.label != label).cloned().collect();
-                    this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
+                    let Some((_, t)) = this.find_tab(tab_id, cx) else { return };
+                    let tags = t.tags.into_iter().filter(|t| t.label != label).collect();
+                    this.change_tab(tab_id, TabChange::Tags(tags), cx);
                 })
                 .icon("close"),
             );
@@ -421,12 +490,14 @@ impl Pegboard {
         let private = tab.private;
         entries.push(
             menu_item(if private { "Private  ✓" } else { "Private" }, move |this, _, cx| {
-                this.send(ClientMsg::SetPrivate { tab: tab_id, private: !private }, cx);
+                this.change_tab(tab_id, TabChange::Private(!private), cx);
             })
             .icon("private"),
         );
         entries.push(MenuEntry::Separator);
-        entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)).icon("close"));
+        // A closed bench's tab has nothing running: it just goes.
+        let close = if entry.status == Status::Closed { "Remove Tab" } else { "Close Tab" };
+        entries.push(danger(close, move |this: &mut Self, _, cx| this.change_tab(tab_id, TabChange::Close, cx)).icon("close"));
         entries
     }
 
@@ -452,6 +523,7 @@ impl Pegboard {
         cx: &mut Context<Self>,
         on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> AnyElement {
+        let ink = self.state.read(cx).settings.ui.ink(color);
         div()
             .id(SharedString::from(id))
             .flex()
@@ -462,33 +534,11 @@ impl Pegboard {
             .rounded_sm()
             .text_size(px(12.0))
             .cursor_pointer()
-            .text_color(hsla(color))
+            .text_color(hsla(ink))
             .when(filled, |d| d.bg(hsla_alpha(color, 0.2)))
             .hover(move |s| s.bg(hsla_alpha(color, 0.3)))
-            .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(color)))
+            .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(ink)))
             .child(label.to_string())
-            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
-            .into_any_element()
-    }
-
-    /// A button that is only an icon, with what it does in a tooltip.
-    fn icon_button(
-        &self,
-        id: String,
-        glyph: &'static str,
-        tip: &'static str,
-        color: Rgb,
-        cx: &mut Context<Self>,
-        on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) -> AnyElement {
-        div()
-            .id(SharedString::from(id))
-            .p_1()
-            .rounded_sm()
-            .cursor_pointer()
-            .hover(move |s| s.bg(hsla_alpha(color, 0.2)))
-            .tooltip(menu::tooltip(tip))
-            .child(svg().path(icon(glyph)).size(px(15.0)).text_color(hsla(color)))
             .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
             .into_any_element()
     }
@@ -498,11 +548,25 @@ impl Pegboard {
         let accent = bench.color.accent();
         let id = bench.id;
         let key = entry.key();
-        let status = match entry.status {
-            Status::Open => "open".to_string(),
-            Status::Hidden => "hidden, still running".to_string(),
-            Status::Closed => format!("closed, saved {}", entry.saved.as_deref().map(short_time).unwrap_or_default()),
+        // State at a glance: a coloured badge, and what it means beside it.
+        let palette = &self.state.read(cx).settings.palette;
+        let (state_color, state_label, state_note) = match entry.status {
+            Status::Open => (palette.ansi[2], "Open", String::new()),
+            Status::Hidden => (palette.ansi[3], "Hidden", "running without a window".to_string()),
+            Status::Closed => (ui.text_dim, "Closed", format!("saved {}", entry.saved.as_deref().map(short_time).unwrap_or_default())),
         };
+        let state_badge = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_1p5()
+            .py_0p5()
+            .rounded_md()
+            .text_size(px(11.0))
+            .bg(hsla_alpha(state_color, 0.16))
+            .text_color(hsla(state_color))
+            .child(div().size(px(7.0)).rounded_full().when(entry.status == Status::Closed, |d| d.border_1().border_color(hsla(state_color))).when(entry.status != Status::Closed, |d| d.bg(hsla(state_color))))
+            .child(state_label);
         let tab_count = bench.tabs.len();
 
         // The colour dot picks the colour; a double-click on the name renames.
@@ -540,7 +604,7 @@ impl Pegboard {
         let badge = match self.editor_for(&Edit::Badge(key.clone())).or_else(|| self.editor_for(&Edit::Color(key.clone()))) {
             Some(editor) => Some(div().w(px(110.0)).child(editor).into_any_element()),
             None => bench.badge.clone().map(|badge| {
-                div().px_1().rounded_sm().text_size(px(12.0)).bg(hsla_alpha(accent, 0.25)).text_color(hsla(accent)).child(badge).into_any_element()
+                div().px_1().rounded_sm().text_size(px(12.0)).bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))).child(badge).into_any_element()
             }),
         };
         let mut header = div()
@@ -550,31 +614,31 @@ impl Pegboard {
             .child(dot)
             .child(name)
             .children(badge)
+            .child(state_badge)
             .child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(format!(
-                "{status} · {tab_count} tab{}",
+                "{}{tab_count} tab{}",
+                if state_note.is_empty() { String::new() } else { format!("{state_note} · ") },
                 if tab_count == 1 { "" } else { "s" }
             )))
             .child(div().flex_1());
 
         if bench.closing {
-            header = header.child(div().text_size(px(12.0)).text_color(hsla(accent)).child("closing…"));
+            header = header.child(div().text_size(px(12.0)).text_color(hsla(ui.ink(accent))).child("closing…"));
         } else {
             let (open_icon, open_label) = if entry.status == Status::Open { ("go", "Go to") } else { ("bench-load", "Open") };
             let e = entry.clone();
             header = header.child(self.button(format!("open-{id}"), open_icon, open_label, accent, true, cx, move |this, _, cx| this.open(&e, None, cx)));
             if entry.status == Status::Open {
-                header = header.child(self.icon_button(format!("hide-{id}"), "detach", "Hide: the window closes, the bench keeps running", ui.text_dim, cx, move |this, _, cx| {
-                    this.hide(id, cx)
-                }));
+                header = header.child(self.button(format!("hide-{id}"), "detach", "Hide", ui.text_dim, false, cx, move |this, _, cx| this.hide(id, cx)));
             }
             if entry.status != Status::Closed {
                 let b = bench.clone();
-                header = header.child(self.icon_button(format!("close-{id}"), "power", "Close: its programs stop and its teardown runs", ui.text_dim, cx, move |this, window, cx| {
+                header = header.child(self.button(format!("close-{id}"), "power", "Close…", ui.text_dim, false, cx, move |this, window, cx| {
                     this.close(&b, window, cx)
                 }));
             }
             let name = bench.name.clone();
-            header = header.child(self.icon_button(format!("delete-{id}"), "trash", "Delete: its saved file and launcher go too", ui.danger, cx, move |this, window, cx| {
+            header = header.child(self.button(format!("delete-{id}"), "trash", "Delete…", ui.danger, false, cx, move |this, window, cx| {
                 this.delete(name.clone(), window, cx)
             }));
             let e = entry.clone();
@@ -600,8 +664,9 @@ impl Pegboard {
             let index = bench.tabs.iter().position(|t| t.id == *tab_id).unwrap_or(i);
             cards = cards.child(self.render_tab(entry, tab, index, first + i, previews, ui, cx));
         }
-        let running = entry.status != Status::Closed;
-        if running && !bench.closing {
+        if !bench.closing {
+            let k = key.clone();
+            let ink = ui.ink(accent);
             cards = cards.child(
                 div()
                     .id(SharedString::from(format!("new-tab-{id}")))
@@ -618,14 +683,15 @@ impl Pegboard {
                     .cursor_pointer()
                     .text_size(px(12.0))
                     .text_color(hsla(ui.text_dim))
-                    .hover(move |s| s.border_color(hsla(accent)).text_color(hsla(accent)))
+                    .hover(move |s| s.border_color(hsla(accent)).text_color(hsla(ink)))
                     .child(svg().path(icon("tab-new")).size(px(14.0)).text_color(hsla(ui.text_dim)))
                     .child("New tab")
-                    .on_click(cx.listener(move |this, _, _, cx| this.send(ClientMsg::NewTab { bench: id, cwd: None }, cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| this.new_tab(&k, cx))),
             );
         }
 
         let e = entry.clone();
+        let drop_key = key.clone();
         div()
             .id(SharedString::from(format!("bench-{id}")))
             .flex()
@@ -639,12 +705,8 @@ impl Pegboard {
                 let entries = this.bench_menu(&e);
                 this.open_menu(ev.position, entries, cx);
             }))
-            .when(running, |el| {
-                el.drag_over::<DraggedTab>(move |s, _, _, _| s.border_color(hsla(accent)))
-                    .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
-                        this.send(ClientMsg::MoveTab { tab: d.tab, bench: id, index: usize::MAX }, cx);
-                    }))
-            })
+            .drag_over::<DraggedTab>(move |s, _, _, _| s.border_color(hsla(accent)))
+            .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| this.move_tab(d.tab, &drop_key, usize::MAX, cx)))
             .child(header)
             .child(cards)
             .into_any_element()
@@ -673,7 +735,7 @@ impl Pegboard {
         let tool = pane.and_then(|p| p.tool.as_ref()).map(|t| t.display());
         let waiting = tab.panes.iter().any(|p| p.waiting.is_some());
         let tab_id = tab.id;
-        let bench_id = bench.id;
+        let card_key = entry.key();
 
         let mut head = div().flex().items_center().gap_1p5().min_w_0();
         if waiting {
@@ -697,7 +759,7 @@ impl Pegboard {
                         .text_color(hsla(ui.text))
                         .child(title.clone())
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            if running && e.click_count() >= 2 {
+                            if e.click_count() >= 2 {
                                 cx.stop_propagation();
                                 this.start_edit(Edit::TabName(tab_id), t.clone(), window, cx);
                             }
@@ -713,14 +775,14 @@ impl Pegboard {
                     .rounded_sm()
                     .text_size(px(11.0))
                     .bg(hsla_alpha(tag.color, 0.25))
-                    .text_color(hsla(tag.color))
+                    .text_color(hsla(ui.ink(tag.color)))
                     .child(tag.label.clone()),
             );
         }
         if let Some(editor) = self.editor_for(&Edit::AddTag(tab_id)) {
             head = head.child(div().w(px(90.0)).child(editor));
         }
-        if running {
+        {
             head = head.child(
                 div()
                     .id(SharedString::from(format!("close-tab-{tab_id}")))
@@ -730,9 +792,10 @@ impl Pegboard {
                     .invisible()
                     .group_hover("card", |s| s.visible())
                     .hover(|s| s.bg(hsla(ui.divider)))
+                    .tooltip(menu::tooltip(if running { "Close tab" } else { "Remove tab" }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        this.send(ClientMsg::CloseTab { tab: tab_id }, cx);
+                        this.change_tab(tab_id, TabChange::Close, cx);
                     }))
                     .child(svg().path(icon("close")).size(px(11.0)).text_color(hsla(ui.text_dim))),
             );
@@ -748,6 +811,8 @@ impl Pegboard {
             .text_size(px(9.0))
             .line_height(px(11.0))
             .text_color(hsla(ui.text_dim))
+            // A closed bench's screen is a memory: dimmer than live ones.
+            .when(!running, |d| d.opacity(0.55))
             .children(lines.into_iter().map(|l| div().whitespace_nowrap().overflow_hidden().child(if l.is_empty() { " ".to_string() } else { l })));
 
         let mut foot = vec![pane.map(|p| home_relative(&p.cwd)).unwrap_or_default()];
@@ -774,15 +839,13 @@ impl Pegboard {
             .border_color(border)
             .cursor_pointer()
             .hover(move |s| s.border_color(hsla(accent)))
-            .when(running, |el| {
-                el.on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
-                    // Dropped on a card, a tab takes its place.
-                    .drag_over::<DraggedTab>(move |s, _, _, _| s.border_l_4().border_color(hsla(accent)))
-                    .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
-                        cx.stop_propagation();
-                        this.send(ClientMsg::MoveTab { tab: d.tab, bench: bench_id, index }, cx);
-                    }))
-            })
+            .on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
+            // Dropped on a card, a tab takes its place.
+            .drag_over::<DraggedTab>(move |s, _, _, _| s.border_l_4().border_color(hsla(accent)))
+            .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
+                cx.stop_propagation();
+                this.move_tab(d.tab, &card_key, index, cx);
+            }))
             .on_click(cx.listener(move |this, _, _, cx| this.open(&e, Some(tab_id), cx)))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                 let entries = this.tab_menu(&e2, &tab_for_menu);

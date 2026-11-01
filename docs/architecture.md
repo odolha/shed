@@ -124,6 +124,12 @@ startup and teardown. Each pane's scrollback goes beside it, as zstd-compressed 
 The keeper saves every running bench each minute, within a second of a change to
 setup or aliases, on rename, when closing a bench, and when it stops.
 
+A closed bench is changed in its file: Shed sends the keeper an edit (`EditSaved`:
+rename, colour, badge, a tab's name, tags or place, a new or removed tab, a pane's
+setup, aliases), which loads the file, applies it and saves it back, leaving the
+scrollback as it was. A running bench is changed in the tree instead, and the keeper
+refuses file edits to it.
+
 **Loading** rebuilds the bench in the keeper: panes start in their folder, with
 their old scrollback fed to the emulator dimmed above a "restored" line, then either
 run their startup commands or bring back what was running, by the rack rules

@@ -8,11 +8,12 @@ use gpui::{
 };
 use shed_model::config::{AliasLevel, resolve_aliases};
 use shed_model::{Aliases, Bench, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId};
-use shed_proto::{AliasTarget, ClientMsg};
+use shed_proto::{AliasTarget, ClientMsg, SavedEdit};
 use shed_save::{expand_home, home_relative};
 
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
+use crate::pegboard::PegboardData;
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
@@ -72,6 +73,13 @@ fn shown_tab(bench: &Bench, pinned: Option<TabId>) -> Option<&Tab> {
     }
 }
 
+/// Where an alias change goes: to the keeper for a running bench, into the
+/// saved file for a closed one.
+enum AliasDest {
+    Live(AliasTarget),
+    Saved { name: String, tab: Option<TabId> },
+}
+
 pub struct SetupPanel {
     bench: BenchId,
     /// The tab shown; `None` follows the bench's active tab.
@@ -92,39 +100,70 @@ impl SetupPanel {
         Self { bench, pinned, state, editing: None, new_alias_level: AliasLevel::Tab, show_shell: false }
     }
 
-    fn tab<'a>(&self, cx: &'a Context<Self>) -> Option<&'a Tab> {
-        shown_tab(self.state.read(cx).tree.bench(self.bench)?, self.pinned)
+    /// The bench: running, from the tree, or closed, from Shed's copy of
+    /// its saved file (then `false`).
+    fn bench(&self, cx: &Context<Self>) -> Option<(Bench, bool)> {
+        if let Some(b) = self.state.read(cx).tree.bench(self.bench) {
+            return Some((b.clone(), true));
+        }
+        let stored = cx.try_global::<PegboardData>()?;
+        stored.0.stored.iter().find(|s| s.bench.id == self.bench).map(|s| (s.bench.clone(), false))
+    }
+
+    fn tab(&self, cx: &Context<Self>) -> Option<Tab> {
+        shown_tab(&self.bench(cx)?.0, self.pinned).cloned()
     }
 
     /// The tab's panes in layout order.
-    fn panes<'a>(&self, cx: &'a Context<Self>) -> Vec<&'a Pane> {
+    fn panes(&self, cx: &Context<Self>) -> Vec<Pane> {
         let Some(tab) = self.tab(cx) else { return Vec::new() };
-        tab.layout.leaves().iter().filter_map(|id| tab.pane(*id)).collect()
+        tab.layout.leaves().iter().filter_map(|id| tab.pane(*id)).cloned().collect()
     }
 
     fn send(&self, msg: ClientMsg, cx: &Context<Self>) {
         self.state.read(cx).conn.send_msg(msg);
     }
 
+    /// A closed bench changes in its saved file; Shed then shows the change.
+    fn send_saved(&self, name: String, edit: SavedEdit, cx: &Context<Self>) {
+        self.send(ClientMsg::EditSaved { name, edit }, cx);
+        self.send(ClientMsg::Pegboard, cx);
+    }
+
     fn set_setup(&self, pane: PaneId, edit: impl FnOnce(&mut PaneSetup), cx: &Context<Self>) {
-        let Some(p) = self.state.read(cx).tree.pane(pane) else { return };
+        let Some((bench, running)) = self.bench(cx) else { return };
+        let Some(p) = bench.tabs.iter().flat_map(|t| &t.panes).find(|p| p.id == pane) else { return };
         let mut setup = p.setup.clone();
         edit(&mut setup);
-        if setup != p.setup {
+        if setup == p.setup {
+            return;
+        }
+        if running {
             self.send(ClientMsg::SetPaneSetup { pane, setup }, cx);
+        } else {
+            self.send_saved(bench.name, SavedEdit::PaneSetup { pane, setup }, cx);
         }
     }
 
-    fn aliases_at(&self, level: AliasLevel, cx: &Context<Self>) -> Option<(AliasTarget, Aliases)> {
-        let state = self.state.read(cx);
-        let bench = state.tree.bench(self.bench)?;
-        let tab = shown_tab(bench, self.pinned)?;
+    fn aliases_at(&self, level: AliasLevel, cx: &Context<Self>) -> Option<(AliasDest, Aliases)> {
+        let (bench, running) = self.bench(cx)?;
+        let tab = shown_tab(&bench, self.pinned)?;
+        let saved = |tab: Option<TabId>| AliasDest::Saved { name: bench.name.clone(), tab };
         Some(match level {
-            AliasLevel::Global => (AliasTarget::Global, state.tree.aliases.clone()),
-            AliasLevel::Bench => (AliasTarget::Bench(bench.id), bench.aliases.clone()),
-            AliasLevel::Tab => (AliasTarget::Tab(tab.id), tab.aliases.clone()),
+            AliasLevel::Global => (AliasDest::Live(AliasTarget::Global), self.state.read(cx).tree.aliases.clone()),
+            AliasLevel::Bench if running => (AliasDest::Live(AliasTarget::Bench(bench.id)), bench.aliases.clone()),
+            AliasLevel::Bench => (saved(None), bench.aliases.clone()),
+            AliasLevel::Tab if running => (AliasDest::Live(AliasTarget::Tab(tab.id)), tab.aliases.clone()),
+            AliasLevel::Tab => (saved(Some(tab.id)), tab.aliases.clone()),
             AliasLevel::Shell => return None,
         })
+    }
+
+    fn send_aliases(&self, dest: AliasDest, aliases: Aliases, cx: &Context<Self>) {
+        match dest {
+            AliasDest::Live(level) => self.send(ClientMsg::SetAliases { level, aliases }, cx),
+            AliasDest::Saved { name, tab } => self.send_saved(name, SavedEdit::Aliases { tab, aliases }, cx),
+        }
     }
 
     fn edit(&mut self, field: Field, initial: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -171,7 +210,7 @@ impl SetupPanel {
                 if let Some((name, value)) = parsed {
                     aliases.insert(name, value);
                 }
-                self.send(ClientMsg::SetAliases { level: target, aliases }, cx);
+                self.send_aliases(target, aliases, cx);
             }
         }
     }
@@ -219,7 +258,7 @@ impl SetupPanel {
         div()
             .id(id)
             .text_size(px(12.0))
-            .text_color(hsla(accent))
+            .text_color(hsla(self.state.read(cx).settings.ui.ink(accent)))
             .cursor_pointer()
             .hover(|s| s.underline())
             .child(label.to_string())
@@ -330,11 +369,10 @@ impl SetupPanel {
     }
 
     fn render_aliases(&self, ui: &UiColors, accent: Rgb, cx: &mut Context<Self>) -> AnyElement {
-        let state = self.state.read(cx);
-        let Some(bench) = state.tree.bench(self.bench) else { return div().into_any_element() };
-        let Some(tab) = shown_tab(bench, self.pinned) else { return div().into_any_element() };
+        let Some((bench, _)) = self.bench(cx) else { return div().into_any_element() };
+        let Some(tab) = shown_tab(&bench, self.pinned) else { return div().into_any_element() };
         let shell = tab.active().map(|p| p.shell_aliases.clone()).unwrap_or_default();
-        let rows = resolve_aliases(&shell, &state.tree.aliases, &bench.aliases, &tab.aliases);
+        let rows = resolve_aliases(&shell, &self.state.read(cx).tree.aliases, &bench.aliases, &tab.aliases);
         let mono = self.mono(cx);
 
         let shell_count = rows.iter().filter(|r| r.2 == AliasLevel::Shell).count();
@@ -372,7 +410,7 @@ impl SetupPanel {
                 row = row.child(self.remove_button(format!("alias-rm-{i}").into(), ui, cx, move |this, cx| {
                     if let Some((target, mut aliases)) = this.aliases_at(level, cx) {
                         aliases.remove(&name);
-                        this.send(ClientMsg::SetAliases { level: target, aliases }, cx);
+                        this.send_aliases(target, aliases, cx);
                     }
                 }));
             }
@@ -398,7 +436,7 @@ impl SetupPanel {
                 .rounded_sm()
                 .text_size(px(12.0))
                 .cursor_pointer()
-                .when(on, |d| d.bg(hsla_alpha(accent, 0.25)).text_color(hsla(accent)))
+                .when(on, |d| d.bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))))
                 .when(!on, |d| d.text_color(hsla(ui.text_dim)))
                 .child(level.name())
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -435,11 +473,10 @@ impl SetupPanel {
 
 impl Render for SetupPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = self.state.read(cx);
-        let ui = state.settings.ui.clone();
-        let accent = state.tree.bench(self.bench).map(|b| b.color.accent()).unwrap_or(ui.accent);
+        let ui = self.state.read(cx).settings.ui.clone();
+        let accent = self.bench(cx).map(|(b, _)| b.color.accent()).unwrap_or(ui.accent);
         let title = self.tab(cx).map(|t| t.display_title()).unwrap_or_default();
-        let panes: Vec<(usize, Pane)> = self.panes(cx).into_iter().cloned().enumerate().collect();
+        let panes: Vec<(usize, Pane)> = self.panes(cx).into_iter().enumerate().collect();
 
         let header = div()
             .flex()
