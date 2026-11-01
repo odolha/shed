@@ -88,6 +88,20 @@ impl BenchColor {
         self.gradient().0
     }
 
+    /// A named colour (`blue`, `coral`, …) or `#rrggbb`.
+    pub fn parse(s: &str) -> Option<BenchColor> {
+        let s = s.trim().to_ascii_lowercase();
+        Self::NAMED.into_iter().find(|c| c.name() == Some(s.as_str())).or_else(|| Rgb::parse(&s).map(BenchColor::Custom))
+    }
+
+    /// The colour as written in saved benches: its name, or `#rrggbb`.
+    pub fn to_text(self) -> String {
+        match self {
+            BenchColor::Custom(c) => format!("#{:06X}", c.to_hex()),
+            named => named.name().unwrap_or_default().to_string(),
+        }
+    }
+
     pub fn name(self) -> Option<&'static str> {
         Some(match self {
             BenchColor::Blue => "blue",

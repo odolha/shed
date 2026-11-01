@@ -231,11 +231,13 @@ pub struct Pane {
     pub title: Option<String>,
     /// The program in the foreground, when it is not the shell itself.
     pub tool: Option<Tool>,
+    /// A command typed at the prompt by a bench load, waiting for Enter.
+    pub waiting: Option<String>,
 }
 
 impl Pane {
     pub fn new(id: PaneId, cwd: PathBuf) -> Self {
-        Self { id, cwd, cols: 80, rows: 24, title: None, tool: None }
+        Self { id, cwd, cols: 80, rows: 24, title: None, tool: None, waiting: None }
     }
 }
 

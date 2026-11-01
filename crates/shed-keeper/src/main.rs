@@ -54,16 +54,22 @@ fn main() -> anyhow::Result<()> {
             state_dir: paths::state_dir(),
             shed_bin: std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("shed"))).filter(|p| p.exists()),
             env: Vec::new(),
+            store: Some(shed_save::Store::default()),
+            desktop: Some(shed_desktop::Desktop::new(paths::data_home())),
             shell: args.shell,
             home,
             exit_when_idle: !args.persist,
         });
 
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut hup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+        let stopping = keeper.clone();
         tokio::select! {
             r = keeper.serve(listener) => r?,
-            _ = term.recv() => info!("terminated"),
-            _ = tokio::signal::ctrl_c() => info!("interrupted"),
+            // Logout and shutdown: save every bench before anything else goes.
+            _ = term.recv() => { info!("terminated"); stopping.finish(); }
+            _ = hup.recv() => { info!("hung up"); stopping.finish(); }
+            _ = tokio::signal::ctrl_c() => { info!("interrupted"); stopping.finish(); }
         }
         let _ = std::fs::remove_file(&socket);
         info!("keeper stopped");

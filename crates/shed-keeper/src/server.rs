@@ -14,6 +14,7 @@ use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Palette};
 use shed_emu::EmuEvent;
 use shed_emu::marks::{Mark, MarkScanner};
 use shed_logbook::{Logbook, NewEntry};
+use shed_save::{PaneExtras, Relaunch, SavedBench, Store};
 use shed_model::config::{Config, FileWatch};
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId};
 use shed_proto::{
@@ -33,6 +34,17 @@ use crate::pty::{self, SpawnOptions};
 /// How long a pane keeps draining output after its shell exits, for
 /// background jobs that still hold the terminal open.
 const EXIT_DRAIN: Duration = Duration::from_millis(200);
+
+/// Lines of scrollback kept per pane in a saved bench.
+const SAVED_SCROLLBACK: usize = 5000;
+
+/// How long after its command finished a tool still counts as running when
+/// the keeper stops: at logout, tools and the keeper are stopped together.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// How long a loaded pane waits for its shell's first prompt before typing
+/// its saved command anyway (shells without Shed's hook send no prompt mark).
+const PROMPT_WAIT: Duration = Duration::from_secs(3);
 
 /// How often each pane's tool and directory are read from `/proc`.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -58,6 +70,10 @@ pub struct KeeperConfig {
     pub shed_bin: Option<PathBuf>,
     /// Extra environment for every pane (tests use it for a private HOME).
     pub env: Vec<(OsString, OsString)>,
+    /// Where benches are saved; `None` saves nothing.
+    pub store: Option<Store>,
+    /// Desktop entries to remove when a bench is deleted.
+    pub desktop: Option<shed_desktop::Desktop>,
 }
 
 type ClientId = u64;
@@ -67,6 +83,8 @@ pub struct Keeper {
     state: Mutex<State>,
     shutdown: Notify,
     stopping: AtomicBool,
+    /// `finish` has run.
+    finished: AtomicBool,
     /// Wakes the task that broadcasts batched tree changes.
     tree_dirty: Notify,
     /// Finished commands, on their way to the logbook writer thread.
@@ -100,6 +118,27 @@ struct PaneRt {
     marks: MarkScanner,
     /// The command running, from its mark until it finishes.
     running: Option<Running>,
+    /// The last command to finish, and when.
+    last_finished: Option<(String, Instant)>,
+    /// A saved command to type at the first prompt, and whether to run it.
+    after_prompt: Option<(String, bool)>,
+}
+
+/// How to start a pane.
+struct PaneSpec {
+    id: PaneId,
+    cwd: PathBuf,
+    cols: u16,
+    rows: u16,
+    /// Bytes shown before the shell starts: a loaded pane's old scrollback.
+    restore: Option<Vec<u8>>,
+    after_prompt: Option<(String, bool)>,
+}
+
+impl PaneSpec {
+    fn fresh(cwd: PathBuf) -> Self {
+        PaneSpec { id: PaneId::new(), cwd, cols: 80, rows: 24, restore: None, after_prompt: None }
+    }
 }
 
 struct Running {
@@ -179,13 +218,6 @@ impl State {
         self.panes.iter().filter(|(_, rt)| rt.bench == bench).map(|(id, _)| *id).collect()
     }
 
-    fn unique_bench_name(&self) -> String {
-        let taken = |n: &str| self.tree.benches.iter().any(|b| b.name == n);
-        if !taken("main") {
-            return "main".into();
-        }
-        (2..).map(|i| format!("bench-{i}")).find(|n| !taken(n)).unwrap()
-    }
 }
 
 impl Keeper {
@@ -226,6 +258,7 @@ impl Keeper {
             }),
             shutdown: Notify::new(),
             stopping: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
             tree_dirty: Notify::new(),
             logbook,
             bash_rc,
@@ -241,6 +274,7 @@ impl Keeper {
     pub async fn serve(self: Arc<Self>, listener: UnixListener) -> io::Result<()> {
         let poll = tokio::spawn(self.clone().poll_loop());
         let flush = tokio::spawn(self.clone().flush_loop());
+        let autosave = tokio::spawn(self.clone().autosave_loop());
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -257,7 +291,8 @@ impl Keeper {
         }
         poll.abort();
         flush.abort();
-        self.hang_up_all();
+        autosave.abort();
+        self.finish();
         Ok(())
     }
 
@@ -511,10 +546,64 @@ impl Keeper {
                 }
             }
             ClientMsg::CloseBench { bench } => {
-                let st = self.lock();
+                let mut st = self.lock();
                 info!(?bench, "closing bench");
-                let panes = st.pane_rt_ids_in(bench);
-                st.hang_up(&panes);
+                // Saved first, then taken out of the tree, so it loads as it was.
+                if let Some(store) = &self.cfg.store {
+                    for (saved, scrollback) in self.snapshot(&st, &[bench], false) {
+                        if let Err(e) = store.save(&saved, &scrollback) {
+                            warn!("cannot save bench {:?}: {e}", saved.name);
+                        }
+                    }
+                }
+                self.drop_bench(&mut st, bench);
+            }
+            ClientMsg::DeleteBench { name } => {
+                let mut st = self.lock();
+                if let Some(id) = st.tree.benches.iter().find(|b| b.name == name).map(|b| b.id) {
+                    self.drop_bench(&mut st, id);
+                }
+                let removed = self.cfg.store.as_ref().map(|s| (s.exists(&name), s.delete(&name)));
+                if let Some(desktop) = &self.cfg.desktop {
+                    desktop.remove(&name);
+                }
+                match removed {
+                    Some((true, Ok(()))) => st.send(client, KeeperMsg::Done(format!("deleted {name}"))),
+                    Some((_, Err(e))) => st.send(client, KeeperMsg::Error(format!("cannot delete {name:?}: {e}"))),
+                    _ => st.send(client, KeeperMsg::Done(format!("no saved bench named {name:?}"))),
+                }
+                info!(%name, "bench deleted");
+            }
+            ClientMsg::SaveBench { bench, as_name } => {
+                let st = self.lock();
+                let Some(store) = &self.cfg.store else {
+                    st.send(client, KeeperMsg::Error("saving is turned off".into()));
+                    return;
+                };
+                let Some((saved, scrollback)) = self.snapshot(&st, &[bench], false).into_iter().next() else {
+                    st.send(client, KeeperMsg::Error("no such bench".into()));
+                    return;
+                };
+                if let Err(e) = store.save(&saved, &scrollback) {
+                    st.send(client, KeeperMsg::Error(format!("cannot save: {e}")));
+                    return;
+                }
+                let msg = match as_name {
+                    None => format!("saved {}", saved.name),
+                    Some(copy) => {
+                        if let Some(problem) = self.name_problem(&st, &copy, None) {
+                            st.send(client, KeeperMsg::Error(problem));
+                            return;
+                        }
+                        // A copy starts clean: no scrollback, fresh IDs.
+                        if let Err(e) = store.save(&saved.copy_as(&copy), &[]) {
+                            st.send(client, KeeperMsg::Error(format!("cannot save {copy:?}: {e}")));
+                            return;
+                        }
+                        format!("saved {} as {copy}", saved.name)
+                    }
+                };
+                st.send(client, KeeperMsg::Done(msg));
             }
             ClientMsg::FocusPane { pane } => {
                 let mut st = self.lock();
@@ -546,11 +635,15 @@ impl Keeper {
             ClientMsg::RenameBench { bench, name } => {
                 let mut st = self.lock();
                 let name = name.trim().to_string();
-                let taken = st.tree.benches.iter().any(|b| b.id != bench && b.name == name);
-                if name.is_empty() || taken {
-                    st.send(client, KeeperMsg::Error(format!("cannot name a bench {name:?}")));
+                if let Some(problem) = self.name_problem(&st, &name, Some(bench)) {
+                    st.send(client, KeeperMsg::Error(problem));
                 } else if let Some(b) = st.tree.bench_mut(bench) {
-                    b.name = name;
+                    let old = std::mem::replace(&mut b.name, name.clone());
+                    if let Some(store) = &self.cfg.store
+                        && let Err(e) = store.rename(&old, &name)
+                    {
+                        warn!("cannot rename the saved bench: {e}");
+                    }
                     st.broadcast_tree();
                 }
             }
@@ -592,6 +685,12 @@ impl Keeper {
                     clients: st.clients.len() as u32,
                     windows: st.clients.values().filter(|c| c.kind == ClientKind::Window).count() as u32,
                     open: st.tree.benches.iter().map(|b| b.id).filter(|b| st.is_open(*b)).collect(),
+                    stored: self
+                        .cfg
+                        .store
+                        .as_ref()
+                        .map(|s| s.list().into_iter().map(|b| b.name).filter(|n| !st.tree.benches.iter().any(|b| &b.name == n)).collect())
+                        .unwrap_or_default(),
                     tree: st.tree.clone(),
                 };
                 st.send(client, KeeperMsg::Status(status));
@@ -619,6 +718,14 @@ impl Keeper {
         }
     }
 
+    /// Takes a bench out of the tree and hangs up its shells.
+    fn drop_bench(&self, st: &mut State, bench: BenchId) {
+        let panes = st.pane_rt_ids_in(bench);
+        st.tree.benches.retain(|b| b.id != bench);
+        st.broadcast_tree();
+        st.hang_up(&panes);
+    }
+
     /// Resolves what to show and tells the window process to show it.
     fn show(self: &Arc<Self>, client: ClientId, target: ShowTarget) {
         let mut st = self.lock();
@@ -629,16 +736,47 @@ impl Keeper {
                 return;
             }
             ShowTarget::Detached => {
-                let detached: Vec<BenchId> = st.tree.benches.iter().map(|b| b.id).filter(|b| !st.is_open(*b)).collect();
-                if detached.is_empty() { self.new_bench(&mut st, None, None).into_iter().collect() } else { detached }
+                let mut benches: Vec<BenchId> = st.tree.benches.iter().map(|b| b.id).filter(|b| !st.is_open(*b)).collect();
+                if st.tree.benches.is_empty() {
+                    // Nothing running: bring back what ran when the keeper last stopped.
+                    let names = self.cfg.store.as_ref().map(Store::session).unwrap_or_default();
+                    for name in names {
+                        match self.load_bench(&mut st, &name) {
+                            Ok(id) => benches.push(id),
+                            Err(e) => warn!("cannot load bench {name:?}: {e}"),
+                        }
+                    }
+                }
+                if benches.is_empty() && st.tree.benches.iter().all(|b| st.is_open(b.id)) {
+                    benches.extend(self.new_bench(&mut st, None, None));
+                }
+                benches
             }
-            ShowTarget::NewBench { name, cwd } => match self.new_bench(&mut st, name, cwd) {
-                Ok(b) => vec![b],
-                Err(e) => {
-                    st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}")));
+            ShowTarget::Load { name } => {
+                let running = st.tree.benches.iter().find(|b| b.name == name).map(|b| b.id);
+                match running.map(Ok).unwrap_or_else(|| self.load_bench(&mut st, &name)) {
+                    Ok(id) => vec![id],
+                    Err(e) => {
+                        st.send(client, KeeperMsg::Error(format!("cannot load {name:?}: {e}")));
+                        return;
+                    }
+                }
+            }
+            ShowTarget::NewBench { name, cwd } => {
+                if let Some(n) = &name
+                    && let Some(problem) = self.name_problem(&st, n, None)
+                {
+                    st.send(client, KeeperMsg::Error(problem));
                     return;
                 }
-            },
+                match self.new_bench(&mut st, name, cwd) {
+                    Ok(b) => vec![b],
+                    Err(e) => {
+                        st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}")));
+                        return;
+                    }
+                }
+            }
         };
         st.broadcast_tree();
         match st.window_client(client) {
@@ -649,6 +787,178 @@ impl Keeper {
             }
             None => st.send(client, KeeperMsg::Error("no window is open to show it in".into())),
         }
+    }
+
+    /// A free name for a new bench, not taken by a running or a saved bench.
+    fn unique_bench_name(&self, st: &State) -> String {
+        let taken = |n: &str| {
+            st.tree.benches.iter().any(|b| b.name == n) || self.cfg.store.as_ref().is_some_and(|s| s.exists(n))
+        };
+        if !taken("main") {
+            return "main".into();
+        }
+        (2..).map(|i| format!("bench-{i}")).find(|n| !taken(n)).unwrap()
+    }
+
+    /// Why `name` cannot name a bench (other than `except`), if it can't.
+    fn name_problem(&self, st: &State, name: &str, except: Option<BenchId>) -> Option<String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Some("a bench needs a name".into());
+        }
+        if st.tree.benches.iter().any(|b| b.name == name && Some(b.id) != except) {
+            return Some(format!("a bench named {name:?} is already running"));
+        }
+        let saved_elsewhere = self.cfg.store.as_ref().and_then(|s| s.load(name).ok()).is_some_and(|b| Some(b.id) != except);
+        saved_elsewhere.then(|| format!("a saved bench is named {name:?}; load it with `shed load {name}` or pick another name"))
+    }
+
+    /// Rebuilds a saved bench: every pane in its folder with its old
+    /// scrollback, and its tools restarted or typed according to the rack.
+    fn load_bench(self: &Arc<Self>, st: &mut State, name: &str) -> Result<BenchId, String> {
+        let store = self.cfg.store.as_ref().ok_or("saving is turned off")?;
+        let saved = store.load(name).map_err(|e| e.to_string())?;
+        if st.tree.bench(saved.id).is_some() {
+            return Ok(saved.id);
+        }
+        if st.tree.benches.iter().any(|b| b.name == saved.name) {
+            return Err(format!("another bench named {:?} is running", saved.name));
+        }
+        let (mut bench, panes) = saved.to_bench()?;
+        let mut started = Vec::new();
+        for tab in &mut bench.tabs {
+            for pane in &mut tab.panes {
+                let sp = panes.iter().find(|(id, _)| *id == pane.id).map(|(_, p)| p.clone());
+                let restore = store.scrollback(&saved.name, pane.id).map(|text| shed_save::restored_scrollback(&text, &saved.saved));
+                let tool = sp.as_ref().and_then(|p| p.tool.clone());
+                let after_prompt = tool.as_ref().and_then(|cmd| match shed_save::relaunch(&st.config.rack, cmd) {
+                    Relaunch::Run => Some((cmd.clone(), true)),
+                    Relaunch::Prefill => Some((cmd.clone(), false)),
+                    Relaunch::Skip => None,
+                });
+                let waiting = after_prompt.as_ref().filter(|(_, run)| !run).map(|(cmd, _)| cmd.clone());
+                let cwd = if pane.cwd.is_dir() { pane.cwd.clone() } else { bench.cwd.clone() };
+                let spec = PaneSpec { id: pane.id, cwd, cols: pane.cols, rows: pane.rows, restore, after_prompt };
+                match self.spawn_pane_spec(st, bench.id, tab.id, spec) {
+                    Ok(spawned) => {
+                        started.push(pane.id);
+                        pane.cwd = spawned.cwd;
+                        pane.waiting = waiting;
+                    }
+                    Err(e) => {
+                        st.hang_up(&started);
+                        return Err(format!("cannot start a shell: {e}"));
+                    }
+                }
+            }
+        }
+        let id = bench.id;
+        info!(name = %bench.name, panes = started.len(), "bench loaded");
+        st.tree.benches.push(bench);
+        Ok(id)
+    }
+
+    /// Types a loaded pane's saved command, once.
+    fn send_after_prompt(&self, st: &mut State, pane: PaneId) {
+        let Some(rt) = st.panes.get_mut(&pane) else { return };
+        let Some((command, run)) = rt.after_prompt.take() else { return };
+        // Pasted, so a multi-line command is not run line by line.
+        let mut bytes = shed_emu::keys::encode_paste(&command, rt.emu.modes());
+        if run {
+            bytes.push(b'\r');
+        }
+        let _ = rt.input.send(bytes);
+    }
+
+    fn type_after_prompt(&self, pane: PaneId) {
+        let mut st = self.lock();
+        self.send_after_prompt(&mut st, pane);
+    }
+
+    /// What each bench looks like now, ready to write.
+    fn snapshot(&self, st: &State, benches: &[BenchId], shutting_down: bool) -> Vec<(SavedBench, Vec<(PaneId, String)>)> {
+        let extras = |pane: PaneId| {
+            let rt = st.panes.get(&pane);
+            let tree_pane = st.tree.pane(pane);
+            let tool = rt
+                .and_then(|rt| rt.running.as_ref().map(|r| r.command.clone()))
+                .or_else(|| {
+                    // At logout a tool may have been stopped just before the keeper.
+                    let (cmd, at) = rt?.last_finished.as_ref()?;
+                    (shutting_down && at.elapsed() < SHUTDOWN_GRACE).then(|| cmd.clone())
+                })
+                .or_else(|| tree_pane.and_then(|p| p.waiting.clone()))
+                .or_else(|| tree_pane.and_then(|p| p.tool.as_ref()).map(|t| t.display()));
+            PaneExtras { tool }
+        };
+        benches
+            .iter()
+            .filter_map(|id| st.tree.bench(*id))
+            .map(|bench| {
+                let saved = SavedBench::from_bench(bench, extras);
+                let scrollback = bench
+                    .tabs
+                    .iter()
+                    .flat_map(|t| &t.panes)
+                    .filter_map(|p| st.panes.get(&p.id).map(|rt| (p.id, rt.emu.scrollback_text(SAVED_SCROLLBACK))))
+                    .collect();
+                (saved, scrollback)
+            })
+            .collect()
+    }
+
+    /// Saves every running bench and the list of them.
+    fn save_all(&self, st: &State, shutting_down: bool) {
+        let Some(store) = &self.cfg.store else { return };
+        let ids: Vec<BenchId> = st.tree.benches.iter().map(|b| b.id).collect();
+        let names: Vec<String> = st.tree.benches.iter().map(|b| b.name.clone()).collect();
+        for (bench, scrollback) in self.snapshot(st, &ids, shutting_down) {
+            if let Err(e) = store.save(&bench, &scrollback) {
+                warn!("cannot save bench {:?}: {e}", bench.name);
+            }
+        }
+        if let Err(e) = store.save_session(&names) {
+            warn!("cannot save the session: {e}");
+        }
+    }
+
+    /// Saves everything every `autosave_seconds` (60 by default).
+    async fn autosave_loop(self: Arc<Self>) {
+        loop {
+            let secs = self.lock().config.autosave_seconds.unwrap_or(60).max(5);
+            tokio::time::sleep(Duration::from_secs(secs)).await;
+            // Collect under the lock, write without it.
+            let (store, work, names) = {
+                let st = self.lock();
+                let Some(store) = self.cfg.store.clone() else { return };
+                let ids: Vec<BenchId> = st.tree.benches.iter().map(|b| b.id).collect();
+                (store, self.snapshot(&st, &ids, false), st.tree.benches.iter().map(|b| b.name.clone()).collect::<Vec<_>>())
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                for (bench, scrollback) in work {
+                    if let Err(e) = store.save(&bench, &scrollback) {
+                        warn!("cannot save bench {:?}: {e}", bench.name);
+                    }
+                }
+                let _ = store.save_session(&names);
+            })
+            .await;
+        }
+    }
+
+    /// Stops the keeper: saves everything first, with the tree frozen so
+    /// shells exiting meanwhile don't take their benches with them.
+    pub fn finish(&self) {
+        if self.finished.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.stopping.store(true, Ordering::SeqCst);
+        {
+            let st = self.lock();
+            self.save_all(&st, true);
+        }
+        info!("saved; stopping");
+        self.hang_up_all();
     }
 
     fn new_bench(
@@ -663,7 +973,7 @@ impl Keeper {
         let pane = self.spawn_pane(st, id, tab_id, cwd.clone())?;
         let mut tab = Tab::with_pane(pane);
         tab.id = tab_id;
-        let name = name.unwrap_or_else(|| st.unique_bench_name());
+        let name = name.unwrap_or_else(|| self.unique_bench_name(st));
         let color = BenchColor::next_unused(st.tree.benches.iter().map(|b| &b.color));
         st.tree.benches.push(Bench {
             id,
@@ -684,8 +994,19 @@ impl Keeper {
         tab: TabId,
         cwd: PathBuf,
     ) -> io::Result<Pane> {
-        let pane_id = PaneId::new();
-        let (cols, rows) = (80, 24);
+        self.spawn_pane_spec(st, bench, tab, PaneSpec::fresh(cwd))
+    }
+
+    fn spawn_pane_spec(
+        self: &Arc<Self>,
+        st: &mut State,
+        bench: BenchId,
+        tab: TabId,
+        spec: PaneSpec,
+    ) -> io::Result<Pane> {
+        let pane_id = spec.id;
+        let (cols, rows) = (spec.cols.max(2), spec.rows.max(1));
+        let cwd = spec.cwd;
         let program = self.cfg.shell.clone().unwrap_or_else(pty::default_shell);
         let env: Vec<(OsString, OsString)> = [
             ("TERM", "xterm-256color".to_string()),
@@ -725,20 +1046,37 @@ impl Keeper {
         let master = Arc::new(master);
         let (input_tx, input_rx) = mpsc::unbounded_channel();
 
+        let mut emu = AlacrittyEmulator::new(GridSize::new(cols, rows), st.palette.clone());
+        if let Some(bytes) = &spec.restore {
+            emu.advance(bytes);
+        }
+        if spec.after_prompt.is_some() {
+            // Shells without Shed's hook never send a prompt mark.
+            let keeper = self.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(PROMPT_WAIT).await;
+                keeper.type_after_prompt(pane_id);
+            });
+        }
         st.panes.insert(pane_id, PaneRt {
             bench,
-            emu: AlacrittyEmulator::new(GridSize::new(cols, rows), st.palette.clone()),
+            emu,
             reply_guard: ReplyGuard::default(),
             input: input_tx,
             master: master.clone(),
             pid,
             marks: MarkScanner::new(),
             running: None,
+            last_finished: None,
+            after_prompt: spec.after_prompt,
         });
         tokio::spawn(write_loop(master.clone(), input_rx));
         tokio::spawn(self.clone().pane_loop(pane_id, master, pty.child));
         info!(pane = ?pane_id, ?pid, "pane started");
-        Ok(Pane::new(pane_id, cwd))
+        let mut pane = Pane::new(pane_id, cwd);
+        pane.cols = cols;
+        pane.rows = rows;
+        Ok(pane)
     }
 
     /// Reads a pane's output until its shell exits, then reports the exit.
@@ -783,6 +1121,10 @@ impl Keeper {
         };
         let code = status.and_then(|s| s.code());
         info!(?pane, ?code, "pane exited");
+        if self.stopping.load(Ordering::Relaxed) {
+            // Shutting down: the final save needs the tree as it was.
+            return;
+        }
         {
             let mut st = self.lock();
             st.panes.remove(&pane);
@@ -806,6 +1148,18 @@ impl Keeper {
                     self.tree_dirty.notify_one();
                 }
             }
+            Mark::InputStart => {
+                self.send_after_prompt(st, pane);
+            }
+            // Any command running ends the wait, even one bash leaves out of
+            // history (and so sends no command text for).
+            Mark::Executed => {
+                if let Some(p) = st.tree.pane_mut(pane)
+                    && p.waiting.take().is_some()
+                {
+                    self.tree_dirty.notify_one();
+                }
+            }
             Mark::Command(command) => {
                 let cwd = st.tree.pane(pane).map(|p| p.cwd.display().to_string()).unwrap_or_default();
                 if let Some(rt) = st.panes.get_mut(&pane) {
@@ -813,7 +1167,9 @@ impl Keeper {
                 }
             }
             Mark::Finished(exit) => {
-                let Some(run) = st.panes.get_mut(&pane).and_then(|rt| rt.running.take()) else { return };
+                let Some(rt) = st.panes.get_mut(&pane) else { return };
+                let Some(run) = rt.running.take() else { return };
+                rt.last_finished = Some((run.command.clone(), Instant::now()));
                 let (Some(tx), Some((bench, tab_id))) = (&self.logbook, st.tree.locate_pane(pane)) else { return };
                 let Some(tab) = st.tree.tab(tab_id) else { return };
                 let entry = NewEntry {
@@ -832,7 +1188,7 @@ impl Keeper {
                 };
                 let _ = tx.send(entry);
             }
-            Mark::PromptStart | Mark::InputStart | Mark::Executed | Mark::Walk(_) | Mark::WalkEnd => {}
+            Mark::PromptStart | Mark::Walk(_) | Mark::WalkEnd => {}
         }
     }
 

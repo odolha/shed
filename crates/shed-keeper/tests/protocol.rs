@@ -104,6 +104,8 @@ fn start_keeper(dir: &Path) -> std::path::PathBuf {
                 state_dir: home.join("state"),
                 shed_bin: None,
                 env: Vec::new(),
+                store: None,
+                desktop: None,
                 shell: Some("/bin/sh".into()),
                 home,
                 exit_when_idle: false,

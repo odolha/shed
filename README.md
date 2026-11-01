@@ -7,8 +7,8 @@ window (`shed`) is only a view onto it. See
 
 ## Status
 
-Phases 1–4 are in place: the first pane, the keeper, bench windows with tabs and splits,
-and the logbook.
+Phases 1–5 are in place: the first pane, the keeper, bench windows with tabs and splits,
+the logbook, and saving and loading benches.
 
 - **The keeper** owns every PTY. Closing a window detaches its bench. The next `shed`
   reattaches it and replays each pane exactly: scrollback, both screens, cursor,
@@ -27,6 +27,12 @@ and the logbook.
   prompt opens a search (Tab cycles scopes, `tag:prod` filters, Enter inserts,
   Alt+Enter runs). Commands typed with a leading space are not kept. `shed log` lists
   entries from a shell.
+- **Saved benches**: every bench saves itself every minute and when the keeper stops
+  (`shed stop`, logout, reboot) to `~/.local/share/shed/benches/<name>.toml`, with each
+  pane's scrollback beside it. `shed` with nothing running brings back the benches that
+  ran last; `shed load <name>` (and a pinned bench icon) loads one. Panes come back in
+  their folders with their old scrollback dimmed above the prompt; tools on the rack
+  restart, others are typed and wait for Enter, the never list is left out.
 - Query replies triggered by binary output (`cat image.png`) are dropped.
 
 | Keys | Action |
@@ -54,8 +60,12 @@ icon_badges = false
 [keys]
 "ctrl-shift-d" = "split_right"
 "alt-left" = "none"
+autosave_seconds = 60
 [shell]
 integration = true             # load Shed's bash hook into panes
+[rack]                         # what restarts by itself when a bench loads
+auto = ["nvim", "vim", "hx", "ssh", "htop", "btop", "less", "tail -f", "cargo watch", "npm run dev"]
+never = ["rm", "git push", "sudo"]
 [[tag_rule]]
 tool = "ssh *prod*"
 tag = "prod"
@@ -72,7 +82,11 @@ see `vendor/alacritty_terminal/SHED_PATCHES.md`.
 cargo build --release
 ./target/release/shed           # starts shedd if needed, opens the bench window
 ./target/release/shed status    # what the keeper holds
-./target/release/shed stop      # stop the keeper and everything it holds
+./target/release/shed stop      # save everything, then stop the keeper and its tools
+./target/release/shed list      # benches: open, detached, saved
+./target/release/shed load web  # open a bench, loading it if it is saved
+./target/release/shed save web --as web-template
+./target/release/shed delete web
 ```
 
 `shed` looks for `shedd` next to its own binary, then on `PATH`. The keeper
@@ -114,4 +128,4 @@ and prints a warning.
 | `shed-desktop` | Bench icons and desktop entries |
 | `shed-app` | `shed`: GPUI windows and the CLI |
 | `shed-logbook` | The logbook (SQLite) and the bash hook (`shell/shed.bash`) |
-| `shed-save` | Stub for phase 5 |
+| `shed-save` | Saved bench files, layouts as text, rack rules, scrollback |

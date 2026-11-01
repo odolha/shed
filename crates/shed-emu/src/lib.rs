@@ -148,6 +148,11 @@ pub trait Emulator: Send {
     /// The OSC 8 hyperlink on a visible cell.
     fn hyperlink_at(&self, col: usize, row: usize) -> Option<String>;
 
+    /// The main screen's scrollback and screen as plain text: wrapped lines
+    /// joined, trailing blanks trimmed, at most the last `max_lines` lines.
+    /// (While a full-screen app runs, this is the screen beneath it.)
+    fn scrollback_text(&self, max_lines: usize) -> String;
+
     /// The visible grid as plain text, one line per row, trailing blanks trimmed.
     fn dump_text(&self) -> String;
 }

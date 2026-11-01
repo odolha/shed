@@ -7,6 +7,7 @@ mod keeper_conn;
 mod line_editor;
 mod logbook;
 mod logbook_view;
+mod prompt;
 mod settings;
 mod state;
 mod terminal_view;
@@ -58,8 +59,25 @@ enum Command {
         #[arg(long)]
         cwd: Option<std::path::PathBuf>,
     },
-    /// Open a bench by name, in its window.
+    /// Open a bench by name: raise its window, reattach it, or load it from
+    /// its saved file.
     Load { name: String },
+    /// Save a running bench now (it also saves itself every minute).
+    Save {
+        name: String,
+        /// Also save a copy under this name, as a template.
+        #[arg(long = "as")]
+        as_name: Option<String>,
+    },
+    /// Delete a saved bench, stopping it if it runs.
+    Delete {
+        name: String,
+        /// Delete without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// List benches: open, detached and saved.
+    List,
     /// Tag the current tab (run inside Shed).
     Tag {
         #[command(subcommand)]
@@ -121,20 +139,55 @@ fn main() -> anyhow::Result<()> {
             let cwd = cwd.map(std::path::absolute).transpose()?;
             run_app(ShowTarget::NewBench { name, cwd })
         }
-        Some(Command::Load { name }) => {
+        Some(Command::Load { name }) => run_app(ShowTarget::Load { name }),
+        Some(Command::Save { name, as_name }) => {
             let tree = request(ClientMsg::Status, |m| match m {
                 KeeperMsg::Status(s) => Some(s.tree),
                 _ => None,
-            })
-            .ok()
-            .unwrap_or_default();
-            match tree.benches.iter().find(|b| b.name == name) {
-                Some(bench) => run_app(ShowTarget::Bench(bench.id)),
-                // Saved benches arrive in phase 5; until then, a launcher for a
-                // bench the keeper no longer holds starts it afresh.
-                None => run_app(ShowTarget::NewBench { name: Some(name), cwd: None }),
+            })?;
+            let Some(bench) = tree.benches.iter().find(|b| b.name == name).map(|b| b.id) else {
+                bail!("no running bench named {name:?}");
+            };
+            let done = request(ClientMsg::SaveBench { bench, as_name }, |m| match m {
+                KeeperMsg::Done(text) => Some(text),
+                _ => None,
+            })?;
+            println!("{done}");
+            Ok(())
+        }
+        Some(Command::Delete { name, yes }) => {
+            if !yes {
+                eprint!("Delete the bench {name:?}, stopping its tools and removing its saved file? [y/N] ");
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !answer.trim().eq_ignore_ascii_case("y") {
+                    return Ok(());
+                }
+            }
+            let (conn, rx) = match keeper_conn::connect(ClientKind::Cli, false) {
+                Ok(c) => c,
+                Err(_) => {
+                    // No keeper: only the files.
+                    shed_save::Store::default().delete(&name)?;
+                    shed_desktop::Desktop::new(shed_model::paths::data_home()).remove(&name);
+                    println!("deleted {name}");
+                    return Ok(());
+                }
+            };
+            conn.send_msg(ClientMsg::DeleteBench { name });
+            loop {
+                match rx.recv_blocking() {
+                    Ok(Frame::Keeper(KeeperMsg::Done(text))) => {
+                        println!("{text}");
+                        return Ok(());
+                    }
+                    Ok(Frame::Keeper(KeeperMsg::Error(e))) => bail!("{e}"),
+                    Ok(_) => {}
+                    Err(_) => bail!("the keeper closed the connection"),
+                }
             }
         }
+        Some(Command::List) => list(),
         Some(Command::Status) => status(),
         Some(Command::Tag { action }) => tag(action),
         Some(Command::Stop) => stop(),
@@ -187,6 +240,7 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
         .with_assets(assets::Assets)
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
+            prompt::install(cx);
             let settings = settings::Settings::load(&settings::Settings::default());
             let state = cx.new(|_| AppState::new(conn, settings.clone()));
             state.update(cx, |state, cx| state.apply_settings(settings, cx));
@@ -256,6 +310,9 @@ fn status() -> anyhow::Result<()> {
         "keeper: running, pid {}, version {}, up {}s, {} client(s), {} window process(es)",
         s.pid, s.version, s.uptime_secs, s.clients, s.windows
     );
+    if !s.stored.is_empty() {
+        println!("saved, not running: {}", s.stored.join(", "));
+    }
     for bench in &s.tree.benches {
         let color = bench.color.name().unwrap_or("custom");
         let state = if s.open.contains(&bench.id) { "open" } else { "detached" };
@@ -265,6 +322,34 @@ fn status() -> anyhow::Result<()> {
             let tools = if tools.is_empty() { String::new() } else { format!(", running {}", tools.join(", ")) };
             println!("  tab {}: {} pane(s){tools}", tab.display_title(), tab.panes.len());
         }
+    }
+    Ok(())
+}
+
+fn list() -> anyhow::Result<()> {
+    let status = request(ClientMsg::Status, |m| match m {
+        KeeperMsg::Status(s) => Some(s),
+        _ => None,
+    })
+    .ok();
+    let saved = shed_save::Store::default().list();
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+    if let Some(s) = &status {
+        for b in &s.tree.benches {
+            let state = if s.open.contains(&b.id) { "open" } else { "detached" };
+            rows.push((b.name.clone(), state.into(), format!("{} tab(s)", b.tabs.len())));
+        }
+    }
+    for b in saved {
+        if !rows.iter().any(|r| r.0 == b.name) {
+            rows.push((b.name, "saved".into(), format!("{} tab(s), saved {}", b.tabs, b.saved.replace('T', " "))));
+        }
+    }
+    if rows.is_empty() {
+        println!("No benches.");
+    }
+    for (name, state, detail) in rows {
+        println!("{name:<20} {state:<9} {detail}");
     }
     Ok(())
 }

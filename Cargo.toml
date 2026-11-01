@@ -39,6 +39,7 @@ tempfile = "3"
 toml = "1"
 rusqlite = { version = "0.41", features = ["bundled"] }
 base64 = "0.22"
+zstd = "0.13"
 
 # A vendored copy with read-only accessors for screen replay; see vendor/alacritty_terminal/SHED_PATCHES.md.
 [patch.crates-io]

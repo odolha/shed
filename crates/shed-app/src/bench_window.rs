@@ -206,18 +206,23 @@ impl BenchWindow {
     fn close_bench(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(bench) = self.bench(cx) else { return };
         let message = format!("Close the bench “{}”?", bench.name);
+        let name = bench.name.clone();
         let answer = window.prompt(
             PromptLevel::Warning,
             &message,
-            Some("Every tool running in it will be stopped. To keep them running, close the window instead."),
-            &["Close Bench", "Cancel"],
+            Some(
+                "Closing stops every tool in it and keeps it saved, to load again later. \
+                 Deleting also removes the saved bench and its launcher.\n\n\
+                 To keep the tools running, close the window instead.",
+            ),
+            &["Close Bench", "Delete Bench", "Cancel"],
             cx,
         );
         let (bench, conn) = (self.bench, self.state.read(cx).conn.clone());
-        cx.spawn(async move |_, _| {
-            if answer.await == Ok(0) {
-                conn.send_msg(ClientMsg::CloseBench { bench });
-            }
+        cx.spawn(async move |_, _| match answer.await {
+            Ok(0) => conn.send_msg(ClientMsg::CloseBench { bench }),
+            Ok(1) => conn.send_msg(ClientMsg::DeleteBench { name }),
+            _ => {}
         })
         .detach();
     }
@@ -500,7 +505,10 @@ impl BenchWindow {
                 // The active tab carries the bench colour along its top.
                 el = el.border_t_2().border_color(hsla(accent));
             }
-            if tab.panes.iter().any(|p| p.tool.is_some()) {
+            if tab.panes.iter().any(|p| p.waiting.is_some()) {
+                // A loaded bench typed a command here; it waits for Enter.
+                el = el.child(svg().path(icon("tool-waiting")).size(px(12.0)).flex_none().text_color(hsla(accent)));
+            } else if tab.panes.iter().any(|p| p.tool.is_some()) {
                 el = el.child(svg().path(icon("tool")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
             }
             if tab.private {

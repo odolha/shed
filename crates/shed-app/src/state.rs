@@ -118,7 +118,7 @@ impl AppState {
                     cx.quit();
                 }
             }
-            Frame::Keeper(KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_)) => {}
+            Frame::Keeper(KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Done(_)) => {}
             Frame::Client(_) | Frame::Input { .. } => warn!("unexpected frame from keeper"),
         }
     }
@@ -213,13 +213,9 @@ impl AppState {
             }
             self.identities.insert(bench.id, identity);
         }
-        // Benches that are gone take their launchers with them.
-        let gone: Vec<BenchId> = self.identities.keys().filter(|id| self.tree.bench(**id).is_none()).copied().collect();
-        for id in gone {
-            if let Some(identity) = self.identities.remove(&id) {
-                self.desktop.remove(&identity.name);
-            }
-        }
+        // A bench that stops running is still saved, so its launcher stays;
+        // the keeper removes it when the bench is deleted.
+        self.identities.retain(|id, _| self.tree.bench(*id).is_some());
     }
 
     fn sync_window(&mut self, bench: BenchId, cx: &mut Context<Self>) {
@@ -243,6 +239,7 @@ impl AppState {
         for e in &settings.errors {
             warn!("config: {e}");
         }
+        cx.set_global(crate::prompt::CurrentUi(settings.ui.clone()));
         self.settings = settings;
         self.sync_identities(cx);
         for view in self.panes.values() {

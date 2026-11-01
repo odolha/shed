@@ -1,1 +1,630 @@
-//! Saving and loading benches, tool detection and rack rules. Phase 5.
+//! Saving and loading benches.
+//!
+//! A bench is always saved: the keeper writes each one to
+//! `~/.local/share/shed/benches/<name>.toml`, with each pane's scrollback
+//! compressed beside it in `<name>/scrollback/<pane>.zst`. The files are
+//! meant to be readable and hand-editable:
+//!
+//! ```toml
+//! name = "backend"
+//! color = "blue"
+//! cwd = "~/code"
+//! saved = "2026-11-01T09:12:00Z"
+//! active_tab = 0
+//!
+//! [[tabs]]
+//! name = "api"
+//! layout = "right 0.6 (0) (1)"
+//! tags = [{ label = "dev", color = "green" }]
+//!
+//! [[tabs.panes]]
+//! cwd = "~/code/api"
+//! tool = "nvim src/main.rs"
+//!
+//! [[tabs.panes]]
+//! cwd = "~/code/api"
+//! tool = "cargo watch -x run"
+//! ```
+//!
+//! IDs are kept too, so a loaded tab finds its own history file and logbook
+//! scope again.
+
+mod layout;
+
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+use shed_model::config::RackConfig;
+use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Rgb, Tab, TabId, Tag, paths, tag_color};
+
+pub use layout::{format_layout, parse_layout};
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedBench {
+    pub name: String,
+    pub id: BenchId,
+    /// A colour name or `#rrggbb`.
+    pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
+    pub cwd: String,
+    /// When it was saved, UTC.
+    pub saved: String,
+    #[serde(default)]
+    pub active_tab: usize,
+    pub tabs: Vec<SavedTab>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedTab {
+    pub id: TabId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<SavedTag>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub private: bool,
+    /// The split tree, with panes numbered in the order of `panes`:
+    /// `0`, or `right 0.6 (0) (down 0.5 (1) (2))`.
+    pub layout: String,
+    #[serde(default)]
+    pub active_pane: usize,
+    pub panes: Vec<SavedPane>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedTag {
+    pub label: String,
+    pub color: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tint: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedPane {
+    pub id: PaneId,
+    pub cwd: String,
+    #[serde(default = "default_cols")]
+    pub cols: u16,
+    #[serde(default = "default_rows")]
+    pub rows: u16,
+    /// The command running in the pane, as it was typed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn default_cols() -> u16 {
+    80
+}
+
+fn default_rows() -> u16 {
+    24
+}
+
+/// What the keeper knows about a pane beyond the tree.
+#[derive(Clone, Debug, Default)]
+pub struct PaneExtras {
+    /// The command in the foreground, as typed.
+    pub tool: Option<String>,
+}
+
+impl SavedBench {
+    /// A bench as it is now. `extras` gives each pane's running command.
+    pub fn from_bench(bench: &Bench, extras: impl Fn(PaneId) -> PaneExtras) -> SavedBench {
+        let tabs = bench
+            .tabs
+            .iter()
+            .map(|tab| {
+                let order = tab.layout.leaves();
+                let panes = order
+                    .iter()
+                    .filter_map(|id| tab.pane(*id))
+                    .map(|p| SavedPane {
+                        id: p.id,
+                        cwd: home_relative(&p.cwd),
+                        cols: p.cols,
+                        rows: p.rows,
+                        tool: extras(p.id).tool,
+                    })
+                    .collect();
+                SavedTab {
+                    id: tab.id,
+                    name: tab.name.clone(),
+                    tags: tab
+                        .tags
+                        .iter()
+                        .map(|t| SavedTag { label: t.label.clone(), color: format!("#{:06X}", t.color.to_hex()), tint: t.tint_tab })
+                        .collect(),
+                    private: tab.private,
+                    layout: format_layout(&tab.layout, &order),
+                    active_pane: order.iter().position(|id| *id == tab.active_pane).unwrap_or(0),
+                    panes,
+                }
+            })
+            .collect();
+        SavedBench {
+            name: bench.name.clone(),
+            id: bench.id,
+            color: bench.color.to_text(),
+            badge: bench.badge.clone(),
+            cwd: home_relative(&bench.cwd),
+            saved: utc_now(),
+            active_tab: bench.tab_index(bench.active_tab).unwrap_or(0),
+            tabs,
+        }
+    }
+
+    /// The bench to rebuild, with each pane's saved size and tool. Panes
+    /// whose folder is gone fall back to the bench's (or the home) folder.
+    pub fn to_bench(&self) -> Result<(Bench, Vec<(PaneId, SavedPane)>), String> {
+        let cwd = expand_home(&self.cwd);
+        let mut panes_out = Vec::new();
+        let mut tabs = Vec::new();
+        for (ti, st) in self.tabs.iter().enumerate() {
+            if st.panes.is_empty() {
+                continue;
+            }
+            let ids: Vec<PaneId> = st.panes.iter().map(|p| p.id).collect();
+            let layout = parse_layout(&st.layout, &ids).map_err(|e| format!("tab {}: layout: {e}", ti + 1))?;
+            let panes: Vec<Pane> = st
+                .panes
+                .iter()
+                .map(|sp| {
+                    let mut pane = Pane::new(sp.id, expand_home(&sp.cwd));
+                    pane.cols = sp.cols;
+                    pane.rows = sp.rows;
+                    pane
+                })
+                .collect();
+            panes_out.extend(st.panes.iter().map(|sp| (sp.id, sp.clone())));
+            tabs.push(Tab {
+                id: st.id,
+                name: st.name.clone(),
+                tags: st
+                    .tags
+                    .iter()
+                    .map(|t| Tag {
+                        label: t.label.clone(),
+                        color: tag_color(&t.color).unwrap_or(Rgb::hex(0x8A93A3)),
+                        tint_tab: t.tint,
+                    })
+                    .collect(),
+                auto_tags: Vec::new(),
+                private: st.private,
+                active_pane: ids.get(st.active_pane).copied().unwrap_or(ids[0]),
+                layout,
+                panes,
+            });
+        }
+        if tabs.is_empty() {
+            return Err("it has no panes".into());
+        }
+        let active_tab = tabs.get(self.active_tab).map_or(tabs[0].id, |t| t.id);
+        let bench = Bench {
+            id: self.id,
+            name: self.name.clone(),
+            color: BenchColor::parse(&self.color).unwrap_or(BenchColor::Slate),
+            badge: self.badge.clone(),
+            cwd,
+            tabs,
+            active_tab,
+        };
+        Ok((bench, panes_out))
+    }
+
+    /// A copy under another name, with fresh IDs so both can be open at once.
+    pub fn copy_as(&self, name: &str) -> SavedBench {
+        let mut copy = self.clone();
+        copy.name = name.to_string();
+        copy.id = BenchId::new();
+        for tab in &mut copy.tabs {
+            tab.id = TabId::new();
+            for pane in &mut tab.panes {
+                pane.id = PaneId::new();
+            }
+        }
+        copy
+    }
+
+    pub fn to_toml(&self) -> String {
+        toml::to_string(self).expect("saved benches always serialize")
+    }
+
+    pub fn from_toml(text: &str) -> Result<SavedBench, String> {
+        toml::from_str(text).map_err(|e| e.to_string())
+    }
+}
+
+/// What to do with a saved tool when its bench loads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Relaunch {
+    /// On the rack: run it.
+    Run,
+    /// Type it at the prompt, wait for Enter.
+    Prefill,
+    /// On the never list: leave the prompt empty.
+    Skip,
+}
+
+/// Matches `command` against the rack. An entry matches a program when the
+/// program starts with its words (`tail -f` matches `tail -f log.txt`); a
+/// path counts by its name (`/usr/bin/nvim` is `nvim`).
+///
+/// In a chain like `cd ~/app && npm run dev`, the tool is the last step (the
+/// first program of a pipeline in it); a chain with any step on the never
+/// list is skipped.
+pub fn relaunch(rack: &RackConfig, command: &str) -> Relaunch {
+    let steps: Vec<&str> = command
+        .split(['\n'])
+        .flat_map(|l| l.split("&&"))
+        .flat_map(|s| s.split("||"))
+        .flat_map(|s| s.split(';'))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let Some(last) = steps.last() else { return Relaunch::Skip };
+    let programs = |step: &str| step.split('|').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect::<Vec<_>>();
+    let on = |list: &[String], program: &str| {
+        let words: Vec<&str> = program.split_whitespace().collect();
+        let Some(first) = words.first() else { return false };
+        let name = first.rsplit('/').next().unwrap_or(first);
+        list.iter().any(|entry| {
+            let entry: Vec<&str> = entry.split_whitespace().collect();
+            !entry.is_empty()
+                && entry.len() <= words.len()
+                && entry[0] == name
+                && entry[1..].iter().zip(&words[1..]).all(|(a, b)| a == b)
+        })
+    };
+    if steps.iter().flat_map(|s| programs(s)).any(|p| on(&rack.never, &p)) {
+        Relaunch::Skip
+    } else if programs(last).first().is_some_and(|p| on(&rack.auto, p)) {
+        Relaunch::Run
+    } else {
+        Relaunch::Prefill
+    }
+}
+
+/// Where saved benches live.
+#[derive(Clone, Debug)]
+pub struct Store {
+    pub dir: PathBuf,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Store { dir: paths::data_dir().join("benches") }
+    }
+}
+
+/// A saved bench as listed, without loading it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredInfo {
+    pub name: String,
+    pub id: BenchId,
+    pub color: String,
+    pub saved: String,
+    pub tabs: usize,
+}
+
+impl Store {
+    pub fn new(dir: PathBuf) -> Self {
+        Store { dir }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{}.toml", file_stem(name)))
+    }
+
+    pub fn scrollback_dir(&self, name: &str) -> PathBuf {
+        self.dir.join(file_stem(name)).join("scrollback")
+    }
+
+    pub fn scrollback_file(&self, name: &str, pane: PaneId) -> PathBuf {
+        self.scrollback_dir(name).join(format!("{pane}.zst"))
+    }
+
+    /// Writes a bench and its panes' scrollback. Scrollback of panes no
+    /// longer in the bench is removed.
+    pub fn save(&self, bench: &SavedBench, scrollback: &[(PaneId, String)]) -> io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        write_atomic(&self.file(&bench.name), bench.to_toml().as_bytes())?;
+        let dir = self.scrollback_dir(&bench.name);
+        std::fs::create_dir_all(&dir)?;
+        for (pane, text) in scrollback {
+            let compressed = zstd::encode_all(text.as_bytes(), 3)?;
+            write_atomic(&self.scrollback_file(&bench.name, *pane), &compressed)?;
+        }
+        let keep: Vec<String> = bench.tabs.iter().flat_map(|t| &t.panes).map(|p| format!("{}.zst", p.id)).collect();
+        for entry in std::fs::read_dir(&dir)?.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".zst") && !keep.contains(&name) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn load(&self, name: &str) -> io::Result<SavedBench> {
+        let text = std::fs::read_to_string(self.file(name))?;
+        SavedBench::from_toml(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{name}: {e}")))
+    }
+
+    /// A pane's saved scrollback, if there is any.
+    pub fn scrollback(&self, name: &str, pane: PaneId) -> Option<String> {
+        let compressed = std::fs::read(self.scrollback_file(name, pane)).ok()?;
+        let bytes = zstd::decode_all(compressed.as_slice()).ok()?;
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// Removes a bench's file and scrollback.
+    pub fn delete(&self, name: &str) -> io::Result<()> {
+        let _ = std::fs::remove_dir_all(self.dir.join(file_stem(name)));
+        match std::fs::remove_file(self.file(name)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// Moves a bench's files to a new name (the file's own `name` is
+    /// rewritten by the next save).
+    pub fn rename(&self, old: &str, new: &str) -> io::Result<()> {
+        if file_stem(old) == file_stem(new) {
+            return Ok(());
+        }
+        if self.file(old).exists() {
+            std::fs::rename(self.file(old), self.file(new))?;
+        }
+        let (from, to) = (self.dir.join(file_stem(old)), self.dir.join(file_stem(new)));
+        if from.exists() {
+            let _ = std::fs::remove_dir_all(&to);
+            std::fs::rename(from, to)?;
+        }
+        Ok(())
+    }
+
+    /// Every saved bench, by name.
+    pub fn list(&self) -> Vec<StoredInfo> {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else { return Vec::new() };
+        let mut out: Vec<StoredInfo> = entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .filter_map(|text| SavedBench::from_toml(&text).ok())
+            .map(|b| StoredInfo { tabs: b.tabs.len(), name: b.name, id: b.id, color: b.color, saved: b.saved })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    pub fn exists(&self, name: &str) -> bool {
+        self.file(name).exists()
+    }
+
+    fn session_file(&self) -> PathBuf {
+        self.dir.join("../session.toml")
+    }
+
+    /// Records which benches were running, to bring them back on the next start.
+    pub fn save_session(&self, names: &[String]) -> io::Result<()> {
+        #[derive(Serialize)]
+        struct Session<'a> {
+            benches: &'a [String],
+        }
+        std::fs::create_dir_all(&self.dir)?;
+        write_atomic(&self.session_file(), toml::to_string(&Session { benches: names }).unwrap().as_bytes())
+    }
+
+    /// The benches running when the keeper last stopped.
+    pub fn session(&self) -> Vec<String> {
+        #[derive(Deserialize)]
+        struct Session {
+            benches: Vec<String>,
+        }
+        std::fs::read_to_string(self.session_file())
+            .ok()
+            .and_then(|t| toml::from_str::<Session>(&t).ok())
+            .map(|s| s.benches)
+            .unwrap_or_default()
+    }
+}
+
+/// The scrollback shown above a loaded pane's first prompt: dimmed, with a
+/// divider saying when it was saved.
+pub fn restored_scrollback(text: &str, saved: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len() + 128);
+    out.extend_from_slice(b"\x1b[2m");
+    for line in text.lines() {
+        out.extend_from_slice(line.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    let when = saved.replace('T', " ").trim_end_matches('Z').get(..16).unwrap_or(saved).to_string();
+    out.extend_from_slice(format!("\x1b[0m\x1b[2m── restored · saved {when} UTC ──\x1b[0m\r\n").as_bytes());
+    out
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(tmp, path)
+}
+
+/// A bench name made safe as a file name.
+fn file_stem(name: &str) -> String {
+    let s: String = name.chars().map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c }).collect();
+    let s = s.trim_start_matches('.').to_string();
+    if s.is_empty() { "_".into() } else { s }
+}
+
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// `/home/me/code` → `~/code`
+pub fn home_relative(path: &Path) -> String {
+    if let Some(home) = home()
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return if rest.as_os_str().is_empty() { "~".into() } else { format!("~/{}", rest.display()) };
+    }
+    path.display().to_string()
+}
+
+/// `~/code` → `/home/me/code`
+pub fn expand_home(path: &str) -> PathBuf {
+    match (path.strip_prefix('~'), home()) {
+        (Some(rest), Some(home)) => home.join(rest.trim_start_matches('/')),
+        _ => PathBuf::from(path),
+    }
+}
+
+/// The current time as `2026-11-01T09:12:00Z`.
+pub fn utc_now() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil from days, after Howard Hinnant's algorithm.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shed_model::SplitDir;
+
+    fn sample() -> Bench {
+        let home = home().unwrap_or_else(|| "/".into());
+        let mut tab = Tab::with_pane(Pane::new(PaneId::new(), home.join("code/api")));
+        let first = tab.active_pane;
+        tab.split(first, Pane::new(PaneId::new(), home.join("code/api")), SplitDir::Right);
+        tab.layout.set_ratio(&[], 0.6);
+        tab.name = Some("api".into());
+        tab.tags.push(Tag { label: "dev".into(), color: tag_color("green").unwrap(), tint_tab: false });
+        let second = Tab::with_pane(Pane::new(PaneId::new(), "/tmp".into()));
+        Bench {
+            id: BenchId::new(),
+            name: "backend".into(),
+            color: BenchColor::Blue,
+            badge: Some("B".into()),
+            cwd: home.join("code"),
+            active_tab: second.id,
+            tabs: vec![tab, second],
+        }
+    }
+
+    #[test]
+    fn save_load_save_is_identical() {
+        let bench = sample();
+        let tools = |id: PaneId| PaneExtras { tool: (id == bench.tabs[0].layout.leaves()[0]).then(|| "nvim src/main.rs".into()) };
+        let saved = SavedBench::from_bench(&bench, tools);
+        let text = saved.to_toml();
+        assert!(text.contains("layout = \"right 0.6 (0) (1)\""), "{text}");
+        assert!(text.contains("tool = \"nvim src/main.rs\""));
+        assert!(text.contains("cwd = \"~/code/api\""));
+
+        let (loaded, panes) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
+        assert_eq!(loaded.tabs.len(), 2);
+        assert_eq!(loaded.active_tab, bench.active_tab);
+        assert_eq!(loaded.tabs[0].layout, bench.tabs[0].layout);
+        assert_eq!(panes[0].1.tool.as_deref(), Some("nvim src/main.rs"));
+
+        let again = SavedBench::from_bench(&loaded, |id| PaneExtras { tool: panes.iter().find(|p| p.0 == id).and_then(|p| p.1.tool.clone()) });
+        let again = SavedBench { saved: saved.saved.clone(), ..again };
+        assert_eq!(again.to_toml(), text);
+    }
+
+    #[test]
+    fn store_files_scrollback_session_rename_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("benches"));
+        let bench = sample();
+        let saved = SavedBench::from_bench(&bench, |_| PaneExtras::default());
+        let pane = bench.tabs[0].active_pane;
+        store.save(&saved, &[(pane, "line one\nline two".into())]).unwrap();
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.load("backend").unwrap(), saved);
+        assert_eq!(store.scrollback("backend", pane).as_deref(), Some("line one\nline two"));
+
+        store.save_session(&["backend".into()]).unwrap();
+        assert_eq!(store.session(), ["backend"]);
+
+        store.rename("backend", "server").unwrap();
+        assert!(store.exists("server") && !store.exists("backend"));
+        assert!(store.scrollback("server", pane).is_some());
+        store.delete("server").unwrap();
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn copies_get_new_ids() {
+        let saved = SavedBench::from_bench(&sample(), |_| PaneExtras::default());
+        let copy = saved.copy_as("template");
+        assert_ne!(copy.id, saved.id);
+        assert_ne!(copy.tabs[0].panes[0].id, saved.tabs[0].panes[0].id);
+        assert_eq!(copy.tabs[0].layout, saved.tabs[0].layout);
+    }
+
+    #[test]
+    fn rack_rules() {
+        let rack = RackConfig::default();
+        assert_eq!(relaunch(&rack, "nvim src/main.rs"), Relaunch::Run);
+        assert_eq!(relaunch(&rack, "/usr/bin/htop"), Relaunch::Run);
+        assert_eq!(relaunch(&rack, "tail -f /var/log/syslog"), Relaunch::Run);
+        assert_eq!(relaunch(&rack, "tail -n 5 x"), Relaunch::Prefill);
+        assert_eq!(relaunch(&rack, "cargo build"), Relaunch::Prefill);
+        assert_eq!(relaunch(&rack, "cargo watch -x run"), Relaunch::Run);
+        assert_eq!(relaunch(&rack, "git push origin main"), Relaunch::Skip);
+        assert_eq!(relaunch(&rack, "sudo rm -rf /tmp/x"), Relaunch::Skip);
+        assert_eq!(relaunch(&rack, "   "), Relaunch::Skip);
+        assert_eq!(relaunch(&rack, "cd ~/app && npm run dev"), Relaunch::Run);
+        assert_eq!(relaunch(&rack, "cd /tmp && ls | head -5 && htop"), Relaunch::Run);
+        assert_eq!(relaunch(&rack, "tail -f app.log | grep ERROR"), Relaunch::Run);
+        assert_eq!(relaunch(&rack, "make && ./deploy"), Relaunch::Prefill);
+        assert_eq!(relaunch(&rack, "git push && htop"), Relaunch::Skip);
+    }
+
+    #[test]
+    fn hand_edited_files_load() {
+        let text = r##"
+            name = "web"
+            id = "8f6d7861-0000-4000-8000-000000000001"
+            color = "#123456"
+            cwd = "/tmp"
+            saved = "2026-11-01T09:12:00Z"
+
+            [[tabs]]
+            id = "8f6d7861-0000-4000-8000-000000000002"
+            layout = "0"
+
+            [[tabs.panes]]
+            id = "8f6d7861-0000-4000-8000-000000000003"
+            cwd = "/tmp"
+            tool = "npm run dev"
+        "##;
+        let (bench, panes) = SavedBench::from_toml(text).unwrap().to_bench().unwrap();
+        assert_eq!(bench.color, BenchColor::Custom(Rgb::hex(0x123456)));
+        assert_eq!(panes[0].1.cols, 80);
+        assert_eq!(bench.tabs[0].panes.len(), 1);
+    }
+
+    #[test]
+    fn utc_format() {
+        let now = utc_now();
+        assert_eq!(now.len(), 20);
+        assert!(now.starts_with("20") && now.ends_with('Z'));
+    }
+}

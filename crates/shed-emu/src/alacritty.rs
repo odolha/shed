@@ -377,6 +377,38 @@ impl Emulator for AlacrittyEmulator {
         grid[line][Column(col)].hyperlink().map(|h| h.uri().to_string())
     }
 
+    fn scrollback_text(&self, max_lines: usize) -> String {
+        let grid = if self.term.mode().contains(TermMode::ALT_SCREEN) { self.term.inactive_grid() } else { self.term.grid() };
+        let cols = grid.columns();
+        let mut lines: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for line in -(grid.history_size() as i32)..grid.screen_lines() as i32 {
+            let row = &grid[Line(line)];
+            for col in 0..cols {
+                let cell = &row[Column(col)];
+                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                current.push(visible_char(cell.c));
+                if let Some(z) = cell.zerowidth() {
+                    current.extend(z);
+                }
+            }
+            if !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+                lines.push(current.trim_end().to_string());
+                current.clear();
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current.trim_end().to_string());
+        }
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        let start = lines.len().saturating_sub(max_lines);
+        lines[start..].join("\n")
+    }
+
     fn dump_text(&self) -> String {
         let grid = self.term.grid();
         let offset = grid.display_offset() as i32;
@@ -489,6 +521,16 @@ mod tests {
         assert_eq!(&cols[..4], &[0, 2, 4, 5]);
         assert_eq!(e.hyperlink_at(6, 0).as_deref(), Some("https://x.org"));
         assert_eq!(e.hyperlink_at(0, 0), None);
+    }
+
+    #[test]
+    fn scrollback_text_joins_wraps_and_keeps_the_screen_under_apps() {
+        let mut e = emu(10, 3);
+        e.advance(b"short\r\na line that wraps around\r\n\r\nlast\r\n");
+        assert_eq!(e.scrollback_text(100), "short\na line that wraps around\n\nlast");
+        assert_eq!(e.scrollback_text(2), "\nlast");
+        e.advance(b"\x1b[?1049hFULL SCREEN APP");
+        assert_eq!(e.scrollback_text(1), "last");
     }
 
     #[test]

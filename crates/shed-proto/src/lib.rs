@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{BenchColor, BenchId, PaneId, PaneNode, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -53,8 +53,12 @@ pub enum ClientMsg {
     /// Hangs up the pane's shell; the pane leaves the tree when it exits.
     ClosePane { pane: PaneId },
     CloseTab { tab: TabId },
-    /// Stops every tool on the bench and forgets it.
+    /// Saves the bench, then stops every tool on it. It stays saved, to load later.
     CloseBench { bench: BenchId },
+    /// Stops the bench if it runs, and removes its saved file and launcher.
+    DeleteBench { name: String },
+    /// Saves a bench now; with `as_name`, also saves a copy under that name.
+    SaveBench { bench: BenchId, as_name: Option<String> },
     FocusPane { pane: PaneId },
     FocusTab { tab: TabId },
     /// New split ratios for a tab. The panes must be the same.
@@ -74,10 +78,13 @@ pub enum ClientMsg {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ShowTarget {
-    /// Every bench without a window; a new bench if there is none.
+    /// Every bench without a window. If the keeper holds none, the benches
+    /// that were running when it last stopped; failing that, a new bench.
     Detached,
     Bench(BenchId),
     NewBench { name: Option<String>, cwd: Option<PathBuf> },
+    /// A bench by name: shown if it runs, loaded from its saved file if not.
+    Load { name: String },
 }
 
 /// Sent by the keeper to a client.
@@ -96,6 +103,8 @@ pub enum KeeperMsg {
     Show { bench: BenchId },
     PaneExited { pane: PaneId, code: Option<i32> },
     Status(KeeperStatus),
+    /// A request finished; the text says what happened (for the CLI).
+    Done(String),
     Error(String),
 }
 
@@ -109,6 +118,8 @@ pub struct KeeperStatus {
     pub windows: u32,
     /// Benches some window shows; the rest are detached.
     pub open: Vec<BenchId>,
+    /// Saved benches that are not running.
+    pub stored: Vec<String>,
     pub tree: Shed,
 }
 
