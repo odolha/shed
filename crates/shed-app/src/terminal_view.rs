@@ -2,7 +2,34 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+
+/// Render and paint counters, logged once a second with `SHED_PERF=1`.
+pub mod perf {
+    use super::*;
+    pub static RENDERS: AtomicU64 = AtomicU64::new(0);
+    pub static RENDER_US: AtomicU64 = AtomicU64::new(0);
+    pub static PAINTS: AtomicU64 = AtomicU64::new(0);
+    pub static PAINT_US: AtomicU64 = AtomicU64::new(0);
+    pub static WINDOW_RENDERS: AtomicU64 = AtomicU64::new(0);
+
+    pub fn enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("SHED_PERF").is_some())
+    }
+
+    pub fn report() -> String {
+        let take = |a: &AtomicU64| a.swap(0, Ordering::Relaxed);
+        let (r, rus, p, pus) = (take(&RENDERS), take(&RENDER_US), take(&PAINTS), take(&PAINT_US));
+        format!(
+            "window renders {}/s, terminal renders {r}/s ({} µs avg), paints {p}/s ({} µs avg)",
+            take(&WINDOW_RENDERS),
+            rus.checked_div(r).unwrap_or(0),
+            pus.checked_div(p).unwrap_or(0)
+        )
+    }
+}
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, FocusHandle, Font, FontStyle, FontWeight, Hsla,
@@ -644,6 +671,7 @@ fn paint_frame(frame: &GridFrame, origin: Point<Pixels>, m: CellMetrics, font: &
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let started = Instant::now();
         let m = self.metrics(window);
         if self.dirty {
             self.emu.snapshot(&self.palette, &mut self.snapshot);
@@ -656,6 +684,10 @@ impl Render for TerminalView {
         let view = cx.entity().downgrade();
         let grid_origin = self.grid_origin.clone();
         let padding = self.padding;
+        if perf::enabled() {
+            perf::RENDERS.fetch_add(1, Ordering::Relaxed);
+            perf::RENDER_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
 
         div()
             .id("terminal")
@@ -697,7 +729,14 @@ impl Render for TerminalView {
                         .ok();
                         origin
                     },
-                    move |_bounds, origin, window, cx| paint_frame(&frame, origin, m, &font, window, cx),
+                    move |_bounds, origin, window, cx| {
+                        let t = Instant::now();
+                        paint_frame(&frame, origin, m, &font, window, cx);
+                        if perf::enabled() {
+                            perf::PAINTS.fetch_add(1, Ordering::Relaxed);
+                            perf::PAINT_US.fetch_add(t.elapsed().as_micros() as u64, Ordering::Relaxed);
+                        }
+                    },
                 )
                 .size_full(),
             )

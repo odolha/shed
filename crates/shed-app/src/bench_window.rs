@@ -684,6 +684,9 @@ impl BenchWindow {
 
 impl Render for BenchWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if crate::terminal_view::perf::enabled() {
+            crate::terminal_view::perf::WINDOW_RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         self.ui = self.state.read(cx).settings.ui.clone();
         let errors = self.state.read(cx).settings.errors.clone();
         let Some(bench) = self.bench(cx).cloned() else {

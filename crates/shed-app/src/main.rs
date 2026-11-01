@@ -139,6 +139,13 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
             let receiving = state.clone();
             cx.spawn(async move |cx| AppState::receive(receiving, rx, cx).await).detach();
             cx.spawn(async move |cx| AppState::watch_config(state, cx).await).detach();
+            if terminal_view::perf::enabled() {
+                cx.spawn(async move |cx| loop {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    eprintln!("perf: {}", terminal_view::perf::report());
+                })
+                .detach();
+            }
             cx.activate(true);
         });
     Ok(())
