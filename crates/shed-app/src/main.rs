@@ -10,6 +10,7 @@ mod logbook_view;
 mod prompt;
 mod settings;
 mod setup_cli;
+mod setup_panel;
 mod state;
 mod terminal_view;
 mod theme;

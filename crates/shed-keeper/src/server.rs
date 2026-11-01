@@ -1214,6 +1214,19 @@ impl Keeper {
         env.push(("SHED_STATE_DIR".into(), self.cfg.state_dir.clone().into()));
         if let Some(bin) = &self.cfg.shed_bin {
             env.push(("SHED_BIN".into(), bin.clone().into()));
+            // `shed setup` and `shed alias` work in every pane, even from a build
+            // that is not installed; an installed `shed` earlier on PATH still wins.
+            if let Some(dir) = bin.parent() {
+                let path = env.iter().rev().find(|(k, _)| k == "PATH").map(|(_, v)| v.clone());
+                let path = path.or_else(|| std::env::var_os("PATH")).unwrap_or_default();
+                let mut dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+                if !dirs.iter().any(|d| d == dir) {
+                    dirs.push(dir.to_path_buf());
+                    if let Ok(joined) = std::env::join_paths(dirs) {
+                        env.push(("PATH".into(), joined));
+                    }
+                }
+            }
         }
         let mut args = Vec::new();
         let is_bash = program.file_name().is_some_and(|n| n == "bash");

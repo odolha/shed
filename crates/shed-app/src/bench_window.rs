@@ -20,6 +20,7 @@ use shed_proto::{ClientMsg, ShowTarget};
 use crate::actions::*;
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
+use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
@@ -94,6 +95,8 @@ pub struct BenchWindow {
     /// Where each split container was laid out last frame, by path in the tree.
     split_bounds: Rc<RefCell<HashMap<Vec<bool>, Bounds<Pixels>>>>,
     drag: Option<SplitDrag>,
+    /// The Setup panel, while open.
+    setup: Option<(Entity<SetupPanel>, Subscription)>,
 }
 
 impl BenchWindow {
@@ -114,7 +117,25 @@ impl BenchWindow {
             menu: None,
             split_bounds: Rc::default(),
             drag: None,
+            setup: None,
         }
+    }
+
+    fn toggle_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.setup.take().is_none() {
+            let panel = cx.new(|cx| SetupPanel::new(self.bench, self.state.clone(), cx));
+            let sub = cx.subscribe_in(&panel, window, |this, _, event: &PanelEvent, window, cx| match event {
+                PanelEvent::Close => {
+                    this.setup = None;
+                    this.refocus(window, cx);
+                }
+                PanelEvent::Done => this.refocus(window, cx),
+            });
+            self.setup = Some((panel, sub));
+        } else {
+            self.refocus(window, cx);
+        }
+        cx.notify();
     }
 
     /// Follows the tree: window title, and keyboard focus on the active pane.
@@ -281,6 +302,12 @@ impl BenchWindow {
         let mut entries = vec![
             item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)),
             item("Add Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)),
+            item("Setup…", move |this, window, cx| {
+                this.send(ClientMsg::FocusTab { tab: tab_id }, cx);
+                if this.setup.is_none() {
+                    this.toggle_setup(window, cx);
+                }
+            }),
         ];
         for tag in &tab.tags {
             let label = tag.label.clone();
@@ -572,6 +599,19 @@ impl BenchWindow {
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
                 })),
         )
+        .child(
+            div()
+                .id("setup-button")
+                .flex()
+                .items_center()
+                .px_2()
+                .cursor_pointer()
+                .when(self.setup.is_some(), |d| d.bg(hsla(ui.tab_active)))
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .tooltip(|_, cx| cx.new(|_| Tooltip("Setup: startup, teardown, aliases".into())).into())
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_setup(window, cx)))
+                .child(svg().path(icon("rack")).size(px(16.0)).text_color(hsla(if self.setup.is_some() { accent } else { ui.text_dim }))),
+        )
         .child(self.render_bench_label(bench, cx))
     }
 
@@ -767,6 +807,7 @@ impl Render for BenchWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &RenameBench, window, cx| this.start_edit(EditTarget::BenchName, window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleSetup, window, cx| this.toggle_setup(window, cx)))
             .on_action(cx.listener(|this, a: &FocusBench, _, cx| {
                 if let Some(handle) = this.state.read(cx).window_at(a.0) {
                     handle.update(cx, |_, window, _| window.activate()).ok();
@@ -774,7 +815,18 @@ impl Render for BenchWindow {
             }))
             .child(div().h(px(3.0)).w_full().flex_none().bg(hsla(accent)))
             .child(self.render_tab_bar(&bench, cx))
-            .child(div().flex_1().min_h_0().child(content))
+            .child(
+                // The panel lies over the panes rather than beside them, so opening it
+                // does not resize every terminal in the tab.
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(content)
+                    .when_some(self.setup.as_ref().map(|(p, _)| p.clone()), |el, panel| {
+                        el.child(div().absolute().top_0().right_0().h_full().child(panel))
+                    }),
+            )
             .when(!errors.is_empty(), |el| {
                 el.child(
                     div()
@@ -789,5 +841,24 @@ impl Render for BenchWindow {
             })
             .children(menu)
             .into_any_element()
+    }
+}
+
+/// A one-line tooltip.
+struct Tooltip(SharedString);
+
+impl Render for Tooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let ui = UiColors::default();
+        div()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .bg(hsla(ui.tab_active))
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .text_size(px(12.0))
+            .text_color(hsla(ui.text))
+            .child(self.0.clone())
     }
 }

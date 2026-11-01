@@ -32,6 +32,10 @@ impl LineEditor {
         Self { text, cursor, focus: cx.focus_handle() }
     }
 
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
     fn byte(&self, chars: usize) -> usize {
         self.text.char_indices().nth(chars).map_or(self.text.len(), |(i, _)| i)
     }
@@ -55,6 +59,13 @@ impl LineEditor {
             "right" => self.cursor = (self.cursor + 1).min(len),
             "home" => self.cursor = 0,
             "end" => self.cursor = len,
+            "v" if ks.modifiers.control => {
+                let Some(pasted) = cx.read_from_clipboard().and_then(|c| c.text()) else { return };
+                let pasted = pasted.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+                let at = self.byte(self.cursor);
+                self.text.insert_str(at, &pasted);
+                self.cursor += pasted.chars().count();
+            }
             _ => match ks.key_char.as_deref() {
                 Some(text) if !ks.modifiers.control && !ks.modifiers.platform => {
                     let at = self.byte(self.cursor);
