@@ -43,7 +43,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use shed_model::config::RackConfig;
-use shed_model::{Aliases, Bench, BenchColor, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId, Tag, paths, tag_color};
+use shed_model::{Aliases, Bench, BenchColor, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId, Tag, paths, slug, tag_color};
 
 pub use layout::{format_layout, parse_layout};
 
@@ -51,6 +51,10 @@ pub use layout::{format_layout, parse_layout};
 pub struct SavedBench {
     pub name: String,
     pub id: BenchId,
+    /// The key of its desktop launcher; files from before it was kept use
+    /// the name's slug, which is what their launchers were keyed by.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub launcher: String,
     /// A colour name or `#rrggbb`.
     pub color: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -178,6 +182,7 @@ impl SavedBench {
         SavedBench {
             name: bench.name.clone(),
             id: bench.id,
+            launcher: bench.launcher.clone(),
             color: bench.color.to_text(),
             badge: bench.badge.clone(),
             cwd: home_relative(&bench.cwd),
@@ -251,14 +256,21 @@ impl SavedBench {
             active_tab,
             aliases: self.aliases.clone(),
             closing: false,
+            launcher: self.launcher(),
         };
         Ok((bench, panes_out))
     }
 
-    /// A copy under another name, with fresh IDs so both can be open at once.
-    pub fn copy_as(&self, name: &str) -> SavedBench {
+    pub fn launcher(&self) -> String {
+        if self.launcher.is_empty() { slug(&self.name) } else { self.launcher.clone() }
+    }
+
+    /// A copy under another name, with fresh IDs so both can be open at
+    /// once, and its own launcher (`launcher`, which must be free).
+    pub fn copy_as(&self, name: &str, launcher: String) -> SavedBench {
         let mut copy = self.clone();
         copy.name = name.to_string();
+        copy.launcher = launcher;
         copy.id = BenchId::new();
         for tab in &mut copy.tabs {
             tab.id = TabId::new();
@@ -345,6 +357,7 @@ impl Default for Store {
 pub struct StoredInfo {
     pub name: String,
     pub id: BenchId,
+    pub launcher: String,
     pub color: String,
     pub saved: String,
     pub tabs: usize,
@@ -434,7 +447,7 @@ impl Store {
             .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
             .filter_map(|e| std::fs::read_to_string(e.path()).ok())
             .filter_map(|text| SavedBench::from_toml(&text).ok())
-            .map(|b| StoredInfo { tabs: b.tabs.len(), name: b.name, id: b.id, color: b.color, saved: b.saved })
+            .map(|b| StoredInfo { tabs: b.tabs.len(), launcher: b.launcher(), name: b.name, id: b.id, color: b.color, saved: b.saved })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
@@ -569,6 +582,7 @@ mod tests {
             tabs: vec![tab, second],
             aliases: [("up".to_string(), "docker compose up -d".to_string())].into(),
             closing: false,
+            launcher: "backend".into(),
         }
     }
 
@@ -623,8 +637,9 @@ mod tests {
     #[test]
     fn copies_get_new_ids() {
         let saved = SavedBench::from_bench(&sample(), |_| PaneExtras::default());
-        let copy = saved.copy_as("template");
+        let copy = saved.copy_as("template", "template".into());
         assert_ne!(copy.id, saved.id);
+        assert_eq!((copy.launcher(), saved.launcher()), ("template".into(), "backend".into()));
         assert_ne!(copy.tabs[0].panes[0].id, saved.tabs[0].panes[0].id);
         assert_eq!(copy.tabs[0].layout, saved.tabs[0].layout);
     }

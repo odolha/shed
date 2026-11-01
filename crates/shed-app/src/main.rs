@@ -227,8 +227,10 @@ fn main() -> anyhow::Result<()> {
                 Ok(c) => c,
                 Err(_) => {
                     // No keeper: only the files.
-                    shed_save::Store::default().delete(&name)?;
-                    shed_desktop::Desktop::new(shed_model::paths::data_home()).remove(&name);
+                    let store = shed_save::Store::default();
+                    let launcher = store.load(&name).map(|b| b.launcher()).unwrap_or_else(|_| shed_model::slug(&name));
+                    store.delete(&name)?;
+                    shed_desktop::Desktop::new(shed_model::paths::data_home()).remove(&launcher);
                     println!("deleted {name}");
                     return Ok(());
                 }

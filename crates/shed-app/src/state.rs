@@ -40,6 +40,7 @@ pub struct AppState {
 
 #[derive(Clone, PartialEq)]
 struct Identity {
+    launcher: String,
     name: String,
     color: BenchColor,
     badge: Option<String>,
@@ -48,7 +49,7 @@ struct Identity {
 impl Identity {
     fn of(bench: &Bench, badges: bool) -> Self {
         let badge = badges.then(|| bench.badge.clone().unwrap_or_else(|| initials(&bench.name)));
-        Self { name: bench.name.clone(), color: bench.color, badge }
+        Self { launcher: bench.launcher.clone(), name: bench.name.clone(), color: bench.color, badge }
     }
 }
 
@@ -195,14 +196,16 @@ impl AppState {
             if previous == Some(&identity) {
                 continue;
             }
-            if let Some(old) = previous.filter(|old| old.name != identity.name) {
-                self.desktop.remove(&old.name);
+            // A rename rewrites the same entry; only a new launcher key moves it.
+            if let Some(old) = previous.filter(|old| old.launcher != identity.launcher) {
+                self.desktop.remove(&old.launcher);
                 if let Some(handle) = self.windows.get(&bench.id) {
-                    let id = shed_desktop::app_id(&identity.name);
+                    let id = shed_desktop::app_id(&identity.launcher);
                     handle.update(cx, |_, window, _| window.set_app_id(&id)).ok();
                 }
             }
             let written = self.desktop.install(&BenchIdentity {
+                launcher: &identity.launcher,
                 name: &identity.name,
                 color: identity.color,
                 badge: identity.badge.as_deref(),
@@ -290,7 +293,7 @@ impl AppState {
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(window_title(&bench.name).into()), ..Default::default() }),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(960.0), px(640.0)), cx))),
-            app_id: Some(shed_desktop::app_id(&bench.name)),
+            app_id: Some(shed_desktop::app_id(&bench.launcher)),
             icon: window_icon(&Identity::of(bench, self.settings.icon_badges)),
             ..Default::default()
         };

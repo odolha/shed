@@ -139,3 +139,33 @@ fn rack_tools_restart_by_themselves() {
     });
     assert_eq!(tree.pane(pane).unwrap().waiting, None);
 }
+
+#[test]
+fn renaming_keeps_the_launcher_and_names_stay_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let web = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("web".into()), cwd: None });
+    let tree = tree_until(&mut c, "web", |t| t.bench(web).is_some());
+    assert_eq!(tree.bench(web).unwrap().launcher, "web");
+
+    c.msg(ClientMsg::RenameBench { bench: web, name: "shop".into() });
+    let tree = tree_until(&mut c, "renamed", |t| t.bench(web).is_some_and(|b| b.name == "shop"));
+    assert_eq!(tree.bench(web).unwrap().launcher, "web", "a pinned launcher keeps working");
+
+    // A new bench may take the old name, but not the launcher.
+    let second = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("web".into()), cwd: None });
+    let tree = tree_until(&mut c, "second", |t| t.bench(second).is_some());
+    assert_eq!(tree.bench(second).unwrap().launcher, "web-2");
+
+    // Saved with the bench; a copy gets its own.
+    c.msg(ClientMsg::SaveBench { bench: web, as_name: Some("shop-copy".into()) });
+    c.until("saved", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Done(text)) if text.starts_with("saved shop as") => Some(()),
+        _ => None,
+    });
+    let saved = std::fs::read_to_string(dir.path().join("benches/shop.toml")).unwrap();
+    assert!(saved.contains("launcher = \"web\""), "{saved}");
+    let copy = std::fs::read_to_string(dir.path().join("benches/shop-copy.toml")).unwrap();
+    assert!(copy.contains("launcher = \"shop-copy\""), "{copy}");
+}

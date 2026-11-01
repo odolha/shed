@@ -131,6 +131,20 @@ pub struct Bench {
     pub aliases: Aliases,
     /// The bench is being closed: its tools are stopping and teardowns running.
     pub closing: bool,
+    /// What the bench's desktop launcher and window app ID are keyed by:
+    /// the slug of its name when it was made. Renaming keeps it, so a
+    /// launcher pinned to a dock keeps working.
+    pub launcher: String,
+}
+
+/// A bench name made safe for app IDs and file names.
+pub fn slug(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '-' })
+        .collect();
+    let s = s.trim_matches('-').to_string();
+    if s.is_empty() { "bench".into() } else { s }
 }
 
 /// Shed-level aliases: name → command. They override the shell's own.
@@ -521,6 +535,7 @@ mod tests {
             tabs,
             aliases: Aliases::new(),
             closing: false,
+            launcher: "main".into(),
         }
     }
 

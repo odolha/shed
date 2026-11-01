@@ -615,12 +615,16 @@ impl Keeper {
             }
             ClientMsg::DeleteBench { name } => {
                 let mut st = self.lock();
-                if let Some(id) = st.tree.benches.iter().find(|b| b.name == name).map(|b| b.id) {
+                let running = st.tree.benches.iter().find(|b| b.name == name).map(|b| (b.id, b.launcher.clone()));
+                let saved = self.cfg.store.as_ref().and_then(|s| s.load(&name).ok()).map(|b| b.launcher());
+                if let Some((id, _)) = running {
                     self.drop_bench(&mut st, id);
                 }
                 let removed = self.cfg.store.as_ref().map(|s| (s.exists(&name), s.delete(&name)));
                 if let Some(desktop) = &self.cfg.desktop {
-                    desktop.remove(&name);
+                    for launcher in running.map(|(_, l)| l).into_iter().chain(saved) {
+                        desktop.remove(&launcher);
+                    }
                 }
                 match removed {
                     Some((true, Ok(()))) => st.send(client, KeeperMsg::Done(format!("deleted {name}"))),
@@ -650,8 +654,9 @@ impl Keeper {
                             st.send(client, KeeperMsg::Error(problem));
                             return;
                         }
-                        // A copy starts clean: no scrollback, fresh IDs.
-                        if let Err(e) = store.save(&saved.copy_as(&copy), &[]) {
+                        // A copy starts clean: no scrollback, fresh IDs, its own launcher.
+                        let launcher = self.unique_launcher(&st, &copy);
+                        if let Err(e) = store.save(&saved.copy_as(&copy, launcher), &[]) {
                             st.send(client, KeeperMsg::Error(format!("cannot save {copy:?}: {e}")));
                             return;
                         }
@@ -886,6 +891,17 @@ impl Keeper {
             return "main".into();
         }
         (2..).map(|i| format!("bench-{i}")).find(|n| !taken(n)).unwrap()
+    }
+
+    /// A launcher key for a new bench called `name`: its slug, numbered if
+    /// another bench, running or saved, already has it.
+    fn unique_launcher(&self, st: &State, name: &str) -> String {
+        let mut taken: HashSet<String> = st.tree.benches.iter().map(|b| b.launcher.clone()).collect();
+        if let Some(store) = &self.cfg.store {
+            taken.extend(store.list().into_iter().map(|i| i.launcher));
+        }
+        let base = shed_model::slug(name);
+        std::iter::once(base.clone()).chain((2..).map(|i| format!("{base}-{i}"))).find(|l| !taken.contains(l)).unwrap()
     }
 
     /// Why `name` cannot name a bench (other than `except`), if it can't.
@@ -1196,8 +1212,10 @@ impl Keeper {
         tab.id = tab_id;
         let name = name.unwrap_or_else(|| self.unique_bench_name(st));
         let color = BenchColor::next_unused(st.tree.benches.iter().map(|b| &b.color));
+        let launcher = self.unique_launcher(st, &name);
         st.tree.benches.push(Bench {
             id,
+            launcher,
             name,
             color,
             badge: None,

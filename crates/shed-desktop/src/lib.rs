@@ -1,10 +1,14 @@
 //! Per-bench window identity: generated icons and desktop entries.
 //!
 //! Linux has no single way to give one app's windows different taskbar
-//! icons. Each bench window gets its own app ID (`dev.shed.bench.<name>`,
+//! icons. Each bench window gets its own app ID (`dev.shed.bench.<launcher>`,
 //! the X11 `WM_CLASS`), and a hidden desktop entry with the same
 //! `StartupWMClass` and a generated icon in the bench colour, so docks treat
 //! every bench as its own app and pinning one gives a launcher for it.
+//!
+//! Everything is keyed by the bench's launcher key (see
+//! [`shed_model::Bench::launcher`]), not its name, so renaming a bench
+//! rewrites its entry in place and a pinned launcher keeps working.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,19 +18,11 @@ use shed_model::{BenchColor, Rgb};
 const TEMPLATE: &str = include_str!("../../../assets/icons/bench/bench-template.svg");
 const TEMPLATE_BADGE: &str = include_str!("../../../assets/icons/bench/bench-template-badge.svg");
 
-/// A bench name made safe for app IDs and file names.
-pub fn slug(name: &str) -> String {
-    let s: String = name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '-' })
-        .collect();
-    let s = s.trim_matches('-').to_string();
-    if s.is_empty() { "bench".into() } else { s }
-}
+pub use shed_model::slug;
 
 /// The app ID (X11 `WM_CLASS`, Wayland `app_id`) of a bench's window.
-pub fn app_id(bench_name: &str) -> String {
-    format!("dev.shed.bench.{}", slug(bench_name))
+pub fn app_id(launcher: &str) -> String {
+    format!("dev.shed.bench.{}", slug(launcher))
 }
 
 fn hex(c: Rgb) -> String {
@@ -70,6 +66,8 @@ pub fn icon_rgba(svg: &str, size: u32) -> Option<Vec<u8>> {
 
 /// What a bench's launcher shows and runs.
 pub struct BenchIdentity<'a> {
+    /// The key its files and app ID go by.
+    pub launcher: &'a str,
     pub name: &'a str,
     pub color: BenchColor,
     /// Letters drawn on the icon, if badges are on.
@@ -88,18 +86,18 @@ impl Desktop {
         Self { data_home }
     }
 
-    pub fn entry_path(&self, name: &str) -> PathBuf {
-        self.data_home.join("applications").join(format!("{}.desktop", app_id(name)))
+    pub fn entry_path(&self, launcher: &str) -> PathBuf {
+        self.data_home.join("applications").join(format!("{}.desktop", app_id(launcher)))
     }
 
-    pub fn icon_path(&self, name: &str) -> PathBuf {
-        self.data_home.join("icons/hicolor/scalable/apps").join(format!("{}.svg", app_id(name)))
+    pub fn icon_path(&self, launcher: &str) -> PathBuf {
+        self.data_home.join("icons/hicolor/scalable/apps").join(format!("{}.svg", app_id(launcher)))
     }
 
     /// Writes the bench's icon and desktop entry. Files already up to date
     /// are left alone, so docks are not prodded to reload for nothing.
     pub fn install(&self, bench: &BenchIdentity<'_>) -> io::Result<()> {
-        let icon = self.icon_path(bench.name);
+        let icon = self.icon_path(bench.launcher);
         write_if_changed(&icon, &icon_svg(bench.color, bench.badge))?;
         let entry = format!(
             "[Desktop Entry]\n\
@@ -116,15 +114,15 @@ impl Desktop {
             exe = desktop_quote(&bench.shed.to_string_lossy()),
             quoted = desktop_quote(bench.name),
             icon = icon.display(),
-            class = app_id(bench.name),
+            class = app_id(bench.launcher),
         );
-        write_if_changed(&self.entry_path(bench.name), &entry)
+        write_if_changed(&self.entry_path(bench.launcher), &entry)
     }
 
     /// Removes a bench's desktop entry and icon.
-    pub fn remove(&self, name: &str) {
-        let _ = std::fs::remove_file(self.entry_path(name));
-        let _ = std::fs::remove_file(self.icon_path(name));
+    pub fn remove(&self, launcher: &str) {
+        let _ = std::fs::remove_file(self.entry_path(launcher));
+        let _ = std::fs::remove_file(self.icon_path(launcher));
     }
 }
 
@@ -179,16 +177,24 @@ mod tests {
     }
 
     #[test]
-    fn install_and_remove() {
+    fn install_rename_and_remove() {
         let dir = tempfile::tempdir().unwrap();
         let desktop = Desktop::new(dir.path().to_path_buf());
-        let bench = BenchIdentity { name: "web site", color: BenchColor::Green, badge: None, shed: Path::new("/opt/shed bin/shed") };
+        let shed = Path::new("/opt/shed bin/shed");
+        let bench = BenchIdentity { launcher: "web-site", name: "web site", color: BenchColor::Green, badge: None, shed };
         desktop.install(&bench).unwrap();
-        let entry = std::fs::read_to_string(desktop.entry_path("web site")).unwrap();
+        let entry = std::fs::read_to_string(desktop.entry_path("web-site")).unwrap();
         assert!(entry.contains("StartupWMClass=dev.shed.bench.web-site\n"));
         assert!(entry.contains("Exec=\"/opt/shed bin/shed\" load \"web site\"\n"));
-        assert!(desktop.icon_path("web site").exists());
-        desktop.remove("web site");
-        assert!(!desktop.entry_path("web site").exists());
+        assert!(desktop.icon_path("web-site").exists());
+
+        // Renamed: the same entry, so a pinned launcher still finds it, now loading the new name.
+        desktop.install(&BenchIdentity { name: "shop", ..bench }).unwrap();
+        let entry = std::fs::read_to_string(desktop.entry_path("web-site")).unwrap();
+        assert!(entry.contains("Name=shop — Shed\n") && entry.contains(" load shop\n"), "{entry}");
+        assert!(entry.contains("StartupWMClass=dev.shed.bench.web-site\n"));
+
+        desktop.remove("web-site");
+        assert!(!desktop.entry_path("web-site").exists());
     }
 }
