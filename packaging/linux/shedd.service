@@ -9,7 +9,7 @@
 # check with `systemctl --user show-environment`).
 [Unit]
 Description=Shed keeper: holds Shed's shells and the programs in them
-Documentation=file:///usr/share/doc/shed-terminal/README.md
+Documentation=https://github.com/odolha/shed file:///usr/share/doc/shed-terminal/README.md
 After=graphical-session.target
 
 [Service]

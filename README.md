@@ -112,21 +112,41 @@ see `vendor/alacritty_terminal/SHED_PATCHES.md`.
 
 ## Install
 
-The package is called `shed-terminal`: Debian, Ubuntu and Arch already have a `shed`
-(a hex editor) that also installs `/usr/bin/shed`, so the two conflict.
+From GitHub, in one of three ways. The commands are `shed` and `shedd`; the package is
+called `shed-terminal`, because Debian, Ubuntu and Arch already have a `shed` (a hex
+editor) that also installs `/usr/bin/shed`, so the two conflict.
 
-**Debian, Ubuntu, Mint**: build the package, then install it.
+**With Cargo** (any distribution, no root): needs Rust 1.95 or newer
+([rustup](https://rustup.rs)) and the build dependencies below.
 
 ```sh
-packaging/deb/build.sh
-sudo apt install ./target/debian/shed-terminal_0.1.0-1_amd64.deb
+cargo install --locked --git https://github.com/odolha/shed shed-app shed-keeper
+shed
 ```
 
-**Arch**: `cd packaging/arch && makepkg -si` builds this source tree.
+This puts `shed` and `shedd` in `~/.cargo/bin`. The first run adds Shed to the
+application menu (a launcher and icon in `~/.local/share`). To update, run the same
+`cargo install` again; to remove, `cargo uninstall shed-app shed-keeper`.
 
-Either installs `shed` and `shedd` in `/usr/bin`, Shed in the application menu
-(`dev.shed.desktop`, with icons in the hicolor theme), and an optional systemd user unit
-that starts the keeper at login:
+**As a Debian, Ubuntu or Mint package:**
+
+```sh
+git clone https://github.com/odolha/shed && cd shed
+packaging/deb/build.sh
+sudo apt install ./target/debian/shed-terminal_*.deb
+```
+
+**On Arch**, `packaging/arch/PKGBUILD` builds the latest commit from GitHub
+(`shed-terminal-git`):
+
+```sh
+git clone https://github.com/odolha/shed && cd shed/packaging/arch
+makepkg -si
+```
+
+The packages install `shed` and `shedd` in `/usr/bin`, Shed in the application menu
+(`dev.shed.desktop`, with icons in the hicolor theme), and an optional systemd user
+unit that starts the keeper at login:
 
 ```sh
 systemctl --user enable --now shedd.service
@@ -137,14 +157,14 @@ panes inherit the user manager's environment, which only has `DISPLAY`,
 `SSH_AUTH_SOCK` and the like if the desktop imports them; check with
 `systemctl --user show-environment`.
 
-**From source, without a package**: `cargo build --release` and run
-`./target/release/shed`. Shed then writes its own launcher and icon to
-`~/.local/share` (and removes them once a package provides them).
+**After an update**, the keeper still running is the old one: `shed` from a terminal
+offers to restart it, or run `shed stop` (every bench is saved first).
 
-Build dependencies (Debian/Ubuntu): `libxkbcommon-dev libxkbcommon-x11-dev
-libwayland-dev libxcb1-dev libfontconfig-dev` and a Vulkan driver. Without
-`libxkbcommon-x11-dev`, `shed-app/build.rs` links the runtime library directly
-and prints a warning.
+**Build dependencies**: on Debian, Ubuntu and Mint, `build-essential pkg-config
+libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libfontconfig-dev`;
+on Arch, `base-devel libxkbcommon-x11 wayland fontconfig`. Running needs a Vulkan
+driver (Mesa's is installed on most desktops). Without `libxkbcommon-x11-dev`,
+`shed-app/build.rs` links the runtime library directly and prints a warning.
 
 ## Use
 
