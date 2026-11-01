@@ -396,7 +396,8 @@ impl BenchWindow {
             .border_1()
             .border_color(hsla(ui.divider))
             .rounded_md()
-            .shadow_lg()
+            // No drop shadow: a blurred shadow is redrawn over the whole menu on
+            // every hover change, which tripled the cost of moving through it.
             .text_size(px(13.0))
             .text_color(hsla(ui.text))
             .on_mouse_down_out(cx.listener(|this, _, window, cx| {
@@ -603,6 +604,7 @@ impl BenchWindow {
                 let split = tab.panes.len() > 1;
                 let active = pane == tab.active_pane;
                 let mut cell = div()
+                    .relative()
                     .size_full()
                     .min_w_0()
                     .min_h_0()
@@ -611,13 +613,20 @@ impl BenchWindow {
                         let entries = this.pane_menu(pane);
                         this.open_menu(e.position, entries, cx);
                     }));
-                if split {
-                    cell = cell.border_1().border_color(if active { hsla(accent) } else { hsla_alpha(accent, 0.0) });
+                if let Some(view) = self.state.read(cx).panes.get(&pane) {
+                    cell = cell.child(view.clone());
                 }
-                match self.state.read(cx).panes.get(&pane) {
-                    Some(view) => cell.child(view.clone()).into_any_element(),
-                    None => cell.into_any_element(),
+                if split && active {
+                    // Four thin strips over the pane: a bordered box the size of the
+                    // pane would run the quad shader over every pixel of it.
+                    let edge = || div().absolute().bg(hsla(accent));
+                    cell = cell
+                        .child(edge().top_0().left_0().w_full().h(px(1.0)))
+                        .child(edge().bottom_0().left_0().w_full().h(px(1.0)))
+                        .child(edge().top_0().left_0().h_full().w(px(1.0)))
+                        .child(edge().top_0().right_0().h_full().w(px(1.0)));
                 }
+                cell.into_any_element()
             }
             PaneNode::Split { dir, ratio, first, second } => {
                 let row = *dir == SplitDir::Right;
@@ -704,7 +713,9 @@ impl Render for BenchWindow {
             .size_full()
             .flex()
             .flex_col()
-            .bg(hsla(self.ui.background))
+            // The terminal background, drawn first and full-window, so the renderer
+            // turns it into the frame's clear colour.
+            .bg(hsla(self.state.read(cx).settings.palette.background))
             .capture_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
                 if this.menu.is_some() && e.keystroke.key == "escape" {
                     this.menu = None;

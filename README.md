@@ -85,6 +85,14 @@ and prints a warning.
   away from your real ones.
 - `shed debug-type 'echo hi\r'` types into the first pane through the keeper,
   for testing without a keyboard.
+- `SHED_PERF=1` makes the window process print redraws per second and their cost.
+  It only applies to the process that owns the windows, so close every Shed window
+  first, or use a separate `SHED_RUNTIME_DIR`. Per-process GPU time is in
+  `/proc/<pid>/fdinfo/*` (`drm-engine-render`).
+- `gpui_ce_wgpu` is vendored with one renderer patch (window-sized backgrounds become
+  the clear colour); see `vendor/gpui_ce_wgpu/SHED_PATCHES.md`. Keep Shed's frames at
+  one window-sized layer: GPUI's quad shader costs ~4 ms per full-window quad on an
+  integrated GPU.
 
 | Crate | Role |
 | --- | --- |

@@ -694,7 +694,9 @@ impl Render for TerminalView {
             .key_context("Terminal")
             .track_focus(&self.focus)
             .size_full()
-            .bg(background)
+            // The window paints the theme background (cleared by the renderer
+            // at no cost); a pane paints its own only if the app changed it.
+            .when(frame.background != self.palette.background, |d| d.bg(background))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::copy))

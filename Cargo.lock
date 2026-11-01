@@ -2603,8 +2603,6 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3168d4877f63a3e4a36dce067dd3c19d6df5604be3ac0d357da2aedc9e44db0"
 dependencies = [
  "anyhow",
  "etagere",
