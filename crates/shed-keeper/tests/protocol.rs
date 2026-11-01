@@ -64,16 +64,18 @@ impl Client {
     /// Attaches to the default bench and returns it with its only pane.
     fn attach(&mut self) -> (BenchId, PaneId) {
         self.send(Frame::Client(ClientMsg::Attach { bench: None }));
-        let tree: Shed = self.expect("tree", |f| match f {
-            Frame::Keeper(KeeperMsg::TreeChanged(t)) => Some(t),
-            _ => None,
-        });
-        let bench = self.expect("attached", |f| match f {
-            Frame::Keeper(KeeperMsg::Attached { bench }) => Some(bench),
-            _ => None,
-        });
-        let pane = tree.bench(bench).unwrap().tabs[0].active_pane;
-        (bench, pane)
+        // A tree broadcast from before the bench existed may come first.
+        let (mut tree, mut attached): (Option<Shed>, Option<BenchId>) = (None, None);
+        self.expect("tree and attached", |f| {
+            match f {
+                Frame::Keeper(KeeperMsg::TreeChanged(t)) => tree = Some(t),
+                Frame::Keeper(KeeperMsg::Attached { bench }) => attached = Some(bench),
+                _ => {}
+            }
+            let bench = attached?;
+            let pane = tree.as_ref()?.bench(bench)?.tabs[0].active_pane;
+            Some((bench, pane))
+        })
     }
 
     /// Collects output from `pane` until it contains `needle`.

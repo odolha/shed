@@ -1337,6 +1337,10 @@ impl Keeper {
     }
 
     /// Reads a pane's output until its shell exits, then reports the exit.
+    ///
+    /// A bench closed and loaded again at once brings its panes back under
+    /// the same IDs while the old shells are still exiting; `master` tells
+    /// this loop's pane from the new one, which it must leave alone.
     async fn pane_loop(self: Arc<Self>, pane: PaneId, master: Arc<AsyncFd<OwnedFd>>, mut child: Child) {
         let mut buf = vec![0u8; 64 * 1024];
         let mut status = None;
@@ -1349,7 +1353,7 @@ impl Keeper {
                     let Ok(mut guard) = ready else { break };
                     match guard.try_io(|fd| read_fd(fd.get_ref(), &mut buf)) {
                         Ok(Ok(0)) => break,
-                        Ok(Ok(n)) => sync_deadline = self.on_output(pane, &buf[..n]).map(Into::into),
+                        Ok(Ok(n)) => sync_deadline = self.on_output(pane, &master, &buf[..n]).map(Into::into),
                         // EIO: every process holding the terminal has closed it.
                         Ok(Err(e)) if e.raw_os_error() == Some(libc::EIO) => break,
                         Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -1367,7 +1371,8 @@ impl Keeper {
                 _ = sleep_until(drain_until), if drain_until.is_some() => break,
                 _ = sleep_until(sync_deadline), if sync_deadline.is_some() => {
                     let mut st = self.lock();
-                    sync_deadline = st.panes.get_mut(&pane).and_then(|rt| rt.emu.tick()).map(Into::into);
+                    let rt = st.panes.get_mut(&pane).filter(|rt| Arc::ptr_eq(&rt.master, &master));
+                    sync_deadline = rt.and_then(|rt| rt.emu.tick()).map(Into::into);
                 }
             }
         }
@@ -1384,6 +1389,10 @@ impl Keeper {
         }
         {
             let mut st = self.lock();
+            if !st.panes.get(&pane).is_some_and(|rt| Arc::ptr_eq(&rt.master, &master)) {
+                // Its bench was closed and is already back: the pane is someone else's now.
+                return;
+            }
             st.panes.remove(&pane);
             if let Some(bench) = st.tree.remove_pane(pane) {
                 let frame = Frame::Keeper(KeeperMsg::PaneExited { pane, code }).encode().into();
@@ -1461,9 +1470,9 @@ impl Keeper {
 
     /// Feeds output to the keeper's emulator and forwards it to attached windows.
     /// Returns when the emulator next needs a tick.
-    fn on_output(&self, pane: PaneId, bytes: &[u8]) -> Option<Instant> {
+    fn on_output(&self, pane: PaneId, master: &Arc<AsyncFd<OwnedFd>>, bytes: &[u8]) -> Option<Instant> {
         let mut st = self.lock();
-        let rt = st.panes.get_mut(&pane)?;
+        let rt = st.panes.get_mut(&pane).filter(|rt| Arc::ptr_eq(&rt.master, master))?;
         rt.emu.advance(bytes);
         let replies = rt.emu.take_replies();
         let suppress = rt.reply_guard.suppress(bytes, Instant::now());
