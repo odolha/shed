@@ -1,0 +1,22 @@
+[package]
+name = "shed-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "shed"
+path = "src/main.rs"
+
+[dependencies]
+shed-model.workspace = true
+shed-proto.workspace = true
+shed-emu.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+libc.workspace = true
+async-channel.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

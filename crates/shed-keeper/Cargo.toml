@@ -1,0 +1,24 @@
+[package]
+name = "shed-keeper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "shedd"
+path = "src/main.rs"
+
+[dependencies]
+shed-model.workspace = true
+shed-proto.workspace = true
+shed-emu.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+nix.workspace = true
+libc.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

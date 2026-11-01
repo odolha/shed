@@ -1,0 +1,11 @@
+[package]
+name = "shed-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shed-model.workspace = true
+serde.workspace = true
+postcard.workspace = true
+thiserror.workspace = true

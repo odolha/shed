@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[workspace.dependencies]
+shed-model = { path = "crates/shed-model" }
+shed-proto = { path = "crates/shed-proto" }
+shed-emu = { path = "crates/shed-emu" }
+shed-keeper = { path = "crates/shed-keeper" }
+shed-logbook = { path = "crates/shed-logbook" }
+shed-save = { path = "crates/shed-save" }
+shed-desktop = { path = "crates/shed-desktop" }
+
+# GPUI community edition, pinned exactly: upgrade on purpose, one version at a time.
+gpui = { package = "gpui-ce", version = "=0.3.0" }
+gpui_platform = { package = "gpui_ce_platform", version = "=0.3.0", features = ["x11", "wayland"] }
+alacritty_terminal = "0.26.0"
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal", "process"] }
+nix = { version = "0.31", features = ["term", "process", "signal", "fs", "ioctl", "user"] }
+libc = "0.2"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-channel = "2"
+insta = "1"
+tempfile = "3"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+debug = "line-tables-only"

@@ -1,0 +1,12 @@
+[package]
+name = "shed-emu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shed-model.workspace = true
+alacritty_terminal.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
