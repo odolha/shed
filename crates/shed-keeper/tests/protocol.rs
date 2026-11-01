@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use shed_keeper::{Keeper, KeeperConfig};
 use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Palette};
-use shed_model::{BenchId, PaneId, Shed};
+use shed_model::{BenchColor, BenchId, PaneId, Shed, SplitDir};
 use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, PROTOCOL_VERSION, read_frame, write_frame};
 
 struct Client {
@@ -244,4 +244,112 @@ fn reattach_replays_the_screen_exactly() {
     restored.scroll_display(i32::MAX);
     assert_eq!(restored.display_offset(), seen.display_offset(), "scrollback length");
     assert_eq!(restored.dump_text(), seen.dump_text(), "oldest scrollback page");
+}
+
+impl Client {
+    fn tree_where(&self, what: &str, mut ok: impl FnMut(&Shed) -> bool) -> Shed {
+        self.expect(what, |f| match f {
+            Frame::Keeper(KeeperMsg::TreeChanged(t)) if ok(&t) => Some(t),
+            _ => None,
+        })
+    }
+
+    fn msg(&mut self, msg: ClientMsg) {
+        self.send(Frame::Client(msg));
+    }
+}
+
+#[test]
+fn tabs_splits_focus_and_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+    let mut c = Client::connect(&socket);
+    let (bench, first) = c.attach();
+
+    c.msg(ClientMsg::NewTab { bench, cwd: None });
+    let tree = c.tree_where("second tab", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 2));
+    let b = tree.bench(bench).unwrap();
+    let second_tab = b.tabs[1].id;
+    assert_eq!(b.active_tab, second_tab, "a new tab becomes active");
+
+    c.msg(ClientMsg::Split { pane: first, dir: SplitDir::Right, cwd: Some("/tmp".into()) });
+    let tree = c.tree_where("split", |t| t.bench(bench).is_some_and(|b| b.tabs[0].panes.len() == 2));
+    let tab = &tree.bench(bench).unwrap().tabs[0];
+    let new = tab.layout.leaves()[1];
+    assert_eq!(tab.active_pane, new);
+    assert_eq!(tab.pane(new).unwrap().cwd, std::path::Path::new("/tmp"));
+
+    // The new pane runs a shell of its own.
+    c.send(Frame::Input { pane: new, bytes: b"echo from-split\n".to_vec() });
+    c.wait_output(new, "from-split");
+
+    c.msg(ClientMsg::FocusPane { pane: first });
+    c.tree_where("focus", |t| {
+        t.bench(bench).is_some_and(|b| b.active_tab == b.tabs[0].id && b.tabs[0].active_pane == first)
+    });
+
+    c.msg(ClientMsg::ClosePane { pane: new });
+    c.tree_where("pane closed", |t| t.bench(bench).is_some_and(|b| b.tabs[0].panes.len() == 1));
+
+    c.msg(ClientMsg::CloseTab { tab: second_tab });
+    c.tree_where("tab closed", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 1));
+}
+
+#[test]
+fn rename_colour_move_and_tool_tracking() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+    let mut c = Client::connect(&socket);
+    let (bench, pane) = c.attach();
+
+    c.msg(ClientMsg::RenameBench { bench, name: "backend".into() });
+    c.msg(ClientMsg::SetBenchColor { bench, color: BenchColor::Coral });
+    c.tree_where("rename", |t| t.bench(bench).is_some_and(|b| b.name == "backend" && b.color == BenchColor::Coral));
+
+    // The foreground program shows up as the pane's tool, and goes away after.
+    c.send(Frame::Input { pane, bytes: b"cd /tmp && sleep 3\n".to_vec() });
+    let tree = c.tree_where("tool", |t| t.pane(pane).is_some_and(|p| p.tool.is_some()));
+    let p = tree.pane(pane).unwrap();
+    assert_eq!(p.tool.as_ref().unwrap().argv, vec!["sleep", "3"]);
+    assert_eq!(p.cwd, std::path::Path::new("/tmp"));
+    c.tree_where("tool gone", |t| t.pane(pane).is_some_and(|p| p.tool.is_none()));
+
+    // Titles set by programs reach the tree.
+    c.send(Frame::Input { pane, bytes: b"printf '\\033]2;my-title\\007'\n".to_vec() });
+    c.tree_where("title", |t| t.pane(pane).is_some_and(|p| p.title.as_deref() == Some("my-title")));
+
+    // Moving the only tab into another bench removes the first bench.
+    c.msg(ClientMsg::Show(shed_proto::ShowTarget::NewBench { name: Some("other".into()), cwd: None }));
+    let tree = c.tree_where("second bench", |t| t.benches.len() == 2);
+    let other = tree.benches.iter().find(|b| b.name == "other").unwrap().id;
+    let tab = tree.bench(bench).unwrap().tabs[0].id;
+    c.msg(ClientMsg::MoveTab { tab, bench: other, index: 1 });
+    let tree = c.tree_where("moved", |t| t.benches.len() == 1);
+    assert_eq!(tree.benches[0].tabs[1].id, tab);
+}
+
+#[test]
+fn show_goes_to_the_window_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+    let mut window = Client::connect(&socket);
+    let (bench, _) = window.attach();
+
+    // A second `shed`, as a CLI client, asks for a new bench.
+    let mut cli = Client::connect(&socket);
+    cli.msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Cli });
+    cli.msg(ClientMsg::Show(shed_proto::ShowTarget::NewBench { name: None, cwd: None }));
+    let shown = window.expect("show", |f| match f {
+        Frame::Keeper(KeeperMsg::Show { bench }) => Some(bench),
+        _ => None,
+    });
+    assert_ne!(shown, bench);
+
+    // Detached benches: the first is open in `window`, so only the new one is detached.
+    cli.msg(ClientMsg::Show(shed_proto::ShowTarget::Detached));
+    let again = window.expect("show detached", |f| match f {
+        Frame::Keeper(KeeperMsg::Show { bench }) => Some(bench),
+        _ => None,
+    });
+    assert_eq!(again, shown);
 }

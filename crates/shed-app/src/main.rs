@@ -1,7 +1,10 @@
 //! `shed`: the bench windows, plus the CLI.
 
+mod actions;
+mod assets;
 mod bench_window;
 mod keeper_conn;
+mod line_editor;
 mod state;
 mod terminal_view;
 mod theme;
@@ -11,7 +14,7 @@ use std::time::Duration;
 use anyhow::bail;
 use clap::{Parser, Subcommand};
 use gpui::{App, AppContext, QuitMode};
-use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg};
+use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, PROTOCOL_VERSION, ShowTarget};
 use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
@@ -25,6 +28,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open a new bench in its own window.
+    New {
+        /// The bench's name (default: the next free one).
+        #[arg(long)]
+        name: Option<String>,
+        /// The bench's directory (default: home).
+        #[arg(long)]
+        cwd: Option<std::path::PathBuf>,
+    },
     /// Show whether the keeper is running, and what it holds.
     Status,
     /// Stop the keeper and every tool it holds.
@@ -39,23 +51,69 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
 
     match Cli::parse().command {
-        None => run_app(),
+        None => run_app(ShowTarget::Detached),
+        Some(Command::New { name, cwd }) => {
+            let cwd = cwd.map(std::path::absolute).transpose()?;
+            run_app(ShowTarget::NewBench { name, cwd })
+        }
         Some(Command::Status) => status(),
         Some(Command::Stop) => stop(),
         Some(Command::DebugType { text }) => debug_type(&text),
     }
 }
 
-fn run_app() -> anyhow::Result<()> {
-    let (conn, rx) = keeper_conn::connect(ClientKind::Window, true)?;
-    conn.send_msg(ClientMsg::Attach { bench: None });
+/// Shows `target`. If a window process is already running, it shows it and
+/// this process exits; otherwise this process becomes the window process.
+fn run_app(target: ShowTarget) -> anyhow::Result<()> {
+    let (conn, rx) = keeper_conn::connect(ClientKind::Cli, true)?;
+    conn.send_msg(ClientMsg::Status);
+    let windows = loop {
+        match rx.recv_blocking() {
+            Ok(Frame::Keeper(KeeperMsg::Status(s))) => break s.windows,
+            Ok(Frame::Keeper(KeeperMsg::Error(e))) => bail!("keeper: {e}. Run `shed stop` to restart it."),
+            Ok(_) => {}
+            Err(_) => bail!("the keeper closed the connection"),
+        }
+    };
+    if windows > 0 {
+        conn.send_msg(ClientMsg::Show(target));
+        // Errors come back at once; silence means the window process has it.
+        if let Ok(Ok(Frame::Keeper(KeeperMsg::Error(e)))) =
+            futures_lite_timeout(&rx, Duration::from_millis(300))
+        {
+            bail!("keeper: {e}");
+        }
+        return Ok(());
+    }
 
-    gpui_platform::application().with_quit_mode(QuitMode::LastWindowClosed).run(move |cx: &mut App| {
-        let state = cx.new(|_| AppState::new(conn));
-        cx.spawn(async move |cx| AppState::receive(state, rx, cx).await).detach();
-        cx.activate(true);
-    });
+    conn.send_msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Window });
+    conn.send_msg(ClientMsg::Show(target));
+    gpui_platform::application()
+        .with_assets(assets::Assets)
+        .with_quit_mode(QuitMode::LastWindowClosed)
+        .run(move |cx: &mut App| {
+            actions::bind_default_keys(cx);
+            let state = cx.new(|_| AppState::new(conn));
+            cx.spawn(async move |cx| AppState::receive(state, rx, cx).await).detach();
+            cx.activate(true);
+        });
     Ok(())
+}
+
+/// Waits up to `timeout` for the next frame.
+fn futures_lite_timeout(
+    rx: &async_channel::Receiver<Frame>,
+    timeout: Duration,
+) -> Result<Result<Frame, async_channel::RecvError>, ()> {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        match rx.try_recv() {
+            Ok(f) => return Ok(Ok(f)),
+            Err(async_channel::TryRecvError::Closed) => return Ok(Err(async_channel::RecvError)),
+            Err(async_channel::TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    Err(())
 }
 
 /// Sends one message and waits for the first reply `pick` accepts.
@@ -89,12 +147,18 @@ fn status() -> anyhow::Result<()> {
             return Ok(());
         }
     };
-    println!("keeper: running, pid {}, version {}, up {}s, {} client(s)", s.pid, s.version, s.uptime_secs, s.clients);
+    println!(
+        "keeper: running, pid {}, version {}, up {}s, {} client(s), {} window process(es)",
+        s.pid, s.version, s.uptime_secs, s.clients, s.windows
+    );
     for bench in &s.tree.benches {
         let color = bench.color.name().unwrap_or("custom");
-        println!("bench {} ({color}), {} tab(s)", bench.name, bench.tabs.len());
+        let state = if s.open.contains(&bench.id) { "open" } else { "detached" };
+        println!("bench {} ({color}, {state}), {} tab(s)", bench.name, bench.tabs.len());
         for tab in &bench.tabs {
-            println!("  tab {}: {} pane(s)", tab.title, tab.panes.len());
+            let tools: Vec<String> = tab.panes.iter().filter_map(|p| p.tool.as_ref()).map(|t| t.display()).collect();
+            let tools = if tools.is_empty() { String::new() } else { format!(", running {}", tools.join(", ")) };
+            println!("  tab {}: {} pane(s){tools}", tab.display_title(), tab.panes.len());
         }
     }
     Ok(())

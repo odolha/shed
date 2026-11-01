@@ -10,4 +10,4 @@ mod tree;
 
 pub use color::{BenchColor, Rgb};
 pub use ids::{BenchId, PaneId, TabId};
-pub use tree::{Bench, Pane, PaneNode, Shed, SplitDir, Tab, Tag};
+pub use tree::{Bench, Direction, Pane, PaneNode, Rect, Shed, SplitDir, Tab, Tag, Tool, split_rect};

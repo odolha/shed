@@ -18,6 +18,7 @@ use shed_emu::{
 use shed_model::PaneId;
 use shed_proto::{ClientMsg, Frame};
 
+use crate::actions::{Copy, Paste, ScrollPageDown, ScrollPageUp, ZoomIn, ZoomOut, ZoomReset};
 use crate::keeper_conn::KeeperConn;
 use crate::theme::{FontSettings, hsla};
 
@@ -173,44 +174,6 @@ impl TerminalView {
         let m = ks.modifiers;
         let key = ks.key.as_str();
 
-        // Shed's own shortcuts. Phase 3 moves these into rebindable actions.
-        if m.control && m.shift && !m.alt {
-            match key {
-                "v" => {
-                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        self.emu.scroll_to_bottom();
-                        self.send(keys::encode_paste(&text, self.emu.modes()));
-                    }
-                    cx.stop_propagation();
-                    return;
-                }
-                "c" => {
-                    // Selection arrives with mouse selection in phase 3.
-                    cx.stop_propagation();
-                    return;
-                }
-                _ => {}
-            }
-        }
-        if m.control && !m.alt && matches!(key, "=" | "+" | "-" | "0") {
-            match key {
-                "-" => self.font.size = (self.font.size - 1.0).max(6.0),
-                "0" => self.font.size = FontSettings::default().size,
-                _ => self.font.size = (self.font.size + 1.0).min(72.0),
-            }
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
-        if m.shift && !m.control && !m.alt && matches!(key, "pageup" | "pagedown") && !self.emu.modes().alt_screen {
-            let page = self.emu.size().rows as i32 - 1;
-            self.emu.scroll_display(if key == "pageup" { page } else { -page });
-            self.dirty = true;
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
-
         let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, super_: m.platform };
         let input = KeyInput { key, text: ks.key_char.as_deref(), mods };
         if let Some(bytes) = keys::encode(input, self.emu.modes()) {
@@ -222,6 +185,39 @@ impl TerminalView {
             self.send(bytes);
             cx.stop_propagation();
         }
+    }
+
+    fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.emu.scroll_to_bottom();
+            self.dirty = true;
+            self.send(keys::encode_paste(&text, self.emu.modes()));
+            cx.notify();
+        }
+    }
+
+    fn copy(&mut self, _: &Copy, _: &mut Window, _cx: &mut Context<Self>) {
+        // Selection arrives with mouse selection (phase 3c).
+    }
+
+    fn zoom(&mut self, delta: f32, cx: &mut Context<Self>) {
+        self.font.size = if delta == 0.0 {
+            FontSettings::default().size
+        } else {
+            (self.font.size + delta).clamp(6.0, 72.0)
+        };
+        cx.notify();
+    }
+
+    fn scroll_page(&mut self, up: bool, cx: &mut Context<Self>) {
+        if self.emu.modes().alt_screen {
+            cx.propagate();
+            return;
+        }
+        let page = self.emu.size().rows as i32 - 1;
+        self.emu.scroll_display(if up { page } else { -page });
+        self.dirty = true;
+        cx.notify();
     }
 
     fn on_scroll(&mut self, event: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -274,7 +270,10 @@ impl TerminalView {
     }
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus, cx);
+        if !self.focus.is_focused(window) {
+            window.focus(&self.focus, cx);
+            self.conn.send_msg(ClientMsg::FocusPane { pane: self.pane });
+        }
         let Some(button) = button_of(event.button) else { return };
         self.held_button = Some(button);
         self.mouse_report(MouseAction::Press(button), event.position, event.modifiers);
@@ -541,6 +540,13 @@ impl Render for TerminalView {
             .size_full()
             .bg(background)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(|v, _: &ZoomIn, _, cx| v.zoom(1.0, cx)))
+            .on_action(cx.listener(|v, _: &ZoomOut, _, cx| v.zoom(-1.0, cx)))
+            .on_action(cx.listener(|v, _: &ZoomReset, _, cx| v.zoom(0.0, cx)))
+            .on_action(cx.listener(|v, _: &ScrollPageUp, _, cx| v.scroll_page(true, cx)))
+            .on_action(cx.listener(|v, _: &ScrollPageDown, _, cx| v.scroll_page(false, cx)))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_mouse_down))

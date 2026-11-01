@@ -11,9 +11,11 @@ use std::time::{Duration, Instant};
 
 use shed_emu::binary::ReplyGuard;
 use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Palette};
+use shed_emu::EmuEvent;
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId};
 use shed_proto::{
     ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus, PROTOCOL_VERSION,
+    ShowTarget,
 };
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -22,11 +24,18 @@ use tokio::process::Child;
 use tokio::sync::{Notify, mpsc};
 use tracing::{debug, info, warn};
 
+use crate::procinfo;
 use crate::pty::{self, SpawnOptions};
 
 /// How long a pane keeps draining output after its shell exits, for
 /// background jobs that still hold the terminal open.
 const EXIT_DRAIN: Duration = Duration::from_millis(200);
+
+/// How often each pane's tool and directory are read from `/proc`.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Tree changes from output (titles) are batched for this long before broadcast.
+const TREE_FLUSH_DELAY: Duration = Duration::from_millis(50);
 
 pub struct KeeperConfig {
     pub socket: PathBuf,
@@ -45,6 +54,8 @@ pub struct Keeper {
     state: Mutex<State>,
     shutdown: Notify,
     stopping: AtomicBool,
+    /// Wakes the task that broadcasts batched tree changes.
+    tree_dirty: Notify,
 }
 
 struct State {
@@ -88,6 +99,23 @@ impl State {
         self.send(client, KeeperMsg::Replay { pane, cols: size.cols, rows: size.rows, bytes });
     }
 
+    /// Hangs up panes' sessions, as closing a terminal would. They leave the
+    /// tree as their shells exit.
+    fn hang_up(&self, panes: &[PaneId]) {
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+        for pane in panes {
+            let Some(rt) = self.panes.get(pane) else { continue };
+            // Negative pids: whole process groups, the shell's and the foreground job's.
+            if let Some(pgrp) = pty::foreground_pgrp(rt.master.get_ref()) {
+                let _ = kill(Pid::from_raw(-pgrp.as_raw()), Signal::SIGHUP);
+            }
+            if let Some(pid) = rt.pid {
+                let _ = kill(Pid::from_raw(-(pid as i32)), Signal::SIGHUP);
+            }
+        }
+    }
+
     fn broadcast_tree(&self) {
         let frame: Arc<[u8]> = Frame::Keeper(KeeperMsg::TreeChanged(self.tree.clone())).encode().into();
         for c in self.clients.values().filter(|c| c.kind == ClientKind::Window) {
@@ -99,6 +127,25 @@ impl State {
         for c in self.clients.values().filter(|c| c.attached.contains(&bench)) {
             let _ = c.tx.send(frame.clone());
         }
+    }
+
+    /// The window clients showing `bench`.
+    fn is_open(&self, bench: BenchId) -> bool {
+        self.clients.values().any(|c| c.kind == ClientKind::Window && c.attached.contains(&bench))
+    }
+
+    /// The window process to show benches in: the asking client if it is one,
+    /// else any connected one.
+    fn window_client(&self, asking: ClientId) -> Option<ClientId> {
+        let is_window = |id: &ClientId| self.clients.get(id).is_some_and(|c| c.kind == ClientKind::Window);
+        if is_window(&asking) {
+            return Some(asking);
+        }
+        self.clients.keys().copied().filter(is_window).min()
+    }
+
+    fn pane_rt_ids_in(&self, bench: BenchId) -> Vec<PaneId> {
+        self.panes.iter().filter(|(_, rt)| rt.bench == bench).map(|(id, _)| *id).collect()
     }
 
     fn unique_bench_name(&self) -> String {
@@ -124,6 +171,7 @@ impl Keeper {
             }),
             shutdown: Notify::new(),
             stopping: AtomicBool::new(false),
+            tree_dirty: Notify::new(),
         })
     }
 
@@ -133,6 +181,8 @@ impl Keeper {
 
     /// Accepts clients until a client asks for shutdown or the keeper goes idle.
     pub async fn serve(self: Arc<Self>, listener: UnixListener) -> io::Result<()> {
+        let poll = tokio::spawn(self.clone().poll_loop());
+        let flush = tokio::spawn(self.clone().flush_loop());
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -147,22 +197,58 @@ impl Keeper {
                 _ = self.shutdown.notified() => break,
             }
         }
+        poll.abort();
+        flush.abort();
         self.hang_up_all();
         Ok(())
+    }
+
+    /// Keeps each pane's tool and working directory current.
+    async fn poll_loop(self: Arc<Self>) {
+        let mut tick = tokio::time::interval(POLL_INTERVAL);
+        loop {
+            tick.tick().await;
+            let mut st = self.lock();
+            let mut changed = false;
+            let ids: Vec<PaneId> = st.panes.keys().copied().collect();
+            for id in ids {
+                let rt = &st.panes[&id];
+                let Some(pid) = rt.pid else { continue };
+                let tool = procinfo::foreground_tool(rt.master.get_ref(), pid);
+                let cwd = procinfo::cwd(pid);
+                if let Some(pane) = st.tree.pane_mut(id) {
+                    if pane.tool != tool {
+                        pane.tool = tool;
+                        changed = true;
+                    }
+                    if let Some(cwd) = cwd
+                        && pane.cwd != cwd
+                    {
+                        pane.cwd = cwd;
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                st.broadcast_tree();
+            }
+        }
+    }
+
+    /// Broadcasts tree changes that output caused, batched.
+    async fn flush_loop(self: Arc<Self>) {
+        loop {
+            self.tree_dirty.notified().await;
+            tokio::time::sleep(TREE_FLUSH_DELAY).await;
+            self.lock().broadcast_tree();
+        }
     }
 
     /// Asks every pane's session to end, as closing a terminal would.
     fn hang_up_all(&self) {
         let st = self.lock();
-        for rt in st.panes.values() {
-            if let Some(pid) = rt.pid {
-                // Negative pid: the whole process group the shell leads.
-                let _ = nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(-(pid as i32)),
-                    nix::sys::signal::Signal::SIGHUP,
-                );
-            }
-        }
+        let all: Vec<PaneId> = st.panes.keys().copied().collect();
+        st.hang_up(&all);
     }
 
     fn check_idle(&self) {
@@ -259,10 +345,7 @@ impl Keeper {
                         return;
                     }
                     None => match self.new_bench(&mut st, None, None) {
-                        Ok(id) => {
-                            st.broadcast_tree();
-                            id
-                        }
+                        Ok(id) => id,
                         Err(e) => {
                             st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}")));
                             return;
@@ -272,11 +355,10 @@ impl Keeper {
                 if let Some(c) = st.clients.get_mut(&client) {
                     c.attached.insert(bench);
                 }
-                st.send(client, KeeperMsg::TreeChanged(st.tree.clone()));
+                st.broadcast_tree();
                 st.send(client, KeeperMsg::Attached { bench });
                 // Still under the lock: each replay precedes that pane's next output.
-                let panes: Vec<PaneId> = st.panes.iter().filter(|(_, rt)| rt.bench == bench).map(|(id, _)| *id).collect();
-                for pane in panes {
+                for pane in st.pane_rt_ids_in(bench) {
                     st.send_replay(client, pane);
                 }
                 info!(client, ?bench, "attached");
@@ -287,6 +369,7 @@ impl Keeper {
                 if let Some(c) = st.clients.get_mut(&client) {
                     c.attached.remove(&bench);
                 }
+                info!(client, ?bench, "detached");
             }
             ClientMsg::Resize { pane, cols, rows, cell_width, cell_height } => {
                 let mut st = self.lock();
@@ -298,22 +381,121 @@ impl Keeper {
                         warn!(?pane, "resize failed: {e}");
                     }
                 }
-                if let Some((bench, tab)) = st.tree.locate_pane(pane)
-                    && let Some(p) = st
-                        .tree
-                        .bench_mut(bench)
-                        .and_then(|b| b.tabs.iter_mut().find(|t| t.id == tab))
-                        .and_then(|t| t.panes.iter_mut().find(|p| p.id == pane))
-                {
+                if let Some(p) = st.tree.pane_mut(pane) {
                     p.cols = cols;
                     p.rows = rows;
                 }
             }
-            ClientMsg::NewBench { name, cwd } => {
+            ClientMsg::Show(target) => self.show(client, target),
+            ClientMsg::NewTab { bench, cwd } => {
                 let mut st = self.lock();
-                match self.new_bench(&mut st, name, cwd) {
-                    Ok(_) => st.broadcast_tree(),
+                let Some(b) = st.tree.bench(bench) else { return };
+                let cwd = cwd.unwrap_or_else(|| b.cwd.clone());
+                let index = b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1);
+                let tab_id = TabId::new();
+                match self.spawn_pane(&mut st, bench, tab_id, cwd) {
+                    Ok(pane) => {
+                        let mut tab = Tab::with_pane(pane);
+                        tab.id = tab_id;
+                        let b = st.tree.bench_mut(bench).unwrap();
+                        b.tabs.insert(index, tab);
+                        b.active_tab = tab_id;
+                        st.broadcast_tree();
+                    }
                     Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
+                }
+            }
+            ClientMsg::Split { pane, dir, cwd } => {
+                let mut st = self.lock();
+                let Some((bench, tab)) = st.tree.locate_pane(pane) else { return };
+                let cwd = cwd.unwrap_or_else(|| st.tree.bench(bench).unwrap().cwd.clone());
+                match self.spawn_pane(&mut st, bench, tab, cwd) {
+                    Ok(new) => {
+                        st.tree.tab_mut(tab).unwrap().split(pane, new, dir);
+                        st.broadcast_tree();
+                    }
+                    Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
+                }
+            }
+            ClientMsg::ClosePane { pane } => self.lock().hang_up(&[pane]),
+            ClientMsg::CloseTab { tab } => {
+                let st = self.lock();
+                if let Some(t) = st.tree.tab(tab) {
+                    let panes: Vec<PaneId> = t.panes.iter().map(|p| p.id).collect();
+                    st.hang_up(&panes);
+                }
+            }
+            ClientMsg::CloseBench { bench } => {
+                let st = self.lock();
+                info!(?bench, "closing bench");
+                let panes = st.pane_rt_ids_in(bench);
+                st.hang_up(&panes);
+            }
+            ClientMsg::FocusPane { pane } => {
+                let mut st = self.lock();
+                if st.tree.focus_pane(pane) {
+                    st.broadcast_tree();
+                }
+            }
+            ClientMsg::FocusTab { tab } => {
+                let mut st = self.lock();
+                if let Some(bench) = st.tree.bench_of_tab(tab) {
+                    st.tree.bench_mut(bench).unwrap().active_tab = tab;
+                    st.broadcast_tree();
+                }
+            }
+            ClientMsg::SetLayout { tab, layout } => {
+                let mut st = self.lock();
+                let Some(t) = st.tree.tab_mut(tab) else { return };
+                let mut old = t.layout.leaves();
+                let mut new = layout.leaves();
+                old.sort();
+                new.sort();
+                if old == new {
+                    t.layout = layout.clamped();
+                    st.broadcast_tree();
+                } else {
+                    st.send(client, KeeperMsg::Error("layout does not match the tab's panes".into()));
+                }
+            }
+            ClientMsg::RenameBench { bench, name } => {
+                let mut st = self.lock();
+                let name = name.trim().to_string();
+                let taken = st.tree.benches.iter().any(|b| b.id != bench && b.name == name);
+                if name.is_empty() || taken {
+                    st.send(client, KeeperMsg::Error(format!("cannot name a bench {name:?}")));
+                } else if let Some(b) = st.tree.bench_mut(bench) {
+                    b.name = name;
+                    st.broadcast_tree();
+                }
+            }
+            ClientMsg::RenameTab { tab, name } => self.edit_tab(tab, |t| t.name = name.filter(|n| !n.trim().is_empty())),
+            ClientMsg::SetTags { tab, tags } => self.edit_tab(tab, |t| t.tags = tags),
+            ClientMsg::SetPrivate { tab, private } => self.edit_tab(tab, |t| t.private = private),
+            ClientMsg::SetBenchColor { bench, color } => self.edit_bench(bench, |b| b.color = color),
+            ClientMsg::SetBadge { bench, badge } => self.edit_bench(bench, |b| b.badge = badge),
+            ClientMsg::MoveTab { tab, bench, index } => {
+                let mut st = self.lock();
+                let Some(from) = st.tree.bench_of_tab(tab) else { return };
+                if st.tree.move_tab(tab, bench, index) {
+                    if from != bench {
+                        // The tab's panes now belong to another bench's windows.
+                        let ids: Vec<PaneId> = st.tree.tab(tab).unwrap().panes.iter().map(|p| p.id).collect();
+                        for id in &ids {
+                            if let Some(rt) = st.panes.get_mut(id) {
+                                rt.bench = bench;
+                            }
+                        }
+                        st.broadcast_tree();
+                        let targets: Vec<ClientId> = st.clients.iter().filter(|(_, c)| c.attached.contains(&bench)).map(|(id, _)| *id).collect();
+                        for c in targets {
+                            for id in &ids {
+                                st.send_replay(c, *id);
+                            }
+                        }
+                    } else {
+                        st.broadcast_tree();
+                    }
                 }
             }
             ClientMsg::Status => {
@@ -323,6 +505,8 @@ impl Keeper {
                     version: env!("CARGO_PKG_VERSION").into(),
                     uptime_secs: st.started.elapsed().as_secs(),
                     clients: st.clients.len() as u32,
+                    windows: st.clients.values().filter(|c| c.kind == ClientKind::Window).count() as u32,
+                    open: st.tree.benches.iter().map(|b| b.id).filter(|b| st.is_open(*b)).collect(),
                     tree: st.tree.clone(),
                 };
                 st.send(client, KeeperMsg::Status(status));
@@ -334,6 +518,54 @@ impl Keeper {
         }
     }
 
+    fn edit_tab(&self, tab: TabId, edit: impl FnOnce(&mut Tab)) {
+        let mut st = self.lock();
+        if let Some(t) = st.tree.tab_mut(tab) {
+            edit(t);
+            st.broadcast_tree();
+        }
+    }
+
+    fn edit_bench(&self, bench: BenchId, edit: impl FnOnce(&mut Bench)) {
+        let mut st = self.lock();
+        if let Some(b) = st.tree.bench_mut(bench) {
+            edit(b);
+            st.broadcast_tree();
+        }
+    }
+
+    /// Resolves what to show and tells the window process to show it.
+    fn show(self: &Arc<Self>, client: ClientId, target: ShowTarget) {
+        let mut st = self.lock();
+        let benches = match target {
+            ShowTarget::Bench(b) if st.tree.bench(b).is_some() => vec![b],
+            ShowTarget::Bench(b) => {
+                st.send(client, KeeperMsg::Error(format!("no bench {b}")));
+                return;
+            }
+            ShowTarget::Detached => {
+                let detached: Vec<BenchId> = st.tree.benches.iter().map(|b| b.id).filter(|b| !st.is_open(*b)).collect();
+                if detached.is_empty() { self.new_bench(&mut st, None, None).into_iter().collect() } else { detached }
+            }
+            ShowTarget::NewBench { name, cwd } => match self.new_bench(&mut st, name, cwd) {
+                Ok(b) => vec![b],
+                Err(e) => {
+                    st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}")));
+                    return;
+                }
+            },
+        };
+        st.broadcast_tree();
+        match st.window_client(client) {
+            Some(window) => {
+                for bench in benches {
+                    st.send(window, KeeperMsg::Show { bench });
+                }
+            }
+            None => st.send(client, KeeperMsg::Error("no window is open to show it in".into())),
+        }
+    }
+
     fn new_bench(
         self: &Arc<Self>,
         st: &mut State,
@@ -342,7 +574,10 @@ impl Keeper {
     ) -> io::Result<BenchId> {
         let id = BenchId::new();
         let cwd = cwd.unwrap_or_else(|| self.cfg.home.clone());
-        let pane = self.spawn_pane(st, id, TabId::new(), cwd.clone())?;
+        let tab_id = TabId::new();
+        let pane = self.spawn_pane(st, id, tab_id, cwd.clone())?;
+        let mut tab = Tab::with_pane(pane);
+        tab.id = tab_id;
         let name = name.unwrap_or_else(|| st.unique_bench_name());
         let color = BenchColor::next_unused(st.tree.benches.iter().map(|b| &b.color));
         st.tree.benches.push(Bench {
@@ -351,8 +586,8 @@ impl Keeper {
             color,
             badge: None,
             cwd,
-            tabs: vec![Tab::with_pane("shell", pane)],
-            active_tab: 0,
+            tabs: vec![tab],
+            active_tab: tab_id,
         });
         Ok(id)
     }
@@ -401,7 +636,7 @@ impl Keeper {
         tokio::spawn(write_loop(master.clone(), input_rx));
         tokio::spawn(self.clone().pane_loop(pane_id, master, pty.child));
         info!(pane = ?pane_id, ?pid, "pane started");
-        Ok(Pane { id: pane_id, cwd, cols, rows })
+        Ok(Pane::new(pane_id, cwd))
     }
 
     /// Reads a pane's output until its shell exits, then reports the exit.
@@ -473,10 +708,20 @@ impl Keeper {
                 let _ = rt.input.send(replies);
             }
         }
-        rt.emu.take_events();
+        let title = rt.emu.take_events().into_iter().rev().find_map(|e| match e {
+            EmuEvent::Title(t) => Some(t),
+            _ => None,
+        });
         let deadline = rt.emu.tick();
         let bench = rt.bench;
         st.broadcast_to_bench(bench, Frame::encode_output(pane, bytes).into());
+        if let Some(title) = title
+            && let Some(p) = st.tree.pane_mut(pane)
+            && p.title != title
+        {
+            p.title = title;
+            self.tree_dirty.notify_one();
+        }
         deadline
     }
 }

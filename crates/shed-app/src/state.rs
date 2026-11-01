@@ -1,36 +1,49 @@
-//! The app's view of the keeper: the tree, the open bench windows, and
-//! routing of output to panes.
+//! The app's view of the keeper: the tree, one window per bench, and the
+//! terminal view of every pane those windows show.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AppContext, AsyncApp, Bounds, Context, Entity, TitlebarOptions, WeakEntity, WindowBounds, WindowHandle,
+    AppContext, AsyncApp, Bounds, Context, Entity, TitlebarOptions, WindowBounds, WindowHandle,
     WindowOptions, px, size,
 };
 use shed_emu::Palette;
 use shed_model::{BenchId, PaneId, Shed};
-use shed_proto::{Frame, KeeperMsg};
+use shed_proto::{ClientMsg, Frame, KeeperMsg};
 use tracing::{error, warn};
 
 use crate::bench_window::BenchWindow;
 use crate::keeper_conn::KeeperConn;
 use crate::terminal_view::TerminalView;
+use crate::theme::FontSettings;
 
 /// How long the receive loop may run before letting a frame be drawn.
 const FRAME_BUDGET: Duration = Duration::from_millis(8);
 
 pub struct AppState {
-    conn: KeeperConn,
-    tree: Shed,
+    pub conn: KeeperConn,
+    pub tree: Shed,
     palette: Palette,
-    panes: HashMap<PaneId, WeakEntity<TerminalView>>,
+    pub panes: HashMap<PaneId, Entity<TerminalView>>,
     windows: HashMap<BenchId, WindowHandle<BenchWindow>>,
+    /// Benches asked for with `Attach`, until their window is open.
+    pending: HashSet<BenchId>,
+    /// Windows being opened.
+    opening: HashSet<BenchId>,
 }
 
 impl AppState {
     pub fn new(conn: KeeperConn) -> Self {
-        Self { conn, tree: Shed::default(), palette: Palette::default(), panes: HashMap::new(), windows: HashMap::new() }
+        Self {
+            conn,
+            tree: Shed::default(),
+            palette: Palette::default(),
+            panes: HashMap::new(),
+            windows: HashMap::new(),
+            pending: HashSet::new(),
+            opening: HashSet::new(),
+        }
     }
 
     /// Reads frames from the keeper until it goes away.
@@ -58,17 +71,18 @@ impl AppState {
     fn handle(&mut self, frame: Frame, cx: &mut Context<Self>) {
         match frame {
             Frame::Output { pane, bytes } => {
-                if let Some(view) = self.panes.get(&pane).and_then(|v| v.upgrade()) {
+                if let Some(view) = self.panes.get(&pane) {
                     view.update(cx, |view, cx| view.feed(&bytes, cx));
                 }
             }
             Frame::Keeper(KeeperMsg::TreeChanged(tree)) => {
                 self.tree = tree;
-                self.sync_windows(cx);
+                self.sync(cx);
             }
+            Frame::Keeper(KeeperMsg::Show { bench }) => self.show(bench, cx),
             Frame::Keeper(KeeperMsg::Attached { bench }) => self.open_bench_window(bench, cx),
             Frame::Keeper(KeeperMsg::Replay { pane, cols, rows, bytes }) => {
-                if let Some(view) = self.panes.get(&pane).and_then(|v| v.upgrade()) {
+                if let Some(view) = self.panes.get(&pane) {
                     view.update(cx, |view, cx| view.restore(cols, rows, &bytes, cx));
                 }
             }
@@ -84,15 +98,61 @@ impl AppState {
         }
     }
 
-    /// Closes windows whose bench is gone.
-    fn sync_windows(&mut self, cx: &mut Context<Self>) {
+    /// Opens or raises a bench's window.
+    fn show(&mut self, bench: BenchId, cx: &mut Context<Self>) {
+        if let Some(handle) = self.windows.get(&bench) {
+            handle.update(cx, |_, window, _| window.activate()).ok();
+        } else if self.pending.insert(bench) {
+            self.conn.send_msg(ClientMsg::Attach { bench: Some(bench) });
+        }
+    }
+
+    /// Brings views and windows in line with the tree.
+    fn sync(&mut self, cx: &mut Context<Self>) {
         let gone: Vec<BenchId> = self.windows.keys().filter(|b| self.tree.bench(**b).is_none()).copied().collect();
         for bench in gone {
             if let Some(handle) = self.windows.remove(&bench) {
                 handle.update(cx, |_, window, _| window.remove_window()).ok();
             }
         }
-        self.panes.retain(|pane, view| view.upgrade().is_some() && self.tree.pane(*pane).is_some());
+
+        // A view for every pane of every open bench; none for anything else.
+        let shown: HashSet<PaneId> = self
+            .windows
+            .keys()
+            .filter_map(|b| self.tree.bench(*b))
+            .flat_map(|b| &b.tabs)
+            .flat_map(|t| &t.panes)
+            .map(|p| p.id)
+            .collect();
+        self.panes.retain(|id, _| shown.contains(id));
+        for id in shown {
+            if !self.panes.contains_key(&id) {
+                let view = self.new_view(id, cx);
+                self.panes.insert(id, view);
+            }
+        }
+
+        let benches: Vec<BenchId> = self.windows.keys().copied().collect();
+        for bench in benches {
+            self.sync_window(bench, cx);
+        }
+        cx.notify();
+    }
+
+    fn sync_window(&mut self, bench: BenchId, cx: &mut Context<Self>) {
+        let Some(handle) = self.windows.get(&bench).copied() else { return };
+        let Some(b) = self.tree.bench(bench) else { return };
+        let title = window_title(&b.name);
+        let active = b
+            .active_tab()
+            .and_then(|t| self.panes.get(&t.active_pane).map(|v| (t.active_pane, v.read(cx).focus_handle().clone())));
+        handle.update(cx, |bw, window, cx| bw.sync(title, active, window, cx)).ok();
+    }
+
+    fn new_view(&self, pane: PaneId, cx: &mut Context<Self>) -> Entity<TerminalView> {
+        let (conn, palette) = (self.conn.clone(), self.palette.clone());
+        cx.new(|cx| TerminalView::new(pane, conn, palette, FontSettings::default(), cx))
     }
 
     fn open_bench_window(&mut self, bench_id: BenchId, cx: &mut Context<Self>) {
@@ -101,25 +161,76 @@ impl AppState {
             return;
         }
         let Some(bench) = self.tree.bench(bench_id) else { return };
-        let Some(pane) = bench.active_tab().map(|t| t.active_pane) else { return };
-        let (color, conn, palette) = (bench.color, self.conn.clone(), self.palette.clone());
+        if !self.opening.insert(bench_id) {
+            return;
+        }
+        // Views first, so the replays that follow `Attached` find them.
+        let ids: Vec<PaneId> = bench.tabs.iter().flat_map(|t| &t.panes).map(|p| p.id).collect();
+        for id in ids {
+            if !self.panes.contains_key(&id) {
+                let view = self.new_view(id, cx);
+                self.panes.insert(id, view);
+            }
+        }
+        let bench = self.tree.bench(bench_id).unwrap();
         let options = WindowOptions {
-            titlebar: Some(TitlebarOptions { title: Some(format!("{} — Shed", bench.name).into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(960.0), px(600.0)), cx))),
+            titlebar: Some(TitlebarOptions { title: Some(window_title(&bench.name).into()), ..Default::default() }),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(960.0), px(640.0)), cx))),
             app_id: Some("dev.shed.Shed".into()),
             ..Default::default()
         };
-        let opened = cx.open_window(options, |window, cx| {
-            cx.new(|cx| BenchWindow::new(color, pane, conn, palette, window, cx))
-        });
-        match opened {
-            Ok(handle) => {
-                if let Ok(view) = handle.update(cx, |bw, _, _| bw.terminal.downgrade()) {
-                    self.panes.insert(pane, view);
+        // Opening a window renders it at once, and its render reads this
+        // state, so open it after this update ends.
+        cx.spawn(async move |this, cx| {
+            let Some(state) = this.upgrade() else { return };
+            let opened = cx.update(|cx| {
+                cx.open_window(options, |window, cx| cx.new(|cx| BenchWindow::new(bench_id, state, window, cx)))
+            });
+            match opened {
+                Ok(handle) => {
+                    this.update(cx, |this, cx| {
+                        this.pending.remove(&bench_id);
+                        this.opening.remove(&bench_id);
+                        this.windows.insert(bench_id, handle);
+                        this.sync_window(bench_id, cx);
+                    })
+                    .ok();
                 }
-                self.windows.insert(bench_id, handle);
+                Err(e) => {
+                    error!("cannot open a window: {e}");
+                    this.update(cx, |this, _| {
+                        this.pending.remove(&bench_id);
+                        this.opening.remove(&bench_id);
+                    })
+                    .ok();
+                }
             }
-            Err(e) => error!("cannot open a window: {e}"),
-        }
+        })
+        .detach();
     }
+
+    /// Called when a bench's window closes: its tools keep running in the keeper.
+    pub fn window_closed(&mut self, bench: BenchId) {
+        if self.windows.remove(&bench).is_some() {
+            self.conn.send_msg(ClientMsg::Detach { bench });
+        }
+        let shown: HashSet<PaneId> = self
+            .windows
+            .keys()
+            .filter_map(|b| self.tree.bench(*b))
+            .flat_map(|b| &b.tabs)
+            .flat_map(|t| &t.panes)
+            .map(|p| p.id)
+            .collect();
+        self.panes.retain(|id, _| shown.contains(id));
+    }
+
+    /// Bench windows in tree order, for Super+1…9.
+    pub fn window_at(&self, index: usize) -> Option<WindowHandle<BenchWindow>> {
+        self.tree.benches.iter().filter_map(|b| self.windows.get(&b.id)).nth(index).copied()
+    }
+}
+
+pub fn window_title(bench: &str) -> String {
+    format!("{bench} — Shed")
 }

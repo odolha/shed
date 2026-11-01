@@ -9,10 +9,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use shed_model::{BenchId, PaneId, Shed};
+use shed_model::{BenchColor, BenchId, PaneId, PaneNode, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -33,6 +33,7 @@ pub enum ClientKind {
 /// Sent by a window or CLI client to the keeper.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
+    /// First message; may be sent again to change the client's kind.
     Hello { version: u32, kind: ClientKind },
     /// Start receiving a bench's output. `None` attaches to the first bench,
     /// creating one if the keeper holds none.
@@ -43,10 +44,40 @@ pub enum ClientMsg {
     Resize { pane: PaneId, cols: u16, rows: u16, cell_width: u16, cell_height: u16 },
     /// Ask for a pane's current screen again (see [`KeeperMsg::Replay`]).
     Replay { pane: PaneId },
-    NewBench { name: Option<String>, cwd: Option<PathBuf> },
+    /// Show benches in windows. The keeper passes this on to the window
+    /// process as [`KeeperMsg::Show`], so a second `shed` reuses the first.
+    Show(ShowTarget),
+    NewTab { bench: BenchId, cwd: Option<PathBuf> },
+    /// Splits `pane`; the new pane opens in `cwd`, or the bench's directory.
+    Split { pane: PaneId, dir: SplitDir, cwd: Option<PathBuf> },
+    /// Hangs up the pane's shell; the pane leaves the tree when it exits.
+    ClosePane { pane: PaneId },
+    CloseTab { tab: TabId },
+    /// Stops every tool on the bench and forgets it.
+    CloseBench { bench: BenchId },
+    FocusPane { pane: PaneId },
+    FocusTab { tab: TabId },
+    /// New split ratios for a tab. The panes must be the same.
+    SetLayout { tab: TabId, layout: PaneNode },
+    RenameBench { bench: BenchId, name: String },
+    RenameTab { tab: TabId, name: Option<String> },
+    SetBenchColor { bench: BenchId, color: BenchColor },
+    SetBadge { bench: BenchId, badge: Option<String> },
+    SetTags { tab: TabId, tags: Vec<Tag> },
+    SetPrivate { tab: TabId, private: bool },
+    /// Moves a tab within its bench or to another bench, at `index`.
+    MoveTab { tab: TabId, bench: BenchId, index: usize },
     Status,
     /// Stop the keeper and every tool it holds.
     Shutdown,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ShowTarget {
+    /// Every bench without a window; a new bench if there is none.
+    Detached,
+    Bench(BenchId),
+    NewBench { name: Option<String>, cwd: Option<PathBuf> },
 }
 
 /// Sent by the keeper to a client.
@@ -59,8 +90,10 @@ pub enum KeeperMsg {
     /// A pane's whole state (scrollback, screens, modes) as terminal bytes:
     /// fed to a fresh emulator of `cols` × `rows`, it shows the pane exactly
     /// as the keeper sees it. Sent for every pane of a bench on attach, before
-    /// any of that pane's live output.
+    /// any of that pane's live output, and for each new pane.
     Replay { pane: PaneId, cols: u16, rows: u16, bytes: Vec<u8> },
+    /// To the window process: open (or raise) this bench's window.
+    Show { bench: BenchId },
     PaneExited { pane: PaneId, code: Option<i32> },
     Status(KeeperStatus),
     Error(String),
@@ -72,6 +105,10 @@ pub struct KeeperStatus {
     pub version: String,
     pub uptime_secs: u64,
     pub clients: u32,
+    /// Window processes connected.
+    pub windows: u32,
+    /// Benches some window shows; the rest are detached.
+    pub open: Vec<BenchId>,
     pub tree: Shed,
 }
 
