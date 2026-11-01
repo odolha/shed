@@ -36,12 +36,31 @@ pub struct KeyInput<'a> {
     pub mods: Mods,
 }
 
+/// What happened to a key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyEvent {
+    #[default]
+    Press,
+    /// Held down: the keyboard repeats it.
+    Repeat,
+    Release,
+}
+
 /// The bytes to send for a key press, or `None` if the terminal ignores it.
 pub fn encode(input: KeyInput<'_>, modes: Modes) -> Option<Vec<u8>> {
+    encode_event(input, KeyEvent::Press, modes)
+}
+
+/// [`encode`] for any key event. Only apps that ask for it through the kitty
+/// protocol hear about releases; a repeat is otherwise another press.
+pub fn encode_event(input: KeyInput<'_>, event: KeyEvent, modes: Modes) -> Option<Vec<u8>> {
     if modes.kitty != 0
-        && let Some(bytes) = kitty(input, modes.kitty)
+        && let Some(bytes) = kitty(input, event, modes.kitty)
     {
-        return Some(bytes);
+        return (!bytes.is_empty()).then_some(bytes);
+    }
+    if event == KeyEvent::Release {
+        return None;
     }
     let KeyInput { key, text, mods } = input;
 
@@ -76,29 +95,65 @@ pub fn encode(input: KeyInput<'_>, modes: Modes) -> Option<Vec<u8>> {
 
 /// The kitty keyboard protocol (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>):
 /// `CSI code ; mods u` for what legacy encoding makes ambiguous, or for
-/// every key with flag 8. `None` leaves the key to the legacy encoding,
-/// which the protocol keeps for the rest. Only presses are reported.
-fn kitty(input: KeyInput<'_>, flags: u8) -> Option<Vec<u8>> {
+/// every key with flag 8; repeats and releases with flag 2, the shifted
+/// key with flag 4. `None` leaves the key to the legacy encoding, which the
+/// protocol keeps for the rest; an empty result sends nothing.
+fn kitty(input: KeyInput<'_>, event: KeyEvent, flags: u8) -> Option<Vec<u8>> {
     let KeyInput { key, text, mods } = input;
+    // Without flag 2 there are only presses.
+    let event = match event {
+        KeyEvent::Release if flags & 2 == 0 => return Some(Vec::new()),
+        KeyEvent::Repeat if flags & 2 == 0 => KeyEvent::Press,
+        e => e,
+    };
     let all_keys = flags & 8 != 0;
-    let with_text = flags & 16 != 0;
+    let with_text = flags & 16 != 0 && event != KeyEvent::Release;
+    let alternates = flags & 4 != 0;
     let chorded = mods.ctrl || mods.alt || mods.super_;
-    let csi_u = |code: u32, text: Option<&str>| {
+    // `;mods` or `;mods:event`, or nothing at all for a plain press.
+    let params = |trailing: bool| {
+        let e = match event {
+            KeyEvent::Press => None,
+            KeyEvent::Repeat => Some(2),
+            KeyEvent::Release => Some(3),
+        };
+        match (mods.param(), e) {
+            (m, Some(e)) => format!(";{m}:{e}"),
+            (1, None) if !trailing => String::new(),
+            (m, None) => format!(";{m}"),
+        }
+    };
+    let csi_u = |code: u32, shifted: Option<u32>| {
         let text: Option<String> = text
             .filter(|t| with_text && !t.chars().any(char::is_control))
             .map(|t| t.chars().map(|c| (c as u32).to_string()).collect::<Vec<_>>().join(":"));
         let mut out = format!("\x1b[{code}");
-        match (mods.param(), text) {
-            (m, Some(t)) => out.push_str(&format!(";{m};{t}")),
-            (1, None) => {}
-            (m, None) => out.push_str(&format!(";{m}")),
+        if let Some(s) = shifted.filter(|s| alternates && mods.shift && *s != code) {
+            out.push_str(&format!(":{s}"));
+        }
+        out.push_str(&params(text.is_some()));
+        if let Some(t) = text {
+            out.push_str(&format!(";{t}"));
         }
         out.push('u');
         out.into_bytes()
     };
+    let functional = |n: u8, final_byte: char| {
+        let n = if n == 1 && params(false).is_empty() { String::new() } else { n.to_string() };
+        format!("\x1b[{n}{}{final_byte}", params(false)).into_bytes()
+    };
+
     match key {
         "escape" => Some(csi_u(27, None)),
-        "enter" | "tab" | "backspace" if all_keys || mods.any() => {
+        "enter" | "tab" | "backspace" => {
+            // These stay legacy unless every key is an escape, so a shell
+            // left in this mode by a crashed program can still run `reset`.
+            if !all_keys && event == KeyEvent::Release {
+                return Some(Vec::new());
+            }
+            if !all_keys && !mods.any() {
+                return None;
+            }
             let code = match key {
                 "enter" => 13,
                 "tab" => 9,
@@ -106,33 +161,67 @@ fn kitty(input: KeyInput<'_>, flags: u8) -> Option<Vec<u8>> {
             };
             Some(csi_u(code, None))
         }
-        "space" if all_keys || chorded => Some(csi_u(32, text)),
-        // With every key as an escape, the cursor keys drop SS3 and take CSI.
-        "up" | "down" | "right" | "left" | "home" | "end" if all_keys && !mods.any() => {
-            let final_byte = match key {
-                "up" => 'A',
-                "down" => 'B',
-                "right" => 'C',
-                "left" => 'D',
-                "home" => 'H',
-                _ => 'F',
-            };
-            Some(format!("\x1b[{final_byte}").into_bytes())
-        }
+        "space" if all_keys || chorded || event == KeyEvent::Release => Some(csi_u(32, None)),
         _ => {
+            if let Some((n, final_byte)) = functional_key(key) {
+                // The legacy forms already work for a press; repeats, releases
+                // and every-key mode spell everything out.
+                return match (event, all_keys || mods.any()) {
+                    (KeyEvent::Press, false) => None,
+                    _ => Some(functional(n, final_byte)),
+                };
+            }
             let mut chars = key.chars();
             let c = chars.next()?;
             if chars.next().is_some() {
-                // A named key: the legacy encoding is already unambiguous.
+                // A named key the protocol has no code for here.
                 return None;
             }
             // Shift alone just types: `A` is text, not a chord.
-            if !all_keys && !chorded {
+            if !all_keys && !chorded && event != KeyEvent::Release {
                 return None;
             }
-            Some(csi_u(c.to_lowercase().next().unwrap_or(c) as u32, text))
+            let base = c.to_lowercase().next().unwrap_or(c);
+            let shifted = text.and_then(single_char).filter(|c| !c.is_control()).unwrap_or(base.to_ascii_uppercase());
+            Some(csi_u(base as u32, Some(shifted as u32)))
         }
     }
+}
+
+fn single_char(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    chars.next().is_none().then_some(c)
+}
+
+/// Keys the protocol writes as `CSI number ; mods final`: (number, final).
+fn functional_key(key: &str) -> Option<(u8, char)> {
+    Some(match key {
+        "up" => (1, 'A'),
+        "down" => (1, 'B'),
+        "right" => (1, 'C'),
+        "left" => (1, 'D'),
+        "home" => (1, 'H'),
+        "end" => (1, 'F'),
+        "f1" => (1, 'P'),
+        "f2" => (1, 'Q'),
+        // Not `CSI R`: that reads as a cursor position report.
+        "f3" => (13, '~'),
+        "f4" => (1, 'S'),
+        "insert" => (2, '~'),
+        "delete" => (3, '~'),
+        "pageup" => (5, '~'),
+        "pagedown" => (6, '~'),
+        "f5" => (15, '~'),
+        "f6" => (17, '~'),
+        "f7" => (18, '~'),
+        "f8" => (19, '~'),
+        "f9" => (20, '~'),
+        "f10" => (21, '~'),
+        "f11" => (23, '~'),
+        "f12" => (24, '~'),
+        _ => return None,
+    })
 }
 
 /// Keys with no printable text: arrows, function keys, editing keys.
@@ -339,6 +428,52 @@ mod tests {
         assert_eq!(kitty(8 | 16, "e", Some("é"), Mods::NONE), "\x1b[101;1;233u");
         let app_cursor = Modes { kitty: 8, app_cursor: true, ..Default::default() };
         assert_eq!(encode(KeyInput { key: "up", text: None, mods: Mods::NONE }, app_cursor).unwrap(), b"\x1b[A");
+    }
+
+    fn kitty_event(flags: u8, key: &str, text: Option<&str>, mods: Mods, event: KeyEvent) -> Option<String> {
+        let modes = Modes { kitty: flags, ..Default::default() };
+        encode_event(KeyInput { key, text, mods }, event, modes).map(|b| String::from_utf8(b).unwrap())
+    }
+
+    #[test]
+    fn kitty_reports_repeats_and_releases_when_asked() {
+        use KeyEvent::{Release, Repeat};
+        let s = |t: &str| Some(t.to_string());
+        // Only with flag 2; otherwise a repeat is a press and a release is nothing.
+        assert_eq!(kitty_event(1, "escape", None, Mods::NONE, Release), None);
+        assert_eq!(kitty_event(1, "c", None, CTRL, Repeat), s("\x1b[99;5u"));
+        assert_eq!(kitty_event(0, "a", Some("a"), Mods::NONE, Release), None);
+        assert_eq!(kitty_event(0, "a", Some("a"), Mods::NONE, Repeat), s("a"));
+
+        assert_eq!(kitty_event(3, "escape", None, Mods::NONE, Release), s("\x1b[27;1:3u"));
+        assert_eq!(kitty_event(3, "c", None, CTRL, Repeat), s("\x1b[99;5:2u"));
+        // Typing stays text; its release is spelled out.
+        assert_eq!(kitty_event(3, "a", Some("a"), Mods::NONE, Repeat), s("a"));
+        assert_eq!(kitty_event(3, "a", None, Mods::NONE, Release), s("\x1b[97;1:3u"));
+        assert_eq!(kitty_event(3, "space", None, Mods::NONE, Release), s("\x1b[32;1:3u"));
+        // Enter, Tab and Backspace keep quiet on release unless every key is reported.
+        assert_eq!(kitty_event(3, "enter", None, Mods::NONE, Release), None);
+        assert_eq!(kitty_event(3, "enter", None, Mods::NONE, Repeat), s("\r"));
+        assert_eq!(kitty_event(11, "enter", None, Mods::NONE, Release), s("\x1b[13;1:3u"));
+        // Named keys: legacy for a plain press, spelled out otherwise.
+        assert_eq!(kitty_event(3, "up", None, Mods::NONE, KeyEvent::Press), s("\x1b[A"));
+        assert_eq!(kitty_event(3, "up", None, Mods::NONE, Release), s("\x1b[1;1:3A"));
+        assert_eq!(kitty_event(3, "pageup", None, CTRL, Repeat), s("\x1b[5;5:2~"));
+        assert_eq!(kitty_event(3, "f3", None, Mods::NONE, Release), s("\x1b[13;1:3~"));
+        assert_eq!(kitty_event(8, "f1", None, Mods::NONE, KeyEvent::Press), s("\x1b[P"));
+    }
+
+    #[test]
+    fn kitty_alternate_keys_add_the_shifted_key() {
+        let shift_ctrl = Mods { shift: true, ..CTRL };
+        assert_eq!(kitty(5, "a", Some("A"), shift_ctrl), "\x1b[97:65;6u");
+        // No text with Ctrl: an ASCII letter's shifted key is still known.
+        assert_eq!(kitty(5, "a", None, shift_ctrl), "\x1b[97:65;6u");
+        assert_eq!(kitty(5, "a", Some("\x01"), shift_ctrl), "\x1b[97:65;6u");
+        assert_eq!(kitty(13, "1", Some("!"), SHIFT), "\x1b[49:33;2u");
+        // Without Shift, or without flag 4, there is none.
+        assert_eq!(kitty(5, "a", None, CTRL), "\x1b[97;5u");
+        assert_eq!(kitty(1, "a", Some("A"), shift_ctrl), "\x1b[97;6u");
     }
 
     #[test]

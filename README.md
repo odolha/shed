@@ -143,7 +143,8 @@ and prints a warning.
   first, or use a separate `SHED_RUNTIME_DIR`. Per-process GPU time is in
   `/proc/<pid>/fdinfo/*` (`drm-engine-render`).
 - `gpui_ce_wgpu` is vendored with one renderer patch (window-sized backgrounds become
-  the clear colour); see `vendor/gpui_ce_wgpu/SHED_PATCHES.md`. Keep Shed's frames at
+  the clear colour); see `vendor/gpui_ce_wgpu/SHED_PATCHES.md`. `gpui_ce_linux` is
+  vendored so X11 key releases are not lost; see `vendor/gpui_ce_linux/SHED_PATCHES.md`. Keep Shed's frames at
   one window-sized layer: GPUI's quad shader costs ~4 ms per full-window quad on an
   integrated GPU.
 

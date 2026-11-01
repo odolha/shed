@@ -2342,8 +2342,6 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e471c10455ec436ba6d9a41f2e08db60576283ccd1f51a844e4d72810a297e28"
 dependencies = [
  "accesskit",
  "accesskit_unix",

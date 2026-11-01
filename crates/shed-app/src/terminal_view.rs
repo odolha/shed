@@ -33,11 +33,11 @@ pub mod perf {
 
 use gpui::{
     App, Bounds, ClipboardItem, ElementInputHandler, EntityInputHandler, UTF16Selection, Context, Entity, FocusHandle, Focusable, Subscription, Font, FontStyle, FontWeight, Hsla,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels,
+    KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels,
     Point, ScrollWheelEvent, SharedString, StrikethroughStyle, Task, TextAlign, TextRun,
     UnderlineStyle, Window, canvas, div, point, prelude::*, px, size,
 };
-use shed_emu::keys::{self, KeyInput, Mods};
+use shed_emu::keys::{self, KeyEvent, KeyInput, Mods};
 use shed_emu::links::{self, Link};
 use shed_emu::marks::{Mark, MarkScanner, WalkState};
 use shed_emu::mouse::{self, Button, MouseAction};
@@ -100,6 +100,9 @@ pub struct TerminalView {
     find: Option<Find>,
     /// Text an input method is composing, shown at the cursor until it commits.
     preedit: Option<String>,
+    /// Keys whose press went to the app: only their releases are reported
+    /// (kitty protocol), not those of keys Shed kept, like its shortcuts.
+    pressed: std::collections::HashSet<String>,
 }
 
 struct Find {
@@ -138,6 +141,7 @@ impl TerminalView {
             search: None,
             find: None,
             preedit: None,
+            pressed: Default::default(),
             sync_timer: None,
         }
     }
@@ -353,12 +357,29 @@ impl TerminalView {
 
         let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, super_: m.platform };
         let input = KeyInput { key, text: ks.key_char.as_deref(), mods };
-        if let Some(bytes) = keys::encode(input, self.emu.modes()) {
+        let kind = if event.is_held { KeyEvent::Repeat } else { KeyEvent::Press };
+        if let Some(bytes) = keys::encode_event(input, kind, self.emu.modes()) {
             if self.emu.display_offset() != 0 {
                 self.emu.scroll_to_bottom();
                 self.dirty = true;
                 cx.notify();
             }
+            self.send(bytes);
+            self.pressed.insert(key.to_string());
+            cx.stop_propagation();
+        }
+    }
+
+    /// Releases, for apps that asked the kitty protocol for them.
+    fn on_key_up(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &event.keystroke;
+        if !self.focus.is_focused(window) || !self.pressed.remove(&ks.key) {
+            return;
+        }
+        let m = ks.modifiers;
+        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, super_: m.platform };
+        let input = KeyInput { key: &ks.key, text: None, mods };
+        if let Some(bytes) = keys::encode_event(input, KeyEvent::Release, self.emu.modes()) {
             self.send(bytes);
             cx.stop_propagation();
         }
@@ -858,6 +879,7 @@ impl Render for TerminalView {
             // at no cost); a pane paints its own only if the app changed it.
             .when(frame.background != self.palette.background, |d| d.bg(background))
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::open_logbook))
             .on_action(cx.listener(Self::open_find))
