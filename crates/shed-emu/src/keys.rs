@@ -1,4 +1,5 @@
-//! Turning key presses into the bytes a terminal app expects (xterm encoding).
+//! Turning key presses into the bytes a terminal app expects: xterm's
+//! encoding, or the kitty keyboard protocol's once an app turns it on.
 //!
 //! Key names follow GPUI's: `enter`, `pageup`, `f5`, `a`, `/`. The encoder is
 //! kept free of GPUI types so it can be tested without a window.
@@ -37,6 +38,11 @@ pub struct KeyInput<'a> {
 
 /// The bytes to send for a key press, or `None` if the terminal ignores it.
 pub fn encode(input: KeyInput<'_>, modes: Modes) -> Option<Vec<u8>> {
+    if modes.kitty != 0
+        && let Some(bytes) = kitty(input, modes.kitty)
+    {
+        return Some(bytes);
+    }
     let KeyInput { key, text, mods } = input;
 
     if let Some(bytes) = special(key, mods, modes) {
@@ -66,6 +72,67 @@ pub fn encode(input: KeyInput<'_>, modes: Modes) -> Option<Vec<u8>> {
     }
     out.extend_from_slice(text.as_bytes());
     Some(out)
+}
+
+/// The kitty keyboard protocol (<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>):
+/// `CSI code ; mods u` for what legacy encoding makes ambiguous, or for
+/// every key with flag 8. `None` leaves the key to the legacy encoding,
+/// which the protocol keeps for the rest. Only presses are reported.
+fn kitty(input: KeyInput<'_>, flags: u8) -> Option<Vec<u8>> {
+    let KeyInput { key, text, mods } = input;
+    let all_keys = flags & 8 != 0;
+    let with_text = flags & 16 != 0;
+    let chorded = mods.ctrl || mods.alt || mods.super_;
+    let csi_u = |code: u32, text: Option<&str>| {
+        let text: Option<String> = text
+            .filter(|t| with_text && !t.chars().any(char::is_control))
+            .map(|t| t.chars().map(|c| (c as u32).to_string()).collect::<Vec<_>>().join(":"));
+        let mut out = format!("\x1b[{code}");
+        match (mods.param(), text) {
+            (m, Some(t)) => out.push_str(&format!(";{m};{t}")),
+            (1, None) => {}
+            (m, None) => out.push_str(&format!(";{m}")),
+        }
+        out.push('u');
+        out.into_bytes()
+    };
+    match key {
+        "escape" => Some(csi_u(27, None)),
+        "enter" | "tab" | "backspace" if all_keys || mods.any() => {
+            let code = match key {
+                "enter" => 13,
+                "tab" => 9,
+                _ => 127,
+            };
+            Some(csi_u(code, None))
+        }
+        "space" if all_keys || chorded => Some(csi_u(32, text)),
+        // With every key as an escape, the cursor keys drop SS3 and take CSI.
+        "up" | "down" | "right" | "left" | "home" | "end" if all_keys && !mods.any() => {
+            let final_byte = match key {
+                "up" => 'A',
+                "down" => 'B',
+                "right" => 'C',
+                "left" => 'D',
+                "home" => 'H',
+                _ => 'F',
+            };
+            Some(format!("\x1b[{final_byte}").into_bytes())
+        }
+        _ => {
+            let mut chars = key.chars();
+            let c = chars.next()?;
+            if chars.next().is_some() {
+                // A named key: the legacy encoding is already unambiguous.
+                return None;
+            }
+            // Shift alone just types: `A` is text, not a chord.
+            if !all_keys && !chorded {
+                return None;
+            }
+            Some(csi_u(c.to_lowercase().next().unwrap_or(c) as u32, text))
+        }
+    }
 }
 
 /// Keys with no printable text: arrows, function keys, editing keys.
@@ -237,6 +304,41 @@ mod tests {
     #[test]
     fn super_combinations_are_left_to_shed() {
         assert_eq!(key("c", Some("c"), Mods { super_: true, ..Mods::NONE }), None);
+    }
+
+    fn kitty(flags: u8, key: &str, text: Option<&str>, mods: Mods) -> String {
+        let modes = Modes { kitty: flags, ..Default::default() };
+        String::from_utf8(encode(KeyInput { key, text, mods }, modes).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn kitty_disambiguates_what_legacy_cannot() {
+        // Plain typing and Shift stay text; Esc and chords become CSI u.
+        assert_eq!(kitty(1, "a", Some("a"), Mods::NONE), "a");
+        assert_eq!(kitty(1, "a", Some("A"), SHIFT), "A");
+        assert_eq!(kitty(1, "escape", None, Mods::NONE), "\x1b[27u");
+        assert_eq!(kitty(1, "c", None, CTRL), "\x1b[99;5u");
+        assert_eq!(kitty(1, "i", None, CTRL), "\x1b[105;5u", "Ctrl+I is not Tab");
+        assert_eq!(kitty(1, "a", Some("A"), Mods { shift: true, ..CTRL }), "\x1b[97;6u");
+        assert_eq!(kitty(1, "x", Some("x"), ALT), "\x1b[120;3u");
+        assert_eq!(kitty(1, "enter", None, Mods::NONE), "\r");
+        assert_eq!(kitty(1, "enter", None, SHIFT), "\x1b[13;2u");
+        assert_eq!(kitty(1, "tab", None, SHIFT), "\x1b[9;2u");
+        assert_eq!(kitty(1, "backspace", None, CTRL), "\x1b[127;5u");
+        assert_eq!(kitty(1, "space", Some(" "), CTRL), "\x1b[32;5u");
+        // Named keys keep their legacy forms.
+        assert_eq!(kitty(1, "up", None, Mods::NONE), "\x1b[A");
+        assert_eq!(kitty(1, "f5", None, CTRL), "\x1b[15;5~");
+    }
+
+    #[test]
+    fn kitty_can_report_every_key_with_its_text() {
+        assert_eq!(kitty(8, "a", Some("a"), Mods::NONE), "\x1b[97u");
+        assert_eq!(kitty(8, "enter", None, Mods::NONE), "\x1b[13u");
+        assert_eq!(kitty(8 | 16, "a", Some("A"), SHIFT), "\x1b[97;2;65u");
+        assert_eq!(kitty(8 | 16, "e", Some("é"), Mods::NONE), "\x1b[101;1;233u");
+        let app_cursor = Modes { kitty: 8, app_cursor: true, ..Default::default() };
+        assert_eq!(encode(KeyInput { key: "up", text: None, mods: Mods::NONE }, app_cursor).unwrap(), b"\x1b[A");
     }
 
     #[test]

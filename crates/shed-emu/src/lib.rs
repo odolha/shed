@@ -46,6 +46,10 @@ pub struct Modes {
     pub mouse: MouseMode,
     pub sgr_mouse: bool,
     pub utf8_mouse: bool,
+    /// Kitty keyboard protocol flags the app enabled (`CSI > flags u`):
+    /// 1 disambiguate, 2 event types, 4 alternate keys, 8 all keys as
+    /// escapes, 16 associated text.
+    pub kitty: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

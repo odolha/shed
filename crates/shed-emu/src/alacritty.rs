@@ -93,7 +93,7 @@ impl Dimensions for Dims {
 impl AlacrittyEmulator {
     pub fn new(size: GridSize, palette: Palette) -> Self {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let config = term::Config { scrolling_history: SCROLLBACK, ..Default::default() };
+        let config = term::Config { scrolling_history: SCROLLBACK, kitty_keyboard: true, ..Default::default() };
         let term = Term::new(config, &Dims(size), Listener(events.clone()));
         Self { term, processor: Processor::new(), events, size, palette, search: None }
     }
@@ -240,6 +240,17 @@ impl Emulator for AlacrittyEmulator {
             mouse,
             sgr_mouse: m.contains(TermMode::SGR_MOUSE),
             utf8_mouse: m.contains(TermMode::UTF8_MOUSE),
+            kitty: [
+                (TermMode::DISAMBIGUATE_ESC_CODES, 1),
+                (TermMode::REPORT_EVENT_TYPES, 2),
+                (TermMode::REPORT_ALTERNATE_KEYS, 4),
+                (TermMode::REPORT_ALL_KEYS_AS_ESC, 8),
+                (TermMode::REPORT_ASSOCIATED_TEXT, 16),
+            ]
+            .iter()
+            .filter(|(flag, _)| m.contains(*flag))
+            .map(|(_, bit)| bit)
+            .sum(),
         }
     }
 
@@ -569,6 +580,19 @@ mod tests {
         assert!(!e.set_search(Some("a.ple")));
         assert!(!e.set_search(Some("")));
         assert!(e.search.is_none());
+    }
+
+    #[test]
+    fn kitty_keyboard_flags_are_tracked_answered_and_replayed() {
+        let mut e = emu(20, 3);
+        e.advance(b"\x1b[>1u\x1b[>9u\x1b[?u");
+        assert_eq!(e.modes().kitty, 9);
+        assert_eq!(e.take_replies(), b"\x1b[?9u");
+        let mut copy = emu(20, 3);
+        copy.advance(&e.replay());
+        assert_eq!(copy.modes().kitty, 9);
+        e.advance(b"\x1b[<u");
+        assert_eq!(e.modes().kitty, 1, "popping restores the one before");
     }
 
     #[test]

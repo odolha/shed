@@ -32,7 +32,7 @@ pub mod perf {
 }
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Subscription, Font, FontStyle, FontWeight, Hsla,
+    App, Bounds, ClipboardItem, ElementInputHandler, EntityInputHandler, UTF16Selection, Context, Entity, FocusHandle, Focusable, Subscription, Font, FontStyle, FontWeight, Hsla,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels,
     Point, ScrollWheelEvent, SharedString, StrikethroughStyle, Task, TextAlign, TextRun,
     UnderlineStyle, Window, canvas, div, point, prelude::*, px, size,
@@ -98,6 +98,8 @@ pub struct TerminalView {
     search: Option<(Entity<LogbookSearch>, Subscription)>,
     /// The scrollback search bar, while open.
     find: Option<Find>,
+    /// Text an input method is composing, shown at the cursor until it commits.
+    preedit: Option<String>,
 }
 
 struct Find {
@@ -135,6 +137,7 @@ impl TerminalView {
             walk: None,
             search: None,
             find: None,
+            preedit: None,
             sync_timer: None,
         }
     }
@@ -386,11 +389,15 @@ impl TerminalView {
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.emu.scroll_to_bottom();
-            self.dirty = true;
-            self.send(keys::encode_paste(&text, self.emu.modes()));
-            cx.notify();
+            self.paste_text(&text, cx);
         }
+    }
+
+    fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.emu.scroll_to_bottom();
+        self.dirty = true;
+        self.send(keys::encode_paste(text, self.emu.modes()));
+        cx.notify();
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
@@ -818,6 +825,12 @@ impl Render for TerminalView {
         let background: Hsla = hsla(frame.background);
         let font = self.font.font();
         let view = cx.entity().downgrade();
+        let input = (cx.entity(), self.focus.clone());
+        let (font_for_overlay, background_overlay, fg_overlay) = (self.font.font(), hsla(self.palette.background), self.palette.foreground);
+        let preedit = self.preedit.clone().map(|text| {
+            let c = &self.snapshot.cursor;
+            (px(self.padding) + m.width * c.col as f32, px(self.padding) + m.height * c.row as f32, text)
+        });
         let grid_origin = self.grid_origin.clone();
         let padding = self.padding;
         let accent = self.accent;
@@ -880,8 +893,11 @@ impl Render for TerminalView {
                         .ok();
                         origin
                     },
-                    move |_bounds, origin, window, cx| {
+                    move |bounds, origin, window, cx| {
                         let t = Instant::now();
+                        // Input methods: composed text arrives through this, not as keys.
+                        let (entity, focus) = input;
+                        window.handle_input(&focus, ElementInputHandler::new(bounds, entity), cx);
                         paint_frame(&frame, origin, m, &font, window, cx);
                         if perf::enabled() {
                             perf::PAINTS.fetch_add(1, Ordering::Relaxed);
@@ -891,6 +907,23 @@ impl Render for TerminalView {
                 )
                 .size_full(),
             )
+            .when_some(preedit, |el, (left, top, text)| {
+                el.child(
+                    div()
+                        .absolute()
+                        .left(left)
+                        .top(top)
+                        .h(m.height)
+                        .flex()
+                        .items_center()
+                        .font(font_for_overlay.clone())
+                        .text_size(m.font_size)
+                        .bg(background_overlay)
+                        .text_color(hsla(fg_overlay))
+                        .underline()
+                        .child(text),
+                )
+            })
             .when_some(chip, |el, (top, label)| {
                 el.child(
                     div()
@@ -935,5 +968,68 @@ impl Render for TerminalView {
                         .child(div().text_color(hsla(if !empty && !found { Rgb::hex(0xF0566A) } else { ui.text_dim })).child(hint)),
                 )
             })
+    }
+}
+
+/// Input methods (IBus, Fcitx, dead keys): the composed text goes to the
+/// shell like typing; while composing, it shows at the cursor.
+impl EntityInputHandler for TerminalView {
+    fn text_for_range(&mut self, _: std::ops::Range<usize>, _: &mut Option<std::ops::Range<usize>>, _: &mut Window, _: &mut Context<Self>) -> Option<String> {
+        None
+    }
+
+    fn selected_text_range(&mut self, _: bool, _: &mut Window, _: &mut Context<Self>) -> Option<UTF16Selection> {
+        Some(UTF16Selection { range: 0..0, reversed: false })
+    }
+
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<std::ops::Range<usize>> {
+        self.preedit.as_ref().map(|p| 0..p.encode_utf16().count())
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.preedit = None;
+        cx.notify();
+    }
+
+    fn replace_text_in_range(&mut self, _: Option<std::ops::Range<usize>>, text: &str, _: &mut Window, cx: &mut Context<Self>) {
+        self.preedit = None;
+        if !text.is_empty() {
+            if self.emu.display_offset() != 0 {
+                self.emu.scroll_to_bottom();
+                self.dirty = true;
+            }
+            self.send(text.as_bytes().to_vec());
+        }
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.preedit = (!text.is_empty()).then(|| text.to_string());
+        cx.notify();
+    }
+
+    fn paste(&mut self, item: ClipboardItem, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = item.text() {
+            self.paste_text(&text, cx);
+        }
+    }
+
+    /// The cursor's cell, so the candidate window opens next to it.
+    fn bounds_for_range(&mut self, _: std::ops::Range<usize>, _: Bounds<Pixels>, window: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
+        let m = self.metrics(window);
+        let origin = self.grid_origin.get();
+        let c = &self.snapshot.cursor;
+        Some(Bounds::new(point(origin.x + m.width * c.col as f32, origin.y + m.height * c.row as f32), size(m.width, m.height)))
+    }
+
+    fn character_index_for_point(&mut self, _: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        None
     }
 }

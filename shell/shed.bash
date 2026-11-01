@@ -61,7 +61,9 @@ __shed_alias_sync() {
 # Runs first at every prompt: the last command's exit code, the directory.
 __shed_precmd() {
     local status=$?
-    builtin printf '\e]133;D;%s\a\e]7;file://%s%s\a' "$status" "${HOSTNAME:-}" "$PWD"
+    # Also clears kitty keyboard flags a crashed program may have left on:
+    # readline reads keys the legacy way.
+    builtin printf '\e]133;D;%s\a\e]7;file://%s%s\a\e[=0;1u' "$status" "${HOSTNAME:-}" "$PWD"
     __shed_alias_sync
     builtin history -a
     __shed_hist_next=$HISTCMD
