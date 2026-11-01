@@ -14,6 +14,7 @@ use shed_model::{
     Bench, BenchColor, BenchId, Direction, PaneId, PaneNode, Rgb, SplitDir, Tab, TabId, Tag,
     default_tag_color, tag_color,
 };
+use shed_model::config::NewPaneDir;
 use shed_proto::{ClientMsg, ShowTarget};
 
 use crate::actions::*;
@@ -170,8 +171,22 @@ impl BenchWindow {
         self.send(ClientMsg::FocusTab { tab }, cx);
     }
 
+    /// Where a new pane next to `pane` opens: its directory, or the bench's (`None`).
+    fn new_pane_cwd(&self, pane: Option<PaneId>, cx: &Context<Self>) -> Option<std::path::PathBuf> {
+        let state = self.state.read(cx);
+        match state.settings.new_pane_dir {
+            NewPaneDir::Bench => None,
+            NewPaneDir::Current => pane.and_then(|p| state.tree.pane(p)).map(|p| p.cwd.clone()),
+        }
+    }
+
+    fn new_tab(&mut self, cx: &mut Context<Self>) {
+        let cwd = self.new_pane_cwd(self.active_tab(cx).map(|t| t.active_pane), cx);
+        self.send(ClientMsg::NewTab { bench: self.bench, cwd }, cx);
+    }
+
     fn split_pane(&mut self, pane: PaneId, dir: SplitDir, cx: &mut Context<Self>) {
-        let cwd = self.state.read(cx).tree.pane(pane).map(|p| p.cwd.clone());
+        let cwd = self.new_pane_cwd(Some(pane), cx);
         self.send(ClientMsg::Split { pane, dir, cwd }, cx);
     }
 
@@ -527,7 +542,6 @@ impl BenchWindow {
             bar = bar.child(el);
         }
 
-        let bench_id = bench.id;
         bar.child(
             div()
                 .id("new-tab")
@@ -536,7 +550,7 @@ impl BenchWindow {
                 .px_2()
                 .cursor_pointer()
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
-                .on_click(cx.listener(move |this, _, _, cx| this.send(ClientMsg::NewTab { bench: bench_id, cwd: None }, cx)))
+                .on_click(cx.listener(|this, _, _, cx| this.new_tab(cx)))
                 .child(svg().path(icon("tab-new")).size(px(16.0)).text_color(hsla(ui.text_dim))),
         )
         .child(
@@ -670,6 +684,8 @@ impl BenchWindow {
 
 impl Render for BenchWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ui = self.state.read(cx).settings.ui.clone();
+        let errors = self.state.read(cx).settings.errors.clone();
         let Some(bench) = self.bench(cx).cloned() else {
             return div().size_full().bg(hsla(self.ui.background)).into_any_element();
         };
@@ -695,9 +711,7 @@ impl Render for BenchWindow {
             }))
             .on_mouse_move(cx.listener(Self::on_drag_move))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = None))
-            .on_action(cx.listener(|this, _: &NewTab, _, cx| {
-                this.send(ClientMsg::NewTab { bench: this.bench, cwd: None }, cx);
-            }))
+            .on_action(cx.listener(|this, _: &NewTab, _, cx| this.new_tab(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
                 if let Some(tab) = this.active_tab(cx).map(|t| t.id) {
                     this.send(ClientMsg::CloseTab { tab }, cx);
@@ -739,6 +753,18 @@ impl Render for BenchWindow {
             .child(div().h(px(3.0)).w_full().flex_none().bg(hsla(accent)))
             .child(self.render_tab_bar(&bench, cx))
             .child(div().flex_1().min_h_0().child(content))
+            .when(!errors.is_empty(), |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .px_3()
+                        .py_1()
+                        .bg(hsla_alpha(Rgb::hex(0xF0566A), 0.2))
+                        .text_size(px(12.0))
+                        .text_color(hsla(self.ui.text))
+                        .child(format!("shed.toml: {}", errors.join("; "))),
+                )
+            })
             .children(menu)
             .into_any_element()
     }

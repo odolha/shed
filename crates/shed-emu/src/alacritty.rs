@@ -185,6 +185,10 @@ impl Emulator for AlacrittyEmulator {
         self.size
     }
 
+    fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
+    }
+
     fn modes(&self) -> Modes {
         let m = *self.term.mode();
         let mouse = if m.contains(TermMode::MOUSE_MOTION) {

@@ -8,7 +8,7 @@ use gpui::{
     AppContext, AsyncApp, Bounds, Context, Entity, TitlebarOptions, WindowBounds, WindowHandle,
     WindowOptions, px, size,
 };
-use shed_emu::Palette;
+use shed_model::config::{Config, FileWatch};
 use shed_model::{BenchId, PaneId, Shed};
 use shed_proto::{ClientMsg, Frame, KeeperMsg};
 use tracing::{error, warn};
@@ -16,7 +16,7 @@ use tracing::{error, warn};
 use crate::bench_window::BenchWindow;
 use crate::keeper_conn::KeeperConn;
 use crate::terminal_view::TerminalView;
-use crate::theme::FontSettings;
+use crate::settings::Settings;
 
 /// How long the receive loop may run before letting a frame be drawn.
 const FRAME_BUDGET: Duration = Duration::from_millis(8);
@@ -24,7 +24,7 @@ const FRAME_BUDGET: Duration = Duration::from_millis(8);
 pub struct AppState {
     pub conn: KeeperConn,
     pub tree: Shed,
-    palette: Palette,
+    pub settings: Settings,
     pub panes: HashMap<PaneId, Entity<TerminalView>>,
     windows: HashMap<BenchId, WindowHandle<BenchWindow>>,
     /// Benches asked for with `Attach`, until their window is open.
@@ -34,11 +34,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(conn: KeeperConn) -> Self {
+    pub fn new(conn: KeeperConn, settings: Settings) -> Self {
         Self {
             conn,
             tree: Shed::default(),
-            palette: Palette::default(),
+            settings,
             panes: HashMap::new(),
             windows: HashMap::new(),
             pending: HashSet::new(),
@@ -159,8 +159,42 @@ impl AppState {
     }
 
     fn new_view(&self, pane: PaneId, cx: &mut Context<Self>) -> Entity<TerminalView> {
-        let (conn, palette) = (self.conn.clone(), self.palette.clone());
-        cx.new(|cx| TerminalView::new(pane, conn, palette, FontSettings::default(), cx))
+        let (conn, settings) = (self.conn.clone(), self.settings.clone());
+        cx.new(|cx| TerminalView::new(pane, conn, &settings, cx))
+    }
+
+    /// Applies a reloaded config to keys, panes and windows.
+    pub fn apply_settings(&mut self, mut settings: Settings, cx: &mut Context<Self>) {
+        settings.errors.extend(crate::actions::bind_keys(cx, &settings.keys));
+        for e in &settings.errors {
+            warn!("config: {e}");
+        }
+        self.settings = settings;
+        for view in self.panes.values() {
+            view.update(cx, |view, cx| view.apply(&self.settings, cx));
+        }
+        cx.notify();
+    }
+
+    /// Reloads `shed.toml` (and its theme) whenever either changes.
+    pub async fn watch_config(state: Entity<AppState>, cx: &mut AsyncApp) {
+        let mut config_watch = FileWatch::default();
+        let mut theme_watch = FileWatch::default();
+        config_watch.changed(&Config::path());
+        loop {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let theme_file = Config::load_from(&Config::path())
+                .ok()
+                .and_then(|c| c.theme)
+                .map(|name| shed_model::paths::config_dir().join("themes").join(format!("{name}.toml")));
+            let theme_changed = theme_file.as_deref().is_some_and(|p| theme_watch.changed(p));
+            if config_watch.changed(&Config::path()) || theme_changed {
+                state.update(cx, |state, cx| {
+                    let settings = Settings::load(&state.settings);
+                    state.apply_settings(settings, cx);
+                });
+            }
+        }
     }
 
     fn open_bench_window(&mut self, bench_id: BenchId, cx: &mut Context<Self>) {

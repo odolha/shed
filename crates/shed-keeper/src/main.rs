@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into());
         let keeper = Keeper::new(KeeperConfig {
             socket: socket.clone(),
+            config_file: shed_model::config::Config::path(),
             shell: args.shell,
             home,
             exit_when_idle: !args.persist,

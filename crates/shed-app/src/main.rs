@@ -5,6 +5,7 @@ mod assets;
 mod bench_window;
 mod keeper_conn;
 mod line_editor;
+mod settings;
 mod state;
 mod terminal_view;
 mod theme;
@@ -27,6 +28,24 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum TagAction {
+    /// Add a tag, or change its colour.
+    Add {
+        label: String,
+        /// A name (red, orange, yellow, green, blue, violet, teal, grey) or #rrggbb.
+        #[arg(long)]
+        color: Option<String>,
+        /// Tint the whole tab.
+        #[arg(long)]
+        tint: bool,
+    },
+    Remove {
+        label: String,
+    },
+    List,
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Open a new bench in its own window.
     New {
@@ -36,6 +55,11 @@ enum Command {
         /// The bench's directory (default: home).
         #[arg(long)]
         cwd: Option<std::path::PathBuf>,
+    },
+    /// Tag the current tab (run inside Shed).
+    Tag {
+        #[command(subcommand)]
+        action: TagAction,
     },
     /// Show whether the keeper is running, and what it holds.
     Status,
@@ -57,6 +81,7 @@ fn main() -> anyhow::Result<()> {
             run_app(ShowTarget::NewBench { name, cwd })
         }
         Some(Command::Status) => status(),
+        Some(Command::Tag { action }) => tag(action),
         Some(Command::Stop) => stop(),
         Some(Command::DebugType { text }) => debug_type(&text),
     }
@@ -92,9 +117,12 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
         .with_assets(assets::Assets)
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
-            actions::bind_default_keys(cx);
-            let state = cx.new(|_| AppState::new(conn));
-            cx.spawn(async move |cx| AppState::receive(state, rx, cx).await).detach();
+            let settings = settings::Settings::load(&settings::Settings::default());
+            let state = cx.new(|_| AppState::new(conn, settings.clone()));
+            state.update(cx, |state, cx| state.apply_settings(settings, cx));
+            let receiving = state.clone();
+            cx.spawn(async move |cx| AppState::receive(receiving, rx, cx).await).detach();
+            cx.spawn(async move |cx| AppState::watch_config(state, cx).await).detach();
             cx.activate(true);
         });
     Ok(())
@@ -195,6 +223,47 @@ fn debug_type(text: &str) -> anyhow::Result<()> {
     let (conn, _rx) = keeper_conn::connect(ClientKind::Cli, false)?;
     conn.send(Frame::Input { pane, bytes: text.replace("\\r", "\r").replace("\\e", "\x1b").into_bytes() });
     // Give the writer thread a moment to flush before exiting.
+    std::thread::sleep(Duration::from_millis(100));
+    Ok(())
+}
+
+fn tag(action: TagAction) -> anyhow::Result<()> {
+    use shed_model::{Tag, TabId, default_tag_color, tag_color};
+    let Some(tab) = std::env::var("SHED_TAB").ok().and_then(|t| t.parse().ok()).map(TabId) else {
+        bail!("not inside a Shed tab ($SHED_TAB is not set)");
+    };
+    let tree = request(ClientMsg::Status, |m| match m {
+        KeeperMsg::Status(s) => Some(s.tree),
+        _ => None,
+    })?;
+    let Some(current) = tree.tab(tab) else { bail!("this tab is no longer in the keeper") };
+    let mut tags = current.tags.clone();
+    match action {
+        TagAction::List => {
+            for t in current.all_tags() {
+                let auto = if current.tags.iter().any(|m| m.label == t.label) { "" } else { " (rule)" };
+                println!("{} #{:06X}{}{auto}", t.label, t.color.to_hex(), if t.tint_tab { " tint" } else { "" });
+            }
+            return Ok(());
+        }
+        TagAction::Add { label, color, tint } => {
+            let color = match color {
+                Some(c) => tag_color(&c).ok_or_else(|| anyhow::anyhow!("unknown colour {c:?}"))?,
+                None => default_tag_color(&label),
+            };
+            tags.retain(|t| t.label != label);
+            tags.push(Tag { label, color, tint_tab: tint });
+        }
+        TagAction::Remove { label } => {
+            let before = tags.len();
+            tags.retain(|t| t.label != label);
+            if tags.len() == before {
+                bail!("this tab has no tag {label:?}");
+            }
+        }
+    }
+    let (conn, _rx) = keeper_conn::connect(ClientKind::Cli, false)?;
+    conn.send_msg(ClientMsg::SetTags { tab, tags });
     std::thread::sleep(Duration::from_millis(100));
     Ok(())
 }

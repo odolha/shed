@@ -1,4 +1,5 @@
 use shed_model::Rgb;
+use shed_model::config::Theme;
 
 /// The colours a theme provides to the emulator.
 #[derive(Clone, Debug, PartialEq)]
@@ -17,36 +18,26 @@ pub struct Palette {
 impl Default for Palette {
     /// Shed's default dark theme, matched to the slate walls of the icon.
     fn default() -> Self {
-        let h = Rgb::hex;
-        Self {
-            ansi: [
-                h(0x20242D),
-                h(0xF0566A),
-                h(0x5FD38D),
-                h(0xF2C14E),
-                h(0x5C9DFF),
-                h(0xB48BFF),
-                h(0x3CCFC0),
-                h(0xC9CED8),
-                h(0x5F6878),
-                h(0xFF7A8A),
-                h(0x8CF0BE),
-                h(0xFFD97A),
-                h(0x8CC4FF),
-                h(0xD0B6FF),
-                h(0x7FEBDD),
-                h(0xF4F6FA),
-            ],
-            foreground: h(0xDDE1E8),
-            background: h(0x14171D),
-            cursor: h(0xFF9A5A),
-            cursor_text: h(0x14171D),
-            selection: h(0x34405A),
-        }
+        Self::from_theme(&Theme::load("shed-dark").expect("built-in theme"))
     }
 }
 
 impl Palette {
+    pub fn from_theme(theme: &Theme) -> Self {
+        let mut ansi = [Rgb::default(); 16];
+        for (slot, c) in ansi.iter_mut().zip(&theme.ansi) {
+            *slot = Theme::rgb(c);
+        }
+        Self {
+            ansi,
+            foreground: Theme::rgb(&theme.foreground),
+            background: Theme::rgb(&theme.background),
+            cursor: Theme::rgb(&theme.cursor),
+            cursor_text: Theme::rgb(&theme.cursor_text),
+            selection: Theme::rgb(&theme.selection),
+        }
+    }
+
     /// One of the 256 indexed colours: ANSI, then the 6×6×6 cube, then the grey ramp.
     pub fn indexed(&self, index: u8) -> Rgb {
         match index {

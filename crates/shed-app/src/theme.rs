@@ -2,6 +2,7 @@
 
 use gpui::{Font, Hsla, font};
 use shed_emu::Rgb;
+use shed_model::config::{FontConfig, Theme};
 
 pub fn hsla(c: Rgb) -> Hsla {
     gpui::rgb_to_hsla(gpui::rgb(c.to_hex()))
@@ -17,11 +18,13 @@ pub struct FontSettings {
 
 impl Default for FontSettings {
     fn default() -> Self {
-        Self {
-            family: std::env::var("SHED_FONT").unwrap_or_else(|_| "DejaVu Sans Mono".into()),
-            size: std::env::var("SHED_FONT_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(14.0),
-            line_height: 1.25,
-        }
+        FontConfig::default().into()
+    }
+}
+
+impl From<FontConfig> for FontSettings {
+    fn from(c: FontConfig) -> Self {
+        Self { family: c.family, size: c.size.clamp(6.0, 72.0), line_height: c.line_height.clamp(0.8, 3.0) }
     }
 }
 
@@ -48,14 +51,23 @@ pub struct UiColors {
 
 impl Default for UiColors {
     fn default() -> Self {
+        Self::from_theme(&Theme::load("shed-dark").expect("built-in theme"))
+    }
+}
+
+impl UiColors {
+    /// The theme's chrome colours, falling back to its terminal colours.
+    pub fn from_theme(t: &Theme) -> Self {
+        let ui = t.ui.clone().unwrap_or_default();
+        let pick = |c: &Option<String>, fallback: &str| c.as_deref().and_then(Rgb::parse).unwrap_or(Theme::rgb(fallback));
         Self {
-            background: Rgb::hex(0x0E1116),
-            tab_active: Rgb::hex(0x14171D),
-            tab_hover: Rgb::hex(0x1A1D24),
-            text: Rgb::hex(0xDDE1E8),
-            text_dim: Rgb::hex(0x8A93A3),
-            divider: Rgb::hex(0x2A2F3A),
-            accent_fallback: Rgb::hex(0xFF9A5A),
+            background: pick(&ui.background, &t.background),
+            tab_active: pick(&ui.tab_active, &t.background),
+            tab_hover: pick(&ui.tab_hover, &t.ansi[0]),
+            text: pick(&ui.text, &t.foreground),
+            text_dim: pick(&ui.text_dim, &t.ansi[8]),
+            divider: pick(&ui.divider, &t.ansi[8]),
+            accent_fallback: Theme::rgb(&t.cursor),
         }
     }
 }

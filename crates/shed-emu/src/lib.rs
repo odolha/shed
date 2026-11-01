@@ -104,6 +104,9 @@ pub trait Emulator: Send {
 
     fn resize(&mut self, size: GridSize);
 
+    /// The colours reported to apps that query them.
+    fn set_palette(&mut self, palette: Palette);
+
     fn size(&self) -> GridSize;
 
     fn modes(&self) -> Modes;

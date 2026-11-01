@@ -1,0 +1,18 @@
+# Shed's default theme, matched to the slate walls of the icon.
+foreground = "#DDE1E8"
+background = "#14171D"
+cursor = "#FF9A5A"
+cursor_text = "#14171D"
+selection = "#34405A"
+ansi = [
+    "#20242D", "#F0566A", "#5FD38D", "#F2C14E", "#5C9DFF", "#B48BFF", "#3CCFC0", "#C9CED8",
+    "#5F6878", "#FF7A8A", "#8CF0BE", "#FFD97A", "#8CC4FF", "#D0B6FF", "#7FEBDD", "#F4F6FA",
+]
+
+[ui]
+background = "#0E1116"
+tab_active = "#14171D"
+tab_hover = "#1A1D24"
+text = "#DDE1E8"
+text_dim = "#8A93A3"
+divider = "#2A2F3A"

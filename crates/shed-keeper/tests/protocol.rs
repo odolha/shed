@@ -99,6 +99,7 @@ fn start_keeper(dir: &Path) -> std::path::PathBuf {
             let listener = shed_keeper::bind_socket(&listener_path).unwrap();
             let keeper = Keeper::new(KeeperConfig {
                 socket: listener_path,
+                config_file: home.join("shed.toml"),
                 shell: Some("/bin/sh".into()),
                 home,
                 exit_when_idle: false,
@@ -352,4 +353,21 @@ fn show_goes_to_the_window_process() {
         _ => None,
     });
     assert_eq!(again, shown);
+}
+
+#[test]
+fn tag_rules_follow_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("shed.toml"),
+        "[[tag_rule]]\ntool = \"sleep 4*\"\ntag = \"napping\"\ncolor = \"teal\"\n",
+    )
+    .unwrap();
+    let socket = start_keeper(dir.path());
+    let mut c = Client::connect(&socket);
+    let (bench, pane) = c.attach();
+    c.send(Frame::Input { pane, bytes: b"sleep 4.5\n".to_vec() });
+    let tree = c.tree_where("auto tag", |t| t.bench(bench).is_some_and(|b| !b.tabs[0].auto_tags.is_empty()));
+    assert_eq!(tree.bench(bench).unwrap().tabs[0].auto_tags[0].label, "napping");
+    c.tree_where("auto tag gone", |t| t.bench(bench).is_some_and(|b| b.tabs[0].auto_tags.is_empty()));
 }

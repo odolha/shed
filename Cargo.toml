@@ -36,6 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-channel = "2"
 insta = "1"
 tempfile = "3"
+toml = "1"
 
 # A vendored copy with read-only accessors for screen replay; see vendor/alacritty_terminal/SHED_PATCHES.md.
 [patch.crates-io]

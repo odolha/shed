@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use shed_emu::binary::ReplyGuard;
 use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Palette};
 use shed_emu::EmuEvent;
+use shed_model::config::{Config, FileWatch};
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId};
 use shed_proto::{
     ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus, PROTOCOL_VERSION,
@@ -39,6 +40,8 @@ const TREE_FLUSH_DELAY: Duration = Duration::from_millis(50);
 
 pub struct KeeperConfig {
     pub socket: PathBuf,
+    /// `shed.toml`, reloaded when it changes.
+    pub config_file: PathBuf,
     /// The shell for new panes; `None` uses the user's login shell.
     pub shell: Option<PathBuf>,
     /// Where new benches open.
@@ -59,6 +62,8 @@ pub struct Keeper {
 }
 
 struct State {
+    config: Config,
+    config_watch: FileWatch,
     tree: Shed,
     panes: HashMap<PaneId, PaneRt>,
     clients: HashMap<ClientId, ClientRt>,
@@ -162,6 +167,8 @@ impl Keeper {
         Arc::new(Self {
             cfg,
             state: Mutex::new(State {
+                config: Config::default(),
+                config_watch: FileWatch::default(),
                 tree: Shed::default(),
                 panes: HashMap::new(),
                 clients: HashMap::new(),
@@ -210,6 +217,24 @@ impl Keeper {
             tick.tick().await;
             let mut st = self.lock();
             let mut changed = false;
+            if st.config_watch.changed(&self.cfg.config_file) {
+                match Config::load_from(&self.cfg.config_file) {
+                    Ok(config) => {
+                        let (theme, error) = config.theme();
+                        if let Some(e) = error {
+                            warn!("{e}");
+                        }
+                        st.palette = Palette::from_theme(&theme);
+                        let palette = st.palette.clone();
+                        for rt in st.panes.values_mut() {
+                            rt.emu.set_palette(palette.clone());
+                        }
+                        st.config = config;
+                        info!("config loaded");
+                    }
+                    Err(e) => warn!("config not loaded: {e}"),
+                }
+            }
             let ids: Vec<PaneId> = st.panes.keys().copied().collect();
             for id in ids {
                 let rt = &st.panes[&id];
@@ -227,6 +252,15 @@ impl Keeper {
                         pane.cwd = cwd;
                         changed = true;
                     }
+                }
+            }
+            // Tag rules, over each tab's tools and directories.
+            let State { tree, config, .. } = &mut *st;
+            for tab in tree.benches.iter_mut().flat_map(|b| &mut b.tabs) {
+                let tags = config.auto_tags(tab.panes.iter().map(|p| (p.tool.as_ref(), p.cwd.as_path())));
+                if tab.auto_tags != tags {
+                    tab.auto_tags = tags;
+                    changed = true;
                 }
             }
             if changed {

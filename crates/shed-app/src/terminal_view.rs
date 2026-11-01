@@ -22,10 +22,9 @@ use shed_proto::{ClientMsg, Frame};
 
 use crate::actions::{Copy, Paste, ScrollPageDown, ScrollPageUp, ZoomIn, ZoomOut, ZoomReset};
 use crate::keeper_conn::KeeperConn;
+use crate::settings::Settings;
 use crate::theme::{FontSettings, hsla};
 
-/// Space between the window edge and the grid.
-const PADDING: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CellMetrics {
@@ -40,6 +39,8 @@ pub struct TerminalView {
     emu: AlacrittyEmulator,
     palette: Palette,
     font: FontSettings,
+    /// Space between the pane's edge and the grid.
+    padding: f32,
     metrics: Option<(FontSettings, CellMetrics)>,
     snapshot: Snapshot,
     dirty: bool,
@@ -58,13 +59,15 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(pane: PaneId, conn: KeeperConn, palette: Palette, font: FontSettings, cx: &mut Context<Self>) -> Self {
+    pub fn new(pane: PaneId, conn: KeeperConn, settings: &Settings, cx: &mut Context<Self>) -> Self {
+        let (palette, font) = (settings.palette.clone(), settings.font.clone());
         Self {
             pane,
             conn,
             emu: AlacrittyEmulator::new(GridSize::new(80, 24), palette.clone()),
             palette,
             font,
+            padding: settings.padding,
             metrics: None,
             snapshot: Snapshot::default(),
             dirty: true,
@@ -81,6 +84,15 @@ impl TerminalView {
 
     pub fn focus_handle(&self) -> &FocusHandle {
         &self.focus
+    }
+
+    /// Takes new colours, font and padding from a reloaded config.
+    pub fn apply(&mut self, settings: &Settings, cx: &mut Context<Self>) {
+        self.palette = settings.palette.clone();
+        self.font = settings.font.clone();
+        self.padding = settings.padding;
+        self.dirty = true;
+        cx.notify();
     }
 
     /// Rebuilds the screen from the keeper's replay of this pane. The grid
@@ -643,6 +655,7 @@ impl Render for TerminalView {
         let font = self.font.font();
         let view = cx.entity().downgrade();
         let grid_origin = self.grid_origin.clone();
+        let padding = self.padding;
 
         div()
             .id("terminal")
@@ -669,10 +682,10 @@ impl Render for TerminalView {
             .child(
                 canvas(
                     move |bounds, _window, cx| {
-                        let origin = point(bounds.origin.x + px(PADDING), bounds.origin.y + px(PADDING));
+                        let origin = point(bounds.origin.x + px(padding), bounds.origin.y + px(padding));
                         grid_origin.set(origin);
-                        let cols = ((f32::from(bounds.size.width) - 2.0 * PADDING) / f32::from(m.width)).floor();
-                        let rows = ((f32::from(bounds.size.height) - 2.0 * PADDING) / f32::from(m.height)).floor();
+                        let cols = ((f32::from(bounds.size.width) - 2.0 * padding) / f32::from(m.width)).floor();
+                        let rows = ((f32::from(bounds.size.height) - 2.0 * padding) / f32::from(m.height)).floor();
                         let (cols, rows) = (cols.max(2.0) as u16, rows.max(1.0) as u16);
                         view.update(cx, |view, cx| {
                             let before = view.emu.size();

@@ -4,6 +4,7 @@
 //! windows render it, and saved benches serialize it.
 
 mod color;
+pub mod config;
 mod ids;
 pub mod paths;
 mod tree;
