@@ -155,4 +155,13 @@ pub trait Emulator: Send {
 
     /// The visible grid as plain text, one line per row, trailing blanks trimmed.
     fn dump_text(&self) -> String;
+
+    /// Highlights `query` in the scrollback and screen (plain text, ignoring
+    /// case unless it has capitals) and goes to the newest match; `None` or
+    /// an empty query ends the search. Returns whether anything matches.
+    fn set_search(&mut self, query: Option<&str>) -> bool;
+
+    /// Goes to the next match, older or newer, wrapping around, and scrolls
+    /// it into view. Returns whether anything matches.
+    fn search_step(&mut self, older: bool) -> bool;
 }

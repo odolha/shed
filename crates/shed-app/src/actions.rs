@@ -32,6 +32,7 @@ actions!(
         OpenLogbook,
         ToggleSetup,
         TogglePegboard,
+        SearchScrollback,
     ]
 );
 
@@ -57,6 +58,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("shift-pageup", "scroll_page_up"),
     ("shift-pagedown", "scroll_page_down"),
     ("ctrl-r", "logbook"),
+    ("ctrl-shift-f", "search"),
     ("ctrl-shift-t", "new_tab"),
     ("ctrl-shift-w", "close_pane"),
     ("ctrl-tab", "next_tab"),
@@ -114,6 +116,7 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         "zoom_reset" => KeyBinding::new(key, ZoomReset, t),
         "scroll_page_up" => KeyBinding::new(key, ScrollPageUp, t),
         "scroll_page_down" => KeyBinding::new(key, ScrollPageDown, t),
+        "search" => KeyBinding::new(key, SearchScrollback, t),
         // Only at a shell prompt: in vim and other programs the key is theirs.
         "logbook" => KeyBinding::new(key, OpenLogbook, Some("Terminal && at_prompt")),
         "new_tab" => KeyBinding::new(key, NewTab, w),

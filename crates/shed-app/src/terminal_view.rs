@@ -48,8 +48,9 @@ use shed_emu::{
 use shed_model::PaneId;
 use shed_proto::{ClientMsg, Frame};
 
-use crate::actions::{Copy, OpenLogbook, Paste, ScrollPageDown, ScrollPageUp, ZoomIn, ZoomOut, ZoomReset};
+use crate::actions::{Copy, OpenLogbook, Paste, ScrollPageDown, ScrollPageUp, SearchScrollback, ZoomIn, ZoomOut, ZoomReset};
 use crate::keeper_conn::KeeperConn;
+use crate::line_editor::{EditorEvent, LineEditor};
 use crate::logbook_view::{LogbookSearch, SearchEvent};
 use crate::settings::Settings;
 use crate::theme::{FontSettings, UiColors, hsla, hsla_alpha};
@@ -95,6 +96,15 @@ pub struct TerminalView {
     /// The history walk in progress, shown as a chip by the prompt.
     walk: Option<WalkState>,
     search: Option<(Entity<LogbookSearch>, Subscription)>,
+    /// The scrollback search bar, while open.
+    find: Option<Find>,
+}
+
+struct Find {
+    editor: Entity<LineEditor>,
+    query: String,
+    found: bool,
+    _subscriptions: [Subscription; 2],
 }
 
 impl TerminalView {
@@ -124,8 +134,64 @@ impl TerminalView {
             at_prompt: false,
             walk: None,
             search: None,
+            find: None,
             sync_timer: None,
         }
+    }
+
+    fn open_find(&mut self, _: &SearchScrollback, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(find) = &self.find {
+            window.focus(&find.editor.read(cx).focus_handle(cx), cx);
+            return;
+        }
+        // A one-line selection is the likeliest thing to look for.
+        let initial = self.emu.selection_text().filter(|t| !t.contains('\n')).unwrap_or_default();
+        let editor = cx.new(|cx| LineEditor::new(initial.clone(), cx));
+        window.focus(&editor.read(cx).focus_handle(cx), cx);
+        let typed = cx.observe(&editor, |this, editor, cx| {
+            let text = editor.read(cx).text().to_string();
+            let Some(find) = &mut this.find else { return };
+            if text != find.query {
+                find.found = this.emu.set_search(Some(&text));
+                find.query = text;
+                this.dirty = true;
+                cx.notify();
+            }
+        });
+        // Enter never reaches the field: the bar takes it to step (see `find_key`).
+        let cancelled = cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| {
+            if let EditorEvent::Cancel = event {
+                this.close_find(window, cx);
+            }
+        });
+        let found = self.emu.set_search(Some(&initial));
+        self.find = Some(Find { editor, query: initial, found, _subscriptions: [typed, cancelled] });
+        self.dirty = true;
+        cx.notify();
+    }
+
+    /// Ends the search where it is; typing in the pane goes back to the bottom.
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find = None;
+        self.emu.set_search(None);
+        self.dirty = true;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn find_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let older = match event.keystroke.key.as_str() {
+            "enter" => !event.keystroke.modifiers.shift,
+            "up" => true,
+            "down" => false,
+            _ => return,
+        };
+        if let Some(find) = &mut self.find {
+            find.found = self.emu.search_step(older);
+        }
+        self.dirty = true;
+        cx.stop_propagation();
+        cx.notify();
     }
 
     pub fn focus_handle(&self) -> &FocusHandle {
@@ -267,7 +333,11 @@ impl TerminalView {
         GridPoint { col, row, right_half }
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Keys an overlay's field leaves alone bubble up here; they are not the shell's.
+        if !self.focus.is_focused(window) {
+            return;
+        }
         let ks = &event.keystroke;
         let m = ks.modifiers;
         let key = ks.key.as_str();
@@ -777,6 +847,7 @@ impl Render for TerminalView {
             .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::open_logbook))
+            .on_action(cx.listener(Self::open_find))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(|v, _: &ZoomIn, _, cx| v.zoom(1.0, cx)))
             .on_action(cx.listener(|v, _: &ZoomOut, _, cx| v.zoom(-1.0, cx)))
@@ -836,6 +907,33 @@ impl Render for TerminalView {
             })
             .when_some(self.search.as_ref().map(|(s, _)| s.clone()), |el, search| {
                 el.child(div().absolute().bottom_0().left_0().w_full().child(search))
+            })
+            .when_some(self.find.as_ref().map(|f| (f.editor.clone(), f.found, f.query.is_empty())), |el, (editor, found, empty)| {
+                let ui = &self.ui;
+                let hint = match (empty, found) {
+                    (true, _) => "find in scrollback",
+                    (false, true) => "Enter older · Shift+Enter newer · Esc",
+                    (false, false) => "no matches",
+                };
+                el.child(
+                    div()
+                        .absolute()
+                        .top(px(4.0))
+                        .right(px(padding + 8.0))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(hsla(ui.tab_active))
+                        .border_1()
+                        .border_color(hsla(ui.divider))
+                        .text_size(px(12.0))
+                        .capture_key_down(cx.listener(Self::find_key))
+                        .child(div().w(px(220.0)).text_color(hsla(ui.text)).child(editor))
+                        .child(div().text_color(hsla(if !empty && !found { Rgb::hex(0xF0566A) } else { ui.text_dim })).child(hint)),
+                )
             })
     }
 }

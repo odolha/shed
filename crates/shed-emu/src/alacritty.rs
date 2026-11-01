@@ -1,11 +1,13 @@
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color, NamedColor, Processor, StdSyncHandler};
 use shed_model::Rgb;
@@ -29,6 +31,34 @@ pub struct AlacrittyEmulator {
     size: GridSize,
     /// Answers colour queries (OSC 4/10/11) when the app has not set the colour itself.
     palette: Palette,
+    search: Option<Search>,
+}
+
+/// A scrollback search in progress.
+struct Search {
+    /// Behind a `RefCell` because matching needs it mutable while a snapshot
+    /// only borrows the emulator.
+    regex: RefCell<RegexSearch>,
+    /// The match last gone to.
+    focused: Option<Match>,
+}
+
+/// `text` as a regex that matches it literally.
+fn literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `a` blended `t` of the way towards `b`.
+fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Rgb { r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b) }
 }
 
 #[derive(Clone)]
@@ -65,7 +95,7 @@ impl AlacrittyEmulator {
         let events = Arc::new(Mutex::new(Vec::new()));
         let config = term::Config { scrolling_history: SCROLLBACK, ..Default::default() };
         let term = Term::new(config, &Dims(size), Listener(events.clone()));
-        Self { term, processor: Processor::new(), events, size, palette }
+        Self { term, processor: Processor::new(), events, size, palette, search: None }
     }
 
     fn resolve(&self, color: Color, palette: &Palette) -> Rgb {
@@ -246,6 +276,18 @@ impl Emulator for AlacrittyEmulator {
         out.cells.reserve(rows * cols);
         let default_bg = out.background;
         let selection = self.term.selection.as_ref().and_then(|s| s.to_range(&self.term));
+        let (matches, focused) = match &self.search {
+            Some(search) => {
+                // From a few lines above, for matches that start off screen.
+                let start = Point::new(Line(-offset - 5).max(self.term.topmost_line()), Column(0));
+                let end = Point::new(Line(rows as i32 - 1 - offset), Column(cols - 1));
+                let mut regex = search.regex.borrow_mut();
+                let found: Vec<Match> = RegexIter::new(start, end, Direction::Right, &self.term, &mut regex).collect();
+                (found, search.focused.clone())
+            }
+            None => (Vec::new(), None),
+        };
+        let found_bg = mix(palette.ansi[3], default_bg, 0.55);
 
         for row in 0..rows {
             let line = &grid[Line(row as i32 - offset)];
@@ -277,6 +319,16 @@ impl Emulator for AlacrittyEmulator {
                     has_bg: bg != default_bg,
                     selected: selection.is_some_and(|r| r.contains(Point::new(Line(row as i32 - offset), Column(col)))),
                 };
+                if !matches.is_empty() {
+                    let p = Point::new(Line(row as i32 - offset), Column(col));
+                    if focused.as_ref().is_some_and(|m| m.contains(&p)) {
+                        (fg, bg) = (default_bg, palette.ansi[3]);
+                        flags.has_bg = true;
+                    } else if matches.iter().any(|m| m.contains(&p)) {
+                        bg = found_bg;
+                        flags.has_bg = true;
+                    }
+                }
                 if flags.selected {
                     bg = palette.selection;
                     flags.has_bg = true;
@@ -431,6 +483,31 @@ impl Emulator for AlacrittyEmulator {
         }
         out
     }
+
+    fn set_search(&mut self, query: Option<&str>) -> bool {
+        let regex = query.filter(|q| !q.is_empty()).and_then(|q| RegexSearch::new(&literal(q)).ok());
+        self.search = regex.map(|regex| Search { regex: RefCell::new(regex), focused: None });
+        self.search_step(true)
+    }
+
+    fn search_step(&mut self, older: bool) -> bool {
+        let Some(search) = &mut self.search else { return false };
+        let (direction, origin) = match (&search.focused, older) {
+            (Some(m), true) => (Direction::Left, m.start().sub(&self.term, Boundary::None, 1)),
+            (Some(m), false) => (Direction::Right, m.end().add(&self.term, Boundary::None, 1)),
+            // The newest match first: from the end of the screen, upwards.
+            (None, _) => (Direction::Left, Point::new(self.term.bottommost_line(), self.term.last_column())),
+        };
+        let found = self.term.search_next(search.regex.get_mut(), origin, direction, Side::Left, None);
+        search.focused = found.clone();
+        match found {
+            Some(m) => {
+                self.term.scroll_to_point(*m.start());
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 impl AlacrittyEmulator {
@@ -463,6 +540,50 @@ mod tests {
 
     fn emu(cols: u16, rows: u16) -> AlacrittyEmulator {
         AlacrittyEmulator::new(GridSize::new(cols, rows), Palette::default())
+    }
+
+    /// The line the focused match starts on (negative is scrollback).
+    fn focused_line(e: &AlacrittyEmulator) -> Option<i32> {
+        e.search.as_ref()?.focused.as_ref().map(|m| m.start().line.0)
+    }
+
+    #[test]
+    fn search_goes_newest_first_wraps_and_scrolls_matches_into_view() {
+        let mut e = emu(20, 3);
+        // Lines -3..=2 once scrolled: "apple" at -3, "Apple pie" at -1.
+        e.advance(b"apple\r\nbanana\r\nApple pie\r\nx\r\ny\r\nz");
+        assert!(e.set_search(Some("apple")));
+        assert_eq!(focused_line(&e), Some(-1), "newest first");
+        assert_eq!(e.display_offset(), 1, "scrolled to it");
+        assert!(e.search_step(true));
+        assert_eq!(focused_line(&e), Some(-3));
+        assert_eq!(e.display_offset(), 3);
+        assert!(e.search_step(true));
+        assert_eq!(focused_line(&e), Some(-1), "wrapped around");
+        assert!(e.search_step(false));
+        assert_eq!(focused_line(&e), Some(-3), "and back the other way");
+
+        // Capitals make it exact; specials are plain text.
+        assert!(e.set_search(Some("Apple")));
+        assert_eq!(focused_line(&e), Some(-1));
+        assert!(!e.set_search(Some("a.ple")));
+        assert!(!e.set_search(Some("")));
+        assert!(e.search.is_none());
+    }
+
+    #[test]
+    fn search_matches_are_highlighted() {
+        let mut e = emu(20, 2);
+        e.advance(b"one two one\r\n");
+        e.set_search(Some("one"));
+        let palette = Palette::default();
+        let mut snap = Snapshot::default();
+        e.snapshot(&palette, &mut snap);
+        let bg = |col: usize| snap.cells[col].bg;
+        // The newest "one" is focused, the other only marked.
+        assert_eq!(bg(8), palette.ansi[3]);
+        assert!(snap.cells[0].flags.has_bg && bg(0) != palette.ansi[3]);
+        assert!(!snap.cells[4].flags.has_bg);
     }
 
     #[test]
