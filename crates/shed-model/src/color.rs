@@ -103,6 +103,31 @@ impl BenchColor {
     }
 }
 
+/// Named colours for tags, as written in `shed.toml` and `shed tag add`.
+pub const TAG_COLORS: [(&str, Rgb); 8] = [
+    ("red", Rgb::hex(0xF0566A)),
+    ("orange", Rgb::hex(0xFF9A5A)),
+    ("yellow", Rgb::hex(0xF2C14E)),
+    ("green", Rgb::hex(0x5FD38D)),
+    ("blue", Rgb::hex(0x5C9DFF)),
+    ("violet", Rgb::hex(0xB48BFF)),
+    ("teal", Rgb::hex(0x3CCFC0)),
+    ("grey", Rgb::hex(0x8A93A3)),
+];
+
+/// A tag colour by name (`red`, `grey`, …) or `#rrggbb`.
+pub fn tag_color(name: &str) -> Option<Rgb> {
+    let name = name.trim().to_ascii_lowercase();
+    let name = if name == "gray" { "grey".to_string() } else { name };
+    TAG_COLORS.iter().find(|(n, _)| *n == name).map(|(_, c)| *c).or_else(|| Rgb::parse(&name))
+}
+
+/// A stable colour for a tag that names none, so `prod` always looks the same.
+pub fn default_tag_color(label: &str) -> Rgb {
+    let hash = label.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32);
+    TAG_COLORS[hash as usize % TAG_COLORS.len()].1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +138,15 @@ mod tests {
         assert_eq!(BenchColor::next_unused(&[BenchColor::Blue, BenchColor::Pink]), BenchColor::Violet);
         let all = BenchColor::NAMED;
         assert_eq!(BenchColor::next_unused(&all), BenchColor::Blue);
+    }
+
+    #[test]
+    fn tag_colours() {
+        assert_eq!(tag_color("Red"), Some(Rgb::hex(0xF0566A)));
+        assert_eq!(tag_color("gray"), tag_color("grey"));
+        assert_eq!(tag_color("#010203"), Some(Rgb::hex(0x010203)));
+        assert_eq!(tag_color("nope"), None);
+        assert_eq!(default_tag_color("prod"), default_tag_color("prod"));
     }
 
     #[test]

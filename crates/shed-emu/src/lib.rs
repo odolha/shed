@@ -8,6 +8,7 @@
 mod alacritty;
 pub mod binary;
 pub mod keys;
+pub mod links;
 pub mod mouse;
 mod palette;
 mod snapshot;
@@ -58,6 +59,27 @@ pub enum MouseMode {
     Motion,
 }
 
+/// How a selection grows from where the mouse went down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionKind {
+    /// Cell by cell.
+    Simple,
+    /// Whole words (double-click).
+    Word,
+    /// Whole lines (triple-click).
+    Line,
+    /// A rectangle.
+    Block,
+}
+
+/// A cell in the visible grid, 0-based, with the half of it the pointer is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridPoint {
+    pub col: usize,
+    pub row: usize,
+    pub right_half: bool,
+}
+
 /// Something the terminal asked for that the emulator cannot do by itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EmuEvent {
@@ -106,6 +128,21 @@ pub trait Emulator: Send {
     /// scrollback, both screens, cursor, pen, modes, colours and title.
     /// A synchronized update in progress is applied first.
     fn replay(&mut self) -> Vec<u8>;
+
+    fn start_selection(&mut self, kind: SelectionKind, at: GridPoint);
+
+    fn update_selection(&mut self, to: GridPoint);
+
+    fn clear_selection(&mut self);
+
+    /// The selected text, if anything is selected.
+    fn selection_text(&self) -> Option<String>;
+
+    /// The visible row's text and the column each character starts at.
+    fn row_text(&self, row: usize) -> (String, Vec<usize>);
+
+    /// The OSC 8 hyperlink on a visible cell.
+    fn hyperlink_at(&self, col: usize, row: usize) -> Option<String>;
 
     /// The visible grid as plain text, one line per row, trailing blanks trimmed.
     fn dump_text(&self) -> String;

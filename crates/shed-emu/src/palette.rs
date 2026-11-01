@@ -10,6 +10,8 @@ pub struct Palette {
     pub cursor: Rgb,
     /// Text colour under a block cursor.
     pub cursor_text: Rgb,
+    /// Background of selected text.
+    pub selection: Rgb,
 }
 
 impl Default for Palette {
@@ -39,6 +41,7 @@ impl Default for Palette {
             background: h(0x14171D),
             cursor: h(0xFF9A5A),
             cursor_text: h(0x14171D),
+            selection: h(0x34405A),
         }
     }
 }

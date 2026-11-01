@@ -11,9 +11,11 @@ use gpui::{
     UnderlineStyle, Window, canvas, div, point, prelude::*, px, size,
 };
 use shed_emu::keys::{self, KeyInput, Mods};
+use shed_emu::links::{self, Link};
 use shed_emu::mouse::{self, Button, MouseAction};
 use shed_emu::{
-    AlacrittyEmulator, CursorShape, EmuEvent, Emulator, GridSize, MouseMode, Palette, Rgb, Snapshot,
+    AlacrittyEmulator, CursorShape, EmuEvent, Emulator, GridPoint, GridSize, MouseMode, Palette, Rgb,
+    SelectionKind, Snapshot,
 };
 use shed_model::PaneId;
 use shed_proto::{ClientMsg, Frame};
@@ -47,6 +49,11 @@ pub struct TerminalView {
     /// Fractional lines of scroll not yet applied.
     scroll_acc: f32,
     held_button: Option<Button>,
+    /// Where a plain left press landed; a selection starts only once the mouse moves.
+    select_anchor: Option<(GridPoint, SelectionKind)>,
+    selecting: bool,
+    /// The pane's working directory, for opening relative paths.
+    pub cwd: std::path::PathBuf,
     sync_timer: Option<Task<()>>,
 }
 
@@ -65,6 +72,9 @@ impl TerminalView {
             grid_origin: Rc::new(Cell::new(Point::default())),
             scroll_acc: 0.0,
             held_button: None,
+            select_anchor: None,
+            selecting: false,
+            cwd: std::path::PathBuf::from("/"),
             sync_timer: None,
         }
     }
@@ -169,6 +179,18 @@ impl TerminalView {
         (col.min(size.cols as usize - 1), row.min(size.rows as usize - 1))
     }
 
+    fn grid_point(&self, position: Point<Pixels>) -> GridPoint {
+        let (col, row) = self.cell_at(position);
+        let right_half = match self.metrics {
+            Some((_, m)) => {
+                let x = f32::from(position.x - self.grid_origin.get().x) / f32::from(m.width);
+                x - x.floor() >= 0.5
+            }
+            None => false,
+        };
+        GridPoint { col, row, right_half }
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
         let m = ks.modifiers;
@@ -196,8 +218,10 @@ impl TerminalView {
         }
     }
 
-    fn copy(&mut self, _: &Copy, _: &mut Window, _cx: &mut Context<Self>) {
-        // Selection arrives with mouse selection (phase 3c).
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = self.emu.selection_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
     }
 
     fn zoom(&mut self, delta: f32, cx: &mut Context<Self>) {
@@ -276,18 +300,105 @@ impl TerminalView {
         }
         let Some(button) = button_of(event.button) else { return };
         self.held_button = Some(button);
-        self.mouse_report(MouseAction::Press(button), event.position, event.modifiers);
+        if self.mouse_report(MouseAction::Press(button), event.position, event.modifiers) {
+            // The app has the mouse; Shed's menus must not open over it.
+            cx.stop_propagation();
+            return;
+        }
+        let at = self.grid_point(event.position);
+        match button {
+            Button::Left if event.modifiers.control => self.open_link(at, cx),
+            Button::Left => {
+                let kind = match event.click_count {
+                    1 if event.modifiers.alt => SelectionKind::Block,
+                    1 => SelectionKind::Simple,
+                    2 => SelectionKind::Word,
+                    _ => SelectionKind::Line,
+                };
+                self.emu.clear_selection();
+                if kind == SelectionKind::Word || kind == SelectionKind::Line {
+                    self.emu.start_selection(kind, at);
+                    self.selecting = true;
+                } else {
+                    self.select_anchor = Some((at, kind));
+                }
+                self.dirty = true;
+                cx.notify();
+            }
+            Button::Middle => {
+                if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
+                    self.emu.scroll_to_bottom();
+                    self.send(keys::encode_paste(&text, self.emu.modes()));
+                }
+            }
+            _ => {}
+        }
     }
 
-    fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(button) = button_of(event.button) else { return };
         self.held_button = None;
-        self.mouse_report(MouseAction::Release(button), event.position, event.modifiers);
+        self.select_anchor = None;
+        if self.mouse_report(MouseAction::Release(button), event.position, event.modifiers) {
+            return;
+        }
+        if std::mem::take(&mut self.selecting)
+            && let Some(text) = self.emu.selection_text()
+        {
+            // X11 convention: selecting copies to the primary selection.
+            cx.write_to_primary(ClipboardItem::new_string(text));
+        }
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let held = event.pressed_button.and_then(button_of).or(self.held_button.filter(|_| event.pressed_button.is_some()));
-        self.mouse_report(MouseAction::Move(held), event.position, event.modifiers);
+        if self.mouse_report(MouseAction::Move(held), event.position, event.modifiers) {
+            return;
+        }
+        if held != Some(Button::Left) {
+            return;
+        }
+        if let Some((anchor, kind)) = self.select_anchor.take() {
+            self.emu.start_selection(kind, anchor);
+            self.selecting = true;
+        }
+        if !self.selecting {
+            return;
+        }
+        // Dragging past the top or bottom edge scrolls.
+        if let Some((_, m)) = self.metrics {
+            let y = f32::from(event.position.y - self.grid_origin.get().y);
+            let height = f32::from(m.height) * self.emu.size().rows as f32;
+            if y < 0.0 {
+                self.emu.scroll_display(1);
+            } else if y > height {
+                self.emu.scroll_display(-1);
+            }
+        }
+        self.emu.update_selection(self.grid_point(event.position));
+        self.dirty = true;
+        cx.notify();
+    }
+
+    /// Opens the hyperlink, URL or file path under a Ctrl+click.
+    fn open_link(&mut self, at: GridPoint, cx: &mut Context<Self>) {
+        let target = self.emu.hyperlink_at(at.col, at.row).or_else(|| {
+            let (text, cols) = self.emu.row_text(at.row);
+            let index = cols.iter().rposition(|&c| c <= at.col)?;
+            match links::link_at(&text, index)? {
+                Link::Url(url) => Some(url),
+                Link::Path(path) => {
+                    let expanded = match path.strip_prefix("~/") {
+                        Some(rest) => std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(rest))?,
+                        None => self.cwd.join(&path),
+                    };
+                    expanded.exists().then(|| format!("file://{}", expanded.display()))
+                }
+            }
+        });
+        if let Some(url) = target {
+            cx.open_url(&url);
+        }
     }
 }
 

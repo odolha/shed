@@ -8,6 +8,6 @@ mod ids;
 pub mod paths;
 mod tree;
 
-pub use color::{BenchColor, Rgb};
+pub use color::{BenchColor, Rgb, TAG_COLORS, default_tag_color, tag_color};
 pub use ids::{BenchId, PaneId, TabId};
 pub use tree::{Bench, Direction, Pane, PaneNode, Rect, Shed, SplitDir, Tab, Tag, Tool, split_rect};

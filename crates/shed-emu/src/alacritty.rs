@@ -3,7 +3,8 @@ use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color, NamedColor, Processor, StdSyncHandler};
@@ -11,8 +12,8 @@ use shed_model::Rgb;
 
 use crate::palette::dim;
 use crate::{
-    CellFlags, CellView, CursorShape, CursorView, EmuEvent, Emulator, GridSize, Modes, MouseMode,
-    Palette, Snapshot,
+    CellFlags, CellView, CursorShape, CursorView, EmuEvent, Emulator, GridPoint, GridSize, Modes,
+    MouseMode, Palette, SelectionKind, Snapshot,
 };
 
 mod replay;
@@ -240,6 +241,7 @@ impl Emulator for AlacrittyEmulator {
         out.cells.clear();
         out.cells.reserve(rows * cols);
         let default_bg = out.background;
+        let selection = self.term.selection.as_ref().and_then(|s| s.to_range(&self.term));
 
         for row in 0..rows {
             let line = &grid[Line(row as i32 - offset)];
@@ -257,7 +259,7 @@ impl Emulator for AlacrittyEmulator {
                 if f.contains(Flags::HIDDEN) {
                     fg = bg;
                 }
-                let flags = CellFlags {
+                let mut flags = CellFlags {
                     bold: f.contains(Flags::BOLD),
                     italic: f.contains(Flags::ITALIC),
                     underline: f.intersects(
@@ -269,7 +271,12 @@ impl Emulator for AlacrittyEmulator {
                     wide: f.contains(Flags::WIDE_CHAR),
                     spacer: f.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
                     has_bg: bg != default_bg,
+                    selected: selection.is_some_and(|r| r.contains(Point::new(Line(row as i32 - offset), Column(col)))),
                 };
+                if flags.selected {
+                    bg = palette.selection;
+                    flags.has_bg = true;
+                }
                 out.cells.push(CellView {
                     ch: visible_char(cell.c),
                     zerowidth: cell.zerowidth().map(|z| z.iter().collect::<String>().into()),
@@ -313,6 +320,59 @@ impl Emulator for AlacrittyEmulator {
         replay::serialize(&self.term)
     }
 
+    fn start_selection(&mut self, kind: SelectionKind, at: GridPoint) {
+        let ty = match kind {
+            SelectionKind::Simple => SelectionType::Simple,
+            SelectionKind::Word => SelectionType::Semantic,
+            SelectionKind::Line => SelectionType::Lines,
+            SelectionKind::Block => SelectionType::Block,
+        };
+        let (point, side) = self.term_point(at);
+        self.term.selection = Some(Selection::new(ty, point, side));
+    }
+
+    fn update_selection(&mut self, to: GridPoint) {
+        let (point, side) = self.term_point(to);
+        if let Some(sel) = &mut self.term.selection {
+            sel.update(point, side);
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        let sel = self.term.selection.as_ref()?;
+        if sel.is_empty() {
+            return None;
+        }
+        self.term.selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    fn row_text(&self, row: usize) -> (String, Vec<usize>) {
+        let grid = self.term.grid();
+        let line = &grid[Line(row as i32 - grid.display_offset() as i32)];
+        let mut text = String::new();
+        let mut cols = Vec::new();
+        for col in 0..grid.columns() {
+            let cell = &line[Column(col)];
+            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                continue;
+            }
+            text.push(visible_char(cell.c));
+            cols.push(col);
+        }
+        (text, cols)
+    }
+
+    fn hyperlink_at(&self, col: usize, row: usize) -> Option<String> {
+        let grid = self.term.grid();
+        let line = Line(row as i32 - grid.display_offset() as i32);
+        let col = col.min(grid.columns() - 1);
+        grid[line][Column(col)].hyperlink().map(|h| h.uri().to_string())
+    }
+
     fn dump_text(&self) -> String {
         let grid = self.term.grid();
         let offset = grid.display_offset() as i32;
@@ -334,6 +394,16 @@ impl Emulator for AlacrittyEmulator {
             out.push('\n');
         }
         out
+    }
+}
+
+impl AlacrittyEmulator {
+    fn term_point(&self, at: GridPoint) -> (Point, Side) {
+        let grid = self.term.grid();
+        let row = at.row.min(grid.screen_lines() - 1);
+        let col = at.col.min(grid.columns() - 1);
+        let point = Point::new(Line(row as i32 - grid.display_offset() as i32), Column(col));
+        (point, if at.right_half { Side::Right } else { Side::Left })
     }
 }
 
@@ -385,6 +455,36 @@ mod tests {
         assert_eq!(row[3].bg, Rgb::hex(0x010203));
         assert!(row[3].flags.has_bg);
         assert_eq!(s.cursor.col, 4);
+    }
+
+    #[test]
+    fn selection_words_lines_and_scrollback() {
+        let mut e = emu(20, 3);
+        e.advance(b"one two three\r\nsecond line");
+        let at = |col, row| GridPoint { col, row, right_half: false };
+        e.start_selection(SelectionKind::Word, at(5, 0));
+        assert_eq!(e.selection_text().as_deref(), Some("two"));
+        e.start_selection(SelectionKind::Line, at(2, 1));
+        assert_eq!(e.selection_text().as_deref(), Some("second line\n"));
+        e.start_selection(SelectionKind::Simple, at(0, 0));
+        e.update_selection(GridPoint { col: 2, row: 1, right_half: true });
+        assert_eq!(e.selection_text().as_deref(), Some("one two three\nsec"));
+        let mut s = Snapshot::default();
+        e.snapshot(&Palette::default(), &mut s);
+        assert!(s.row(0)[0].flags.selected && !s.row(1)[3].flags.selected);
+        e.clear_selection();
+        assert_eq!(e.selection_text(), None);
+    }
+
+    #[test]
+    fn hyperlinks_and_row_text() {
+        let mut e = emu(20, 2);
+        e.advance("日本 \x1b]8;;https://x.org\x1b\\link\x1b]8;;\x1b\\".as_bytes());
+        let (text, cols) = e.row_text(0);
+        assert!(text.starts_with("日本 link"));
+        assert_eq!(&cols[..4], &[0, 2, 4, 5]);
+        assert_eq!(e.hyperlink_at(6, 0).as_deref(), Some("https://x.org"));
+        assert_eq!(e.hyperlink_at(0, 0), None);
     }
 
     #[test]

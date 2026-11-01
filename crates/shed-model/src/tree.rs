@@ -410,6 +410,20 @@ impl PaneNode {
             .map(|(id, _, _)| id)
     }
 
+    /// Sets the ratio of the split at `path` (`false` = first child, `true` = second).
+    pub fn set_ratio(&mut self, path: &[bool], new: f32) -> bool {
+        match (self, path.split_first()) {
+            (PaneNode::Split { ratio, .. }, None) => {
+                *ratio = new.clamp(0.05, 0.95);
+                true
+            }
+            (PaneNode::Split { first, second, .. }, Some((&go_second, rest))) => {
+                if go_second { second.set_ratio(rest, new) } else { first.set_ratio(rest, new) }
+            }
+            (PaneNode::Leaf(_), _) => false,
+        }
+    }
+
     /// The same layout with every ratio clamped to keep panes visible.
     pub fn clamped(&self) -> PaneNode {
         match self {
@@ -499,6 +513,20 @@ mod tests {
         assert!(node.split(a, b, SplitDir::Right));
         assert_eq!(node.leaves(), vec![a, b]);
         assert_eq!(node.remove(a), Some(PaneNode::Leaf(b)));
+    }
+
+    #[test]
+    fn set_ratio_by_path() {
+        let (a, b, c) = (PaneId::new(), PaneId::new(), PaneId::new());
+        let mut node = PaneNode::Leaf(a);
+        node.split(a, b, SplitDir::Right);
+        node.split(b, c, SplitDir::Down);
+        assert!(node.set_ratio(&[true], 0.3));
+        assert!(node.set_ratio(&[], 2.0));
+        let PaneNode::Split { ratio, second, .. } = &node else { panic!() };
+        assert_eq!(*ratio, 0.95);
+        assert!(matches!(**second, PaneNode::Split { ratio, .. } if ratio == 0.3));
+        assert!(!node.set_ratio(&[false], 0.5), "a leaf has no ratio");
     }
 
     #[test]

@@ -1,12 +1,19 @@
 //! A bench's window: the bench-colour stripe, the tab bar, and the active
 //! tab's panes laid out by its split tree.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use gpui::{
-    AnyElement, Context, Entity, Focusable, MouseButton, PromptLevel, Subscription, Window, div, prelude::*,
-    px, relative, svg,
+    AnyElement, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, Point, PromptLevel, SharedString, Subscription, Window,
+    anchored, canvas, deferred, div, prelude::*, px, relative, svg,
 };
-use gpui::FocusHandle;
-use shed_model::{Bench, BenchId, Direction, PaneId, PaneNode, SplitDir, Tab, TabId};
+use shed_model::{
+    Bench, BenchColor, BenchId, Direction, PaneId, PaneNode, Rgb, SplitDir, Tab, TabId, Tag,
+    default_tag_color, tag_color,
+};
 use shed_proto::{ClientMsg, ShowTarget};
 
 use crate::actions::*;
@@ -17,9 +24,60 @@ use crate::theme::{UiColors, hsla, hsla_alpha};
 
 const TAB_BAR_HEIGHT: f32 = 32.0;
 
-enum RenameTarget {
-    Tab(TabId),
-    Bench,
+/// What the inline text field is editing.
+#[derive(Clone, Copy, PartialEq)]
+enum EditTarget {
+    TabName(TabId),
+    BenchName,
+    AddTag(TabId),
+    Badge,
+}
+
+type MenuAction = Rc<dyn Fn(&mut BenchWindow, &mut Window, &mut Context<BenchWindow>)>;
+
+enum MenuEntry {
+    Item { label: SharedString, swatch: Option<Rgb>, danger: bool, action: MenuAction },
+    Separator,
+}
+
+fn item(label: impl Into<SharedString>, action: impl Fn(&mut BenchWindow, &mut Window, &mut Context<BenchWindow>) + 'static) -> MenuEntry {
+    MenuEntry::Item { label: label.into(), swatch: None, danger: false, action: Rc::new(action) }
+}
+
+struct Menu {
+    position: Point<Pixels>,
+    entries: Vec<MenuEntry>,
+}
+
+/// A split border being dragged.
+struct SplitDrag {
+    tab: TabId,
+    path: Vec<bool>,
+    dir: SplitDir,
+    layout: PaneNode,
+}
+
+/// The payload of a tab being dragged, drawn under the pointer.
+#[derive(Clone)]
+pub struct DraggedTab {
+    tab: TabId,
+    title: String,
+}
+
+impl Render for DraggedTab {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let ui = UiColors::default();
+        div()
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .bg(hsla(ui.tab_active))
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .text_size(px(13.0))
+            .text_color(hsla(ui.text))
+            .child(self.title.clone())
+    }
 }
 
 pub struct BenchWindow {
@@ -30,7 +88,11 @@ pub struct BenchWindow {
     /// active pane without fighting the user's clicks.
     focused: Option<PaneId>,
     title: String,
-    renaming: Option<(RenameTarget, Entity<LineEditor>, Subscription)>,
+    editing: Option<(EditTarget, Entity<LineEditor>, Subscription)>,
+    menu: Option<Menu>,
+    /// Where each split container was laid out last frame, by path in the tree.
+    split_bounds: Rc<RefCell<HashMap<Vec<bool>, Bounds<Pixels>>>>,
+    drag: Option<SplitDrag>,
 }
 
 impl BenchWindow {
@@ -41,7 +103,17 @@ impl BenchWindow {
             true
         });
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
-        Self { bench, state, ui: UiColors::default(), focused: None, title: String::new(), renaming: None }
+        Self {
+            bench,
+            state,
+            ui: UiColors::default(),
+            focused: None,
+            title: String::new(),
+            editing: None,
+            menu: None,
+            split_bounds: Rc::default(),
+            drag: None,
+        }
     }
 
     /// Follows the tree: window title, and keyboard focus on the active pane.
@@ -53,7 +125,7 @@ impl BenchWindow {
             self.title = title;
         }
         let active_id = active.as_ref().map(|(id, _)| *id);
-        if active_id != self.focused && self.renaming.is_none() {
+        if active_id != self.focused && self.editing.is_none() {
             if let Some((_, handle)) = &active {
                 window.focus(handle, cx);
             }
@@ -62,7 +134,7 @@ impl BenchWindow {
         cx.notify();
     }
 
-    /// Re-applies focus after an overlay (the rename field) closes.
+    /// Re-applies focus after an overlay (a text field, a menu) closes.
     fn refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = self.state.read(cx);
         let Some(pane) = state.tree.bench(self.bench).and_then(|b| b.active_tab()).map(|t| t.active_pane) else { return };
@@ -86,6 +158,10 @@ impl BenchWindow {
         self.bench(cx).and_then(|b| b.active_tab())
     }
 
+    fn tab<'a>(&self, tab: TabId, cx: &'a Context<Self>) -> Option<&'a Tab> {
+        self.bench(cx).and_then(|b| b.tabs.iter().find(|t| t.id == tab))
+    }
+
     fn cycle_tab(&mut self, delta: isize, cx: &mut Context<Self>) {
         let Some(bench) = self.bench(cx) else { return };
         let Some(i) = bench.tab_index(bench.active_tab) else { return };
@@ -94,11 +170,15 @@ impl BenchWindow {
         self.send(ClientMsg::FocusTab { tab }, cx);
     }
 
-    fn split(&mut self, dir: SplitDir, cx: &mut Context<Self>) {
-        let Some(tab) = self.active_tab(cx) else { return };
-        let pane = tab.active_pane;
-        let cwd = tab.active().map(|p| p.cwd.clone());
+    fn split_pane(&mut self, pane: PaneId, dir: SplitDir, cx: &mut Context<Self>) {
+        let cwd = self.state.read(cx).tree.pane(pane).map(|p| p.cwd.clone());
         self.send(ClientMsg::Split { pane, dir, cwd }, cx);
+    }
+
+    fn split(&mut self, dir: SplitDir, cx: &mut Context<Self>) {
+        if let Some(pane) = self.active_tab(cx).map(|t| t.active_pane) {
+            self.split_pane(pane, dir, cx);
+        }
     }
 
     fn move_focus(&mut self, dir: Direction, cx: &mut Context<Self>) {
@@ -127,32 +207,227 @@ impl BenchWindow {
         .detach();
     }
 
-    fn start_rename(&mut self, target: RenameTarget, window: &mut Window, cx: &mut Context<Self>) {
-        let current = match &target {
-            RenameTarget::Tab(tab) => self.bench(cx).and_then(|b| b.tabs.iter().find(|t| t.id == *tab)).map(|t| t.display_title()),
-            RenameTarget::Bench => self.bench(cx).map(|b| b.name.clone()),
+    fn start_edit(&mut self, target: EditTarget, window: &mut Window, cx: &mut Context<Self>) {
+        let current = match target {
+            EditTarget::TabName(tab) => self.tab(tab, cx).map(|t| t.display_title()),
+            EditTarget::BenchName => self.bench(cx).map(|b| b.name.clone()),
+            EditTarget::AddTag(_) => Some(String::new()),
+            EditTarget::Badge => self.bench(cx).map(|b| b.badge.clone().unwrap_or_default()),
         };
         let Some(current) = current else { return };
         let editor = cx.new(|cx| LineEditor::new(current, cx));
         window.focus(&editor.read(cx).focus_handle(cx), cx);
         let sub = cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| {
-            let Some((target, _, _)) = this.renaming.take() else { return };
+            let Some((target, _, _)) = this.editing.take() else { return };
             if let EditorEvent::Submit(text) = event {
-                let msg = match target {
-                    RenameTarget::Tab(tab) => ClientMsg::RenameTab { tab, name: Some(text.clone()) },
-                    RenameTarget::Bench => ClientMsg::RenameBench { bench: this.bench, name: text.clone() },
-                };
-                this.send(msg, cx);
+                this.submit_edit(target, text.clone(), cx);
             }
             this.refocus(window, cx);
         });
-        self.renaming = Some((target, editor, sub));
+        self.editing = Some((target, editor, sub));
         cx.notify();
+    }
+
+    fn submit_edit(&mut self, target: EditTarget, text: String, cx: &mut Context<Self>) {
+        let msg = match target {
+            EditTarget::TabName(tab) => ClientMsg::RenameTab { tab, name: Some(text) },
+            EditTarget::BenchName => ClientMsg::RenameBench { bench: self.bench, name: text },
+            EditTarget::Badge => {
+                let badge: String = text.chars().filter(|c| !c.is_whitespace()).take(2).collect();
+                ClientMsg::SetBadge { bench: self.bench, badge: (!badge.is_empty()).then_some(badge) }
+            }
+            EditTarget::AddTag(tab) => {
+                // "prod" or "prod red".
+                let mut words = text.split_whitespace();
+                let Some(label) = words.next() else { return };
+                let color = words.next().and_then(tag_color).unwrap_or_else(|| default_tag_color(label));
+                let Some(t) = self.tab(tab, cx) else { return };
+                let mut tags: Vec<Tag> = t.tags.iter().filter(|t| t.label != label).cloned().collect();
+                tags.push(Tag { label: label.to_string(), color, tint_tab: false });
+                ClientMsg::SetTags { tab, tags }
+            }
+        };
+        self.send(msg, cx);
+    }
+
+    fn open_menu(&mut self, position: Point<Pixels>, entries: Vec<MenuEntry>, cx: &mut Context<Self>) {
+        self.menu = Some(Menu { position, entries });
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn tab_menu(&self, tab_id: TabId, cx: &Context<Self>) -> Vec<MenuEntry> {
+        let Some(tab) = self.tab(tab_id, cx) else { return Vec::new() };
+        let mut entries = vec![
+            item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)),
+            item("Add Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)),
+        ];
+        for tag in &tab.tags {
+            let label = tag.label.clone();
+            let tint = tag.tint_tab;
+            entries.push(item(format!("{} Tint for “{}”", if tint { "✓" } else { "  " }, tag.label), {
+                let label = label.clone();
+                move |this, _, cx| {
+                    let Some(t) = this.tab(tab_id, cx) else { return };
+                    let tags = t.tags.iter().cloned().map(|mut t| {
+                        if t.label == label {
+                            t.tint_tab = !t.tint_tab;
+                        }
+                        t
+                    });
+                    let tags = tags.collect();
+                    this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
+                }
+            }));
+            entries.push(item(format!("Remove Tag “{}”", tag.label), move |this, _, cx| {
+                let Some(t) = this.tab(tab_id, cx) else { return };
+                let tags = t.tags.iter().filter(|t| t.label != label).cloned().collect();
+                this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
+            }));
+        }
+        let private = tab.private;
+        entries.push(item(if private { "✓ Private" } else { "   Private" }, move |this, _, cx| {
+            this.send(ClientMsg::SetPrivate { tab: tab_id, private: !private }, cx);
+        }));
+        let others: Vec<(BenchId, String, Rgb)> = self
+            .state
+            .read(cx)
+            .tree
+            .benches
+            .iter()
+            .filter(|b| b.id != self.bench)
+            .map(|b| (b.id, b.name.clone(), b.color.accent()))
+            .collect();
+        if !others.is_empty() {
+            entries.push(MenuEntry::Separator);
+            for (bench, name, color) in others {
+                entries.push(MenuEntry::Item {
+                    label: format!("Move to “{name}”").into(),
+                    swatch: Some(color),
+                    danger: false,
+                    action: Rc::new(move |this, _, cx| {
+                        this.send(ClientMsg::MoveTab { tab: tab_id, bench, index: usize::MAX }, cx);
+                    }),
+                });
+            }
+        }
+        entries.push(MenuEntry::Separator);
+        entries.push(MenuEntry::Item {
+            label: "Close Tab".into(),
+            swatch: None,
+            danger: true,
+            action: Rc::new(move |this, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)),
+        });
+        entries
+    }
+
+    fn pane_menu(&self, pane: PaneId) -> Vec<MenuEntry> {
+        vec![
+            item("Copy", |_, window, cx| window.dispatch_action(Box::new(Copy), cx)),
+            item("Paste", |_, window, cx| window.dispatch_action(Box::new(Paste), cx)),
+            MenuEntry::Separator,
+            item("Split Right", move |this, _, cx| this.split_pane(pane, SplitDir::Right, cx)),
+            item("Split Down", move |this, _, cx| this.split_pane(pane, SplitDir::Down, cx)),
+            MenuEntry::Separator,
+            MenuEntry::Item {
+                label: "Close Pane".into(),
+                swatch: None,
+                danger: true,
+                action: Rc::new(move |this, _, cx| this.send(ClientMsg::ClosePane { pane }, cx)),
+            },
+        ]
+    }
+
+    fn bench_menu(&self, cx: &Context<Self>) -> Vec<MenuEntry> {
+        let current = self.bench(cx).map(|b| b.color);
+        let mut entries = vec![
+            item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)),
+            item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
+            MenuEntry::Separator,
+        ];
+        for color in BenchColor::NAMED {
+            let name = color.name().unwrap_or_default();
+            let mark = if current == Some(color) { "✓ " } else { "" };
+            entries.push(MenuEntry::Item {
+                label: format!("{mark}{}{}", name[..1].to_uppercase(), &name[1..]).into(),
+                swatch: Some(color.accent()),
+                danger: false,
+                action: Rc::new(move |this, _, cx| {
+                    this.send(ClientMsg::SetBenchColor { bench: this.bench, color }, cx);
+                }),
+            });
+        }
+        entries.push(MenuEntry::Separator);
+        entries.push(item("New Bench", |this, _, cx| {
+            this.send(ClientMsg::Show(ShowTarget::NewBench { name: None, cwd: None }), cx);
+        }));
+        entries.push(MenuEntry::Item {
+            label: "Close Bench…".into(),
+            swatch: None,
+            danger: true,
+            action: Rc::new(|this, window, cx| this.close_bench(window, cx)),
+        });
+        entries
+    }
+
+    fn render_menu(&self, menu: &Menu, cx: &mut Context<Self>) -> AnyElement {
+        let ui = &self.ui;
+        let mut list = div()
+            .id("menu")
+            .occlude()
+            .min_w(px(200.0))
+            .py_1()
+            .bg(hsla(ui.tab_active))
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(13.0))
+            .text_color(hsla(ui.text))
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                this.menu = None;
+                this.refocus(window, cx);
+            }));
+        for (i, entry) in menu.entries.iter().enumerate() {
+            list = list.child(match entry {
+                MenuEntry::Separator => div().my_1().h(px(1.0)).bg(hsla(ui.divider)).into_any_element(),
+                MenuEntry::Item { label, swatch, danger, action } => {
+                    let action = action.clone();
+                    let color = if *danger { Rgb::hex(0xF0566A) } else { ui.text };
+                    div()
+                        .id(("menu-item", i))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .py_1()
+                        .text_color(hsla(color))
+                        .hover(|s| s.bg(hsla(ui.tab_hover)))
+                        .cursor_pointer()
+                        .when_some(*swatch, |el, c| el.child(div().size(px(10.0)).rounded_full().bg(hsla(c))))
+                        .child(label.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.menu = None;
+                            action(this, window, cx);
+                            if this.editing.is_none() {
+                                this.refocus(window, cx);
+                            }
+                        }))
+                        .into_any_element()
+                }
+            });
+        }
+        deferred(anchored().position(menu.position).snap_to_window_with_margin(px(8.0)).child(list)).priority(1).into_any_element()
+    }
+
+    fn editor_for(&self, target: EditTarget) -> Option<Entity<LineEditor>> {
+        self.editing.as_ref().filter(|(t, _, _)| *t == target).map(|(_, e, _)| e.clone())
     }
 
     fn render_tab_bar(&self, bench: &Bench, cx: &mut Context<Self>) -> impl IntoElement {
         let ui = &self.ui;
         let accent = bench.color.accent();
+        let tab_count = bench.tabs.len();
         let mut bar = div()
             .id("tab-bar")
             .flex()
@@ -165,6 +440,7 @@ impl BenchWindow {
         for (i, tab) in bench.tabs.iter().enumerate() {
             let active = tab.id == bench.active_tab;
             let tab_id = tab.id;
+            let title = tab.display_title();
             let tint = tab.all_tags().find(|t| t.tint_tab).map(|t| t.color);
             let mut el = div()
                 .id(("tab", i))
@@ -179,15 +455,24 @@ impl BenchWindow {
                 .border_r_1()
                 .border_color(hsla(ui.divider))
                 .cursor_pointer()
-                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     if event.click_count() >= 2 {
-                        this.start_rename(RenameTarget::Tab(tab_id), window, cx);
+                        this.start_edit(EditTarget::TabName(tab_id), window, cx);
                     } else {
                         this.send(ClientMsg::FocusTab { tab: tab_id }, cx);
                     }
                 }))
                 .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, _, cx| {
                     this.send(ClientMsg::CloseTab { tab: tab_id }, cx);
+                }))
+                .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    let entries = this.tab_menu(tab_id, cx);
+                    this.open_menu(e.position, entries, cx);
+                }))
+                .on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
+                .drag_over::<DraggedTab>(move |s, _, _, _| s.border_l_2().border_color(hsla(accent)))
+                .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
+                    this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: i }, cx);
                 }));
             el = match (active, tint) {
                 (true, Some(t)) => el.bg(hsla_alpha(t, 0.35)).text_color(hsla(ui.text)),
@@ -205,12 +490,9 @@ impl BenchWindow {
             if tab.private {
                 el = el.child(svg().path(icon("private")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
             }
-
-            let renaming_this = matches!(&self.renaming, Some((RenameTarget::Tab(t), _, _)) if *t == tab_id);
-            if let (true, Some((_, editor, _))) = (renaming_this, &self.renaming) {
-                el = el.child(editor.clone());
-            } else {
-                el = el.child(div().truncate().child(tab.display_title()));
+            match self.editor_for(EditTarget::TabName(tab_id)) {
+                Some(editor) => el = el.child(editor),
+                None => el = el.child(div().truncate().child(title)),
             }
             for tag in tab.all_tags() {
                 el = el.child(
@@ -223,6 +505,9 @@ impl BenchWindow {
                         .text_color(hsla(tag.color))
                         .child(tag.label.clone()),
                 );
+            }
+            if let Some(editor) = self.editor_for(EditTarget::AddTag(tab_id)) {
+                el = el.child(editor);
             }
             el = el.child(
                 div()
@@ -254,71 +539,131 @@ impl BenchWindow {
                 .on_click(cx.listener(move |this, _, _, cx| this.send(ClientMsg::NewTab { bench: bench_id, cwd: None }, cx)))
                 .child(svg().path(icon("tab-new")).size(px(16.0)).text_color(hsla(ui.text_dim))),
         )
-        .child(div().flex_1())
+        .child(
+            // Dropping a tab on the empty part of the bar moves it to the end.
+            div()
+                .id("tab-bar-end")
+                .flex_1()
+                .h_full()
+                .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
+                    this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
+                })),
+        )
         .child(self.render_bench_label(bench, cx))
     }
 
     fn render_bench_label(&self, bench: &Bench, cx: &mut Context<Self>) -> AnyElement {
-        if let Some((RenameTarget::Bench, editor, _)) = &self.renaming {
-            return div().flex().items_center().px_2().child(editor.clone()).into_any_element();
+        if let Some(editor) = self.editor_for(EditTarget::BenchName).or_else(|| self.editor_for(EditTarget::Badge)) {
+            return div().flex().items_center().px_2().child(editor).into_any_element();
         }
+        let accent = bench.color.accent();
         div()
             .id("bench-label")
             .flex()
             .items_center()
             .gap_1p5()
             .px_3()
-            .text_color(hsla(bench.color.accent()))
-            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
-                if event.click_count() >= 2 {
-                    this.start_rename(RenameTarget::Bench, window, cx);
-                }
+            .cursor_pointer()
+            .text_color(hsla(accent))
+            .hover(|s| s.bg(hsla(self.ui.tab_hover)))
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                let entries = this.bench_menu(cx);
+                this.open_menu(e.position, entries, cx);
             }))
-            .child(svg().path(icon("bench")).size(px(14.0)).text_color(hsla(bench.color.accent())))
+            .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                let entries = this.bench_menu(cx);
+                this.open_menu(e.position, entries, cx);
+            }))
+            .child(svg().path(icon("bench")).size(px(14.0)).text_color(hsla(accent)))
             .child(bench.name.clone())
             .when_some(bench.badge.clone(), |el, badge| {
-                el.child(div().px_1().rounded_sm().bg(hsla_alpha(bench.color.accent(), 0.25)).child(badge))
+                el.child(div().px_1().rounded_sm().bg(hsla_alpha(accent, 0.25)).child(badge))
             })
             .into_any_element()
     }
 
-    fn render_node(&self, node: &PaneNode, tab: &Tab, accent: shed_model::Rgb, cx: &Context<Self>) -> AnyElement {
+    fn render_node(&self, node: &PaneNode, path: Vec<bool>, tab: &Tab, accent: Rgb, cx: &mut Context<Self>) -> AnyElement {
         match node {
             PaneNode::Leaf(id) => {
+                let pane = *id;
                 let split = tab.panes.len() > 1;
-                let active = *id == tab.active_pane;
-                let border = if split && active { hsla(accent) } else { hsla_alpha(accent, 0.0) };
-                let mut cell = div().size_full().min_w_0().min_h_0().overflow_hidden();
+                let active = pane == tab.active_pane;
+                let mut cell = div()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        let entries = this.pane_menu(pane);
+                        this.open_menu(e.position, entries, cx);
+                    }));
                 if split {
-                    cell = cell.border_1().border_color(border);
+                    cell = cell.border_1().border_color(if active { hsla(accent) } else { hsla_alpha(accent, 0.0) });
                 }
-                match self.state.read(cx).panes.get(id) {
+                match self.state.read(cx).panes.get(&pane) {
                     Some(view) => cell.child(view.clone()).into_any_element(),
                     None => cell.into_any_element(),
                 }
             }
             PaneNode::Split { dir, ratio, first, second } => {
                 let row = *dir == SplitDir::Right;
+                let dir = *dir;
+                let (mut first_path, mut second_path) = (path.clone(), path.clone());
+                first_path.push(false);
+                second_path.push(true);
                 let first_el = div()
                     .flex_none()
                     .min_w_0()
                     .min_h_0()
                     .map(|d| if row { d.h_full().w(relative(*ratio)) } else { d.w_full().h(relative(*ratio)) })
-                    .child(self.render_node(first, tab, accent, cx));
+                    .child(self.render_node(first, first_path, tab, accent, cx));
+                let (tab_id, layout, drag_path) = (tab.id, tab.layout.clone(), path.clone());
+                // A thin line inside a wider grab area.
                 let divider = div()
+                    .id(SharedString::from(format!("divider-{path:?}")))
                     .flex_none()
-                    .bg(hsla(self.ui.divider))
-                    .map(|d| if row { d.w(px(1.0)).h_full() } else { d.h(px(1.0)).w_full() });
-                let second_el = div().flex_1().min_w_0().min_h_0().child(self.render_node(second, tab, accent, cx));
+                    .flex()
+                    .justify_center()
+                    .map(|d| if row { d.w(px(5.0)).h_full().flex_row().cursor_col_resize() } else { d.h(px(5.0)).w_full().flex_col().cursor_row_resize() })
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        this.drag = Some(SplitDrag { tab: tab_id, path: drag_path.clone(), dir, layout: layout.clone() });
+                        cx.stop_propagation();
+                    }))
+                    .child(div().bg(hsla(self.ui.divider)).map(|d| if row { d.w(px(1.0)).h_full() } else { d.h(px(1.0)).w_full() }));
+                let second_el = div().flex_1().min_w_0().min_h_0().child(self.render_node(second, second_path, tab, accent, cx));
+                let bounds = self.split_bounds.clone();
                 div()
+                    .relative()
                     .size_full()
                     .flex()
                     .map(|d| if row { d.flex_row() } else { d.flex_col() })
+                    .child(
+                        canvas(move |b, _, _| { bounds.borrow_mut().insert(path.clone(), b); }, |_, _, _, _| {})
+                            .absolute()
+                            .size_full(),
+                    )
                     .child(first_el)
                     .child(divider)
                     .child(second_el)
                     .into_any_element()
             }
+        }
+    }
+
+    fn on_drag_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = &mut self.drag else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.drag = None;
+            return;
+        }
+        let Some(b) = self.split_bounds.borrow().get(&drag.path).copied() else { return };
+        let ratio = match drag.dir {
+            SplitDir::Right => f32::from(event.position.x - b.origin.x) / f32::from(b.size.width),
+            SplitDir::Down => f32::from(event.position.y - b.origin.y) / f32::from(b.size.height),
+        };
+        if drag.layout.set_ratio(&drag.path, ratio) {
+            let msg = ClientMsg::SetLayout { tab: drag.tab, layout: drag.layout.clone() };
+            self.send(msg, cx);
         }
     }
 }
@@ -330,9 +675,10 @@ impl Render for BenchWindow {
         };
         let accent = bench.color.accent();
         let content = match bench.active_tab() {
-            Some(tab) => self.render_node(&tab.layout, tab, accent, cx),
+            Some(tab) => self.render_node(&tab.layout, Vec::new(), tab, accent, cx),
             None => div().into_any_element(),
         };
+        let menu = self.menu.as_ref().map(|m| self.render_menu(m, cx));
 
         div()
             .key_context("BenchWindow")
@@ -340,6 +686,15 @@ impl Render for BenchWindow {
             .flex()
             .flex_col()
             .bg(hsla(self.ui.background))
+            .capture_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                if this.menu.is_some() && e.keystroke.key == "escape" {
+                    this.menu = None;
+                    this.refocus(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .on_mouse_move(cx.listener(Self::on_drag_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = None))
             .on_action(cx.listener(|this, _: &NewTab, _, cx| {
                 this.send(ClientMsg::NewTab { bench: this.bench, cwd: None }, cx);
             }))
@@ -372,10 +727,10 @@ impl Render for BenchWindow {
             .on_action(cx.listener(|this, _: &CloseBench, window, cx| this.close_bench(window, cx)))
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| {
                 if let Some(tab) = this.active_tab(cx).map(|t| t.id) {
-                    this.start_rename(RenameTarget::Tab(tab), window, cx);
+                    this.start_edit(EditTarget::TabName(tab), window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &RenameBench, window, cx| this.start_rename(RenameTarget::Bench, window, cx)))
+            .on_action(cx.listener(|this, _: &RenameBench, window, cx| this.start_edit(EditTarget::BenchName, window, cx)))
             .on_action(cx.listener(|this, a: &FocusBench, _, cx| {
                 if let Some(handle) = this.state.read(cx).window_at(a.0) {
                     handle.update(cx, |_, window, _| window.activate()).ok();
@@ -384,6 +739,7 @@ impl Render for BenchWindow {
             .child(div().h(px(3.0)).w_full().flex_none().bg(hsla(accent)))
             .child(self.render_tab_bar(&bench, cx))
             .child(div().flex_1().min_h_0().child(content))
+            .children(menu)
             .into_any_element()
     }
 }

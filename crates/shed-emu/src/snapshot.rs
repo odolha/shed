@@ -59,6 +59,7 @@ pub struct CellFlags {
     pub spacer: bool,
     /// The background differs from the terminal default.
     pub has_bg: bool,
+    pub selected: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

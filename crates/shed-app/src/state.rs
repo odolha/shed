@@ -133,6 +133,14 @@ impl AppState {
             }
         }
 
+        for pane in self.tree.benches.iter().flat_map(|b| &b.tabs).flat_map(|t| &t.panes) {
+            if let Some(view) = self.panes.get(&pane.id)
+                && view.read(cx).cwd != pane.cwd
+            {
+                view.update(cx, |view, _| view.cwd = pane.cwd.clone());
+            }
+        }
+
         let benches: Vec<BenchId> = self.windows.keys().copied().collect();
         for bench in benches {
             self.sync_window(bench, cx);
