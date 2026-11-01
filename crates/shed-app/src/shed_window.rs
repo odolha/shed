@@ -95,14 +95,14 @@ impl Render for ShedWindow {
             .border_color(hsla(ui.divider))
             .children(appearances.map(|(appearance, glyph, tip)| {
                 let on = current == Some(appearance);
-                let tint = if on { ui.accent_fallback } else { ui.text_dim };
+                let tint = if on { ui.accent } else { ui.text_dim };
                 div()
                     .id(SharedString::from(format!("appearance-{glyph}")))
                     .px_1p5()
                     .py_0p5()
                     .rounded_sm()
                     .cursor_pointer()
-                    .when(on, |d| d.bg(hsla_alpha(ui.accent_fallback, 0.2)))
+                    .when(on, |d| d.bg(hsla_alpha(ui.accent, 0.2)))
                     .when(!on, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
                     .tooltip(crate::menu::tooltip(tip))
                     .child(svg().path(icon(glyph)).size(px(15.0)).text_color(hsla(tint)))
@@ -139,7 +139,7 @@ impl Render for ShedWindow {
                 .rounded_md()
                 .text_size(px(12.0))
                 .text_color(hsla(ui.text))
-                .bg(hsla_alpha(shed_model::Rgb::hex(0xF0566A), 0.18))
+                .bg(hsla_alpha(ui.danger, 0.18))
                 .child(div().flex_1().child(text))
                 .child(
                     div()
@@ -176,7 +176,7 @@ impl Render for ShedWindow {
                     .gap_2()
                     .px_4()
                     .pt_3()
-                    .child(svg().path(icon("shed")).size(px(18.0)).text_color(hsla(ui.accent_fallback)))
+                    .child(svg().path(icon("shed")).size(px(18.0)).text_color(hsla(ui.accent)))
                     .child(div().text_size(px(16.0)).child("Shed"))
                     .child(div().flex_1())
                     .child(switch),

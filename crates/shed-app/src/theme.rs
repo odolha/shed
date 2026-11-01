@@ -45,8 +45,11 @@ pub struct UiColors {
     pub text_dim: Rgb,
     /// Lines between panes.
     pub divider: Rgb,
-    /// Used where no bench colour applies.
-    pub accent_fallback: Rgb,
+    /// Shed's own highlight, where no bench colour applies. Blue by default:
+    /// far from `danger`, and from the coral cursor.
+    pub accent: Rgb,
+    /// For what stops or removes things.
+    pub danger: Rgb,
 }
 
 impl Default for UiColors {
@@ -67,7 +70,8 @@ impl UiColors {
             text: pick(&ui.text, &t.foreground),
             text_dim: pick(&ui.text_dim, &t.ansi[8]),
             divider: pick(&ui.divider, &t.ansi[8]),
-            accent_fallback: Theme::rgb(&t.cursor),
+            accent: pick(&ui.accent, &t.ansi[4]),
+            danger: pick(&ui.danger, &t.ansi[1]),
         }
     }
 }

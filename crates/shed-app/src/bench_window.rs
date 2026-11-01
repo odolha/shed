@@ -758,7 +758,7 @@ impl Render for BenchWindow {
                         .flex_none()
                         .px_3()
                         .py_1()
-                        .bg(hsla_alpha(Rgb::hex(0xF0566A), 0.2))
+                        .bg(hsla_alpha(self.ui.danger, 0.2))
                         .text_size(px(12.0))
                         .text_color(hsla(self.ui.text))
                         .child(format!("shed.toml: {}", errors.join("; "))),

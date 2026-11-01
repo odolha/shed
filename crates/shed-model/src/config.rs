@@ -198,6 +198,10 @@ pub struct UiTheme {
     pub text: Option<String>,
     pub text_dim: Option<String>,
     pub divider: Option<String>,
+    /// Shed's own highlight: selected switches, the text field, buttons.
+    pub accent: Option<String>,
+    /// For what stops or removes things.
+    pub danger: Option<String>,
 }
 
 pub const SHED_DARK: &str = include_str!("../themes/shed-dark.toml");

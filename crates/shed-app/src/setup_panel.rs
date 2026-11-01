@@ -437,7 +437,7 @@ impl Render for SetupPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.state.read(cx);
         let ui = state.settings.ui.clone();
-        let accent = state.tree.bench(self.bench).map(|b| b.color.accent()).unwrap_or(ui.accent_fallback);
+        let accent = state.tree.bench(self.bench).map(|b| b.color.accent()).unwrap_or(ui.accent);
         let title = self.tab(cx).map(|t| t.display_title()).unwrap_or_default();
         let panes: Vec<(usize, Pane)> = self.panes(cx).into_iter().cloned().enumerate().collect();
 

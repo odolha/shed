@@ -113,7 +113,7 @@ impl Render for LineEditor {
         let ui = crate::theme::current_ui(cx);
         let at = self.byte(self.cursor);
         let (before, after) = self.text.split_at(at);
-        let selection = self.all_selected.then(|| div().rounded_sm().bg(crate::theme::hsla_alpha(ui.accent_fallback, 0.3)).child(self.text.clone()));
+        let selection = self.all_selected.then(|| div().rounded_sm().bg(crate::theme::hsla_alpha(ui.accent, 0.3)).child(self.text.clone()));
         let (before, after) = if self.all_selected { (String::new(), String::new()) } else { (before.to_string(), after.to_string()) };
         div()
             .track_focus(&self.focus)
@@ -124,7 +124,7 @@ impl Render for LineEditor {
             .min_w(px(80.0))
             .bg(hsla(ui.background))
             .border_1()
-            .border_color(hsla(ui.accent_fallback))
+            .border_color(hsla(ui.accent))
             .rounded_sm()
             .text_color(hsla(ui.text))
             .children(selection)

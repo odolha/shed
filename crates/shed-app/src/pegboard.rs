@@ -28,7 +28,6 @@ use crate::theme::{UiColors, hsla, hsla_alpha};
 const REFRESH: Duration = Duration::from_secs(1);
 const IDLE_REFRESH_TICKS: u32 = 10;
 const CARD_WIDTH: f32 = 300.0;
-const DANGER: Rgb = Rgb::hex(0xF0566A);
 
 /// The keeper's last answer: stored benches and previews.
 pub struct PegboardData(pub PegboardInfo);
@@ -560,7 +559,7 @@ impl Pegboard {
                 }));
             }
             let name = bench.name.clone();
-            header = header.child(self.icon_button(format!("delete-{id}"), "trash", "Delete: its saved file and launcher go too", DANGER, cx, move |this, window, cx| {
+            header = header.child(self.icon_button(format!("delete-{id}"), "trash", "Delete: its saved file and launcher go too", ui.danger, cx, move |this, window, cx| {
                 this.delete(name.clone(), window, cx)
             }));
             let e = entry.clone();
@@ -848,7 +847,7 @@ impl Render for Pegboard {
             list = list.child(div().text_color(hsla(ui.text_dim)).child(empty));
         }
 
-        let new_bench = self.button("new-bench".into(), "bench-new", "New bench", ui.accent_fallback, true, cx, |this, _, cx| {
+        let new_bench = self.button("new-bench".into(), "bench-new", "New bench", ui.accent, true, cx, |this, _, cx| {
             this.send(ClientMsg::Show(ShowTarget::NewBench { name: None, cwd: None }), cx);
         });
         let search = div()

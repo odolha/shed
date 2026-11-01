@@ -233,7 +233,7 @@ impl Render for LogbookSearch {
                     .px_1()
                     .rounded_sm()
                     .when(i == self.selected, |d| d.bg(hsla_alpha(self.accent, 0.2)))
-                    .child(div().w(px(12.0)).flex_none().text_color(hsla(Rgb::hex(0xF0566A))).child(if failed { "✗" } else { "" }))
+                    .child(div().w(px(12.0)).flex_none().text_color(hsla(ui.danger)).child(if failed { "✗" } else { "" }))
                     .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(e.command.replace('\n', " ⏎ ")))
                     .child(div().flex_none().text_color(hsla(ui.text_dim)).child(meta.join(" · "))),
             );

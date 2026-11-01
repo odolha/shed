@@ -68,7 +68,7 @@ impl ShedPrompt {
 impl Render for ShedPrompt {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ui = &self.ui;
-        let danger = Rgb::hex(0xF0566A);
+        let danger = ui.danger;
         let buttons = self.actions.iter().enumerate().map(|(i, label)| {
             let destructive = label.starts_with("Delete") || label.starts_with("Close");
             let color = if destructive { danger } else { ui.text };

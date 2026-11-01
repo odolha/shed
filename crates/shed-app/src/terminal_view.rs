@@ -987,7 +987,7 @@ impl Render for TerminalView {
                         .text_size(px(12.0))
                         .capture_key_down(cx.listener(Self::find_key))
                         .child(div().w(px(220.0)).text_color(hsla(ui.text)).child(editor))
-                        .child(div().text_color(hsla(if !empty && !found { Rgb::hex(0xF0566A) } else { ui.text_dim })).child(hint)),
+                        .child(div().text_color(hsla(if !empty && !found { ui.danger } else { ui.text_dim })).child(hint)),
                 )
             })
     }

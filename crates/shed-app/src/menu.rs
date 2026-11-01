@@ -108,7 +108,7 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
             MenuEntry::Separator => div().my_1().h(px(1.0)).bg(hsla(ui.divider)).into_any_element(),
             MenuEntry::Item { label, icon: glyph, swatch, danger, action } => {
                 let action = action.clone();
-                let color = if *danger { Rgb::hex(0xF0566A) } else { ui.text };
+                let color = if *danger { ui.danger } else { ui.text };
                 let lead = match (glyph, swatch) {
                     (Some(name), _) => Some(svg().path(icon(name)).size(px(14.0)).text_color(hsla(if *danger { color } else { ui.text_dim })).into_any_element()),
                     (None, Some(c)) => Some(div().size(px(10.0)).mx(px(2.0)).rounded_full().bg(hsla(*c)).into_any_element()),
