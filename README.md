@@ -8,16 +8,28 @@ window (`shed`) is only a view onto it. See
 ## Status
 
 Phases 1–6 are in place: the first pane, the keeper, bench windows with tabs and splits,
-the logbook, saving and loading benches, and the pegboard with the rest of phase 6.
+the logbook, saving and loading benches, and Shed's own window with the rest of phase 6.
 
-- **The keeper** owns every PTY. Closing a window detaches its bench. The next `shed`
-  reattaches it and replays each pane exactly: scrollback, both screens, cursor,
+- **Shed** (`shed`, the Shed icon) is one window: the pegboard. It shows every bench,
+  open, hidden or closed, with its tabs and a live preview of each. From it you make
+  benches, open, hide, close and delete them, go to a tab, and drag tabs between
+  benches. Type to filter by bench, tab, tag, folder or tool; arrows and Enter (or a
+  click) go there. Nothing starts by itself: Shed opens with its benches closed, and
+  opening one brings back what was saved. With `auto_restore = true`, Shed reopens
+  what was open or hidden when it last closed.
+- **Closing Shed closes everything**, after asking: every bench is saved, its programs
+  stop and its teardown commands run, then Shed quits.
+- **Benches** each get their own window, colour and taskbar icon (a workbench in the
+  bench colour). A bench's window manages only its own tabs and panes; Super+Space or
+  the house button brings Shed forward. Closing a bench's window hides the bench: it
+  keeps running, and Shed can show it again. Every bench writes a hidden desktop entry
+  and icon (`dev.shed.bench.<key>`) to `~/.local/share`, so docks show one icon per
+  bench, and pinning one gives a launcher (`shed load <name>`), which also starts Shed.
+- **The keeper** (`shedd`) owns every PTY, so a hidden bench, or one whose window
+  crashed, keeps running and comes back exactly: scrollback, both screens, cursor,
   modes, colours and title.
-- **Benches** each get their own window, colour and taskbar icon. Every bench writes a
-  hidden desktop entry and icon (`dev.shed.bench.<name>`) to `~/.local/share`, so
-  docks show one icon per bench, and pinning one gives a launcher (`shed load <name>`).
 - **Tabs and splits**: tags (by hand, from `shed tag`, or from tag rules), tinting,
-  private tabs, inline rename, drag to reorder, and a menu to move a tab to another bench.
+  private tabs, inline rename, drag to reorder.
 - **Mouse**: selection (Shift overrides apps' mouse mode), copy to the primary selection,
   Ctrl+click for links and paths, and right-click menus. Split borders drag.
 - **Config**: `~/.config/shed/shed.toml` reloads live. It sets fonts, themes, keys, tag rules and the rack.
@@ -29,8 +41,8 @@ the logbook, saving and loading benches, and the pegboard with the rest of phase
   entries from a shell.
 - **Saved benches**: every bench saves itself every minute and when the keeper stops
   (`shed stop`, logout, reboot) to `~/.local/share/shed/benches/<name>.toml`, with each
-  pane's scrollback beside it. `shed` with nothing running brings back the benches that
-  ran last; `shed load <name>` (and a pinned bench icon) loads one. Panes come back in
+  pane's scrollback beside it. Opening a closed bench (from Shed, `shed load <name>` or
+  a pinned bench icon) loads it. Panes come back in
   their folders with their old scrollback dimmed above the prompt; tools on the rack
   restart, others are typed and wait for Enter, the never list is left out.
 - **Setup and teardown**: each pane can have a folder to start in, startup commands
@@ -38,18 +50,15 @@ the logbook, saving and loading benches, and the pegboard with the rest of phase
   waiting for Enter) and teardown commands. The Setup panel (Ctrl+Shift+S, the rack
   button, or a tab's menu) shows and edits them for the current tab; so do
   `shed setup` and `shed setup --edit`.
-- **Hide or close**: closing a window hides the bench, its tools keep running. Close
-  Bench saves it, stops each pane's tool (Ctrl+C, then SIGTERM), runs the teardown
-  commands at the prompt (`docker compose down`), and ends it; it stays saved.
+- **Hide or close**: hiding a bench (closing its window) keeps its tools running. Closing
+  it (from Shed or the bench's menu) saves it, stops each pane's tool (Ctrl+C, then
+  SIGTERM), runs the teardown commands at the prompt (`docker compose down`), and ends
+  it; it stays saved.
 - **Aliases** at three levels, over the shell's own: global
   (`~/.config/shed/aliases.toml`), bench and tab. Shells pick changes up at their next
   prompt; taking one away brings the shell's version back. The Setup panel lists them
   with what they override; `shed alias`, `shed alias add [--bench|--global] NAME CMD`
   and `shed alias rm` work from a shell.
-- **Pegboard** (Super+Space or Ctrl+Shift+Space): every bench, open, detached or saved,
-  with its tabs and a live preview of each. Type to filter by bench, tab, tag, folder
-  or tool; arrows and Enter (or a click) go there, opening or loading the bench as
-  needed; drag a tab onto another bench to move it.
 - **Find in scrollback** (Ctrl+Shift+F): plain text, case-insensitive unless the query
   has capitals; Enter goes to older matches, Shift+Enter to newer.
 - **Keyboard**: the kitty keyboard protocol for apps that ask for it, and input methods
@@ -62,7 +71,7 @@ the logbook, saving and loading benches, and the pegboard with the rest of phase
 | Ctrl+Shift+E / Ctrl+Shift+O | Split right / split down |
 | Alt+arrows | Move between panes |
 | Ctrl+Tab, Ctrl+1…9 | Switch tabs |
-| Ctrl+Shift+N / Ctrl+Shift+Q | New bench / close bench (stops its tools) |
+| Ctrl+Shift+N (in Shed) / Ctrl+Shift+Q | New bench / close bench (stops its tools) |
 | Super+1…9 | Raise bench windows |
 | F2 / Shift+F2 | Rename tab / bench |
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
@@ -70,11 +79,13 @@ the logbook, saving and loading benches, and the pegboard with the rest of phase
 | Ctrl+R (at a prompt) | Search the logbook |
 | Ctrl+Shift+F | Find in scrollback |
 | Ctrl+Shift+S | Setup panel: startup, teardown, aliases |
-| Super+Space, Ctrl+Shift+Space | Pegboard |
+| Super+Space, Ctrl+Shift+Space | Bring Shed forward |
 
 ```toml
 # ~/.config/shed/shed.toml (every key optional)
 theme = "shed-dark"            # or shed-light, or themes/<name>.toml
+autosave_seconds = 60
+auto_restore = false           # reopen what was open or hidden when Shed last closed
 [font]
 family = "DejaVu Sans Mono"
 size = 14
@@ -84,7 +95,6 @@ icon_badges = false
 [keys]
 "ctrl-shift-d" = "split_right"
 "alt-left" = "none"
-autosave_seconds = 60
 [shell]
 integration = true             # load Shed's bash hook into panes
 [rack]                         # what restarts by itself when a bench loads
@@ -104,10 +114,10 @@ see `vendor/alacritty_terminal/SHED_PATCHES.md`.
 
 ```sh
 cargo build --release
-./target/release/shed           # starts shedd if needed, opens the bench window
+./target/release/shed           # starts shedd if needed, opens the Shed window
 ./target/release/shed status    # what the keeper holds
 ./target/release/shed stop      # save everything, then stop the keeper and its tools
-./target/release/shed list      # benches: open, detached, saved
+./target/release/shed list      # benches: open, hidden, closed
 ./target/release/shed load web  # open a bench, loading it if it is saved
 ./target/release/shed save web --as web-template
 ./target/release/shed delete web

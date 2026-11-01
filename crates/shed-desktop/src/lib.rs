@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 
 use shed_model::{BenchColor, Rgb};
 
+/// Shed's own icon, for the Shed window and its launcher.
+pub const SHED_ICON: &str = include_str!("../../../assets/icons/app/shed.svg");
+/// The app ID of the Shed window.
+pub const SHED_APP_ID: &str = "dev.shed";
+
 const TEMPLATE: &str = include_str!("../../../assets/icons/bench/bench-template.svg");
 const TEMPLATE_BADGE: &str = include_str!("../../../assets/icons/bench/bench-template-badge.svg");
 
@@ -117,6 +122,26 @@ impl Desktop {
             class = app_id(bench.launcher),
         );
         write_if_changed(&self.entry_path(bench.launcher), &entry)
+    }
+
+    /// Writes Shed's own launcher and icon, which the Shed window goes by.
+    pub fn install_shed(&self, shed: &Path) -> io::Result<()> {
+        let icon = self.data_home.join("icons/hicolor/scalable/apps").join(format!("{SHED_APP_ID}.svg"));
+        write_if_changed(&icon, SHED_ICON)?;
+        let entry = format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name=Shed\n\
+             Comment=A terminal whose shells outlive its windows\n\
+             Exec={exe}\n\
+             Icon={icon}\n\
+             StartupWMClass={SHED_APP_ID}\n\
+             Terminal=false\n\
+             Categories=System;TerminalEmulator;\n",
+            exe = desktop_quote(&shed.to_string_lossy()),
+            icon = icon.display(),
+        );
+        write_if_changed(&self.data_home.join("applications").join(format!("{SHED_APP_ID}.desktop")), &entry)
     }
 
     /// Removes a bench's desktop entry and icon.

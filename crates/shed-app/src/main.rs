@@ -12,6 +12,7 @@ mod prompt;
 mod settings;
 mod setup_cli;
 mod setup_panel;
+mod shed_window;
 mod state;
 mod terminal_view;
 mod theme;
@@ -193,7 +194,7 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
 
     match Cli::parse().command {
-        None => run_app(ShowTarget::Detached),
+        None => run_app(ShowTarget::Shed),
         Some(Command::New { name, cwd }) => {
             let cwd = cwd.map(std::path::absolute).transpose()?;
             run_app(ShowTarget::NewBench { name, cwd })
@@ -312,10 +313,14 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
     }
 
     conn.send_msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Window });
-    conn.send_msg(ClientMsg::Show(target));
+    // Shed's window first, so a bench asked for opens in front of it.
+    conn.send_msg(ClientMsg::Show(ShowTarget::Shed));
+    if target != ShowTarget::Shed {
+        conn.send_msg(ClientMsg::Show(target));
+    }
     gpui_platform::application()
         .with_assets(assets::Assets)
-        .with_quit_mode(QuitMode::LastWindowClosed)
+        .with_quit_mode(QuitMode::Explicit)
         .run(move |cx: &mut App| {
             prompt::install(cx);
             let settings = settings::Settings::load(&settings::Settings::default());
@@ -388,11 +393,11 @@ fn status() -> anyhow::Result<()> {
         s.pid, s.version, s.uptime_secs, s.clients, s.windows
     );
     if !s.stored.is_empty() {
-        println!("saved, not running: {}", s.stored.join(", "));
+        println!("closed (saved): {}", s.stored.join(", "));
     }
     for bench in &s.tree.benches {
         let color = bench.color.name().unwrap_or("custom");
-        let state = if s.open.contains(&bench.id) { "open" } else { "detached" };
+        let state = if s.open.contains(&bench.id) { "open" } else { "hidden" };
         println!("bench {} ({color}, {state}), {} tab(s)", bench.name, bench.tabs.len());
         for tab in &bench.tabs {
             let tools: Vec<String> = tab.panes.iter().filter_map(|p| p.tool.as_ref()).map(|t| t.display()).collect();
@@ -413,13 +418,13 @@ fn list() -> anyhow::Result<()> {
     let mut rows: Vec<(String, String, String)> = Vec::new();
     if let Some(s) = &status {
         for b in &s.tree.benches {
-            let state = if s.open.contains(&b.id) { "open" } else { "detached" };
+            let state = if s.open.contains(&b.id) { "open" } else { "hidden" };
             rows.push((b.name.clone(), state.into(), format!("{} tab(s)", b.tabs.len())));
         }
     }
     for b in saved {
         if !rows.iter().any(|r| r.0 == b.name) {
-            rows.push((b.name, "saved".into(), format!("{} tab(s), saved {}", b.tabs, b.saved.replace('T', " "))));
+            rows.push((b.name, "closed".into(), format!("{} tab(s), saved {}", b.tabs, b.saved.replace('T', " "))));
         }
     }
     if rows.is_empty() {

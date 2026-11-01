@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -82,6 +82,9 @@ pub enum ClientMsg {
     // from a newer client has to reach an older keeper.
     /// Asks for [`KeeperMsg::Pegboard`].
     Pegboard,
+    /// Closes Shed: records which benches run (and which have windows) for
+    /// `auto_restore`, closes each bench as `CloseBench` does, then stops.
+    QuitShed,
 }
 
 /// Which aliases to set.
@@ -94,13 +97,15 @@ pub enum AliasTarget {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ShowTarget {
-    /// Every bench without a window. If the keeper holds none, the benches
-    /// that were running when it last stopped; failing that, a new bench.
+    /// Every running bench without a window.
     Detached,
     Bench(BenchId),
     NewBench { name: Option<String>, cwd: Option<PathBuf> },
     /// A bench by name: shown if it runs, loaded from its saved file if not.
     Load { name: String },
+    /// The Shed window. With `auto_restore`, a keeper running nothing first
+    /// brings back the benches of the last session.
+    Shed,
 }
 
 /// Sent by the keeper to a client.
@@ -124,6 +129,8 @@ pub enum KeeperMsg {
     Error(String),
     // New messages go last, so an older keeper's errors still read as errors.
     Pegboard(PegboardInfo),
+    /// To the window process: open (or raise) the Shed window.
+    ShowShed,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

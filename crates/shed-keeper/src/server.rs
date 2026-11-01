@@ -14,7 +14,7 @@ use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Palette};
 use shed_emu::EmuEvent;
 use shed_emu::marks::{Mark, MarkScanner};
 use shed_logbook::{Logbook, NewEntry};
-use shed_save::{PaneExtras, Relaunch, SavedBench, Store};
+use shed_save::{PaneExtras, Relaunch, SavedBench, SessionBench, Store};
 use shed_model::config::{Config, FileWatch};
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
 use shed_proto::{
@@ -103,7 +103,17 @@ pub struct Keeper {
     /// The bash startup file that loads ~/.bashrc and then Shed's hook.
     bash_rc: Option<PathBuf>,
     host: String,
+    /// Shed is closing every bench: the session it recorded must stay.
+    quitting: AtomicBool,
+    /// The last session has been brought back (or skipped) once.
+    restored: AtomicBool,
+    /// Saved benches as the pegboard shows them, by name, while their file's
+    /// save time is unchanged.
+    stored_cache: Mutex<HashMap<String, CachedStored>>,
 }
+
+/// A saved bench for the pegboard: its save time, itself, and its previews.
+type CachedStored = (String, StoredBench, Vec<(PaneId, Vec<String>)>);
 
 struct State {
     config: Config,
@@ -117,6 +127,9 @@ struct State {
     next_client: ClientId,
     started: Instant,
     palette: Palette,
+    /// Benches with a window, as last known: a window process that goes away
+    /// without detaching (logout, a crash) leaves its benches here.
+    shown: HashSet<BenchId>,
 }
 
 struct PaneRt {
@@ -275,6 +288,7 @@ impl Keeper {
                 next_client: 1,
                 started: Instant::now(),
                 palette: Palette::default(),
+                shown: HashSet::new(),
             }),
             shutdown: Notify::new(),
             stopping: AtomicBool::new(false),
@@ -284,6 +298,9 @@ impl Keeper {
             logbook,
             bash_rc,
             host,
+            quitting: AtomicBool::new(false),
+            restored: AtomicBool::new(false),
+            stored_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -293,6 +310,8 @@ impl Keeper {
 
     /// Accepts clients until a client asks for shutdown or the keeper goes idle.
     pub async fn serve(self: Arc<Self>, listener: UnixListener) -> io::Result<()> {
+        // Before any client: the first `shed` may ask for what the config decides (auto_restore).
+        self.reload_config(&mut self.lock());
         let poll = tokio::spawn(self.clone().poll_loop());
         let flush = tokio::spawn(self.clone().flush_loop());
         let autosave = tokio::spawn(self.clone().autosave_loop());
@@ -317,6 +336,28 @@ impl Keeper {
         Ok(())
     }
 
+    /// Loads `shed.toml` if it changed since last time (or was never read).
+    fn reload_config(&self, st: &mut State) {
+        if st.config_watch.changed(&self.cfg.config_file) {
+            match Config::load_from(&self.cfg.config_file) {
+                Ok(config) => {
+                    let (theme, error) = config.theme();
+                    if let Some(e) = error {
+                        warn!("{e}");
+                    }
+                    st.palette = Palette::from_theme(&theme);
+                    let palette = st.palette.clone();
+                    for rt in st.panes.values_mut() {
+                        rt.emu.set_palette(palette.clone());
+                    }
+                    st.config = config;
+                    info!("config loaded");
+                }
+                Err(e) => warn!("config not loaded: {e}"),
+            }
+        }
+    }
+
     /// Keeps each pane's tool and working directory current.
     async fn poll_loop(self: Arc<Self>) {
         let mut tick = tokio::time::interval(POLL_INTERVAL);
@@ -334,24 +375,7 @@ impl Keeper {
                     Err(e) => warn!("global aliases not loaded: {e}"),
                 }
             }
-            if st.config_watch.changed(&self.cfg.config_file) {
-                match Config::load_from(&self.cfg.config_file) {
-                    Ok(config) => {
-                        let (theme, error) = config.theme();
-                        if let Some(e) = error {
-                            warn!("{e}");
-                        }
-                        st.palette = Palette::from_theme(&theme);
-                        let palette = st.palette.clone();
-                        for rt in st.panes.values_mut() {
-                            rt.emu.set_palette(palette.clone());
-                        }
-                        st.config = config;
-                        info!("config loaded");
-                    }
-                    Err(e) => warn!("config not loaded: {e}"),
-                }
-            }
+            self.reload_config(&mut st);
             let ids: Vec<PaneId> = st.panes.keys().copied().collect();
             for id in ids {
                 let rt = &st.panes[&id];
@@ -505,6 +529,9 @@ impl Keeper {
                 };
                 if let Some(c) = st.clients.get_mut(&client) {
                     c.attached.insert(bench);
+                    if c.kind == ClientKind::Window {
+                        st.shown.insert(bench);
+                    }
                 }
                 st.broadcast_tree();
                 st.send(client, KeeperMsg::Attached { bench });
@@ -520,6 +547,8 @@ impl Keeper {
                 if let Some(c) = st.clients.get_mut(&client) {
                     c.attached.remove(&bench);
                 }
+                // Detaching is hiding the bench: its window was closed.
+                st.shown.remove(&bench);
                 info!(client, ?bench, "detached");
             }
             ClientMsg::Resize { pane, cols, rows, cell_width, cell_height } => {
@@ -756,6 +785,10 @@ impl Keeper {
                 };
                 st.send(client, KeeperMsg::Status(status));
             }
+            ClientMsg::QuitShed => {
+                info!(client, "closing Shed");
+                tokio::spawn(self.clone().quit_shed());
+            }
             ClientMsg::Pegboard => {
                 let (mut previews, running): (Vec<_>, Vec<String>) = {
                     let st = self.lock();
@@ -771,19 +804,33 @@ impl Keeper {
                 // Saved benches are read without holding the state.
                 let mut stored = Vec::new();
                 if let Some(store) = &self.cfg.store {
-                    for info in store.list().into_iter().filter(|i| !running.contains(&i.name)) {
+                    let mut cache = self.stored_cache.lock().unwrap();
+                    let infos = store.list();
+                    cache.retain(|name, _| infos.iter().any(|i| &i.name == name));
+                    for info in infos.into_iter().filter(|i| !running.contains(&i.name)) {
+                        if let Some((saved, bench, prev)) = cache.get(&info.name)
+                            && *saved == info.saved
+                        {
+                            stored.push(bench.clone());
+                            previews.extend(prev.iter().cloned());
+                            continue;
+                        }
                         let Ok(saved) = store.load(&info.name) else { continue };
                         let Ok((mut bench, panes)) = saved.to_bench() else { continue };
+                        let mut prev = Vec::new();
                         for tab in &mut bench.tabs {
                             for pane in &mut tab.panes {
                                 let tool = panes.iter().find(|(id, _)| *id == pane.id).and_then(|(_, p)| p.tool.as_deref());
                                 pane.tool = tool.map(|t| Tool { argv: t.split_whitespace().map(String::from).collect() });
                             }
                             if let Some(text) = store.scrollback(&bench.name, tab.active_pane) {
-                                previews.push((tab.active_pane, preview(&text)));
+                                prev.push((tab.active_pane, preview(&text)));
                             }
                         }
-                        stored.push(StoredBench { bench, saved: saved.saved });
+                        let entry = StoredBench { bench, saved: saved.saved.clone() };
+                        previews.extend(prev.iter().cloned());
+                        stored.push(entry.clone());
+                        cache.insert(info.name, (saved.saved, entry, prev));
                     }
                 }
                 self.lock().send(client, KeeperMsg::Pegboard(PegboardInfo { stored, previews }));
@@ -815,6 +862,7 @@ impl Keeper {
     fn drop_bench(&self, st: &mut State, bench: BenchId) {
         let panes = st.pane_rt_ids_in(bench);
         st.tree.benches.retain(|b| b.id != bench);
+        st.shown.remove(&bench);
         st.broadcast_tree();
         st.hang_up(&panes);
     }
@@ -828,22 +876,29 @@ impl Keeper {
                 st.send(client, KeeperMsg::Error(format!("no bench {b}")));
                 return;
             }
-            ShowTarget::Detached => {
-                let mut benches: Vec<BenchId> = st.tree.benches.iter().map(|b| b.id).filter(|b| !st.is_open(*b)).collect();
-                if st.tree.benches.is_empty() {
-                    // Nothing running: bring back what ran when the keeper last stopped.
-                    let names = self.cfg.store.as_ref().map(Store::session).unwrap_or_default();
-                    for name in names {
+            ShowTarget::Detached => st.tree.benches.iter().map(|b| b.id).filter(|b| !st.is_open(*b)).collect(),
+            ShowTarget::Shed => {
+                let mut open = Vec::new();
+                // Only a keeper that runs nothing brings a session back, and only once.
+                let fresh = st.tree.benches.is_empty() && !self.restored.swap(true, Ordering::SeqCst);
+                if fresh && st.config.auto_restore {
+                    let session = self.cfg.store.as_ref().map(Store::session).unwrap_or_default();
+                    for SessionBench { name, open: had_window } in session {
                         match self.load_bench(&mut st, &name) {
-                            Ok(id) => benches.push(id),
+                            Ok(id) if had_window => open.push(id),
+                            Ok(_) => {}
                             Err(e) => warn!("cannot load bench {name:?}: {e}"),
                         }
                     }
                 }
-                if benches.is_empty() && st.tree.benches.iter().all(|b| st.is_open(b.id)) {
-                    benches.extend(self.new_bench(&mut st, None, None));
+                match st.window_client(client) {
+                    Some(window) => st.send(window, KeeperMsg::ShowShed),
+                    None => {
+                        st.send(client, KeeperMsg::Error("no window is open to show it in".into()));
+                        return;
+                    }
                 }
-                benches
+                open
             }
             ShowTarget::Load { name } => {
                 let running = st.tree.benches.iter().find(|b| b.name == name).map(|b| b.id);
@@ -1144,15 +1199,44 @@ impl Keeper {
     fn save_all(&self, st: &State, shutting_down: bool) {
         let Some(store) = &self.cfg.store else { return };
         let ids: Vec<BenchId> = st.tree.benches.iter().map(|b| b.id).collect();
-        let names: Vec<String> = st.tree.benches.iter().map(|b| b.name.clone()).collect();
         for (bench, scrollback) in self.snapshot(st, &ids, shutting_down) {
             if let Err(e) = store.save(&bench, &scrollback) {
                 warn!("cannot save bench {:?}: {e}", bench.name);
             }
         }
-        if let Err(e) = store.save_session(&names) {
+        if !self.quitting.load(Ordering::SeqCst)
+            && let Err(e) = store.save_session(&session_of(st))
+        {
             warn!("cannot save the session: {e}");
         }
+    }
+
+    /// Closes every bench (saved, tools stopped, teardowns run), then the
+    /// keeper. What ran, and with a window, is recorded first for `auto_restore`.
+    async fn quit_shed(self: Arc<Self>) {
+        if self.quitting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let benches: Vec<BenchId> = {
+            let st = self.lock();
+            if let Some(store) = &self.cfg.store
+                && let Err(e) = store.save_session(&session_of(&st))
+            {
+                warn!("cannot save the session: {e}");
+            }
+            st.tree.benches.iter().map(|b| b.id).collect()
+        };
+        let closing: Vec<_> = benches.into_iter().map(|b| tokio::spawn(self.clone().close_bench(b))).collect();
+        for step in closing {
+            let _ = step.await;
+        }
+        // A bench already closing before Shed was closed finishes on its own.
+        let deadline = Instant::now() + TEARDOWN_LIMIT;
+        while !self.lock().tree.benches.is_empty() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        info!("every bench closed; stopping");
+        self.shutdown.notify_one();
     }
 
     /// Saves everything every `autosave_seconds` (60 by default).
@@ -1165,11 +1249,12 @@ impl Keeper {
                 _ = self.save_soon.notified() => tokio::time::sleep(Duration::from_secs(1)).await,
             }
             // Collect under the lock, write without it.
-            let (store, work, names) = {
+            let (store, work, session) = {
                 let st = self.lock();
                 let Some(store) = self.cfg.store.clone() else { return };
                 let ids: Vec<BenchId> = st.tree.benches.iter().map(|b| b.id).collect();
-                (store, self.snapshot(&st, &ids, false), st.tree.benches.iter().map(|b| b.name.clone()).collect::<Vec<_>>())
+                let session = (!self.quitting.load(Ordering::SeqCst)).then(|| session_of(&st));
+                (store, self.snapshot(&st, &ids, false), session)
             };
             let _ = tokio::task::spawn_blocking(move || {
                 for (bench, scrollback) in work {
@@ -1177,7 +1262,9 @@ impl Keeper {
                         warn!("cannot save bench {:?}: {e}", bench.name);
                     }
                 }
-                let _ = store.save_session(&names);
+                if let Some(session) = session {
+                    let _ = store.save_session(&session);
+                }
             })
             .await;
         }
@@ -1569,4 +1656,9 @@ fn preview(text: &str) -> Vec<String> {
     let end = lines.iter().rposition(|l| !l.is_empty()).map_or(0, |i| i + 1);
     let start = end.saturating_sub(PREVIEW_LINES);
     lines[start..end].iter().map(|l| l.chars().take(PREVIEW_COLS).collect()).collect()
+}
+
+/// The benches running now, and which have a window.
+fn session_of(st: &State) -> Vec<SessionBench> {
+    st.tree.benches.iter().map(|b| SessionBench { name: b.name.clone(), open: st.shown.contains(&b.id) }).collect()
 }

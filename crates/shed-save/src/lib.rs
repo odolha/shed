@@ -352,6 +352,14 @@ impl Default for Store {
     }
 }
 
+/// A bench that was running when Shed last stopped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionBench {
+    pub name: String,
+    /// It had a window (open), rather than running hidden.
+    pub open: bool,
+}
+
 /// A saved bench as listed, without loading it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredInfo {
@@ -462,26 +470,36 @@ impl Store {
     }
 
     /// Records which benches were running, to bring them back on the next start.
-    pub fn save_session(&self, names: &[String]) -> io::Result<()> {
+    /// Records the benches running as Shed stops, and which had a window.
+    pub fn save_session(&self, benches: &[SessionBench]) -> io::Result<()> {
         #[derive(Serialize)]
         struct Session<'a> {
-            benches: &'a [String],
+            benches: Vec<&'a str>,
+            open: Vec<&'a str>,
         }
+        let session = Session {
+            benches: benches.iter().map(|b| b.name.as_str()).collect(),
+            open: benches.iter().filter(|b| b.open).map(|b| b.name.as_str()).collect(),
+        };
         std::fs::create_dir_all(&self.dir)?;
-        write_atomic(&self.session_file(), toml::to_string(&Session { benches: names }).unwrap().as_bytes())
+        write_atomic(&self.session_file(), toml::to_string(&session).unwrap().as_bytes())
     }
 
     /// The benches running when the keeper last stopped.
-    pub fn session(&self) -> Vec<String> {
+    pub fn session(&self) -> Vec<SessionBench> {
         #[derive(Deserialize)]
         struct Session {
             benches: Vec<String>,
+            /// Missing in files from before hiding: every bench had a window.
+            open: Option<Vec<String>>,
         }
-        std::fs::read_to_string(self.session_file())
-            .ok()
-            .and_then(|t| toml::from_str::<Session>(&t).ok())
-            .map(|s| s.benches)
-            .unwrap_or_default()
+        let Some(s) = std::fs::read_to_string(self.session_file()).ok().and_then(|t| toml::from_str::<Session>(&t).ok()) else {
+            return Vec::new();
+        };
+        s.benches
+            .into_iter()
+            .map(|name| SessionBench { open: s.open.as_ref().is_none_or(|o| o.contains(&name)), name })
+            .collect()
     }
 }
 
@@ -641,8 +659,15 @@ mod tests {
         assert_eq!(store.load("backend").unwrap(), saved);
         assert_eq!(store.scrollback("backend", pane).as_deref(), Some("line one\nline two"));
 
-        store.save_session(&["backend".into()]).unwrap();
-        assert_eq!(store.session(), ["backend"]);
+        let session = [
+            SessionBench { name: "backend".into(), open: true },
+            SessionBench { name: "docs".into(), open: false },
+        ];
+        store.save_session(&session).unwrap();
+        assert_eq!(store.session(), session);
+        // Sessions from before hiding list only names: each had a window.
+        std::fs::write(store.session_file(), "benches = [\"old\"]\n").unwrap();
+        assert_eq!(store.session(), [SessionBench { name: "old".into(), open: true }]);
 
         store.rename("backend", "server").unwrap();
         assert!(store.exists("server") && !store.exists("backend"));

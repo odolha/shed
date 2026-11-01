@@ -26,6 +26,9 @@ pub struct Config {
     pub tag_rules: Vec<TagRule>,
     /// Seconds between autosaves of every bench.
     pub autosave_seconds: Option<u64>,
+    /// Shed reopens the benches that were open or hidden when it last
+    /// closed (by hand or with the session). Off: every bench starts closed.
+    pub auto_restore: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]

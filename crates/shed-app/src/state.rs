@@ -17,6 +17,7 @@ use tracing::{error, warn};
 use crate::bench_window::BenchWindow;
 use crate::keeper_conn::KeeperConn;
 use crate::pegboard::PegboardData;
+use crate::shed_window::ShedWindow;
 use crate::terminal_view::TerminalView;
 use crate::settings::Settings;
 
@@ -29,6 +30,9 @@ pub struct AppState {
     pub settings: Settings,
     pub panes: HashMap<PaneId, Entity<TerminalView>>,
     windows: HashMap<BenchId, WindowHandle<BenchWindow>>,
+    /// The Shed window, once open.
+    shed_window: Option<WindowHandle<ShedWindow>>,
+    opening_shed: bool,
     /// Benches asked for with `Attach`, until their window is open.
     pending: HashSet<BenchId>,
     /// Windows being opened.
@@ -66,6 +70,8 @@ impl AppState {
             settings,
             panes: HashMap::new(),
             windows: HashMap::new(),
+            shed_window: None,
+            opening_shed: false,
             pending: HashSet::new(),
             opening: HashSet::new(),
             desktop: Desktop::new(shed_model::paths::data_home()),
@@ -107,6 +113,7 @@ impl AppState {
                 self.sync(cx);
             }
             Frame::Keeper(KeeperMsg::Show { bench }) => self.show(bench, cx),
+            Frame::Keeper(KeeperMsg::ShowShed) => self.show_shed(cx),
             Frame::Keeper(KeeperMsg::Pegboard(info)) => {
                 // A global, so only the pegboard redraws, not every window.
                 if cx.try_global::<PegboardData>().is_none_or(|d| d.0 != info) {
@@ -327,6 +334,51 @@ impl AppState {
         .detach();
     }
 
+    /// Opens or raises the Shed window.
+    pub fn show_shed(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.shed_window {
+            handle.update(cx, |_, window, _| window.activate()).ok();
+            return;
+        }
+        if std::mem::replace(&mut self.opening_shed, true) {
+            return;
+        }
+        let shed = std::env::current_exe().unwrap_or_else(|_| "shed".into());
+        if let Err(e) = self.desktop.install_shed(&shed) {
+            warn!("cannot write Shed's desktop entry: {e}");
+        }
+        let options = WindowOptions {
+            titlebar: Some(TitlebarOptions { title: Some("Shed".into()), ..Default::default() }),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1120.0), px(740.0)), cx))),
+            app_id: Some(shed_desktop::SHED_APP_ID.into()),
+            icon: rasterize(shed_desktop::SHED_ICON),
+            ..Default::default()
+        };
+        // As with bench windows: its render reads this state, so open it after this update.
+        cx.spawn(async move |this, cx| {
+            let Some(state) = this.upgrade() else { return };
+            let opened = cx.update(|cx| cx.open_window(options, |window, cx| cx.new(|cx| ShedWindow::new(state, window, cx))));
+            this.update(cx, |this, _| {
+                this.opening_shed = false;
+                match opened {
+                    Ok(handle) => this.shed_window = Some(handle),
+                    Err(e) => error!("cannot open the Shed window: {e}"),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Hides a bench: its window closes, its tools keep running.
+    pub fn hide_bench(&mut self, bench: BenchId, cx: &mut Context<Self>) {
+        if let Some(handle) = self.windows.get(&bench).copied() {
+            handle.update(cx, |_, window, _| window.remove_window()).ok();
+        }
+        self.window_closed(bench);
+        cx.notify();
+    }
+
     /// Called when a bench's window closes: its tools keep running in the keeper.
     pub fn window_closed(&mut self, bench: BenchId) {
         if self.windows.remove(&bench).is_some() {
@@ -366,8 +418,11 @@ pub fn window_title(bench: &str) -> String {
 
 /// The bench icon as a window icon (X11 `_NET_WM_ICON`, Wayland `xdg-toplevel-icon`).
 fn window_icon(identity: &Identity) -> Option<std::sync::Arc<image::RgbaImage>> {
+    rasterize(&shed_desktop::icon_svg(identity.color, identity.badge.as_deref()))
+}
+
+fn rasterize(svg: &str) -> Option<std::sync::Arc<image::RgbaImage>> {
     const SIZE: u32 = 128;
-    let svg = shed_desktop::icon_svg(identity.color, identity.badge.as_deref());
-    let rgba = shed_desktop::icon_rgba(&svg, SIZE)?;
+    let rgba = shed_desktop::icon_rgba(svg, SIZE)?;
     image::RgbaImage::from_raw(SIZE, SIZE, rgba).map(std::sync::Arc::new)
 }

@@ -81,10 +81,21 @@ fn a_bench_survives_the_keeper_stopping() {
     assert!(saved.contains("layout = \"down 0.5 (0) (1)\""), "{saved}");
     drop(c);
 
-    // ── Second keeper, as after a reboot: `shed` brings the session back.
+    // ── Second keeper, as after a reboot: Shed opens with every bench closed…
     let second = start_in(dir.path(), "second.sock");
     let mut c = Client::connect(&second.socket);
-    let shown = show_and_attach(&mut c, ShowTarget::Detached);
+    c.msg(ClientMsg::Show(ShowTarget::Shed));
+    c.until("the Shed window", |f, _| matches!(f, Frame::Keeper(KeeperMsg::ShowShed)).then_some(()));
+    c.msg(ClientMsg::Status);
+    let status = c.until("status", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Status(s)) => Some(s.clone()),
+        _ => None,
+    });
+    assert!(status.tree.benches.is_empty(), "nothing starts by itself");
+    assert_eq!(status.stored, ["work"]);
+
+    // …and opening the bench brings back what was saved.
+    let shown = show_and_attach(&mut c, ShowTarget::Load { name: "work".into() });
     assert_eq!(shown, bench, "the same bench, by id");
 
     let replay = c.until("replay of the first pane", |f, _| match f {
@@ -168,4 +179,49 @@ fn renaming_keeps_the_launcher_and_names_stay_apart() {
     assert!(saved.contains("launcher = \"web\""), "{saved}");
     let copy = std::fs::read_to_string(dir.path().join("benches/shop-copy.toml")).unwrap();
     assert!(copy.contains("launcher = \"shop-copy\""), "{copy}");
+}
+
+#[test]
+fn closing_shed_closes_every_bench_and_auto_restore_reopens_them() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("shed.toml"), "auto_restore = true\n").unwrap();
+    let marker = dir.path().join("torn-down");
+
+    let first = start_in(dir.path(), "first.sock");
+    let mut c = Client::connect(&first.socket);
+    // "front" has a window; "back" runs hidden, with a teardown.
+    let front = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("front".into()), cwd: None });
+    c.msg(ClientMsg::Show(ShowTarget::NewBench { name: Some("back".into()), cwd: None }));
+    let back = c.until("back", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Show { bench }) if *bench != front => Some(*bench),
+        _ => None,
+    });
+    let tree = tree_until(&mut c, "both", |t| t.bench(front).is_some() && t.bench(back).is_some());
+    let pane = tree.bench(back).unwrap().tabs[0].active_pane;
+    let teardown = vec![format!("echo done > {}", marker.display())];
+    c.msg(ClientMsg::SetPaneSetup { pane, setup: shed_model::PaneSetup { teardown, ..Default::default() } });
+    tree_until(&mut c, "setup", |t| t.pane(pane).is_some_and(|p| !p.setup.teardown.is_empty()));
+
+    // Closing Shed closes both, teardowns included, then the keeper stops.
+    c.msg(ClientMsg::QuitShed);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "the teardown did not run");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let session = std::fs::read_to_string(dir.path().join("session.toml")).unwrap();
+    assert!(session.contains("open = [\"front\"]"), "{session}");
+    drop(c);
+
+    // auto_restore: the next Shed brings both back, "front" with its window.
+    let second = start_in(dir.path(), "second.sock");
+    let mut c = Client::connect(&second.socket);
+    c.msg(ClientMsg::Show(ShowTarget::Shed));
+    let shown = c.until("front shown", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Show { bench }) => Some(*bench),
+        _ => None,
+    });
+    assert_eq!(shown, front);
+    let tree = tree_until(&mut c, "both back", |t| t.bench(front).is_some() && t.bench(back).is_some());
+    assert_eq!(tree.benches.len(), 2);
 }

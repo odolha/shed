@@ -84,7 +84,9 @@ pub fn resize(master: BorrowedFd<'_>, cols: u16, rows: u16, cell_w: u16, cell_h:
 
 /// The process group in the foreground of the PTY: the pane's current tool, or the shell.
 pub fn foreground_pgrp(master: &impl AsFd) -> Option<Pid> {
-    nix::unistd::tcgetpgrp(master.as_fd()).ok()
+    // A terminal whose shell has gone reports 0, and signalling group 0 would
+    // signal the keeper's own group.
+    nix::unistd::tcgetpgrp(master.as_fd()).ok().filter(|p| p.as_raw() > 0)
 }
 
 /// The user's login shell: `$SHELL`, then the passwd entry, then `/bin/sh`.

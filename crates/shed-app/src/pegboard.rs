@@ -1,13 +1,14 @@
-//! The pegboard: every bench, open, detached or stored, with its tabs and a
-//! preview of each. Type to filter, arrows and Enter to jump, drag a tab onto
-//! another bench to move it there.
+//! The pegboard, the whole of the Shed window: every bench, open, hidden or
+//! closed, with its tabs and a preview of each. From here benches are made,
+//! opened, hidden, closed and deleted. Type to filter, arrows and Enter to
+//! go to a tab, drag a tab onto another bench to move it there.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, Context, Entity, EventEmitter, Focusable, KeyDownEvent, PromptLevel, SharedString,
-    Subscription, Window, div, prelude::*, px, svg,
+    AnyElement, Context, Entity, Focusable, KeyDownEvent, PromptLevel, SharedString, Subscription,
+    Window, div, prelude::*, px, svg,
 };
 use shed_model::{Bench, BenchId, PaneId, Rgb, Tab, TabId};
 use shed_proto::{ClientMsg, PegboardInfo, ShowTarget};
@@ -19,13 +20,12 @@ use crate::line_editor::{EditorEvent, LineEditor};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
-/// How often the previews refresh while the pegboard is open.
+/// How often the previews refresh while the Shed window is active; ten
+/// times slower while it is not.
 const REFRESH: Duration = Duration::from_secs(1);
+const IDLE_REFRESH_TICKS: u32 = 10;
 const CARD_WIDTH: f32 = 300.0;
-
-pub enum PegboardEvent {
-    Close,
-}
+const DANGER: Rgb = Rgb::hex(0xF0566A);
 
 /// The keeper's last answer: stored benches and previews.
 pub struct PegboardData(pub PegboardInfo);
@@ -34,14 +34,15 @@ impl gpui::Global for PegboardData {}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Status {
-    /// Shown in a window of this Shed.
+    /// Running, with a window.
     Open,
-    /// Running in the keeper without a window.
-    Detached,
+    /// Running, without a window.
+    Hidden,
     /// Only saved.
-    Stored,
+    Closed,
 }
 
+#[derive(Clone)]
 struct Entry {
     bench: Bench,
     status: Status,
@@ -51,20 +52,17 @@ struct Entry {
 }
 
 pub struct Pegboard {
-    /// The bench whose window shows this pegboard.
-    here: BenchId,
     state: Entity<AppState>,
     filter: Entity<LineEditor>,
     /// Position in the list of shown tabs.
     selected: usize,
     query: String,
+    ticks: u32,
     _subscriptions: Vec<Subscription>,
 }
 
-impl EventEmitter<PegboardEvent> for Pegboard {}
-
 impl Pegboard {
-    pub fn new(here: BenchId, state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| LineEditor::new(String::new(), cx));
         window.focus(&filter.read(cx).focus_handle(cx), cx);
         let subscriptions = vec![
@@ -78,20 +76,30 @@ impl Pegboard {
                 }
                 cx.notify();
             }),
-            cx.subscribe(&filter, |this, _, event: &EditorEvent, cx| match event {
+            cx.subscribe(&filter, |this, filter, event: &EditorEvent, cx| match event {
                 EditorEvent::Submit(_) => {
                     let entries = this.entries(cx);
                     if let Some((bench, tab)) = flat(&entries).get(this.selected).copied() {
-                        this.jump(&entries[bench], Some(tab), cx);
+                        this.open(&entries[bench], Some(tab), cx);
                     }
                 }
-                EditorEvent::Cancel => cx.emit(PegboardEvent::Close),
+                EditorEvent::Cancel => filter.update(cx, |f, cx| f.clear(cx)),
+            }),
+            // Fresh previews the moment Shed comes to the front.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.refresh(cx);
+                }
             }),
         ];
-        // Live previews: ask again every second until the pegboard closes.
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             loop {
-                let asked = this.update(cx, |this, cx| this.state.read(cx).conn.send_msg(ClientMsg::Pegboard));
+                let asked = this.update_in(cx, |this, window, cx| {
+                    this.ticks += 1;
+                    if window.is_window_active() || this.ticks.is_multiple_of(IDLE_REFRESH_TICKS) {
+                        this.refresh(cx);
+                    }
+                });
                 if asked.is_err() {
                     break;
                 }
@@ -99,25 +107,30 @@ impl Pegboard {
             }
         })
         .detach();
-        Self { here, state, filter, selected: 0, query: String::new(), _subscriptions: subscriptions }
+        Self { state, filter, selected: 0, query: String::new(), ticks: 0, _subscriptions: subscriptions }
     }
 
-    /// Every bench, open ones first, each with the tabs the filter matches.
+    fn refresh(&self, cx: &Context<Self>) {
+        self.send(ClientMsg::Pegboard, cx);
+    }
+
+    fn send(&self, msg: ClientMsg, cx: &Context<Self>) {
+        self.state.read(cx).conn.send_msg(msg);
+    }
+
+    /// Every bench by name, each with the tabs the filter matches.
     fn entries(&self, cx: &Context<Self>) -> Vec<Entry> {
         let state = self.state.read(cx);
         let live = state.tree.benches.iter().map(|b| {
-            let status = if state.has_window(b.id) { Status::Open } else { Status::Detached };
+            let status = if state.has_window(b.id) { Status::Open } else { Status::Hidden };
             (b.clone(), status, None)
         });
         let stored = cx.try_global::<PegboardData>().map(|d| d.0.stored.as_slice()).unwrap_or_default();
         let stored = stored.iter().filter(|s| state.tree.bench(s.bench.id).is_none());
-        let stored = stored.map(|s| (s.bench.clone(), Status::Stored, Some(s.saved.clone())));
+        let stored = stored.map(|s| (s.bench.clone(), Status::Closed, Some(s.saved.clone())));
         let mut all: Vec<(Bench, Status, Option<String>)> = live.chain(stored).collect();
-        all.sort_by_key(|(_, status, _)| match status {
-            Status::Open => 0,
-            Status::Detached => 1,
-            Status::Stored => 2,
-        });
+        // By name, so a bench stays where it is as it opens and closes.
+        all.sort_by_key(|(b, _, _)| b.name.to_lowercase());
 
         let words: Vec<String> = self.query.split_whitespace().map(str::to_lowercase).collect();
         let matches = |text: &str| {
@@ -136,39 +149,58 @@ impl Pegboard {
             .collect()
     }
 
-    /// Goes to a bench, at `tab` if given: raises its window, opens one for
-    /// it, or loads it.
-    fn jump(&mut self, entry: &Entry, tab: Option<TabId>, cx: &mut Context<Self>) {
-        let bench = entry.bench.id;
-        let conn = self.state.read(cx).conn.clone();
-        match entry.status {
-            Status::Stored => conn.send_msg(ClientMsg::Show(ShowTarget::Load { name: entry.bench.name.clone() })),
-            Status::Open | Status::Detached => {}
+    /// Opens a bench, at `tab` if given: raises its window, gives a hidden
+    /// one a window, or loads a closed one.
+    fn open(&mut self, entry: &Entry, tab: Option<TabId>, cx: &mut Context<Self>) {
+        if entry.status == Status::Closed {
+            self.send(ClientMsg::Show(ShowTarget::Load { name: entry.bench.name.clone() }), cx);
         }
         if let Some(tab) = tab {
-            conn.send_msg(ClientMsg::FocusTab { tab });
+            self.send(ClientMsg::FocusTab { tab }, cx);
         }
-        if entry.status != Status::Stored && bench != self.here {
+        if entry.status != Status::Closed {
+            let bench = entry.bench.id;
             self.state.update(cx, |state, cx| state.show(bench, cx));
         }
-        cx.emit(PegboardEvent::Close);
     }
 
-    fn delete(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("Delete the bench “{name}”?"),
-            Some("Its saved file, scrollback and launcher are removed. This cannot be undone."),
-            &["Delete Bench", "Cancel"],
-            cx,
-        );
+    fn hide(&mut self, bench: BenchId, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| state.hide_bench(bench, cx));
+    }
+
+    /// Asks, then sends `msg`.
+    fn confirm(&mut self, message: String, detail: &str, button: &str, msg: ClientMsg, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(PromptLevel::Warning, &message, Some(detail), &[button, "Cancel"], cx);
         let conn = self.state.read(cx).conn.clone();
         cx.spawn(async move |_, _| {
             if let Ok(0) = answer.await {
-                conn.send_msg(ClientMsg::DeleteBench { name });
+                conn.send_msg(msg);
             }
         })
         .detach();
+    }
+
+    fn close(&mut self, bench: &Bench, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm(
+            format!("Close the bench “{}”?", bench.name),
+            "It is saved, then the programs running in it stop and its teardown commands run. \
+             Open it again from here to bring it back.",
+            "Close Bench",
+            ClientMsg::CloseBench { bench: bench.id },
+            window,
+            cx,
+        );
+    }
+
+    fn delete(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm(
+            format!("Delete the bench “{name}”?"),
+            "It stops if it runs, and its saved file, scrollback and launcher are removed. This cannot be undone.",
+            "Delete Bench",
+            ClientMsg::DeleteBench { name },
+            window,
+            cx,
+        );
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -182,18 +214,38 @@ impl Pegboard {
         cx.notify();
     }
 
+    fn button(
+        &self,
+        id: String,
+        label: &str,
+        color: Rgb,
+        filled: bool,
+        cx: &mut Context<Self>,
+        on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> AnyElement {
+        div()
+            .id(SharedString::from(id))
+            .px_2()
+            .py_0p5()
+            .rounded_sm()
+            .text_size(px(12.0))
+            .cursor_pointer()
+            .text_color(hsla(color))
+            .when(filled, |d| d.bg(hsla_alpha(color, 0.2)))
+            .hover(move |s| s.bg(hsla_alpha(color, 0.3)))
+            .child(label.to_string())
+            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
+            .into_any_element()
+    }
+
     fn render_bench(&self, entry: &Entry, first: usize, previews: &HashMap<PaneId, Vec<String>>, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
         let bench = &entry.bench;
         let accent = bench.color.accent();
         let id = bench.id;
-        let (status, action) = match entry.status {
-            Status::Open if id == self.here => ("this window".to_string(), None),
-            Status::Open => ("open".to_string(), Some("Go to")),
-            Status::Detached => ("detached, still running".to_string(), Some("Open")),
-            Status::Stored => {
-                let saved = entry.saved.as_deref().map(short_time).unwrap_or_default();
-                (format!("stored, saved {saved}"), Some("Load"))
-            }
+        let status = match entry.status {
+            Status::Open => "open".to_string(),
+            Status::Hidden => "hidden, still running".to_string(),
+            Status::Closed => format!("closed, saved {}", entry.saved.as_deref().map(short_time).unwrap_or_default()),
         };
         let tab_count = bench.tabs.len();
         let mut header = div()
@@ -209,44 +261,27 @@ impl Pegboard {
                 "{status} · {tab_count} tab{}",
                 if tab_count == 1 { "" } else { "s" }
             )))
-            .when(bench.closing, |el| el.child(div().text_size(px(12.0)).text_color(hsla(accent)).child("closing…")))
             .child(div().flex_1());
-        if let Some(label) = action {
-            let entry_bench = bench.clone();
-            let (status, saved) = (entry.status, entry.saved.clone());
-            header = header.child(
-                div()
-                    .id(SharedString::from(format!("go-{id}")))
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .text_size(px(12.0))
-                    .cursor_pointer()
-                    .bg(hsla_alpha(accent, 0.2))
-                    .text_color(hsla(accent))
-                    .hover(|s| s.bg(hsla_alpha(accent, 0.35)))
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let entry = Entry { bench: entry_bench.clone(), status, saved: saved.clone(), tabs: Vec::new() };
-                        this.jump(&entry, None, cx);
-                    })),
-            );
-        }
-        if entry.status == Status::Stored {
+
+        if bench.closing {
+            header = header.child(div().text_size(px(12.0)).text_color(hsla(accent)).child("closing…"));
+        } else {
+            let open_label = if entry.status == Status::Open { "Go to" } else { "Open" };
+            let e = entry.clone();
+            header = header.child(self.button(format!("open-{id}"), open_label, accent, true, cx, move |this, _, cx| this.open(&e, None, cx)));
+            if entry.status == Status::Open {
+                header = header.child(self.button(format!("hide-{id}"), "Hide", ui.text_dim, false, cx, move |this, _, cx| this.hide(id, cx)));
+            }
+            if entry.status != Status::Closed {
+                let b = bench.clone();
+                header = header.child(self.button(format!("close-{id}"), "Close…", ui.text_dim, false, cx, move |this, window, cx| {
+                    this.close(&b, window, cx)
+                }));
+            }
             let name = bench.name.clone();
-            header = header.child(
-                div()
-                    .id(SharedString::from(format!("delete-{id}")))
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .text_size(px(12.0))
-                    .cursor_pointer()
-                    .text_color(hsla(ui.text_dim))
-                    .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(Rgb::hex(0xF0566A))))
-                    .child("Delete…")
-                    .on_click(cx.listener(move |this, _, window, cx| this.delete(name.clone(), window, cx))),
-            );
+            header = header.child(self.button(format!("delete-{id}"), "Delete…", DANGER, false, cx, move |this, window, cx| {
+                this.delete(name.clone(), window, cx)
+            }));
         }
 
         let mut cards = div().flex().flex_wrap().gap_3();
@@ -255,7 +290,7 @@ impl Pegboard {
             cards = cards.child(self.render_tab(entry, tab, first + i, previews, ui, cx));
         }
 
-        let live = entry.status != Status::Stored;
+        let running = entry.status != Status::Closed;
         div()
             .id(SharedString::from(format!("bench-{id}")))
             .flex()
@@ -265,10 +300,10 @@ impl Pegboard {
             .rounded_md()
             .border_1()
             .border_color(hsla(ui.divider))
-            .when(live, |el| {
+            .when(running, |el| {
                 el.drag_over::<DraggedTab>(move |s, _, _, _| s.border_color(hsla(accent)))
                     .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
-                        this.state.read(cx).conn.send_msg(ClientMsg::MoveTab { tab: d.tab, bench: id, index: usize::MAX });
+                        this.send(ClientMsg::MoveTab { tab: d.tab, bench: id, index: usize::MAX }, cx);
                     }))
             })
             .child(header)
@@ -331,8 +366,8 @@ impl Pegboard {
             foot.push(format!("{} panes", tab.panes.len()));
         }
 
-        let entry_bench = bench.clone();
-        let (status, saved, tab_id) = (entry.status, entry.saved.clone(), tab.id);
+        let e = entry.clone();
+        let tab_id = tab.id;
         let border = if selected { hsla(accent) } else if active { hsla_alpha(accent, 0.45) } else { hsla(ui.divider) };
         div()
             .id(SharedString::from(format!("tab-{}", tab.id)))
@@ -346,13 +381,10 @@ impl Pegboard {
             .border_color(border)
             .cursor_pointer()
             .hover(move |s| s.border_color(hsla(accent)))
-            .when(status != Status::Stored, |el| {
+            .when(entry.status != Status::Closed, |el| {
                 el.on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
             })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let entry = Entry { bench: entry_bench.clone(), status, saved: saved.clone(), tabs: Vec::new() };
-                this.jump(&entry, Some(tab_id), cx);
-            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.open(&e, Some(tab_id), cx)))
             .child(head)
             .child(preview)
             .child(div().truncate().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(foot.join(" · ")))
@@ -409,9 +441,13 @@ impl Render for Pegboard {
             first += entry.tabs.len();
         }
         if entries.is_empty() {
-            list = list.child(div().text_color(hsla(ui.text_dim)).child("Nothing matches."));
+            let empty = if self.query.is_empty() { "No benches yet. Make one with “New bench”." } else { "Nothing matches." };
+            list = list.child(div().text_color(hsla(ui.text_dim)).child(empty));
         }
 
+        let new_bench = self.button("new-bench".into(), "+ New bench", ui.accent_fallback, true, cx, |this, _, cx| {
+            this.send(ClientMsg::Show(ShowTarget::NewBench { name: None, cwd: None }), cx);
+        });
         let search = div()
             .flex()
             .items_center()
@@ -420,10 +456,13 @@ impl Render for Pegboard {
             .child(div().flex_1().max_w(px(480.0)).text_size(px(14.0)).child(self.filter.clone()))
             .child(
                 div()
+                    .flex_1()
+                    .truncate()
                     .text_size(px(12.0))
                     .text_color(hsla(ui.text_dim))
-                    .child("Type to filter by bench, tab, tag, folder or tool · ↑↓ and Enter to go · drag a tab onto a bench to move it · Esc to close"),
-            );
+                    .child("Filter by bench, tab, tag, folder or tool · ↑↓ and Enter to go · drag a tab onto a bench to move it"),
+            )
+            .child(new_bench);
 
         div()
             .id("pegboard")

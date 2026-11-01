@@ -36,6 +36,12 @@ impl LineEditor {
         &self.text
     }
 
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.text.clear();
+        self.cursor = 0;
+        cx.notify();
+    }
+
     fn byte(&self, chars: usize) -> usize {
         self.text.char_indices().nth(chars).map_or(self.text.len(), |(i, _)| i)
     }
