@@ -9,10 +9,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use shed_model::{Aliases, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
+use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -78,6 +78,10 @@ pub enum ClientMsg {
     Status,
     /// Stop the keeper and every tool it holds.
     Shutdown,
+    // New messages go last: variants travel by position, and `shed stop`
+    // from a newer client has to reach an older keeper.
+    /// Asks for [`KeeperMsg::Pegboard`].
+    Pegboard,
 }
 
 /// Which aliases to set.
@@ -118,6 +122,8 @@ pub enum KeeperMsg {
     /// A request finished; the text says what happened (for the CLI).
     Done(String),
     Error(String),
+    // New messages go last, so an older keeper's errors still read as errors.
+    Pegboard(PegboardInfo),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -133,6 +139,23 @@ pub struct KeeperStatus {
     /// Saved benches that are not running.
     pub stored: Vec<String>,
     pub tree: Shed,
+}
+
+/// What the pegboard shows beyond the tree.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PegboardInfo {
+    /// Saved benches that are not running, as they would load.
+    pub stored: Vec<StoredBench>,
+    /// The last lines with text on screen, of the active pane of every tab,
+    /// running or saved.
+    pub previews: Vec<(PaneId, Vec<String>)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoredBench {
+    pub bench: Bench,
+    /// When it was saved, UTC.
+    pub saved: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -293,6 +316,17 @@ pub fn write_frame(w: &mut impl Write, frame: &Frame) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Messages travel by variant position. These three must keep theirs, so
+    /// any `shed stop` can stop any keeper and a version mismatch is reported
+    /// as an error; new variants go at the end.
+    #[test]
+    fn versioning_messages_keep_their_positions() {
+        let first = |bytes: Vec<u8>| bytes[0];
+        assert_eq!(first(postcard::to_allocvec(&ClientMsg::Hello { version: 1, kind: ClientKind::Cli }).unwrap()), 0);
+        assert_eq!(first(postcard::to_allocvec(&ClientMsg::Shutdown).unwrap()), 26);
+        assert_eq!(first(postcard::to_allocvec(&KeeperMsg::Error(String::new())).unwrap()), 8);
+    }
 
     #[test]
     fn round_trip_through_decoder_byte_by_byte() {

@@ -12,7 +12,7 @@ macro_rules! icons {
 
 const FILES: &[(&str, &[u8])] = icons![
     "bench", "bench-new", "close", "detach", "keeper", "logbook", "pane", "pegboard", "private", "rack",
-    "shed", "split-down", "split-right", "tab", "tab-new", "tag", "tool", "tool-waiting", "bench-color",
+    "shed", "split-down", "split-right", "tab", "tab-new", "tag", "tool", "tool-waiting", "bench-color", "bench-load",
 ];
 
 pub struct Assets;

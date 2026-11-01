@@ -7,6 +7,7 @@ mod keeper_conn;
 mod line_editor;
 mod logbook;
 mod logbook_view;
+mod pegboard;
 mod prompt;
 mod settings;
 mod setup_cli;

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use common::{Client, start_in};
 use shed_model::{Aliases, BenchId, PaneId, PaneSetup, Shed};
-use shed_proto::{AliasTarget, ClientMsg, Frame, KeeperMsg, ShowTarget};
+use shed_proto::{AliasTarget, ClientMsg, Frame, KeeperMsg, PegboardInfo, ShowTarget};
 
 fn tree_until(c: &mut Client, what: &str, ok: impl Fn(&Shed) -> bool) -> Shed {
     if ok(&c.tree) {
@@ -130,4 +130,40 @@ fn closing_stops_tools_runs_teardown_and_loading_runs_startup() {
         std::thread::sleep(Duration::from_millis(100));
         c.msg(ClientMsg::FocusPane { pane });
     }
+}
+
+fn pegboard(c: &mut Client) -> PegboardInfo {
+    c.msg(ClientMsg::Pegboard);
+    c.until("pegboard", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Pegboard(info)) => Some(info.clone()),
+        _ => None,
+    })
+}
+
+fn previews(info: &PegboardInfo, pane: PaneId, needle: &str) -> bool {
+    info.previews.iter().any(|(p, lines)| *p == pane && lines.iter().any(|l| l.contains(needle)))
+}
+
+#[test]
+fn the_pegboard_previews_running_and_stored_benches() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let (bench, pane) = new_bench(&mut c, "board", None);
+    c.prompt(pane);
+    c.input(pane, "echo preview-$((6*7))\n");
+    c.output_until(pane, "preview-42");
+    c.prompt(pane);
+
+    let info = pegboard(&mut c);
+    assert!(previews(&info, pane, "preview-42"), "{info:?}");
+    assert!(info.stored.is_empty());
+
+    // Closed, it is stored, and the preview comes from its saved scrollback.
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed", |t| t.bench(bench).is_none());
+    let info = pegboard(&mut c);
+    let stored = info.stored.iter().find(|s| s.bench.id == bench).expect("stored");
+    assert_eq!(stored.bench.name, "board");
+    assert!(previews(&info, pane, "preview-42"), "{info:?}");
 }

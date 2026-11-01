@@ -16,6 +16,7 @@ use tracing::{error, warn};
 
 use crate::bench_window::BenchWindow;
 use crate::keeper_conn::KeeperConn;
+use crate::pegboard::PegboardData;
 use crate::terminal_view::TerminalView;
 use crate::settings::Settings;
 
@@ -105,6 +106,12 @@ impl AppState {
                 self.sync(cx);
             }
             Frame::Keeper(KeeperMsg::Show { bench }) => self.show(bench, cx),
+            Frame::Keeper(KeeperMsg::Pegboard(info)) => {
+                // A global, so only the pegboard redraws, not every window.
+                if cx.try_global::<PegboardData>().is_none_or(|d| d.0 != info) {
+                    cx.set_global(PegboardData(info));
+                }
+            }
             Frame::Keeper(KeeperMsg::Attached { bench }) => self.open_bench_window(bench, cx),
             Frame::Keeper(KeeperMsg::Replay { pane, cols, rows, bytes }) => {
                 if let Some(view) = self.panes.get(&pane) {
@@ -124,7 +131,7 @@ impl AppState {
     }
 
     /// Opens or raises a bench's window.
-    fn show(&mut self, bench: BenchId, cx: &mut Context<Self>) {
+    pub fn show(&mut self, bench: BenchId, cx: &mut Context<Self>) {
         if let Some(handle) = self.windows.get(&bench) {
             handle.update(cx, |_, window, _| window.activate()).ok();
         } else if self.pending.insert(bench) {
@@ -142,14 +149,7 @@ impl AppState {
         }
 
         // A view for every pane of every open bench; none for anything else.
-        let shown: HashSet<PaneId> = self
-            .windows
-            .keys()
-            .filter_map(|b| self.tree.bench(*b))
-            .flat_map(|b| &b.tabs)
-            .flat_map(|t| &t.panes)
-            .map(|p| p.id)
-            .collect();
+        let shown = self.shown_panes();
         self.panes.retain(|id, _| shown.contains(id));
         for id in shown {
             if !self.panes.contains_key(&id) {
@@ -329,15 +329,26 @@ impl AppState {
         if self.windows.remove(&bench).is_some() {
             self.conn.send_msg(ClientMsg::Detach { bench });
         }
-        let shown: HashSet<PaneId> = self
-            .windows
+        let shown = self.shown_panes();
+        self.panes.retain(|id, _| shown.contains(id));
+    }
+
+    /// The panes of benches with a window, or one being opened: a window
+    /// opens a moment after its bench attaches, and the replays that arrive
+    /// meanwhile must find their views.
+    fn shown_panes(&self) -> HashSet<PaneId> {
+        self.windows
             .keys()
+            .chain(&self.opening)
             .filter_map(|b| self.tree.bench(*b))
             .flat_map(|b| &b.tabs)
             .flat_map(|t| &t.panes)
             .map(|p| p.id)
-            .collect();
-        self.panes.retain(|id, _| shown.contains(id));
+            .collect()
+    }
+
+    pub fn has_window(&self, bench: BenchId) -> bool {
+        self.windows.contains_key(&bench)
     }
 
     /// Bench windows in tree order, for Super+1…9.

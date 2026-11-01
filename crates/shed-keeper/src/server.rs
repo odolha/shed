@@ -16,10 +16,10 @@ use shed_emu::marks::{Mark, MarkScanner};
 use shed_logbook::{Logbook, NewEntry};
 use shed_save::{PaneExtras, Relaunch, SavedBench, Store};
 use shed_model::config::{Config, FileWatch};
-use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId};
+use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
 use shed_proto::{
     AliasTarget, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
-    PROTOCOL_VERSION, ShowTarget,
+    PROTOCOL_VERSION, PegboardInfo, ShowTarget, StoredBench,
 };
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -54,6 +54,10 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Tree changes from output (titles) are batched for this long before broadcast.
 const TREE_FLUSH_DELAY: Duration = Duration::from_millis(50);
+
+/// How much of a screen the pegboard previews.
+const PREVIEW_LINES: usize = 12;
+const PREVIEW_COLS: usize = 100;
 
 pub struct KeeperConfig {
     pub socket: PathBuf,
@@ -746,6 +750,38 @@ impl Keeper {
                     tree: st.tree.clone(),
                 };
                 st.send(client, KeeperMsg::Status(status));
+            }
+            ClientMsg::Pegboard => {
+                let (mut previews, running): (Vec<_>, Vec<String>) = {
+                    let st = self.lock();
+                    let previews = st
+                        .tree
+                        .benches
+                        .iter()
+                        .flat_map(|b| &b.tabs)
+                        .filter_map(|t| Some((t.active_pane, preview(&st.panes.get(&t.active_pane)?.emu.dump_text()))))
+                        .collect();
+                    (previews, st.tree.benches.iter().map(|b| b.name.clone()).collect())
+                };
+                // Saved benches are read without holding the state.
+                let mut stored = Vec::new();
+                if let Some(store) = &self.cfg.store {
+                    for info in store.list().into_iter().filter(|i| !running.contains(&i.name)) {
+                        let Ok(saved) = store.load(&info.name) else { continue };
+                        let Ok((mut bench, panes)) = saved.to_bench() else { continue };
+                        for tab in &mut bench.tabs {
+                            for pane in &mut tab.panes {
+                                let tool = panes.iter().find(|(id, _)| *id == pane.id).and_then(|(_, p)| p.tool.as_deref());
+                                pane.tool = tool.map(|t| Tool { argv: t.split_whitespace().map(String::from).collect() });
+                            }
+                            if let Some(text) = store.scrollback(&bench.name, tab.active_pane) {
+                                previews.push((tab.active_pane, preview(&text)));
+                            }
+                        }
+                        stored.push(StoredBench { bench, saved: saved.saved });
+                    }
+                }
+                self.lock().send(client, KeeperMsg::Pegboard(PegboardInfo { stored, previews }));
             }
             ClientMsg::Shutdown => {
                 info!(client, "shutdown requested");
@@ -1498,4 +1534,12 @@ fn write_bash_rc(dir: &Path) -> Option<PathBuf> {
             None
         }
     }
+}
+
+/// The last lines with text on them, for the pegboard.
+fn preview(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let end = lines.iter().rposition(|l| !l.is_empty()).map_or(0, |i| i + 1);
+    let start = end.saturating_sub(PREVIEW_LINES);
+    lines[start..end].iter().map(|l| l.chars().take(PREVIEW_COLS).collect()).collect()
 }

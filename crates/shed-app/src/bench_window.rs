@@ -20,6 +20,7 @@ use shed_proto::{ClientMsg, ShowTarget};
 use crate::actions::*;
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
+use crate::pegboard::{Pegboard, PegboardEvent};
 use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
@@ -62,8 +63,8 @@ struct SplitDrag {
 /// The payload of a tab being dragged, drawn under the pointer.
 #[derive(Clone)]
 pub struct DraggedTab {
-    tab: TabId,
-    title: String,
+    pub tab: TabId,
+    pub title: String,
 }
 
 impl Render for DraggedTab {
@@ -97,6 +98,8 @@ pub struct BenchWindow {
     drag: Option<SplitDrag>,
     /// The Setup panel, while open.
     setup: Option<(Entity<SetupPanel>, Subscription)>,
+    /// The pegboard, while open; it takes the place of the panes.
+    pegboard: Option<(Entity<Pegboard>, Subscription)>,
 }
 
 impl BenchWindow {
@@ -118,7 +121,25 @@ impl BenchWindow {
             split_bounds: Rc::default(),
             drag: None,
             setup: None,
+            pegboard: None,
         }
+    }
+
+    fn toggle_pegboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pegboard.take().is_none() {
+            self.menu = None;
+            let board = cx.new(|cx| Pegboard::new(self.bench, self.state.clone(), window, cx));
+            let sub = cx.subscribe_in(&board, window, |this, _, event: &PegboardEvent, window, cx| match event {
+                PegboardEvent::Close => {
+                    this.pegboard = None;
+                    this.refocus(window, cx);
+                }
+            });
+            self.pegboard = Some((board, sub));
+        } else {
+            self.refocus(window, cx);
+        }
+        cx.notify();
     }
 
     fn toggle_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -601,6 +622,19 @@ impl BenchWindow {
         )
         .child(
             div()
+                .id("pegboard-button")
+                .flex()
+                .items_center()
+                .px_2()
+                .cursor_pointer()
+                .when(self.pegboard.is_some(), |d| d.bg(hsla(ui.tab_active)))
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .tooltip(|_, cx| cx.new(|_| Tooltip("Pegboard: every bench and tab".into())).into())
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_pegboard(window, cx)))
+                .child(svg().path(icon("pegboard")).size(px(16.0)).text_color(hsla(if self.pegboard.is_some() { accent } else { ui.text_dim }))),
+        )
+        .child(
+            div()
                 .id("setup-button")
                 .flex()
                 .items_center()
@@ -808,6 +842,7 @@ impl Render for BenchWindow {
             }))
             .on_action(cx.listener(|this, _: &RenameBench, window, cx| this.start_edit(EditTarget::BenchName, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSetup, window, cx| this.toggle_setup(window, cx)))
+            .on_action(cx.listener(|this, _: &TogglePegboard, window, cx| this.toggle_pegboard(window, cx)))
             .on_action(cx.listener(|this, a: &FocusBench, _, cx| {
                 if let Some(handle) = this.state.read(cx).window_at(a.0) {
                     handle.update(cx, |_, window, _| window.activate()).ok();
@@ -822,9 +857,11 @@ impl Render for BenchWindow {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(content)
-                    .when_some(self.setup.as_ref().map(|(p, _)| p.clone()), |el, panel| {
-                        el.child(div().absolute().top_0().right_0().h_full().child(panel))
+                    .map(|el| match self.pegboard.as_ref().map(|(b, _)| b.clone()) {
+                        Some(board) => el.child(board),
+                        None => el.child(content).when_some(self.setup.as_ref().map(|(p, _)| p.clone()), |el, panel| {
+                            el.child(div().absolute().top_0().right_0().h_full().child(panel))
+                        }),
                     }),
             )
             .when(!errors.is_empty(), |el| {

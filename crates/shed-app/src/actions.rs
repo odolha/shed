@@ -31,6 +31,7 @@ actions!(
         RenameBench,
         OpenLogbook,
         ToggleSetup,
+        TogglePegboard,
     ]
 );
 
@@ -73,6 +74,8 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("f2", "rename_tab"),
     ("shift-f2", "rename_bench"),
     ("ctrl-shift-s", "setup"),
+    ("super-space", "pegboard"),
+    ("ctrl-shift-space", "pegboard"),
     ("ctrl-1", "activate_tab_1"),
     ("ctrl-2", "activate_tab_2"),
     ("ctrl-3", "activate_tab_3"),
@@ -129,6 +132,7 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         "rename_tab" => KeyBinding::new(key, RenameTab, w),
         "rename_bench" => KeyBinding::new(key, RenameBench, w),
         "setup" => KeyBinding::new(key, ToggleSetup, w),
+        "pegboard" => KeyBinding::new(key, TogglePegboard, w),
         _ => {
             if let Some(i) = numbered("activate_tab_") {
                 KeyBinding::new(key, ActivateTab(i), w)

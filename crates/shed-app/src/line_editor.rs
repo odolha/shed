@@ -67,7 +67,7 @@ impl LineEditor {
                 self.cursor += pasted.chars().count();
             }
             _ => match ks.key_char.as_deref() {
-                Some(text) if !ks.modifiers.control && !ks.modifiers.platform => {
+                Some(text) if !ks.modifiers.control && !ks.modifiers.platform && !text.chars().any(char::is_control) => {
                     let at = self.byte(self.cursor);
                     self.text.insert_str(at, text);
                     self.cursor += text.chars().count();
