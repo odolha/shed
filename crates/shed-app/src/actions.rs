@@ -29,6 +29,7 @@ actions!(
         CloseBench,
         RenameTab,
         RenameBench,
+        OpenLogbook,
     ]
 );
 
@@ -53,6 +54,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl-0", "zoom_reset"),
     ("shift-pageup", "scroll_page_up"),
     ("shift-pagedown", "scroll_page_down"),
+    ("ctrl-r", "logbook"),
     ("ctrl-shift-t", "new_tab"),
     ("ctrl-shift-w", "close_pane"),
     ("ctrl-tab", "next_tab"),
@@ -107,6 +109,8 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         "zoom_reset" => KeyBinding::new(key, ZoomReset, t),
         "scroll_page_up" => KeyBinding::new(key, ScrollPageUp, t),
         "scroll_page_down" => KeyBinding::new(key, ScrollPageDown, t),
+        // Only at a shell prompt: in vim and other programs the key is theirs.
+        "logbook" => KeyBinding::new(key, OpenLogbook, Some("Terminal && at_prompt")),
         "new_tab" => KeyBinding::new(key, NewTab, w),
         "close_tab" => KeyBinding::new(key, CloseTab, w),
         "close_pane" => KeyBinding::new(key, ClosePane, w),

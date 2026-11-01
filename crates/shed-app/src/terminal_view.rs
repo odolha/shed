@@ -32,13 +32,14 @@ pub mod perf {
 }
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, FocusHandle, Font, FontStyle, FontWeight, Hsla,
+    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Subscription, Font, FontStyle, FontWeight, Hsla,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels,
     Point, ScrollWheelEvent, SharedString, StrikethroughStyle, Task, TextAlign, TextRun,
     UnderlineStyle, Window, canvas, div, point, prelude::*, px, size,
 };
 use shed_emu::keys::{self, KeyInput, Mods};
 use shed_emu::links::{self, Link};
+use shed_emu::marks::{Mark, MarkScanner, WalkState};
 use shed_emu::mouse::{self, Button, MouseAction};
 use shed_emu::{
     AlacrittyEmulator, CursorShape, EmuEvent, Emulator, GridPoint, GridSize, MouseMode, Palette, Rgb,
@@ -47,10 +48,11 @@ use shed_emu::{
 use shed_model::PaneId;
 use shed_proto::{ClientMsg, Frame};
 
-use crate::actions::{Copy, Paste, ScrollPageDown, ScrollPageUp, ZoomIn, ZoomOut, ZoomReset};
+use crate::actions::{Copy, OpenLogbook, Paste, ScrollPageDown, ScrollPageUp, ZoomIn, ZoomOut, ZoomReset};
 use crate::keeper_conn::KeeperConn;
+use crate::logbook_view::{LogbookSearch, SearchEvent};
 use crate::settings::Settings;
-use crate::theme::{FontSettings, hsla};
+use crate::theme::{FontSettings, UiColors, hsla, hsla_alpha};
 
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -82,7 +84,17 @@ pub struct TerminalView {
     selecting: bool,
     /// The pane's working directory, for opening relative paths.
     pub cwd: std::path::PathBuf,
+    /// The pane's tab and bench, the context for logbook scopes.
+    pub here: Option<shed_logbook::Context>,
+    pub accent: Rgb,
+    pub ui: UiColors,
     sync_timer: Option<Task<()>>,
+    marks: MarkScanner,
+    /// The shell is at its prompt (between OSC 133 B and C): Ctrl+R is Shed's.
+    at_prompt: bool,
+    /// The history walk in progress, shown as a chip by the prompt.
+    walk: Option<WalkState>,
+    search: Option<(Entity<LogbookSearch>, Subscription)>,
 }
 
 impl TerminalView {
@@ -105,6 +117,13 @@ impl TerminalView {
             select_anchor: None,
             selecting: false,
             cwd: std::path::PathBuf::from("/"),
+            here: None,
+            accent: Rgb::hex(0x5CB2FF),
+            ui: settings.ui.clone(),
+            marks: MarkScanner::new(),
+            at_prompt: false,
+            walk: None,
+            search: None,
             sync_timer: None,
         }
     }
@@ -118,6 +137,7 @@ impl TerminalView {
         self.palette = settings.palette.clone();
         self.font = settings.font.clone();
         self.padding = settings.padding;
+        self.ui = settings.ui.clone();
         self.dirty = true;
         cx.notify();
     }
@@ -128,11 +148,28 @@ impl TerminalView {
         let size = self.emu.size();
         let size = GridSize::new(cols, rows).with_cell(size.cell_width, size.cell_height);
         self.emu = AlacrittyEmulator::new(size, self.palette.clone());
+        self.marks = MarkScanner::new();
         self.feed(bytes, cx);
     }
 
     /// Output from the keeper.
     pub fn feed(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        let mut marks = Vec::new();
+        self.marks.scan(bytes, &mut marks);
+        for mark in marks {
+            match mark {
+                Mark::PromptStart | Mark::InputStart => self.at_prompt = true,
+                // Readline redraws the prompt (and its marks) after every
+                // binding, so only a running command ends the walk here.
+                Mark::Executed => {
+                    self.at_prompt = false;
+                    self.walk = None;
+                }
+                Mark::Walk(w) => self.walk = Some(w),
+                Mark::WalkEnd => self.walk = None,
+                Mark::Finished(_) | Mark::Cwd(_) | Mark::Command(_) => {}
+            }
+        }
         self.emu.advance(bytes);
         // The keeper answers queries; answering here too would answer twice.
         self.emu.take_replies();
@@ -235,6 +272,12 @@ impl TerminalView {
         let m = ks.modifiers;
         let key = ks.key.as_str();
 
+        // Typing anything but the walk keys ends the walk, as far as the chip goes.
+        if self.walk.is_some() && !(m.control && matches!(key, "up" | "down")) {
+            self.walk = None;
+            cx.notify();
+        }
+
         let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, super_: m.platform };
         let input = KeyInput { key, text: ks.key_char.as_deref(), mods };
         if let Some(bytes) = keys::encode(input, self.emu.modes()) {
@@ -246,6 +289,29 @@ impl TerminalView {
             self.send(bytes);
             cx.stop_propagation();
         }
+    }
+
+    fn open_logbook(&mut self, _: &OpenLogbook, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(here) = self.here else { return };
+        let (ui, accent, mono) = (self.ui.clone(), self.accent, SharedString::from(self.font.family.clone()));
+        let search = cx.new(|cx| LogbookSearch::new(here, crate::logbook::path(), ui, accent, mono, cx));
+        window.focus(&search.read(cx).focus_handle(cx), cx);
+        let sub = cx.subscribe_in(&search, window, |this, _, event: &SearchEvent, window, cx| {
+            if let SearchEvent::Insert { command, run } = event {
+                // Clear the line (Ctrl+E, Ctrl+U), then paste, so nothing typed runs by accident.
+                let mut bytes = b"\x05\x15".to_vec();
+                bytes.extend(keys::encode_paste(command, this.emu.modes()));
+                if *run {
+                    bytes.push(b'\r');
+                }
+                this.send(bytes);
+            }
+            this.search = None;
+            window.focus(&this.focus, cx);
+            cx.notify();
+        });
+        self.search = Some((search, sub));
+        cx.notify();
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
@@ -684,6 +750,16 @@ impl Render for TerminalView {
         let view = cx.entity().downgrade();
         let grid_origin = self.grid_origin.clone();
         let padding = self.padding;
+        let accent = self.accent;
+        // The walk chip sits at the right end of the prompt line.
+        let chip = self.walk.as_ref().map(|w| {
+            let top = px(padding) + m.height * self.snapshot.cursor.row as f32;
+            let mut label = format!("{} {}/{}", w.scope, w.pos, w.total);
+            if !w.source.is_empty() {
+                label.push_str(&format!(" · {}", w.source));
+            }
+            (top, label)
+        });
         if perf::enabled() {
             perf::RENDERS.fetch_add(1, Ordering::Relaxed);
             perf::RENDER_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
@@ -691,7 +767,8 @@ impl Render for TerminalView {
 
         div()
             .id("terminal")
-            .key_context("Terminal")
+            .relative()
+            .key_context(if self.at_prompt { "Terminal at_prompt" } else { "Terminal" })
             .track_focus(&self.focus)
             .size_full()
             // The window paints the theme background (cleared by the renderer
@@ -699,6 +776,7 @@ impl Render for TerminalView {
             .when(frame.background != self.palette.background, |d| d.bg(background))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::open_logbook))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(|v, _: &ZoomIn, _, cx| v.zoom(1.0, cx)))
             .on_action(cx.listener(|v, _: &ZoomOut, _, cx| v.zoom(-1.0, cx)))
@@ -742,5 +820,22 @@ impl Render for TerminalView {
                 )
                 .size_full(),
             )
+            .when_some(chip, |el, (top, label)| {
+                el.child(
+                    div()
+                        .absolute()
+                        .top(top)
+                        .right(px(padding + 4.0))
+                        .px_1p5()
+                        .rounded_sm()
+                        .text_size(px(12.0))
+                        .bg(hsla_alpha(accent, 0.22))
+                        .text_color(hsla(accent))
+                        .child(label),
+                )
+            })
+            .when_some(self.search.as_ref().map(|(s, _)| s.clone()), |el, search| {
+                el.child(div().absolute().bottom_0().left_0().w_full().child(search))
+            })
     }
 }

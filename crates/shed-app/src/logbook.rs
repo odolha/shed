@@ -8,7 +8,7 @@ use shed_logbook::{Context, Logbook, Scope};
 use shed_model::{BenchId, TabId};
 
 /// The logbook the keeper writes: `$SHED_STATE_DIR` (set in Shed's panes) or the default.
-fn path() -> PathBuf {
+pub fn path() -> PathBuf {
     match std::env::var_os("SHED_STATE_DIR") {
         Some(dir) => PathBuf::from(dir).join("logbook.sqlite"),
         None => shed_logbook::default_path(),

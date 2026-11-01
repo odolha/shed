@@ -6,6 +6,7 @@ mod bench_window;
 mod keeper_conn;
 mod line_editor;
 mod logbook;
+mod logbook_view;
 mod settings;
 mod state;
 mod terminal_view;

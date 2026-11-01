@@ -7,7 +7,8 @@ window (`shed`) is only a view onto it. See
 
 ## Status
 
-Phases 1–3 are in place: the first pane, the keeper, and bench windows with tabs and splits.
+Phases 1–4 are in place: the first pane, the keeper, bench windows with tabs and splits,
+and the logbook.
 
 - **The keeper** owns every PTY. Closing a window detaches its bench. The next `shed`
   reattaches it and replays each pane exactly: scrollback, both screens, cursor,
@@ -20,6 +21,12 @@ Phases 1–3 are in place: the first pane, the keeper, and bench windows with ta
 - **Mouse**: selection (Shift overrides apps' mouse mode), copy to the primary selection,
   Ctrl+click for links and paths, and right-click menus. Split borders drag.
 - **Config**: `~/.config/shed/shed.toml` reloads live. It sets fonts, themes, keys, tag rules and the rack.
+- **Logbook**: every command run in bash is kept with its directory, exit code, time,
+  tab, bench and tags. Up walks this tab's history, Ctrl+Up the bench's, Ctrl+Shift+Up
+  everything; typing first narrows the walk to commands starting with it. Ctrl+R at a
+  prompt opens a search (Tab cycles scopes, `tag:prod` filters, Enter inserts,
+  Alt+Enter runs). Commands typed with a leading space are not kept. `shed log` lists
+  entries from a shell.
 - Query replies triggered by binary output (`cat image.png`) are dropped.
 
 | Keys | Action |
@@ -32,6 +39,8 @@ Phases 1–3 are in place: the first pane, the keeper, and bench windows with ta
 | Super+1…9 | Raise bench windows |
 | F2 / Shift+F2 | Rename tab / bench |
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste |
+| Up / Ctrl+Up / Ctrl+Shift+Up | Walk this tab's / bench's / all history |
+| Ctrl+R (at a prompt) | Search the logbook |
 
 ```toml
 # ~/.config/shed/shed.toml (every key optional)
@@ -45,6 +54,8 @@ icon_badges = false
 [keys]
 "ctrl-shift-d" = "split_right"
 "alt-left" = "none"
+[shell]
+integration = true             # load Shed's bash hook into panes
 [[tag_rule]]
 tool = "ssh *prod*"
 tag = "prod"
@@ -102,4 +113,5 @@ and prints a warning.
 | `shed-keeper` | `shedd`: PTYs, socket server |
 | `shed-desktop` | Bench icons and desktop entries |
 | `shed-app` | `shed`: GPUI windows and the CLI |
-| `shed-logbook`, `shed-save` | Stubs for phases 4–5 |
+| `shed-logbook` | The logbook (SQLite) and the bash hook (`shell/shed.bash`) |
+| `shed-save` | Stub for phase 5 |

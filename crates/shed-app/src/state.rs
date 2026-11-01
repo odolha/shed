@@ -158,11 +158,22 @@ impl AppState {
             }
         }
 
-        for pane in self.tree.benches.iter().flat_map(|b| &b.tabs).flat_map(|t| &t.panes) {
-            if let Some(view) = self.panes.get(&pane.id)
-                && view.read(cx).cwd != pane.cwd
-            {
-                view.update(cx, |view, _| view.cwd = pane.cwd.clone());
+        for bench in &self.tree.benches {
+            for tab in &bench.tabs {
+                let here = Some(shed_logbook::Context { tab: tab.id, bench: bench.id });
+                let accent = bench.color.accent();
+                for pane in &tab.panes {
+                    let Some(view) = self.panes.get(&pane.id) else { continue };
+                    let v = view.read(cx);
+                    if v.cwd != pane.cwd || v.here.map(|h| (h.tab, h.bench)) != Some((tab.id, bench.id)) || v.accent != accent {
+                        view.update(cx, |view, cx| {
+                            view.cwd = pane.cwd.clone();
+                            view.here = here;
+                            view.accent = accent;
+                            cx.notify();
+                        });
+                    }
+                }
             }
         }
 
