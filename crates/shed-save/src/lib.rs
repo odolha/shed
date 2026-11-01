@@ -490,12 +490,29 @@ impl Store {
 pub fn restored_scrollback(text: &str, saved: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len() + 128);
     out.extend_from_slice(b"\x1b[2m");
-    for line in text.lines() {
+    for line in skip_idle_restores(text.lines()) {
         out.extend_from_slice(line.as_bytes());
         out.extend_from_slice(b"\r\n");
     }
     let when = saved.replace('T', " ").trim_end_matches('Z').get(..16).unwrap_or(saved).to_string();
-    out.extend_from_slice(format!("\x1b[0m\x1b[2m── restored · saved {when} UTC ──\x1b[0m\r\n").as_bytes());
+    out.extend_from_slice(format!("\x1b[0m\x1b[2m{DIVIDER}{when} UTC ──\x1b[0m\r\n").as_bytes());
+    out
+}
+
+const DIVIDER: &str = "── restored · saved ";
+
+/// Drops restores nothing happened after: a prompt, a divider, then the
+/// same prompt again. Restarting an idle pane would otherwise stack up a
+/// divider and a prompt each time; this way only the newest divider shows.
+fn skip_idle_restores<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
+    let mut out: Vec<&str> = Vec::new();
+    for line in lines {
+        out.push(line);
+        let n = out.len();
+        if n >= 3 && out[n - 2].starts_with(DIVIDER) && out[n - 3] == out[n - 1] {
+            out.drain(n - 3..n - 1);
+        }
+    }
     out
 }
 
@@ -632,6 +649,17 @@ mod tests {
         assert!(store.scrollback("server", pane).is_some());
         store.delete("server").unwrap();
         assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn idle_restores_do_not_pile_up() {
+        let d = |t: &str| format!("{DIVIDER}2026-11-01 {t} UTC ──");
+        let text = ["$ make", "ok", "$", &d("12:38"), "$", &d("12:41"), "$"].join("\n");
+        let out = String::from_utf8(restored_scrollback(&text, "2026-11-01T12:43:00Z")).unwrap();
+        assert_eq!(out, format!("\x1b[2m$ make\r\nok\r\n$\r\n\x1b[0m\x1b[2m{}\x1b[0m\r\n", d("12:43")));
+        // Something done after a restore keeps its divider.
+        let busy = ["$", &d("12:38"), "$ ls", "a b", "$"].join("\n");
+        assert_eq!(skip_idle_restores(busy.lines()).len(), 5);
     }
 
     #[test]
