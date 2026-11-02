@@ -517,7 +517,6 @@ fn set_window_icon(window: &gpui::Window, icon: &image::RgbaImage) {
     #[cfg(target_os = "linux")]
     {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        use x11rb::connection::Connection;
         use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, PropMode};
         use x11rb::wrapper::ConnectionExt as _;
 
@@ -534,8 +533,9 @@ fn set_window_icon(window: &gpui::Window, icon: &image::RgbaImage) {
                 let [r, g, b, a] = p.0;
                 (a as u32) << 24 | (r as u32) << 16 | (g as u32) << 8 | b as u32
             }));
-            conn.change_property32(PropMode::REPLACE, id, atom, AtomEnum::CARDINAL, &data)?;
-            conn.flush()?;
+            // Checked, so the request reaches the server before the
+            // connection closes.
+            conn.change_property32(PropMode::REPLACE, id, atom, AtomEnum::CARDINAL, &data)?.check()?;
             Ok(())
         };
         if let Err(e) = set() {
