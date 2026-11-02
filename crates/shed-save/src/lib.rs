@@ -552,6 +552,33 @@ impl Store {
         self.dir.join("../session.toml")
     }
 
+    fn order_file(&self) -> PathBuf {
+        self.dir.join("../order.toml")
+    }
+
+    /// The order benches are listed in, as the user arranged them (by id, so
+    /// renaming keeps the place).
+    pub fn order(&self) -> Vec<BenchId> {
+        #[derive(Deserialize)]
+        struct Order {
+            benches: Vec<BenchId>,
+        }
+        std::fs::read_to_string(self.order_file())
+            .ok()
+            .and_then(|t| toml::from_str::<Order>(&t).ok())
+            .map(|o| o.benches)
+            .unwrap_or_default()
+    }
+
+    pub fn save_order(&self, benches: &[BenchId]) -> io::Result<()> {
+        #[derive(Serialize)]
+        struct Order<'a> {
+            benches: &'a [BenchId],
+        }
+        std::fs::create_dir_all(&self.dir)?;
+        write_atomic(&self.order_file(), toml::to_string(&Order { benches }).unwrap().as_bytes())
+    }
+
     /// Records which benches were running, to bring them back on the next start.
     /// Records the benches running as Shed stops, and which had a window.
     pub fn save_session(&self, benches: &[SessionBench]) -> io::Result<()> {
@@ -800,6 +827,16 @@ mod tests {
         saved.insert_tab(tab, 0);
         assert_eq!(saved.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [moving, added]);
         assert!(other.take_tab(other.tabs[0].id).is_err(), "the last tab stays");
+    }
+
+    #[test]
+    fn bench_order_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("benches"));
+        assert!(store.order().is_empty());
+        let order = [BenchId::new(), BenchId::new()];
+        store.save_order(&order).unwrap();
+        assert_eq!(store.order(), order);
     }
 
     #[test]

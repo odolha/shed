@@ -342,3 +342,19 @@ fn tabs_move_between_running_and_closed_benches() {
     c.msg(ClientMsg::MoveTabAcross { tab: tabs[0], from: Saved("docs".into()), to: Saved("web".into()), index: 0 });
     c.until("last tab kept", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Error(_))).then_some(()));
 }
+
+#[test]
+fn the_bench_order_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let order = vec![BenchId::new(), BenchId::new()];
+    c.msg(ClientMsg::SetBenchOrder(order.clone()));
+    c.msg(ClientMsg::Pegboard);
+    let got = c.until("pegboard", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Pegboard(info)) => Some(info.order.clone()),
+        _ => None,
+    });
+    assert_eq!(got, order);
+    assert!(std::fs::read_to_string(dir.path().join("order.toml")).unwrap().contains(&order[0].to_string()));
+}

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -97,6 +97,8 @@ pub enum ClientMsg {
     CancelAsk { pane: PaneId },
     /// A tab's zoom: points over the configured font size.
     SetZoom { tab: TabId, zoom: f32 },
+    /// The order benches are listed in, running and closed.
+    SetBenchOrder(Vec<BenchId>),
 }
 
 /// What can change in a closed bench without opening it.
@@ -194,6 +196,9 @@ pub struct PegboardInfo {
     /// The last lines with text on screen, of the active pane of every tab,
     /// running or saved.
     pub previews: Vec<(PaneId, Vec<String>)>,
+    /// The order benches are listed in, as the user arranged them; others
+    /// follow by name.
+    pub order: Vec<BenchId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

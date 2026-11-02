@@ -100,7 +100,10 @@ Type in the field at the top to filter: by bench, tab, tag, folder or the progra
 running. Up and Down move through the tabs shown; Enter goes to the selected one;
 Escape clears the filter.
 
-Shed lists benches by name, so a bench stays in place as it opens and closes.
+**Order**: drag a bench by its grip (the dots left of its colour) onto another
+bench to put it there, or use **Move Up** and **Move Down** in its menu. The order
+is kept, and Super+1 … Super+9 raise bench windows in it. A bench stays in its place
+as it opens and closes; benches never moved come after the others, by name.
 
 ## A bench's window
 
@@ -427,7 +430,7 @@ bench and tab aliases are saved with their bench.
 | --- | --- |
 | Settings, themes, global aliases | `~/.config/shed/` |
 | Saved benches (`<name>.toml`, plain TOML you can edit) and their scrollback | `~/.local/share/shed/benches/` |
-| What ran when Shed last closed | `~/.local/share/shed/session.toml` |
+| What ran when Shed last closed; the order of benches | `~/.local/share/shed/session.toml`, `order.toml` |
 | The logbook (SQLite), per-tab shell history, the keeper's log | `~/.local/state/shed/` |
 | Launchers and icons for Shed and each bench (Linux) | `~/.local/share/applications/`, `~/.local/share/icons/` |
 

@@ -762,6 +762,13 @@ impl Keeper {
             ClientMsg::SetTags { tab, tags } => self.edit_tab(tab, |t| t.tags = tags),
             ClientMsg::SetPrivate { tab, private } => self.edit_tab(tab, |t| t.private = private),
             ClientMsg::SetZoom { tab, zoom } => self.edit_tab(tab, |t| t.zoom = zoom.clamp(-20.0, 60.0)),
+            ClientMsg::SetBenchOrder(order) => {
+                if let Some(store) = &self.cfg.store
+                    && let Err(e) = store.save_order(&order)
+                {
+                    warn!("cannot save the bench order: {e}");
+                }
+            }
             ClientMsg::SetBenchColor { bench, color } => self.edit_bench(bench, |b| b.color = color),
             ClientMsg::SetBadge { bench, badge } => self.edit_bench(bench, |b| b.badge = badge),
             ClientMsg::MoveTab { tab, bench, index } => {
@@ -888,7 +895,8 @@ impl Keeper {
                         cache.insert(info.name, (saved.saved, entry, prev));
                     }
                 }
-                self.lock().send(client, KeeperMsg::Pegboard(PegboardInfo { stored, previews }));
+                let order = self.cfg.store.as_ref().map(|s| s.order()).unwrap_or_default();
+                self.lock().send(client, KeeperMsg::Pegboard(PegboardInfo { stored, previews, order }));
             }
             ClientMsg::Shutdown => {
                 info!(client, "shutdown requested");

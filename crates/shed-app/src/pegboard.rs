@@ -79,6 +79,29 @@ impl BenchKey {
     }
 }
 
+/// The payload of a bench being dragged by its grip.
+#[derive(Clone)]
+struct DraggedBench {
+    id: BenchId,
+    name: String,
+}
+
+impl Render for DraggedBench {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let ui = crate::theme::current_ui(cx);
+        div()
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .bg(hsla(ui.tab_active))
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .text_size(px(14.0))
+            .text_color(hsla(ui.text))
+            .child(self.name.clone())
+    }
+}
+
 /// What can change about a tab, whether its bench runs or not.
 enum TabChange {
     Rename(Option<String>),
@@ -263,7 +286,28 @@ impl Pegboard {
             .collect()
     }
 
-    /// Every bench by name, each with the tabs the filter matches.
+    /// Moves bench `id` to where bench `to` is, every bench keeping its place
+    /// in the order from then on.
+    fn move_bench(&mut self, id: BenchId, to: BenchId, cx: &mut Context<Self>) {
+        if id == to {
+            return;
+        }
+        let query = std::mem::take(&mut self.query);
+        let mut order: Vec<BenchId> = self.entries(cx).iter().map(|e| e.bench.id).collect();
+        self.query = query;
+        let (Some(from), Some(target)) = (order.iter().position(|b| *b == id), order.iter().position(|b| *b == to)) else { return };
+        order.remove(from);
+        order.insert(target, id);
+        // At once, before the keeper's next answer.
+        if let Some(mut data) = cx.try_global::<PegboardData>().map(|d| d.0.clone()) {
+            data.order = order.clone();
+            cx.set_global(PegboardData(data));
+        }
+        self.send(ClientMsg::SetBenchOrder(order), cx);
+        cx.notify();
+    }
+
+    /// Every bench in order, each with the tabs the filter matches.
     fn entries(&self, cx: &Context<Self>) -> Vec<Entry> {
         let state = self.state.read(cx);
         let live = state.tree.benches.iter().map(|b| {
@@ -274,8 +318,10 @@ impl Pegboard {
         let stored = stored.iter().filter(|s| state.tree.bench(s.bench.id).is_none());
         let stored = stored.map(|s| (s.bench.clone(), Status::Closed, Some(s.saved.clone())));
         let mut all: Vec<(Bench, Status, Option<String>)> = live.chain(stored).collect();
-        // By name, so a bench stays where it is as it opens and closes.
-        all.sort_by_key(|(b, _, _)| b.name.to_lowercase());
+        // In the order the user arranged; the rest by name. Either way a
+        // bench stays where it is as it opens and closes.
+        let order = cx.try_global::<PegboardData>().map(|d| d.0.order.as_slice()).unwrap_or_default();
+        all.sort_by_key(|(b, _, _)| (order.iter().position(|id| *id == b.id).unwrap_or(usize::MAX), b.name.to_lowercase()));
 
         let words: Vec<String> = self.query.split_whitespace().map(str::to_lowercase).collect();
         let matches = |text: &str| {
@@ -457,9 +503,24 @@ impl Pegboard {
             let b = bench.clone();
             entries.push(danger("Close Bench…", move |this: &mut Self, window, cx| this.close(&b, window, cx)).icon("power"));
         }
+        entries.push(MenuEntry::Separator);
+        let id = bench.id;
+        entries.push(menu_item("Move Up", move |this, _, cx| this.move_bench_by(id, -1, cx)));
+        entries.push(menu_item("Move Down", move |this, _, cx| this.move_bench_by(id, 1, cx)));
+        entries.push(MenuEntry::Separator);
         let name = bench.name.clone();
         entries.push(danger("Delete Bench…", move |this: &mut Self, window, cx| this.delete(name.clone(), window, cx)).icon("trash"));
         entries
+    }
+
+    /// Moves a bench one place up (-1) or down (1).
+    fn move_bench_by(&mut self, id: BenchId, step: isize, cx: &mut Context<Self>) {
+        let query = std::mem::take(&mut self.query);
+        let order: Vec<BenchId> = self.entries(cx).iter().map(|e| e.bench.id).collect();
+        self.query = query;
+        let Some(at) = order.iter().position(|b| *b == id) else { return };
+        let Some(to) = at.checked_add_signed(step).and_then(|i| order.get(i)) else { return };
+        self.move_bench(id, *to, cx);
     }
 
     fn color_entries(&self, key: &BenchKey, current: BenchColor) -> Vec<MenuEntry<Self>> {
@@ -671,10 +732,19 @@ impl Pegboard {
                 div().px_1().rounded_sm().text_size(px(12.0)).bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))).child(badge).into_any_element()
             }),
         };
+        // Dragging the grip moves the bench among the others.
+        let grip = div()
+            .id(SharedString::from(format!("grip-{id}")))
+            .flex_none()
+            .cursor_grab()
+            .tooltip(menu::tooltip("Drag to move the bench"))
+            .child(svg().path(icon("grip")).size(px(14.0)).text_color(hsla(ui.text_dim)))
+            .on_drag(DraggedBench { id, name: bench.name.clone() }, |d, _, _, cx| cx.new(|_| d.clone()));
         let mut header = div()
             .flex()
             .items_center()
             .gap_2()
+            .child(grip)
             .child(dot)
             .child(name)
             .children(badge)
@@ -771,6 +841,8 @@ impl Pegboard {
             }))
             .drag_over::<DraggedTab>(move |s, _, _, _| s.border_color(hsla(accent)))
             .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| this.move_tab(d.tab, &drop_key, usize::MAX, window, cx)))
+            .drag_over::<DraggedBench>(move |s, _, _, _| s.border_2().border_color(hsla(accent)))
+            .on_drop(cx.listener(move |this, d: &DraggedBench, _, cx| this.move_bench(d.id, id, cx)))
             .child(header)
             .child(cards)
             .into_any_element()

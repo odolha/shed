@@ -452,9 +452,12 @@ impl AppState {
         self.windows.contains_key(&bench)
     }
 
-    /// Bench windows in tree order, for Super+1…9.
-    pub fn window_at(&self, index: usize) -> Option<WindowHandle<BenchWindow>> {
-        self.tree.benches.iter().filter_map(|b| self.windows.get(&b.id)).nth(index).copied()
+    /// Bench windows in the order Shed lists them, for Super+1…9.
+    pub fn window_at(&self, index: usize, cx: &gpui::App) -> Option<WindowHandle<BenchWindow>> {
+        let order = cx.try_global::<PegboardData>().map(|d| d.0.order.as_slice()).unwrap_or_default();
+        let mut benches: Vec<&Bench> = self.tree.benches.iter().filter(|b| self.windows.contains_key(&b.id)).collect();
+        benches.sort_by_key(|b| (order.iter().position(|id| *id == b.id).unwrap_or(usize::MAX), b.name.to_lowercase()));
+        benches.get(index).and_then(|b| self.windows.get(&b.id)).copied()
     }
 
     /// Where a tab of bench `from` can move: every other bench, running or

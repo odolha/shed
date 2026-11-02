@@ -777,7 +777,7 @@ impl Render for BenchWindow {
             .on_action(cx.listener(|this, _: &ToggleSetup, window, cx| this.toggle_setup(window, cx)))
             .on_action(cx.listener(|this, _: &ShowShed, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))))
             .on_action(cx.listener(|this, a: &FocusBench, _, cx| {
-                if let Some(handle) = this.state.read(cx).window_at(a.0) {
+                if let Some(handle) = this.state.read(cx).window_at(a.0, cx) {
                     handle.update(cx, |_, window, _| window.activate()).ok();
                 }
             }))
