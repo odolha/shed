@@ -79,12 +79,15 @@ pub struct FontConfig {
     pub size: f32,
     /// Line height as a multiple of the font size.
     pub line_height: f32,
+    /// The font emoji are drawn with, in colour.
+    pub emoji: String,
 }
 
 impl Default for FontConfig {
     fn default() -> Self {
         let family = if cfg!(target_os = "macos") { "Menlo" } else { "DejaVu Sans Mono" };
-        Self { family: family.into(), size: 14.0, line_height: 1.25 }
+        let emoji = if cfg!(target_os = "macos") { "Apple Color Emoji" } else { "Noto Color Emoji" };
+        Self { family: family.into(), size: 14.0, line_height: 1.25, emoji: emoji.into() }
     }
 }
 

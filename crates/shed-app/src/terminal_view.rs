@@ -716,6 +716,8 @@ struct TextBatch {
     text: String,
     style: Style,
     underline_color: Option<Rgb>,
+    /// Drawn with the emoji font, in colour.
+    emoji: bool,
 }
 
 struct CursorPaint {
@@ -786,7 +788,8 @@ fn build_frame(snap: &Snapshot, palette: &Palette, focused: bool) -> GridFrame {
             if let Some(z) = &cell.zerowidth {
                 text.push_str(z);
             }
-            let batch = TextBatch { row, col, text, style, underline_color: cell.underline_color };
+            let emoji = !ascii && crate::emoji::is_emoji(cell.ch, cell.zerowidth.as_deref());
+            let batch = TextBatch { row, col, text, style, underline_color: cell.underline_color, emoji };
             if ascii {
                 current = Some(batch);
             } else {
@@ -811,7 +814,9 @@ fn build_frame(snap: &Snapshot, palette: &Palette, focused: bool) -> GridFrame {
             if let Some(z) = &cell.zerowidth {
                 text.push_str(z);
             }
+            let emoji = crate::emoji::is_emoji(cell.ch, cell.zerowidth.as_deref());
             TextBatch {
+                emoji,
                 row: c.row,
                 col: c.col,
                 text,
@@ -831,7 +836,7 @@ fn build_frame(snap: &Snapshot, palette: &Palette, focused: bool) -> GridFrame {
     GridFrame { background: snap.background, rects, texts, cursor }
 }
 
-fn paint_frame(frame: &GridFrame, origin: Point<Pixels>, m: CellMetrics, font: &Font, window: &mut Window, cx: &mut App) {
+fn paint_frame(frame: &GridFrame, origin: Point<Pixels>, m: CellMetrics, font: &Font, emoji_font: &Font, window: &mut Window, cx: &mut App) {
     let at = |row: usize, col: usize| point(origin.x + m.width * col as f32, origin.y + m.height * row as f32);
 
     for r in &frame.rects {
@@ -842,11 +847,11 @@ fn paint_frame(frame: &GridFrame, origin: Point<Pixels>, m: CellMetrics, font: &
     let paint_text = |batch: &TextBatch, window: &mut Window, cx: &mut App| {
         let style = batch.style;
         let color = hsla(style.fg);
-        let mut font = font.clone();
-        if style.bold {
+        let mut font = if batch.emoji { emoji_font.clone() } else { font.clone() };
+        if style.bold && !batch.emoji {
             font.weight = FontWeight::BOLD;
         }
-        if style.italic {
+        if style.italic && !batch.emoji {
             font.style = FontStyle::Italic;
         }
         let run = TextRun {
@@ -913,6 +918,7 @@ impl Render for TerminalView {
         let frame = build_frame(&self.snapshot, &self.palette, focused);
         let background: Hsla = hsla(frame.background);
         let font = self.font.font();
+        let emoji_font = gpui::font(self.font.emoji.clone());
         let view = cx.entity().downgrade();
         let input = (cx.entity(), self.focus.clone());
         let (font_for_overlay, background_overlay, fg_overlay) = (self.font.font(), hsla(self.palette.background), self.palette.foreground);
@@ -998,7 +1004,7 @@ impl Render for TerminalView {
                         // Input methods: composed text arrives through this, not as keys.
                         let (entity, focus) = input;
                         window.handle_input(&focus, ElementInputHandler::new(bounds, entity), cx);
-                        paint_frame(&frame, origin, m, &font, window, cx);
+                        paint_frame(&frame, origin, m, &font, &emoji_font, window, cx);
                         if perf::enabled() {
                             perf::PAINTS.fetch_add(1, Ordering::Relaxed);
                             perf::PAINT_US.fetch_add(t.elapsed().as_micros() as u64, Ordering::Relaxed);

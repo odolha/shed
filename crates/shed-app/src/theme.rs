@@ -14,6 +14,8 @@ pub struct FontSettings {
     pub size: f32,
     /// Line height as a multiple of the font size.
     pub line_height: f32,
+    /// The colour emoji font.
+    pub emoji: String,
 }
 
 impl Default for FontSettings {
@@ -24,7 +26,7 @@ impl Default for FontSettings {
 
 impl From<FontConfig> for FontSettings {
     fn from(c: FontConfig) -> Self {
-        Self { family: c.family, size: c.size.clamp(6.0, 72.0), line_height: c.line_height.clamp(0.8, 3.0) }
+        Self { family: c.family, size: c.size.clamp(6.0, 72.0), line_height: c.line_height.clamp(0.8, 3.0), emoji: c.emoji }
     }
 }
 

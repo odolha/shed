@@ -364,6 +364,7 @@ autosave_seconds = 60
 family = "DejaVu Sans Mono"
 size = 14
 line_height = 1.25
+emoji = "Noto Color Emoji"     # colour emoji ("Apple Color Emoji" on macOS)
 
 [window]
 padding = 6                    # pixels between the window edge and the text

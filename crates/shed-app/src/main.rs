@@ -3,6 +3,7 @@
 mod actions;
 mod assets;
 mod bench_window;
+mod emoji;
 mod keeper_conn;
 mod line_editor;
 mod logbook;
