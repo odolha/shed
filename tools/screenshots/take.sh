@@ -49,7 +49,7 @@ if [ "${INTERACTIVE:-}" = 1 ]; then
   xtype "$board" %0.4 @Control_L+Shift_L+s %1.2 && grab "$board" setup && xtype "$board" @Control_L+Shift_L+s %0.5 || true
   xtype "$board" %0.3 ~1500,700 '#1' %0.4 @Control_L+r %1.2 && grab "$board" logbook && xtype "$board" @Escape || true
   xtype "$board" %0.3 ~500,700 '#1' %0.3 @Control_L+Shift_L+f %0.4 boards %1.0 && grab "$board" find && xtype "$board" @Escape || true
-  xtype "$shed_win" %0.4 ~70,765 '!1' '^1' %0.8 && grab "$shed_win" palette && xtype "$shed_win" @Escape ~1200,60 '#1' || true
+  xtype "$shed_win" %0.4 ~114,765 '!1' '^1' %0.8 && grab "$shed_win" palette && xtype "$shed_win" @Escape ~1200,60 '#1' || true
   xtype "$shed_win" %0.4 ~350,980 '#3' %0.8 && grab "$shed_win" tabmenu && xtype "$shed_win" ~1200,60 '#1' || true
 fi
 

@@ -305,7 +305,7 @@ impl SetupPanel {
                 .flex()
                 .items_start()
                 .gap_2()
-                .child(div().w(px(70.0)).flex_none().text_color(hsla(ui.text_dim)).child(label.to_string()))
+                .child(div().w(px(88.0)).flex_none().text_color(hsla(ui.text_dim)).child(label.to_string()))
                 .child(content)
         };
         let running = pane.tool.as_ref().map(|t| t.display());
@@ -327,7 +327,7 @@ impl SetupPanel {
         let teardown = self.render_list(id, true, &pane.setup.teardown, ui, accent, cx);
 
         let wait = pane.setup.wait;
-        let mut options = div().flex().gap_3().pl(px(78.0));
+        let mut options = div().flex().gap_3().pl(px(96.0));
         if !pane.setup.startup.is_empty() {
             options = options.child(self.link(
                 format!("wait-{index}").into(),
@@ -344,12 +344,12 @@ impl SetupPanel {
             }));
         }
         let startup_hint = if pane.setup.startup.is_empty() {
-            Some(div().pl(px(78.0)).text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("Empty: on load, what was running is restarted or typed, by the rack."))
+            Some(div().pl(px(96.0)).text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("Empty: on load, what was running is restarted or typed, by the rack."))
         } else {
             None
         };
         let teardown_hint = if pane.setup.teardown.is_empty() {
-            Some(div().pl(px(78.0)).text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("Empty: closing the bench stops the running tool."))
+            Some(div().pl(px(96.0)).text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("Empty: closing the bench stops the running tool."))
         } else {
             None
         };
