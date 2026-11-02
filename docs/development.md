@@ -78,9 +78,11 @@ writes the screenshots in `docs/images/`. Run it from the repository root after
 screenshots, clicking and typing into its own windows only (it stops if they lose
 focus).
 
-`cargo run -p shed-desktop --example icon_preview -- <dir>` renders the bench icon in
-every colour; `--example app_icons -- <dir>` writes the app icon's hicolor tree, as
-the packages do.
+`cargo run -p shed-desktop --example icon_preview -- sheet.png [template.svg]` draws a
+sheet of the bench icon in every colour, at launcher and Dock sizes, on dark and
+light, beside Shed's icon (with a template, that one instead of the built-in);
+`--example app_icons -- <dir>` writes the app icon's hicolor tree, as the packages
+do.
 
 ## macOS
 

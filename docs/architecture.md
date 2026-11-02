@@ -179,7 +179,8 @@ The Shed window has the app id `dev.shed`; each bench window
 `dev.shed.bench.<key>`, where the key is the slug of the bench's first name and
 never changes. A bench window's icon is set as it opens and, on X11, replaced
 when the bench's colour or badge changes. For each bench Shed writes a hidden desktop entry and an icon (the
-workbench template, rendered in the bench's colour with resvg) to
+bench template: a terminal window on a workbench, rendered in the bench's colour
+with resvg) to
 `~/.local/share`, so docks show one icon per bench and a pinned one runs
 `shed load <key>`. Installed packages provide Shed's own entry and icons in the
 hicolor theme.

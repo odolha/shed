@@ -157,7 +157,7 @@ unexpectedly, at most the last minute is lost.
 launcher.
 
 **Taskbar and dock.** Every bench writes a launcher for itself, so it shows as its
-own app with its own icon, a workbench in the bench's colour. Pin it to your dock:
+own app with its own icon, a terminal window on a workbench in the bench's colour. Pin it to your dock:
 clicking it opens that bench (and Shed, if it is not running). Renaming the bench
 keeps the pin working.
 
