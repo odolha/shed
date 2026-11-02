@@ -59,7 +59,11 @@ impl Client {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
-            let frame = self.frames.recv_timeout(left).unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+            let Ok(frame) = self.frames.recv_timeout(left) else {
+                // The end of each pane's output, to see where it stopped.
+                let tails: Vec<String> = self.seen.values().map(|s| format!("{:?}", &s[s.floor_char_boundary(s.len().saturating_sub(400))..])).collect();
+                panic!("timed out waiting for {what}; output ended with:\n{}", tails.join("\n"));
+            };
             if let Frame::Keeper(KeeperMsg::TreeChanged(t)) = &frame {
                 self.tree = t.clone();
             }

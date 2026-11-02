@@ -33,6 +33,33 @@ pub struct Config {
     /// Shed reopens the benches that were open or hidden when it last
     /// closed (by hand or with the session). Off: every bench starts closed.
     pub auto_restore: bool,
+    pub ai: AiConfig,
+}
+
+/// The AI prompt: a line starting with `>` asks a command-line AI for the
+/// command to type, which Shed puts on the prompt for review.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AiConfig {
+    /// Run with `sh -c` in the pane's folder: the request on stdin, the
+    /// command on stdout. Empty turns the AI prompt off.
+    pub command: String,
+    /// Send the tab's recent commands along (never for private tabs).
+    pub history: bool,
+    /// Send the text on the pane's screen along (never for private tabs).
+    pub screen: bool,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self { command: "claude -p".into(), history: true, screen: true }
+    }
+}
+
+impl AiConfig {
+    pub fn enabled(&self) -> bool {
+        !self.command.trim().is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -79,8 +106,9 @@ impl Default for WindowConfig {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ShellConfig {
-    /// Load Shed's shell integration into the shells Shed starts (bash only
-    /// for now). Without it, `eval "$(shed init bash)"` in ~/.bashrc does the same.
+    /// Load Shed's shell integration into the bash and zsh Shed starts.
+    /// Without it, `eval "$(shed init bash)"` in ~/.bashrc (or `zsh` in
+    /// ~/.zshrc) does the same.
     pub integration: bool,
 }
 

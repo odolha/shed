@@ -45,7 +45,7 @@ use shed_emu::{
     AlacrittyEmulator, CursorShape, EmuEvent, Emulator, GridPoint, GridSize, MouseMode, Palette, Rgb,
     SelectionKind, Snapshot,
 };
-use shed_model::PaneId;
+use shed_model::{AiState, PaneId};
 use shed_proto::{ClientMsg, Frame};
 
 use crate::actions::{Copy, OpenLogbook, Paste, ScrollPageDown, ScrollPageUp, SearchScrollback, ZoomIn, ZoomOut, ZoomReset};
@@ -95,6 +95,8 @@ pub struct TerminalView {
     at_prompt: bool,
     /// The history walk in progress, shown as a chip by the prompt.
     walk: Option<WalkState>,
+    /// The pane's AI request, shown as a chip by the prompt.
+    pub ai: Option<AiState>,
     search: Option<(Entity<LogbookSearch>, Subscription)>,
     /// The scrollback search bar, while open.
     find: Option<Find>,
@@ -140,6 +142,7 @@ impl TerminalView {
             marks: MarkScanner::new(),
             at_prompt: false,
             walk: None,
+            ai: None,
             search: None,
             find: None,
             preedit: None,
@@ -243,7 +246,7 @@ impl TerminalView {
                 }
                 Mark::Walk(w) => self.walk = Some(w),
                 Mark::WalkEnd => self.walk = None,
-                Mark::Finished(_) | Mark::Cwd(_) | Mark::Command(_) | Mark::ShellAliases(_) => {}
+                Mark::Finished(_) | Mark::Cwd(_) | Mark::Command(_) | Mark::ShellAliases(_) | Mark::Ask(_) => {}
             }
         }
         self.emu.advance(bytes);
@@ -351,6 +354,13 @@ impl TerminalView {
         let ks = &event.keystroke;
         let m = ks.modifiers;
         let key = ks.key.as_str();
+
+        // Escape stops an AI request under way.
+        if key == "escape" && matches!(self.ai, Some(AiState::Asking(_))) {
+            self.conn.send_msg(ClientMsg::CancelAsk { pane: self.pane });
+            cx.stop_propagation();
+            return;
+        }
 
         // Typing anything but the walk keys ends the walk, as far as the chip goes.
         if self.walk.is_some() && !(m.control && matches!(key, "up" | "down")) {
@@ -883,14 +893,23 @@ impl Render for TerminalView {
         let grid_origin = self.grid_origin.clone();
         let padding = self.padding;
         let accent = self.accent;
-        // The walk chip sits at the right end of the prompt line.
-        let chip = self.walk.as_ref().map(|w| {
-            let top = px(padding) + m.height * self.snapshot.cursor.row as f32;
-            let mut label = format!("{} {}/{}", w.scope, w.pos, w.total);
-            if !w.source.is_empty() {
-                label.push_str(&format!(" · {}", w.source));
-            }
-            (top, label)
+        // The walk chip, or the AI's, sits at the right end of the prompt line.
+        let top = px(padding) + m.height * self.snapshot.cursor.row as f32;
+        let ai_chip = self.ai.as_ref().map(|state| {
+            let (label, color) = match state {
+                AiState::Asking(request) => (format!("asking the AI: {} · Esc stops", short(request, 40)), accent),
+                AiState::Failed(why) => (format!("AI: {}", short(why, 80)), self.ui.danger),
+            };
+            (top, label, color)
+        });
+        let chip = ai_chip.or_else(|| {
+            self.walk.as_ref().map(|w| {
+                let mut label = format!("{} {}/{}", w.scope, w.pos, w.total);
+                if !w.source.is_empty() {
+                    label.push_str(&format!(" · {}", w.source));
+                }
+                (top, label, accent)
+            })
         });
         if perf::enabled() {
             perf::RENDERS.fetch_add(1, Ordering::Relaxed);
@@ -975,7 +994,7 @@ impl Render for TerminalView {
                         .child(text),
                 )
             })
-            .when_some(chip, |el, (top, label)| {
+            .when_some(chip, |el, (top, label, color)| {
                 el.child(
                     div()
                         .absolute()
@@ -984,8 +1003,8 @@ impl Render for TerminalView {
                         .px_1p5()
                         .rounded_sm()
                         .text_size(px(12.0))
-                        .bg(hsla_alpha(accent, 0.22))
-                        .text_color(hsla(self.ui.ink(accent)))
+                        .bg(hsla_alpha(color, 0.22))
+                        .text_color(hsla(self.ui.ink(color)))
                         .child(label),
                 )
             })
@@ -1083,4 +1102,13 @@ impl EntityInputHandler for TerminalView {
     fn character_index_for_point(&mut self, _: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
         None
     }
+}
+
+/// `text` on one line, cut to `max` characters.
+fn short(text: &str, max: usize) -> String {
+    let line = text.lines().next().unwrap_or("").trim();
+    if line.chars().count() <= max {
+        return line.to_string();
+    }
+    format!("{}…", line.chars().take(max - 1).collect::<String>())
 }

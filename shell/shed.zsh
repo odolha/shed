@@ -139,3 +139,23 @@ builtin bindkey '\e[1;5A' __shed_walk_bench_older
 builtin bindkey '\e[1;5B' __shed_walk_bench_newer
 builtin bindkey '\e[1;6A' __shed_walk_global_older
 builtin bindkey '\e[1;6B' __shed_walk_global_newer
+
+# The AI prompt: Enter on a line starting with ">" hands it to Shed, which
+# asks the AI and puts the command it answers with on the next prompt, to
+# review. Only when Shed's AI prompt is on (SHED_AI). Set up at the first
+# prompt, over whatever ~/.zshrc made of accept-line, which still runs.
+__shed_ask_accept_line() {
+    if [[ $BUFFER == '>'* ]]; then
+        builtin printf '\e]7777;shed;ai;%s\a' "$(__shed_b64 "${BUFFER#>}")"
+        builtin print -s -- "$BUFFER"
+        BUFFER=
+    fi
+    zle __shed_accept_line_before -- "$@"
+}
+__shed_ask_setup() {
+    add-zsh-hook -d precmd __shed_ask_setup
+    [[ -n ${SHED_AI:-} ]] || return
+    zle -A accept-line __shed_accept_line_before
+    zle -N accept-line __shed_ask_accept_line
+}
+add-zsh-hook precmd __shed_ask_setup

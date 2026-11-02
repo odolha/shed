@@ -111,6 +111,19 @@ The hook also gives each tab its own history file, binds Ctrl+Up and Ctrl+Shift+
 walk the logbook (through `shed hook walk`), and applies Shed's aliases from a file
 the keeper writes per tab, at every prompt.
 
+## The AI prompt
+
+When Shed's AI prompt is on, the keeper starts shells with `SHED_AI=1`, and the hook
+takes over Enter (and Ctrl+J, which is what an Enter typed ahead arrives as): a
+line starting with `>` is not run but sent to the keeper as an `OSC 7777` request,
+and the line is emptied. The keeper runs the configured command (`sh -c`, in the
+pane's folder, `claude -p` by default) with a prompt on its stdin: the request,
+the shell, the system, the folder, the tab's last commands from the logbook and
+the pane's last lines of text (neither for private tabs). Its output, cleaned of
+code fences, is typed at the prompt as a bracketed paste, so it does not run. The
+pane's `ai` state in the tree (asking, or failed and why) drives the chip in the
+window; Escape there sends `CancelAsk`, which stops the command.
+
 ## The logbook
 
 The logbook is a SQLite database (WAL mode, with an FTS5 trigram index for search).

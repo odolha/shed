@@ -10,6 +10,7 @@ what you see is what Shed shows.
 - [Opening, hiding, closing](#opening-hiding-closing)
 - [Setup: startup, teardown and aliases](#setup-startup-teardown-and-aliases)
 - [History and the logbook](#history-and-the-logbook)
+- [Asking for a command](#asking-for-a-command)
 - [Finding, selecting, links](#finding-selecting-links)
 - [Tags and private tabs](#tags-and-private-tabs)
 - [Colours and appearance](#colours-and-appearance)
@@ -207,6 +208,32 @@ tab, this bench and everything; `tag:prod` keeps only commands from tabs tagged
 Commands typed with a leading space are not kept. `shed log` lists recent commands
 from a shell (`shed log docker --scope bench`).
 
+## Asking for a command
+
+Start a line with `>` and say what you want, in your own words:
+
+```
+> start this project
+> which process is using port 8080, and stop it
+> undo my last commit but keep the changes
+```
+
+Press Enter and Shed asks an AI for the command, while a chip by the prompt says
+it is asking (Escape stops it). The command it answers with is put on the prompt,
+**not run**: read it, change it if needed, and press Enter to run it.
+
+The AI runs in the pane's folder, so it can look at the project (its README,
+`package.json`, `Makefile`, scripts) to answer questions like "start this
+project". Along with your request it is told the shell and system, the folder,
+the tab's recent commands and the text on the screen; private tabs send only the
+request and the folder.
+
+By default Shed asks [Claude Code](https://claude.com/claude-code) (`claude -p`),
+with your own login. Any command that reads a request on its input and prints a
+command works instead; set it under `[ai]` in [`shed.toml`](#settings-shedtoml),
+or set `command = ""` to turn this off. With it off, a line starting with `>` is
+an ordinary shell line again (in bash, a redirection).
+
 ## Finding, selecting, links
 
 - **Ctrl+Shift+F** finds text in the scrollback. The newest match comes first; Enter
@@ -318,6 +345,11 @@ icon_badges = false            # draw each bench's badge on its taskbar icon
 
 [shell]
 integration = true             # load Shed's bash or zsh integration into its shells
+
+[ai]                           # the "> request" prompt
+command = "claude -p"          # gets the request on stdin, prints a command; "" turns it off
+history = true                 # send the tab's recent commands along
+screen = true                  # send the text on the screen along
 
 [rack]                         # what restarts by itself when a bench opens
 auto = ["nvim", "vim", "hx", "ssh", "htop", "btop", "less", "tail -f", "cargo watch", "npm run dev"]

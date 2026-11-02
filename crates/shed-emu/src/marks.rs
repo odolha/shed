@@ -31,6 +31,8 @@ pub enum Mark {
     WalkEnd,
     /// The shell's own aliases, as `alias -p` prints them.
     ShellAliases(String),
+    /// A line typed for the AI prompt, without its `>`.
+    Ask(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,6 +152,10 @@ fn parse(osc: &[u8]) -> Option<Mark> {
                 "aliases" => {
                     let bytes = BASE64.decode(parts.next().unwrap_or("")).ok()?;
                     Some(Mark::ShellAliases(String::from_utf8_lossy(&bytes).into_owned()))
+                }
+                "ai" => {
+                    let bytes = BASE64.decode(parts.next()?).ok()?;
+                    Some(Mark::Ask(String::from_utf8_lossy(&bytes).trim().to_string()))
                 }
                 "walk" => {
                     let scope = parts.next()?;

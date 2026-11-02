@@ -264,6 +264,17 @@ pub struct Pane {
     pub setup: PaneSetup,
     /// The aliases the shell itself defines (from ~/.bashrc and the like).
     pub shell_aliases: Aliases,
+    /// A request to the AI prompt, under way or failed.
+    pub ai: Option<AiState>,
+}
+
+/// Where a pane's AI request is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AiState {
+    /// Asking, with the request.
+    Asking(String),
+    /// It failed, and why; cleared by the next key.
+    Failed(String),
 }
 
 /// A pane's own startup and teardown, set by the user.
@@ -299,6 +310,7 @@ impl Pane {
             waiting: None,
             setup: PaneSetup::default(),
             shell_aliases: Aliases::new(),
+            ai: None,
         }
     }
 }

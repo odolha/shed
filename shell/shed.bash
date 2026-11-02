@@ -123,3 +123,22 @@ builtin bind -x '"\e[1;5A": __shed_walk bench 1'
 builtin bind -x '"\e[1;5B": __shed_walk bench -1'
 builtin bind -x '"\e[1;6A": __shed_walk global 1'
 builtin bind -x '"\e[1;6B": __shed_walk global -1'
+
+# The AI prompt: Enter on a line starting with ">" hands it to Shed, which
+# asks the AI and puts the command it answers with on the next prompt, to
+# review. Enter runs a check first, then accepts the line, which the check
+# emptied if it took it. Ctrl+J too: an Enter typed while a command still
+# runs reaches readline as one, and must not run "> words" as a redirection.
+# Only when Shed's AI prompt is on (SHED_AI).
+if [[ -n ${SHED_AI:-} ]]; then
+    __shed_ask() {
+        [[ $READLINE_LINE == '>'* ]] || return
+        builtin printf '\e]7777;shed;ai;%s\a' "$(builtin printf '%s' "${READLINE_LINE#>}" | command base64 | command tr -d '\n')"
+        builtin history -s -- "$READLINE_LINE"
+        READLINE_LINE=
+    }
+    builtin bind -x '"\C-x\C-_a": __shed_ask'
+    builtin bind '"\C-x\C-_e": accept-line'
+    builtin bind '"\C-m": "\C-x\C-_a\C-x\C-_e"'
+    builtin bind '"\C-j": "\C-x\C-_a\C-x\C-_e"'
+fi

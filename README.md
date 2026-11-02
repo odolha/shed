@@ -43,6 +43,9 @@ On top of that, Shed groups your work the way you think about it:
   (`prod`, `staging`) and private tabs that keep their history to themselves.
 - **Aliases at three levels**, global, per bench and per tab, layered over your
   shell's own.
+- **Ask for a command.** Type `> start this project` and an AI (Claude Code by
+  default, or any command-line AI) looks at the folder and puts the command on
+  your prompt, for you to check and run.
 - **Light and dark**, following your desktop by default.
 - **Fast**: GPU rendering; on the machine it was measured on, it printed output
   faster than GNOME Terminal and kitty. Kitty keyboard protocol, input methods,

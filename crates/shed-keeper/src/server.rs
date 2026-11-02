@@ -16,7 +16,7 @@ use shed_emu::marks::{Mark, MarkScanner};
 use shed_logbook::{Logbook, NewEntry};
 use shed_save::{PaneExtras, Relaunch, SavedBench, SessionBench, Store};
 use shed_model::config::{Config, FileWatch};
-use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
+use shed_model::{AiState, Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
 use shed_proto::{
     AliasTarget, BenchRef, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
     PROTOCOL_VERSION, PegboardInfo, SavedEdit, ShowTarget, StoredBench,
@@ -29,6 +29,7 @@ use tokio::sync::{Notify, mpsc};
 use tracing::{debug, info, warn};
 
 use crate::procinfo;
+use crate::ask;
 use crate::pty::{self, SpawnOptions};
 
 /// How long a pane keeps draining output after its shell exits, for
@@ -164,6 +165,8 @@ struct PaneRt {
     new_prompt: bool,
     /// The shell reports ends at all; one that does not counts every prompt.
     reports_ends: bool,
+    /// The AI request under way, to stop it.
+    ask: Option<tokio::task::AbortHandle>,
 }
 
 /// How to start a pane.
@@ -490,9 +493,16 @@ impl Keeper {
     fn handle_frame(self: &Arc<Self>, client: ClientId, frame: Frame) {
         match frame {
             Frame::Input { pane, bytes } => {
-                let st = self.lock();
+                let mut st = self.lock();
                 if let Some(rt) = st.panes.get(&pane) {
                     let _ = rt.input.send(bytes);
+                }
+                // The next key clears a failed AI request's message.
+                if let Some(p) = st.tree.pane_mut(pane)
+                    && matches!(p.ai, Some(AiState::Failed(_)))
+                {
+                    p.ai = None;
+                    self.tree_dirty.notify_one();
                 }
             }
             Frame::Client(msg) => self.handle_msg(client, msg),
@@ -802,6 +812,16 @@ impl Keeper {
                 if st.dark != dark {
                     st.dark = dark;
                     apply_theme(&mut st);
+                }
+            }
+            ClientMsg::CancelAsk { pane } => {
+                let mut st = self.lock();
+                if let Some(handle) = st.panes.get_mut(&pane).and_then(|rt| rt.ask.take()) {
+                    handle.abort();
+                }
+                if let Some(p) = st.tree.pane_mut(pane) {
+                    p.ai = None;
+                    st.broadcast_tree();
                 }
             }
             ClientMsg::MoveTabAcross { tab, from, to, index } => {
@@ -1256,6 +1276,60 @@ impl Keeper {
         Ok(done)
     }
 
+    /// Asks the AI prompt's command for the command `request` describes, and
+    /// types its answer at the pane's prompt, not run.
+    fn ask(self: &Arc<Self>, st: &mut State, pane: PaneId, request: String) {
+        let ai = st.config.ai.clone();
+        if !ai.enabled() || request.is_empty() {
+            return;
+        }
+        let Some((bench, tab)) = st.tree.locate_pane(pane) else { return };
+        let private = st.tree.tab(tab).is_some_and(|t| t.private);
+        let cwd = st.tree.pane(pane).map(|p| p.cwd.clone()).unwrap_or_else(|| self.cfg.home.clone());
+        let screen = st.panes.get(&pane).filter(|_| ai.screen && !private).map(|rt| {
+            // The request's own prompt line is the last; it says nothing new.
+            let text = rt.emu.scrollback_text(41);
+            let lines: Vec<&str> = text.lines().collect();
+            lines[..lines.len().saturating_sub(1)].join("\n")
+        });
+        let shell = self.cfg.shell.clone().unwrap_or_else(pty::default_shell);
+        let shell = shell.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "sh".into());
+        if let Some(p) = st.tree.pane_mut(pane) {
+            p.ai = Some(AiState::Asking(request.clone()));
+            st.broadcast_tree();
+        }
+        let logbook = self.cfg.logbook.clone().filter(|_| ai.history && !private);
+        let keeper = self.clone();
+        let task = tokio::spawn(async move {
+            let history = logbook
+                .and_then(|path| Logbook::open_readonly(&path).ok())
+                .and_then(|book| book.search(shed_logbook::Scope::Local, shed_logbook::Context { tab, bench }, "", None, 10).ok())
+                .map(|entries| entries.into_iter().rev().map(|e| e.command).collect())
+                .unwrap_or_default();
+            let cx = ask::Context { cwd: shed_save::home_relative(&cwd), shell, os: ask::os_name(), history, screen };
+            let answer = ask::run(&ai.command, &cwd, ask::prompt(&request, &cx)).await;
+            let mut st = keeper.lock();
+            if let Some(rt) = st.panes.get_mut(&pane) {
+                rt.ask = None;
+                if let Ok(command) = &answer {
+                    // Replaces whatever is on the line; pasted, so nothing runs.
+                    let mut bytes = b"\x05\x15".to_vec();
+                    bytes.extend(shed_emu::keys::encode_paste(command, rt.emu.modes()));
+                    let _ = rt.input.send(bytes);
+                }
+            }
+            if let Some(p) = st.tree.pane_mut(pane) {
+                p.ai = answer.err().map(AiState::Failed);
+                st.broadcast_tree();
+            }
+        });
+        if let Some(rt) = st.panes.get_mut(&pane)
+            && let Some(old) = rt.ask.replace(task.abort_handle())
+        {
+            old.abort();
+        }
+    }
+
     /// Stops panes as closing their bench would (tools stopped, teardowns
     /// run), then hangs them up.
     async fn stop_panes(self: Arc<Self>, panes: Vec<PaneId>) {
@@ -1592,6 +1666,10 @@ impl Keeper {
         let mut env = env;
         env.extend(self.cfg.env.iter().cloned());
         env.push(("SHED_STATE_DIR".into(), self.cfg.state_dir.clone().into()));
+        // The hooks hand lines starting with `>` to the AI prompt only when it is on.
+        if st.config.ai.enabled() {
+            env.push(("SHED_AI".into(), "1".into()));
+        }
         if let Some(bin) = &self.cfg.shed_bin {
             env.push(("SHED_BIN".into(), bin.clone().into()));
             // `shed setup` and `shed alias` work in every pane, even from a build
@@ -1669,6 +1747,7 @@ impl Keeper {
             hooked: false,
             new_prompt: false,
             reports_ends: false,
+            ask: None,
         });
         tokio::spawn(write_loop(master.clone(), input_rx));
         tokio::spawn(self.clone().pane_loop(pane_id, master, pty.child));
@@ -1747,7 +1826,7 @@ impl Keeper {
     }
 
     /// Follows a pane's shell through its commands, and logs each one as it finishes.
-    fn on_mark(&self, st: &mut State, pane: PaneId, mark: Mark) {
+    fn on_mark(self: &Arc<Self>, st: &mut State, pane: PaneId, mark: Mark) {
         match mark {
             Mark::Cwd(dir) => {
                 if let Some(p) = st.tree.pane_mut(pane)
@@ -1811,13 +1890,14 @@ impl Keeper {
                 };
                 let _ = tx.send(entry);
             }
+            Mark::Ask(request) => self.ask(st, pane, request),
             Mark::PromptStart | Mark::Walk(_) | Mark::WalkEnd => {}
         }
     }
 
     /// Feeds output to the keeper's emulator and forwards it to attached windows.
     /// Returns when the emulator next needs a tick.
-    fn on_output(&self, pane: PaneId, master: &Arc<AsyncFd<OwnedFd>>, bytes: &[u8]) -> Option<Instant> {
+    fn on_output(self: &Arc<Self>, pane: PaneId, master: &Arc<AsyncFd<OwnedFd>>, bytes: &[u8]) -> Option<Instant> {
         let mut st = self.lock();
         let rt = st.panes.get_mut(&pane).filter(|rt| Arc::ptr_eq(&rt.master, master))?;
         rt.emu.advance(bytes);
