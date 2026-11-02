@@ -18,6 +18,7 @@ use shed_model::{BenchId, TabId, paths};
 /// Shed's bash integration, loaded into every bash that Shed starts and
 /// printed by `shed init bash`.
 pub const BASH_HOOK: &str = include_str!("../../../shell/shed.bash");
+pub const ZSH_HOOK: &str = include_str!("../../../shell/shed.zsh");
 
 pub use rusqlite::Error;
 

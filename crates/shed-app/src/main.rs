@@ -267,7 +267,11 @@ fn main() -> anyhow::Result<()> {
                 print!("{}", shed_logbook::BASH_HOOK);
                 Ok(())
             }
-            other => bail!("no integration for {other:?} yet; only bash"),
+            "zsh" => {
+                print!("{}", shed_logbook::ZSH_HOOK);
+                Ok(())
+            }
+            other => bail!("no integration for {other:?} yet; bash and zsh have one"),
         },
         Some(Command::Log { scope, count, tag, query }) => logbook::print_log(&scope, count, tag.as_deref(), query.as_deref()),
         Some(Command::Hook { action: HookAction::Walk { scope, pos, prefix } }) => {

@@ -49,7 +49,7 @@ On top of that, Shed groups your work the way you think about it:
   find in scrollback, clickable links and paths, OSC 52 clipboard.
 
 Shed runs on Linux, under X11 or Wayland, with a Vulkan driver. Its shell
-integration (logbook, history keys, aliases) is for bash.
+integration (logbook, history keys, aliases) is for bash and zsh.
 
 ## Install
 

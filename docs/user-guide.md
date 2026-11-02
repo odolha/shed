@@ -291,7 +291,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |
 | `shed stop` | Saves everything and stops the keeper, and every program in it |
-| `shed init bash` | Prints the shell integration, for a shell Shed did not start |
+| `shed init bash`, `shed init zsh` | Prints the shell integration, for a shell Shed did not start |
 
 ## Settings: shed.toml
 
@@ -317,7 +317,7 @@ new_pane_dir = "current"       # or "bench": where new tabs and panes open
 icon_badges = false            # draw each bench's badge on its taskbar icon
 
 [shell]
-integration = true             # load Shed's bash integration into its shells
+integration = true             # load Shed's bash or zsh integration into its shells
 
 [rack]                         # what restarts by itself when a bench opens
 auto = ["nvim", "vim", "hx", "ssh", "htop", "btop", "less", "tail -f", "cargo watch", "npm run dev"]
@@ -378,5 +378,5 @@ bench and tab aliases are saved with their bench.
 - **The keeper at login**: packages include a systemd user unit,
   `systemctl --user enable --now shedd.service`, so the first Shed window opens at
   once. Shells started this way inherit systemd's environment.
-- **Shells other than bash** work as terminals, without the logbook, history keys
-  and aliases.
+- **Shells other than bash and zsh** work as terminals, without the logbook,
+  history keys and aliases.

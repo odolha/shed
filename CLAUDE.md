@@ -14,7 +14,7 @@ describes the product as users see it.
 ```sh
 cargo build                          # both binaries: target/debug/shed, target/debug/shedd
 cargo clippy --all-targets           # must stay clean (the libxkbcommon-x11 build warning is expected)
-cargo test --workspace               # all tests; the shed-app ones run real bash
+cargo test --workspace               # all tests; the shed-app ones run real bash (and zsh if found)
 cargo test -p shed-app --test benches closed_benches   # one integration test, by name filter
 cargo test -p shed-save closed_benches_change_tab_by_tab
 ```
@@ -59,7 +59,9 @@ Crates (`crates/`), lowest first:
   key/mouse encoding (xterm and kitty), OSC 133/7/7777 shell-mark parsing.
 - `shed-save`: saved bench TOML (`SavedBench`), layouts as text, rack rules,
   zstd scrollback, `session.toml`.
-- `shed-logbook`: SQLite command history; embeds the bash hook `shell/shed.bash`.
+- `shed-logbook`: SQLite command history; embeds the shell hooks `shell/shed.bash`
+  and `shell/shed.zsh` (keep them doing the same things; the keeper writes them to
+  the runtime dir and points bash/zsh at them).
 - `shed-desktop`: bench icons (SVG template recoloured, resvg) and desktop entries.
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.
 - `shed-app`: `shed` binary: GPUI windows and the CLI.

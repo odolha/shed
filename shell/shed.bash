@@ -31,7 +31,7 @@ __shed_preexec() {
         local line
         line=$(HISTTIMEFORMAT= builtin history 1)
         [[ $line =~ ^[[:space:]]*[0-9]+[[:space:]]+(.*)$ ]] &&
-            builtin printf '\e]7777;shed;cmd;%s\a' "$(builtin printf '%s' "${BASH_REMATCH[1]}" | command base64 -w0)"
+            builtin printf '\e]7777;shed;cmd;%s\a' "$(builtin printf '%s' "${BASH_REMATCH[1]}" | command base64 | command tr -d '\n')"
     fi
     builtin printf '\e]133;C\a'
 }
@@ -40,7 +40,7 @@ __shed_preexec() {
 # this tab, one "name<TAB>command" per line. They are applied over the
 # shell's own aliases; removing one brings the shell's version back.
 __shed_shell_aliases=$(builtin alias -p)
-builtin printf '\e]7777;shed;aliases;%s\a' "$(builtin printf '%s' "$__shed_shell_aliases" | command base64 -w0)"
+builtin printf '\e]7777;shed;aliases;%s\a' "$(builtin printf '%s' "$__shed_shell_aliases" | command base64 | command tr -d '\n')"
 __shed_alias_names=()
 __shed_alias_sync() {
     local file="${SHED_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/shed}/aliases/${SHED_TAB:-none}" content=

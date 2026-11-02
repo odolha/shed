@@ -89,8 +89,11 @@ and modifier keys on their own), and sent to the keeper as input.
 ## Shell integration
 
 Shed starts bash with its own startup file, which reads your `~/.bashrc` and then
-Shed's hook (`shell/shed.bash`). The hook reports, as escape sequences in the
-output:
+Shed's hook (`shell/shed.bash`). zsh starts with `ZDOTDIR` pointing at a folder of
+Shed's whose `.zshenv` puts your own `ZDOTDIR` back, runs your `.zshenv` and loads
+the zsh hook (`shell/shed.zsh`); zsh then reads your `.zprofile` and `.zshrc` as
+usual, and the hook finishes setting up at the first prompt, after them. Either
+hook reports, as escape sequences in the output:
 
 - `OSC 133` marks around the prompt and each command (prompt start, input start,
   command start, command end with its exit status);
@@ -100,7 +103,7 @@ output:
 
 The keeper reads these marks from the output of every pane. They tell it where each
 pane's prompt is (startup and teardown commands are typed one per new prompt, and a
-prompt redrawn by readline does not count), what is running, and what to write to
+prompt redrawn by the line editor does not count), what is running, and what to write to
 the logbook. The folder and the program in the foreground are also read from
 `/proc` every second, for tag rules and for saving.
 
@@ -192,7 +195,7 @@ described in `SHED_PATCHES.md` in their folders.
 | `shed-emu` | The `Emulator` trait and its `alacritty_terminal` backend, replay, key and mouse encoding, shell-mark parsing |
 | `shed-keeper` | `shedd`: PTYs, the socket server, saving, closing, the shell marks |
 | `shed-save` | Saved bench files, layouts as text, rack rules, scrollback, the session |
-| `shed-logbook` | The logbook database, and the bash hook |
+| `shed-logbook` | The logbook database, and the bash and zsh hooks |
 | `shed-desktop` | Bench and app icons, desktop entries |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 

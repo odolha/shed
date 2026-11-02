@@ -102,6 +102,9 @@ pub struct Keeper {
     logbook: Option<std::sync::mpsc::Sender<NewEntry>>,
     /// The bash startup file that loads ~/.bashrc and then Shed's hook.
     bash_rc: Option<PathBuf>,
+    /// The `ZDOTDIR` for zsh, whose `.zshenv` loads the user's startup files
+    /// and Shed's hook.
+    zsh_dir: Option<PathBuf>,
     host: String,
     /// Shed is closing every bench: the session it recorded must stay.
     quitting: AtomicBool,
@@ -282,6 +285,7 @@ impl Keeper {
             }
         });
         let bash_rc = write_bash_rc(cfg.socket.parent().unwrap_or(Path::new("/tmp")));
+        let zsh_dir = write_zsh_dir(cfg.socket.parent().unwrap_or(Path::new("/tmp")));
         let host = nix::unistd::gethostname().ok().and_then(|h| h.into_string().ok()).unwrap_or_default();
         Arc::new(Self {
             cfg,
@@ -306,6 +310,7 @@ impl Keeper {
             tree_dirty: Notify::new(),
             logbook,
             bash_rc,
+            zsh_dir,
             host,
             quitting: AtomicBool::new(false),
             restored: AtomicBool::new(false),
@@ -1604,12 +1609,27 @@ impl Keeper {
             }
         }
         let mut args = Vec::new();
-        let is_bash = program.file_name().is_some_and(|n| n == "bash");
-        if is_bash
+        let name = program.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        if name == "bash"
             && st.config.shell.integration
             && let Some(rc) = &self.bash_rc
         {
             args = vec!["--rcfile".into(), rc.clone().into()];
+        }
+        if name == "zsh" {
+            if st.config.shell.integration
+                && let Some(dir) = &self.zsh_dir
+            {
+                // Its .zshenv puts the user's own ZDOTDIR back.
+                if let Some(own) = std::env::var_os("ZDOTDIR") {
+                    env.push(("SHED_USER_ZDOTDIR".into(), own));
+                }
+                env.push(("ZDOTDIR".into(), dir.clone().into()));
+            }
+            // As macOS terminals do, so ~/.zprofile sets up PATH (Homebrew).
+            if cfg!(target_os = "macos") {
+                args.push("-l".into());
+            }
         }
 
         let cwd = if cwd.is_dir() { cwd } else { self.cfg.home.clone() };
@@ -1885,6 +1905,37 @@ fn write_bash_rc(dir: &Path) -> Option<PathBuf> {
         Ok(()) => Some(path),
         Err(e) => {
             warn!("cannot write {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Writes the `ZDOTDIR` zsh starts with in Shed's panes. Its `.zshenv` puts
+/// the user's ZDOTDIR back (so zsh goes on to their .zprofile and .zshrc),
+/// runs their .zshenv, and loads Shed's hook, which finishes setting up at
+/// the first prompt, after .zshrc.
+fn write_zsh_dir(dir: &Path) -> Option<PathBuf> {
+    let zdotdir = dir.join("zsh");
+    let hook = zdotdir.join("shed.zsh");
+    let zshenv = format!(
+        "# Written by shedd: your own zsh startup files, then Shed's shell integration.\n\
+         if [[ -n ${{SHED_USER_ZDOTDIR+x}} ]]; then\n\
+         \x20   ZDOTDIR=$SHED_USER_ZDOTDIR\n\
+         \x20   unset SHED_USER_ZDOTDIR\n\
+         else\n\
+         \x20   unset ZDOTDIR\n\
+         fi\n\
+         [[ -f ${{ZDOTDIR:-$HOME}}/.zshenv ]] && builtin source ${{ZDOTDIR:-$HOME}}/.zshenv\n\
+         [[ -o interactive ]] && builtin source {:?}\n",
+        hook.display().to_string()
+    );
+    let written = std::fs::create_dir_all(&zdotdir)
+        .and_then(|()| std::fs::write(&hook, shed_logbook::ZSH_HOOK))
+        .and_then(|()| std::fs::write(zdotdir.join(".zshenv"), zshenv));
+    match written {
+        Ok(()) => Some(zdotdir),
+        Err(e) => {
+            warn!("cannot write {}: {e}", zdotdir.display());
             None
         }
     }

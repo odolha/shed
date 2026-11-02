@@ -41,7 +41,9 @@ cargo clippy --all-targets
   checks that a replayed emulator matches the original.
 - `crates/shed-keeper/tests/` drives an in-process keeper over its socket.
 - `crates/shed-app/tests/` runs whole flows with real bash: the logbook, saving and
-  loading, setup and teardown, aliases, closing Shed.
+  loading, setup and teardown, aliases, closing Shed. `tests/zsh.rs` does the same
+  with zsh when there is one (`zsh` on `PATH`, or `SHED_TEST_ZSH=/path/to/zsh`), and
+  is skipped otherwise.
 
 ## Debugging
 

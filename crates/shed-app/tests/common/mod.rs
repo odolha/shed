@@ -111,6 +111,20 @@ pub struct Env {
 /// Starts a keeper with real bash in `dir`, saving benches to `dir/benches`.
 /// Each call gets its own socket, so a second keeper can follow a stopped one.
 pub fn start_in(dir: &Path, socket_name: &str) -> Env {
+    start_with_shell(dir, socket_name, Path::new("/bin/bash"))
+}
+
+/// zsh for the tests: `SHED_TEST_ZSH`, or `zsh` on PATH.
+pub fn zsh() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("SHED_TEST_ZSH") {
+        return Some(path.into());
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|d| d.join("zsh")).find(|p| p.is_file())
+}
+
+/// [`start_in`] with another shell.
+pub fn start_with_shell(dir: &Path, socket_name: &str, shell: &Path) -> Env {
     let home = dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let socket = dir.join(socket_name);
@@ -118,7 +132,7 @@ pub fn start_in(dir: &Path, socket_name: &str) -> Env {
     let cfg = KeeperConfig {
         socket: socket.clone(),
         config_file: dir.join("shed.toml"),
-        shell: Some("/bin/bash".into()),
+        shell: Some(shell.into()),
         home: home.clone(),
         exit_when_idle: false,
         logbook: Some(logbook.clone()),
