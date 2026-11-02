@@ -49,7 +49,7 @@ use shed_emu::{
     AlacrittyEmulator, CursorShape, EmuEvent, Emulator, GridPoint, GridSize, MouseMode, Palette, Rgb,
     SelectionKind, Snapshot,
 };
-use shed_model::{AiState, PaneId};
+use shed_model::{AiState, Held, PaneId};
 use shed_proto::{ClientMsg, Frame};
 
 use crate::actions::{Copy, OpenLogbook, Paste, ScrollPageDown, ScrollPageUp, SearchScrollback, ZoomIn, ZoomOut, ZoomReset};
@@ -106,6 +106,8 @@ pub struct TerminalView {
     walk: Option<WalkState>,
     /// The pane's AI request, shown as a chip by the prompt.
     pub ai: Option<AiState>,
+    /// What the pane's startup waits for, shown as a chip.
+    pub held: Option<Held>,
     search: Option<(Entity<LogbookSearch>, Subscription)>,
     /// The scrollback search bar, while open.
     find: Option<Find>,
@@ -115,7 +117,7 @@ pub struct TerminalView {
     /// (kitty protocol), not those of keys Shed kept, like its shortcuts.
     pressed: std::collections::HashSet<String>,
     /// Modifier keys held, to tell which one a change pressed or released.
-    held: gpui::Modifiers,
+    mods_held: gpui::Modifiers,
     /// macOS: Option sends Alt to the shell instead of typing characters.
     option_as_alt: bool,
 }
@@ -156,11 +158,12 @@ impl TerminalView {
             at_prompt: false,
             walk: None,
             ai: None,
+            held: None,
             search: None,
             find: None,
             preedit: None,
             pressed: Default::default(),
-            held: Default::default(),
+            mods_held: Default::default(),
             option_as_alt: settings.config.macos.option_as_alt,
             sync_timer: None,
         }
@@ -423,7 +426,7 @@ impl TerminalView {
 
     /// Modifier keys alone, for apps that asked the kitty protocol for every key.
     fn on_modifiers_changed(&mut self, event: &gpui::ModifiersChangedEvent, window: &mut Window, _: &mut Context<Self>) {
-        let (before, after) = (std::mem::replace(&mut self.held, event.modifiers), event.modifiers);
+        let (before, after) = (std::mem::replace(&mut self.mods_held, event.modifiers), event.modifiers);
         if !self.focus.is_focused(window) {
             return;
         }
@@ -942,7 +945,14 @@ impl Render for TerminalView {
             };
             (top, label, color)
         });
-        let chip = ai_chip.or_else(|| {
+        let held_chip = self.held.as_ref().map(|held| {
+            let (label, color) = match held {
+                Held::Waiting(panes) => (format!("startup waits for {} · Start Now in the pane's menu", panes.join(", ")), accent),
+                Held::Failed(pane) => (format!("startup held: {pane} failed · Start Now in the pane's menu"), self.ui.danger),
+            };
+            (top, label, color)
+        });
+        let chip = ai_chip.or(held_chip).or_else(|| {
             self.walk.as_ref().map(|w| {
                 let mut label = format!("{} {}/{}", w.scope, w.pos, w.total);
                 if !w.source.is_empty() {

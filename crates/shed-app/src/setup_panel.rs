@@ -32,6 +32,8 @@ enum Field {
     Teardown(PaneId, Option<(usize, String)>),
     /// `name = command`; `None` adds one at the chosen level.
     Alias(Option<(AliasLevel, String)>),
+    /// The text that makes the pane ready.
+    ReadyWhen(PaneId),
 }
 
 /// Replaces, removes (empty `text`) or adds (`at` is `None`) a command. The
@@ -199,6 +201,7 @@ impl SetupPanel {
             Field::StartIn(p) => self.set_setup(p, |s| s.start_in = (!text.is_empty()).then(|| expand_home(&text)), cx),
             Field::Startup(p, at) => self.set_setup(p, |s| edit_list(&mut s.startup, at, text), cx),
             Field::Teardown(p, at) => self.set_setup(p, |s| edit_list(&mut s.teardown, at, text), cx),
+            Field::ReadyWhen(p) => self.set_setup(p, |s| s.ready_when = (!text.is_empty()).then_some(text), cx),
             Field::Alias(existing) => {
                 let level = existing.as_ref().map_or(self.new_alias_level, |(l, _)| *l);
                 let Some((target, mut aliases)) = self.aliases_at(level, cx) else { return };
@@ -365,7 +368,69 @@ impl SetupPanel {
             .child(options)
             .child(row("Teardown", teardown))
             .children(teardown_hint)
+            .child(row("Starts after", self.render_after(pane, ui, accent, cx)))
+            .child(row(
+                "Ready when",
+                self.value(
+                    format!("ready-{index}").into(),
+                    Field::ReadyWhen(id),
+                    pane.setup.ready_when.clone().unwrap_or_default(),
+                    "its startup finishes (or: text its output shows)",
+                    ui,
+                    cx,
+                ),
+            ))
             .into_any_element()
+    }
+
+    /// The other panes of the bench, to start after: a chip each, picked or
+    /// not. Panes that already wait for this one cannot be picked (it would
+    /// wait forever).
+    fn render_after(&self, pane: &Pane, ui: &UiColors, accent: Rgb, cx: &mut Context<Self>) -> AnyElement {
+        let Some((bench, _)) = self.bench(cx) else { return div().into_any_element() };
+        let me = pane.id;
+        let mut chips = div().flex().flex_wrap().gap_1().flex_1().min_w_0();
+        let mut any = false;
+        for tab in &bench.tabs {
+            let leaves = tab.layout.leaves();
+            for (i, other) in leaves.iter().enumerate() {
+                if *other == me {
+                    continue;
+                }
+                any = true;
+                let label = if leaves.len() > 1 { format!("{} · pane {}", tab.display_title(), i + 1) } else { tab.display_title() };
+                let picked = pane.setup.after.contains(other);
+                let loops = waits_on(&bench, *other, me);
+                let other = *other;
+                let chip = div()
+                    .id(SharedString::from(format!("after-{me}-{other}")))
+                    .px_1p5()
+                    .rounded_sm()
+                    .text_size(px(12.0))
+                    .border_1()
+                    .when(picked, |d| d.bg(hsla_alpha(accent, 0.25)).border_color(hsla_alpha(accent, 0.6)).text_color(hsla(ui.ink(accent))))
+                    .when(!picked, |d| d.border_color(hsla(ui.divider)).text_color(hsla(if loops { ui.divider } else { ui.text_dim })))
+                    .child(if picked { format!("✓ {label}") } else { label });
+                let chip = if loops && !picked {
+                    chip.tooltip(crate::menu::tooltip("It waits for this pane already"))
+                } else {
+                    chip.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_setup(me, |s| {
+                            if let Some(i) = s.after.iter().position(|d| *d == other) {
+                                s.after.remove(i);
+                            } else {
+                                s.after.push(other);
+                            }
+                        }, cx)
+                    }))
+                };
+                chips = chips.child(chip);
+            }
+        }
+        if !any {
+            chips = chips.child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child("no other panes in this bench"));
+        }
+        chips.into_any_element()
     }
 
     fn render_aliases(&self, ui: &UiColors, accent: Rgb, cx: &mut Context<Self>) -> AnyElement {
@@ -524,6 +589,26 @@ impl Render for SetupPanel {
             .child(body)
     }
 }
+
+/// Whether pane `from` waits, directly or through others, for pane `on`.
+fn waits_on(bench: &Bench, from: PaneId, on: PaneId) -> bool {
+    let mut seen = Vec::new();
+    let mut todo = vec![from];
+    while let Some(p) = todo.pop() {
+        if p == on {
+            return true;
+        }
+        if seen.contains(&p) {
+            continue;
+        }
+        seen.push(p);
+        if let Some(pane) = bench.tabs.iter().flat_map(|t| &t.panes).find(|x| x.id == p) {
+            todo.extend(pane.setup.after.iter().copied());
+        }
+    }
+    false
+}
+
 
 #[cfg(test)]
 mod tests {

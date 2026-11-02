@@ -16,7 +16,7 @@ use shed_emu::marks::{Mark, MarkScanner};
 use shed_logbook::{Logbook, NewEntry};
 use shed_save::{PaneExtras, Relaunch, SavedBench, SessionBench, Store};
 use shed_model::config::{Config, FileWatch};
-use shed_model::{AiState, Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
+use shed_model::{AiState, Bench, Held, PaneSetup, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
 use shed_proto::{
     AliasTarget, BenchRef, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
     PROTOCOL_VERSION, PegboardInfo, SavedEdit, ShowTarget, StoredBench,
@@ -167,6 +167,28 @@ struct PaneRt {
     reports_ends: bool,
     /// The AI request under way, to stop it.
     ask: Option<tokio::task::AbortHandle>,
+    /// Panes of the bench this one's startup waits for, as the bench loaded.
+    waits_for: Vec<PaneId>,
+    /// Startup is held and the shell sits at a prompt: release types it.
+    held_at_prompt: bool,
+    /// Whether the panes that wait for this one may go.
+    readiness: Readiness,
+    /// Ready once the output shows this; otherwise once startup finishes.
+    ready_text: Option<String>,
+    /// The output as plain text, for `ready_text`; the commands Shed typed
+    /// are left out of the search, so a command naming the text does not count.
+    plain: shed_emu::plain::Plain,
+    seen: Vec<u8>,
+    typed: Vec<String>,
+    /// A startup command was typed and has not finished.
+    startup_pending: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Readiness {
+    Pending,
+    Ready,
+    Failed,
 }
 
 /// How to start a pane.
@@ -762,6 +784,10 @@ impl Keeper {
             ClientMsg::SetTags { tab, tags } => self.edit_tab(tab, |t| t.tags = tags),
             ClientMsg::SetPrivate { tab, private } => self.edit_tab(tab, |t| t.private = private),
             ClientMsg::SetZoom { tab, zoom } => self.edit_tab(tab, |t| t.zoom = zoom.clamp(-20.0, 60.0)),
+            ClientMsg::StartNow { pane } => {
+                let mut st = self.lock();
+                self.release(&mut st, pane);
+            }
             ClientMsg::SetBenchOrder(order) => {
                 if let Some(store) = &self.cfg.store
                     && let Err(e) = store.save_order(&order)
@@ -1144,9 +1170,70 @@ impl Keeper {
         }
         let id = bench.id;
         info!(name = %bench.name, panes = started.len(), "bench loaded");
+        // Startup that waits for other panes is held until they are ready.
+        let setups: Vec<(PaneId, PaneSetup)> = bench.tabs.iter().flat_map(|t| &t.panes).map(|p| (p.id, p.setup.clone())).collect();
+        for (pane, setup) in &setups {
+            if let Some(rt) = st.panes.get_mut(pane) {
+                rt.ready_text = setup.ready_when.clone().filter(|t| !t.trim().is_empty());
+                rt.waits_for = setup.after.iter().copied().filter(|d| d != pane && started.contains(d)).collect();
+            }
+        }
         st.tree.benches.push(bench);
+        for (pane, _) in &setups {
+            self.show_held(st, *pane);
+        }
         self.sync_alias_files(st);
         Ok(id)
+    }
+
+    /// Writes into the tree what a pane's startup waits for, if anything.
+    fn show_held(&self, st: &mut State, pane: PaneId) {
+        let Some(rt) = st.panes.get(&pane) else { return };
+        let failed = rt.waits_for.iter().find(|d| st.panes.get(d).is_some_and(|r| r.readiness == Readiness::Failed));
+        let held = match failed {
+            Some(d) => Some(Held::Failed(pane_label(&st.tree, *d))),
+            None if rt.waits_for.is_empty() => None,
+            None => Some(Held::Waiting(rt.waits_for.iter().map(|d| pane_label(&st.tree, *d)).collect())),
+        };
+        if let Some(p) = st.tree.pane_mut(pane)
+            && p.held != held
+        {
+            p.held = held;
+            self.tree_dirty.notify_one();
+        }
+    }
+
+    /// A pane is ready (or failed): the panes waiting for it learn of it, and
+    /// those with nothing left to wait for start.
+    fn set_readiness(&self, st: &mut State, pane: PaneId, readiness: Readiness) {
+        let Some(rt) = st.panes.get_mut(&pane) else { return };
+        if rt.readiness != Readiness::Pending {
+            return;
+        }
+        rt.readiness = readiness;
+        info!(?pane, ?readiness, "pane readiness");
+        let waiting: Vec<PaneId> = st.panes.iter().filter(|(_, r)| r.waits_for.contains(&pane)).map(|(id, _)| *id).collect();
+        for other in waiting {
+            if readiness == Readiness::Ready
+                && let Some(r) = st.panes.get_mut(&other)
+            {
+                r.waits_for.retain(|d| *d != pane);
+                if r.waits_for.is_empty() {
+                    self.release(st, other);
+                }
+            }
+            self.show_held(st, other);
+        }
+    }
+
+    /// Lets a held pane's startup go: at once if its shell is at a prompt.
+    fn release(&self, st: &mut State, pane: PaneId) {
+        let Some(rt) = st.panes.get_mut(&pane) else { return };
+        rt.waits_for.clear();
+        if std::mem::take(&mut rt.held_at_prompt) {
+            self.send_after_prompt(st, pane);
+        }
+        self.show_held(st, pane);
     }
 
     /// Starts a saved tab's panes in bench `bench`: each in its folder with its
@@ -1352,7 +1439,19 @@ impl Keeper {
     /// Types the next queued command at a prompt: run, or left waiting for Enter.
     fn send_after_prompt(&self, st: &mut State, pane: PaneId) {
         let Some(rt) = st.panes.get_mut(&pane) else { return };
-        let Some((command, run)) = rt.after_prompt.pop_front() else { return };
+        if !rt.waits_for.is_empty() {
+            rt.held_at_prompt = true;
+            return;
+        }
+        let Some((command, run)) = rt.after_prompt.pop_front() else {
+            // Nothing (more) to start: ready, unless it waits for a text.
+            if !rt.startup_pending && rt.ready_text.is_none() {
+                self.set_readiness(st, pane, Readiness::Ready);
+            }
+            return;
+        };
+        rt.startup_pending = true;
+        rt.typed.push(command.clone());
         // Pasted, so a multi-line command is not run line by line.
         let mut bytes = shed_emu::keys::encode_paste(&command, rt.emu.modes());
         if run {
@@ -1757,6 +1856,14 @@ impl Keeper {
             new_prompt: false,
             reports_ends: false,
             ask: None,
+            waits_for: Vec::new(),
+            held_at_prompt: false,
+            readiness: Readiness::Pending,
+            ready_text: None,
+            plain: Default::default(),
+            seen: Vec::new(),
+            typed: Vec::new(),
+            startup_pending: false,
         });
         tokio::spawn(write_loop(master.clone(), input_rx));
         tokio::spawn(self.clone().pane_loop(pane_id, master, pty.child));
@@ -1824,6 +1931,8 @@ impl Keeper {
                 // Its bench was closed and is already back: the pane is someone else's now.
                 return;
             }
+            // Panes waiting for it never will be released by it.
+            self.set_readiness(&mut st, pane, Readiness::Failed);
             st.panes.remove(&pane);
             if let Some(bench) = st.tree.remove_pane(pane) {
                 let frame = Frame::Keeper(KeeperMsg::PaneExited { pane, code }).encode().into();
@@ -1879,6 +1988,10 @@ impl Keeper {
                 // Sent before every new prompt, never with a redraw.
                 rt.new_prompt = true;
                 rt.reports_ends = true;
+                if std::mem::take(&mut rt.startup_pending) && exit.is_some_and(|code| code != 0) && rt.ready_text.is_none() {
+                    self.set_readiness(st, pane, Readiness::Failed);
+                }
+                let Some(rt) = st.panes.get_mut(&pane) else { return };
                 let Some(run) = rt.running.take() else { return };
                 rt.last_finished = Some((run.command.clone(), Instant::now()));
                 let (Some(tx), Some((bench, tab_id))) = (&self.logbook, st.tree.locate_pane(pane)) else { return };
@@ -1925,11 +2038,30 @@ impl Keeper {
         });
         let deadline = rt.emu.tick();
         let bench = rt.bench;
+        let mut ready = false;
+        if rt.readiness == Readiness::Pending
+            && let Some(text) = rt.ready_text.clone()
+        {
+            rt.plain.feed(bytes, &mut rt.seen);
+            let mut seen = String::from_utf8_lossy(&rt.seen).into_owned();
+            for typed in &rt.typed {
+                seen = seen.replace(typed.as_str(), "");
+            }
+            ready = seen.contains(&text);
+            // Enough to find the text across chunks, not the whole history.
+            let keep = 4096 + text.len();
+            if rt.seen.len() > keep {
+                rt.seen.drain(..rt.seen.len() - keep);
+            }
+        }
         let mut marks = Vec::new();
         rt.marks.scan(bytes, &mut marks);
         st.broadcast_to_bench(bench, Frame::encode_output(pane, bytes).into());
         for mark in marks {
             self.on_mark(&mut st, pane, mark);
+        }
+        if ready {
+            self.set_readiness(&mut st, pane, Readiness::Ready);
         }
         if let Some(title) = title
             && let Some(p) = st.tree.pane_mut(pane)
@@ -2053,5 +2185,17 @@ fn apply_theme(st: &mut State) {
     let palette = st.palette.clone();
     for rt in st.panes.values_mut() {
         rt.emu.set_palette(palette.clone());
+    }
+}
+
+/// How a pane is named to the user: its tab's title, and which pane if the
+/// tab has several.
+fn pane_label(tree: &Shed, pane: PaneId) -> String {
+    let Some((_, tab)) = tree.locate_pane(pane) else { return "a closed pane".into() };
+    let Some(tab) = tree.tab(tab) else { return "a closed pane".into() };
+    let leaves = tab.layout.leaves();
+    match leaves.iter().position(|p| *p == pane) {
+        Some(i) if leaves.len() > 1 => format!("{} · pane {}", tab.display_title(), i + 1),
+        _ => tab.display_title(),
     }
 }

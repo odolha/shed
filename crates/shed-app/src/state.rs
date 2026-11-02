@@ -178,12 +178,13 @@ impl AppState {
                 for pane in &tab.panes {
                     let Some(view) = self.panes.get(&pane.id) else { continue };
                     let v = view.read(cx);
-                    if v.cwd != pane.cwd || v.here.map(|h| (h.tab, h.bench)) != Some((tab.id, bench.id)) || v.accent != accent || v.ai != pane.ai {
+                    if v.cwd != pane.cwd || v.here.map(|h| (h.tab, h.bench)) != Some((tab.id, bench.id)) || v.accent != accent || v.ai != pane.ai || v.held != pane.held {
                         view.update(cx, |view, cx| {
                             view.cwd = pane.cwd.clone();
                             view.here = here;
                             view.accent = accent;
                             view.ai = pane.ai.clone();
+                            view.held = pane.held.clone();
                             cx.notify();
                         });
                     }

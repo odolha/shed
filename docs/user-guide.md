@@ -177,6 +177,19 @@ For each pane:
 - **Teardown**: commands run, in order, when the bench is closed, after its running
   program has stopped. For example `docker compose down` after a `docker compose
   up -d`. Empty: closing just stops what runs.
+- **Starts after**: other panes of the bench this one's startup waits for. Click a
+  pane to pick it (again to drop it).
+- **Ready when**: when this pane counts as ready, for the panes that start after it.
+  Empty: once its startup commands have finished without an error. Or a text its
+  output shows, for programs that keep running, such as `ready in` for a dev
+  server or `Listening on` for a backend.
+
+So a stack starts in order without `sleep`s: the database pane runs
+`docker compose up -d`; the backend pane starts after it, runs `git pull` and
+`make run`, and is ready when it prints `Listening on`; the frontend starts after
+the backend. While a pane waits, a chip on it says for what (in red if that
+failed), its tab shows the hourglass, and **Start Now** in its menu starts it
+anyway.
 
 Click a value to edit it, empty it (or use ×) to remove it. Changes are saved at
 once and apply the next time the bench opens or closes.

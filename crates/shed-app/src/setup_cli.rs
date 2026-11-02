@@ -62,9 +62,27 @@ pub fn show_setup() -> anyhow::Result<()> {
             println!("             (typed, waiting for Enter)");
         }
         print_list("  teardown ", &p.setup.teardown, "(stop the running tool)");
+        if !p.setup.after.is_empty() {
+            let names: Vec<String> = p.setup.after.iter().map(|d| pane_name(&tree, *d)).collect();
+            println!("  after      {}", names.join(", "));
+        }
+        match &p.setup.ready_when {
+            Some(text) => println!("  ready when its output shows {text:?}"),
+            None => println!("  ready when its startup finishes"),
+        }
     }
     println!("\nEdit with `shed setup --edit`.");
     Ok(())
+}
+
+/// A pane as `shed setup` names it: its tab, and which pane if there are several.
+fn pane_name(tree: &Shed, pane: PaneId) -> String {
+    let Some(tab) = tree.locate_pane(pane).and_then(|(_, t)| tree.tab(t)) else { return "(a pane no longer here)".into() };
+    let leaves = tab.layout.leaves();
+    match leaves.iter().position(|p| *p == pane) {
+        Some(i) if leaves.len() > 1 => format!("{} · pane {}", tab.display_title(), i + 1),
+        _ => tab.display_title(),
+    }
 }
 
 fn print_list(label: &str, items: &[String], empty: &str) {
@@ -97,6 +115,10 @@ struct EditPane {
     wait: bool,
     #[serde(default)]
     teardown: Vec<String>,
+    /// Ready (for panes that start after it) once the output shows this;
+    /// empty: once its startup finishes.
+    #[serde(default)]
+    ready_when: String,
 }
 
 pub fn edit_setup() -> anyhow::Result<()> {
@@ -115,6 +137,7 @@ pub fn edit_setup() -> anyhow::Result<()> {
                 startup: p.setup.startup.clone(),
                 wait: p.setup.wait,
                 teardown: p.setup.teardown.clone(),
+                ready_when: p.setup.ready_when.clone().unwrap_or_default(),
             })
             .collect(),
         aliases: tab.aliases.clone(),
@@ -150,7 +173,9 @@ pub fn edit_setup() -> anyhow::Result<()> {
         }
         let start_in = Some(ep.start_in.trim()).filter(|s| !s.is_empty()).map(expand_home);
         let clean = |v: Vec<String>| v.into_iter().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
-        let setup = PaneSetup { start_in, startup: clean(ep.startup), wait: ep.wait, teardown: clean(ep.teardown) };
+        let after = tab.pane(ep.id).map(|p| p.setup.after.clone()).unwrap_or_default();
+        let ready_when = Some(ep.ready_when.trim().to_string()).filter(|s| !s.is_empty());
+        let setup = PaneSetup { start_in, startup: clean(ep.startup), wait: ep.wait, teardown: clean(ep.teardown), after, ready_when };
         msgs.push(ClientMsg::SetPaneSetup { pane: ep.id, setup });
     }
     msgs.push(ClientMsg::SetAliases { level: AliasTarget::Tab(tab_id), aliases: edited.aliases });

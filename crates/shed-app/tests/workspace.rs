@@ -94,6 +94,7 @@ fn closing_stops_tools_runs_teardown_and_loading_runs_startup() {
         startup: vec!["echo first-$((1+1))".into(), "echo second-$((2+2))".into()],
         wait: false,
         teardown: vec![format!("echo stopped > {}", marker.display())],
+        ..Default::default()
     };
     c.msg(ClientMsg::SetPaneSetup { pane, setup: setup.clone() });
     tree_until(&mut c, "setup", |t| t.pane(pane).is_some_and(|p| p.setup == setup));
@@ -166,4 +167,62 @@ fn the_pegboard_previews_running_and_stored_benches() {
     let stored = info.stored.iter().find(|s| s.bench.id == bench).expect("stored");
     assert_eq!(stored.bench.name, "board");
     assert!(previews(&info, pane, "preview-42"), "{info:?}");
+}
+
+#[test]
+fn startup_waits_for_other_panes_to_be_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let order = dir.path().join("order.txt");
+    let log = |name: &str| format!("echo {name} >> {}", order.display());
+    let ids: Vec<PaneId> = (0..5).map(|_| PaneId::new()).collect();
+    let quote = |v: &[String]| v.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>().join(", ");
+    let tab = |name: &str, pane: PaneId, startup: &[String], extra: &str| {
+        format!(
+            "\n[[tabs]]\nid = \"{}\"\nname = \"{name}\"\nlayout = \"0\"\n\n[[tabs.panes]]\nid = \"{pane}\"\ncwd = \"~\"\nstartup = [{}]\n{extra}\n",
+            shed_model::TabId::new(),
+            quote(startup)
+        )
+    };
+    let mut file = format!("name = \"stack\"\nid = \"{}\"\ncolor = \"blue\"\ncwd = \"~\"\nsaved = \"2026-11-02T00:00:00Z\"\n", BenchId::new());
+    // docker is ready when its startup finishes; backend when it says so,
+    // and keeps running; frontend waits for backend.
+    file += &tab("docker", ids[0], &["sleep 0.5".into(), log("docker")], "");
+    file += &tab("backend", ids[1], &[log("backend"), "echo 'server ready'; sleep 30".into()], &format!("after = [\"{}\"]\nready_when = \"server ready\"", ids[0]));
+    file += &tab("frontend", ids[2], &[log("frontend")], &format!("after = [\"{}\"]", ids[1]));
+    // One that fails holds what waits for it, until started by hand.
+    file += &tab("broken", ids[3], &["false".into()], "");
+    file += &tab("after-broken", ids[4], &[log("after-broken")], &format!("after = [\"{}\"]", ids[3]));
+    std::fs::create_dir_all(dir.path().join("benches")).unwrap();
+    std::fs::write(dir.path().join("benches/stack.toml"), file).unwrap();
+
+    let mut c = Client::connect(&env.socket);
+    c.msg(ClientMsg::Show(ShowTarget::Load { name: "stack".into() }));
+    let bench = c.until("show", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Show { bench }) => Some(*bench),
+        _ => None,
+    });
+    c.msg(ClientMsg::Attach { bench: Some(bench) });
+    let tree = tree_until(&mut c, "held", |t| t.pane(ids[2]).is_some_and(|p| p.held.is_some()));
+    assert_eq!(tree.pane(ids[2]).unwrap().held, Some(shed_model::Held::Waiting(vec!["backend".into()])));
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let lines = loop {
+        let text = std::fs::read_to_string(&order).unwrap_or_default();
+        let lines: Vec<String> = text.lines().map(String::from).collect();
+        if lines.len() >= 3 || Instant::now() > deadline {
+            break lines;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(lines, ["docker", "backend", "frontend"], "each started after what it waits for");
+    tree_until(&mut c, "failed", |t| t.pane(ids[4]).is_some_and(|p| p.held == Some(shed_model::Held::Failed("broken".into()))));
+    tree_until(&mut c, "frontend released", |t| t.pane(ids[2]).is_some_and(|p| p.held.is_none()));
+
+    c.msg(ClientMsg::StartNow { pane: ids[4] });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !std::fs::read_to_string(&order).unwrap_or_default().contains("after-broken") {
+        assert!(Instant::now() < deadline, "Start Now did not start it");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }

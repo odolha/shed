@@ -269,6 +269,17 @@ pub struct Pane {
     pub shell_aliases: Aliases,
     /// A request to the AI prompt, under way or failed.
     pub ai: Option<AiState>,
+    /// Startup held until other panes are ready: what it waits for.
+    pub held: Option<Held>,
+}
+
+/// Why a pane's startup has not run yet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Held {
+    /// Waiting for these panes to be ready (their titles).
+    Waiting(Vec<String>),
+    /// A pane it waits for failed (its title); it stays held.
+    Failed(String),
 }
 
 /// Where a pane's AI request is.
@@ -293,11 +304,17 @@ pub struct PaneSetup {
     pub wait: bool,
     /// Run when the bench is closed, after the running tool is stopped.
     pub teardown: Vec<String>,
+    /// When the bench loads, startup waits until these panes of the bench
+    /// are ready.
+    pub after: Vec<PaneId>,
+    /// This pane is ready, for the panes that start after it, once its
+    /// output shows this text; `None`: once its startup has finished.
+    pub ready_when: Option<String>,
 }
 
 impl PaneSetup {
     pub fn is_empty(&self) -> bool {
-        self.start_in.is_none() && self.startup.is_empty() && self.teardown.is_empty()
+        self.start_in.is_none() && self.startup.is_empty() && self.teardown.is_empty() && self.after.is_empty() && self.ready_when.is_none()
     }
 }
 
@@ -314,6 +331,7 @@ impl Pane {
             setup: PaneSetup::default(),
             shell_aliases: Aliases::new(),
             ai: None,
+            held: None,
         }
     }
 }

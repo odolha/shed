@@ -161,6 +161,13 @@ their old scrollback fed to the emulator dimmed above a "restored" line, then ei
 run their startup commands or bring back what was running, by the rack rules
 (restart, type and wait for Enter, or leave out).
 
+Panes with **Starts after** wait: the keeper holds their startup at their first
+prompt until every pane they wait for is ready, which is when its queued startup
+has finished with exit status 0 (from the shell marks), or when its output, with
+escape sequences taken out and the commands Shed typed left out, shows its
+**Ready when** text. A failure, or the pane closing, keeps its waiters held; the
+pane's `held` state in the tree says why, and `StartNow` releases one.
+
 **Closing** saves the bench, then runs each pane's stop sequence concurrently:
 Ctrl+C, wait for the prompt; SIGTERM to the foreground group if needed; teardown
 commands one per prompt; then a hangup.

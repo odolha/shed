@@ -350,6 +350,14 @@ impl BenchWindow {
             })
             .icon("private"),
         );
+        let held: Vec<PaneId> = tab.panes.iter().filter(|p| p.held.is_some()).map(|p| p.id).collect();
+        if !held.is_empty() {
+            entries.push(item("Start Now", move |this, _, cx| {
+                for pane in &held {
+                    this.send(ClientMsg::StartNow { pane: *pane }, cx);
+                }
+            }).icon("go"));
+        }
         entries.push(more("Move to Bench", move |this: &mut Self, cx| this.move_menu(tab_id, cx)).icon("bench"));
         entries.push(MenuEntry::Separator);
         entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)).icon("close"));
@@ -375,8 +383,13 @@ impl BenchWindow {
             .collect()
     }
 
-    fn pane_menu(&self, pane: PaneId) -> Vec<MenuEntry<Self>> {
-        vec![
+    fn pane_menu(&self, pane: PaneId, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
+        let mut entries = Vec::new();
+        if self.state.read(cx).tree.pane(pane).is_some_and(|p| p.held.is_some()) {
+            entries.push(item("Start Now", move |this, _, cx| this.send(ClientMsg::StartNow { pane }, cx)).icon("go"));
+            entries.push(MenuEntry::Separator);
+        }
+        entries.extend([
             item("Copy", |_, window, cx| window.dispatch_action(Box::new(Copy), cx)),
             item("Paste", |_, window, cx| window.dispatch_action(Box::new(Paste), cx)),
             MenuEntry::Separator,
@@ -384,7 +397,8 @@ impl BenchWindow {
             item("Split Down", move |this, _, cx| this.split_pane(pane, SplitDir::Down, cx)).icon("split-down"),
             MenuEntry::Separator,
             danger("Close Pane", move |this: &mut Self, _, cx| this.send(ClientMsg::ClosePane { pane }, cx)).icon("close"),
-        ]
+        ]);
+        entries
     }
 
     fn bench_menu(&self, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
@@ -475,7 +489,7 @@ impl BenchWindow {
                 // The active tab carries the bench colour along its top.
                 el = el.border_t_2().border_color(hsla(accent));
             }
-            if tab.panes.iter().any(|p| p.waiting.is_some()) {
+            if tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some()) {
                 // A loaded bench typed a command here; it waits for Enter.
                 el = el.child(svg().path(icon("tool-waiting")).size(px(12.0)).flex_none().text_color(hsla(accent)));
             } else if tab.panes.iter().any(|p| p.tool.is_some()) {
@@ -614,7 +628,7 @@ impl BenchWindow {
                     .min_h_0()
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                        let entries = this.pane_menu(pane);
+                        let entries = this.pane_menu(pane, cx);
                         this.open_menu(e.position, entries, cx);
                     }));
                 if let Some(view) = self.state.read(cx).panes.get(&pane) {

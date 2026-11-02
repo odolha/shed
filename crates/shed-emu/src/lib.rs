@@ -12,6 +12,7 @@ pub mod links;
 pub mod marks;
 pub mod mouse;
 mod palette;
+pub mod plain;
 mod snapshot;
 mod tail;
 

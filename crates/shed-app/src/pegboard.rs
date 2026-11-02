@@ -869,7 +869,7 @@ impl Pegboard {
         let lines = previews.get(&tab.active_pane).cloned().unwrap_or_default();
         let mono: SharedString = self.state.read(cx).settings.font.family.clone().into();
         let tool = pane.and_then(|p| p.tool.as_ref()).map(|t| t.display());
-        let waiting = tab.panes.iter().any(|p| p.waiting.is_some());
+        let waiting = tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some());
         let tab_id = tab.id;
         let card_key = entry.key();
 

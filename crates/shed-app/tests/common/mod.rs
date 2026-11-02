@@ -18,6 +18,10 @@ pub struct Client {
     pub tree: Shed,
     /// Every pane's output so far, whichever wait read it.
     pub seen: std::collections::HashMap<PaneId, String>,
+    /// How far into `seen` each pane's prompts have been waited for.
+    prompted: std::collections::HashMap<PaneId, usize>,
+    /// How far into `seen` `output_until` has read, per pane.
+    read: std::collections::HashMap<PaneId, usize>,
 }
 
 impl Client {
@@ -39,7 +43,7 @@ impl Client {
                 }
             }
         });
-        let mut c = Client { write: stream, frames, tree: Shed::default(), seen: Default::default() };
+        let mut c = Client { write: stream, frames, tree: Shed::default(), seen: Default::default(), prompted: Default::default(), read: Default::default() };
         c.msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Window });
         c
     }
@@ -76,16 +80,20 @@ impl Client {
         }
     }
 
-    /// Output of `pane` until it contains `needle`; returns all of it.
+    /// Waits until `pane`'s output since the last call contains `needle`
+    /// (which may have come during another wait); returns that output.
     pub fn output_until(&mut self, pane: PaneId, needle: &str) -> String {
-        let mut seen = String::new();
-        self.until(needle, |f, _| match f {
-            Frame::Output { pane: p, bytes } if *p == pane => {
-                seen.push_str(&String::from_utf8_lossy(bytes));
-                seen.contains(needle).then(|| seen.clone())
+        loop {
+            let from = self.read.get(&pane).copied().unwrap_or(0);
+            let seen = self.seen.get(&pane).map_or("", String::as_str);
+            if let Some(at) = seen.get(from..).and_then(|rest| rest.find(needle)) {
+                // Everything seen, as callers look past the match too.
+                let out = seen[from..].to_string();
+                self.read.insert(pane, from + at + needle.len());
+                return out;
             }
-            _ => None,
-        })
+            self.until(needle, |f, _| matches!(f, Frame::Output { pane: p, .. } if *p == pane).then_some(()));
+        }
     }
 
     /// Waits until `pane` has shown `needle` at any point so far.
@@ -100,9 +108,25 @@ impl Client {
         self.seen(pane, needle);
     }
 
-    /// Waits for a fresh prompt in `pane` (the hook's "input starts" mark).
+    /// Waits for a fresh prompt in `pane`: a command's end mark, then an
+    /// "input starts" mark, after the last prompt waited for. Readline's
+    /// redraws repeat "input starts" without an end, and do not count; a
+    /// prompt that arrived during another wait does.
     pub fn prompt(&mut self, pane: PaneId) {
-        self.output_until(pane, "\x1b]133;B");
+        let fresh = |seen: &str, from: usize| {
+            let rest = seen.get(from..)?;
+            let end = rest.rfind("\x1b]133;D")?;
+            let input = rest[end..].find("\x1b]133;B")?;
+            Some(from + end + input + 1)
+        };
+        loop {
+            let from = self.prompted.get(&pane).copied().unwrap_or(0);
+            if let Some(at) = fresh(self.seen.get(&pane).map_or("", String::as_str), from) {
+                self.prompted.insert(pane, at);
+                return;
+            }
+            self.until("a prompt", |f, _| matches!(f, Frame::Output { pane: p, .. } if *p == pane).then_some(()));
+        }
     }
 }
 

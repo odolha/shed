@@ -122,6 +122,12 @@ pub struct SavedPane {
     /// Commands to run when the bench is closed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub teardown: Vec<String>,
+    /// Panes of the bench whose readiness startup waits for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<PaneId>,
+    /// Ready once the output shows this; otherwise once startup finishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_when: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -173,6 +179,8 @@ impl SavedBench {
                         startup: p.setup.startup.clone(),
                         wait: p.setup.wait,
                         teardown: p.setup.teardown.clone(),
+                        after: p.setup.after.clone(),
+                        ready_when: p.setup.ready_when.clone(),
                     })
                     .collect();
                 SavedTab {
@@ -230,6 +238,8 @@ impl SavedBench {
                         startup: sp.startup.clone(),
                         wait: sp.wait,
                         teardown: sp.teardown.clone(),
+                        after: sp.after.clone(),
+                        ready_when: sp.ready_when.clone(),
                     };
                     pane
                 })
@@ -290,6 +300,8 @@ impl SavedBench {
         p.startup = setup.startup.clone();
         p.wait = setup.wait;
         p.teardown = setup.teardown.clone();
+        p.after = setup.after.clone();
+        p.ready_when = setup.ready_when.clone();
         true
     }
 
@@ -315,6 +327,8 @@ impl SavedBench {
                 startup: Vec::new(),
                 wait: false,
                 teardown: Vec::new(),
+                after: Vec::new(),
+                ready_when: None,
             }],
         });
         id
@@ -355,11 +369,18 @@ impl SavedBench {
         copy.name = name.to_string();
         copy.launcher = launcher;
         copy.id = BenchId::new();
+        let mut renamed = std::collections::HashMap::new();
         for tab in &mut copy.tabs {
             tab.id = TabId::new();
             for pane in &mut tab.panes {
-                pane.id = PaneId::new();
+                let fresh = PaneId::new();
+                renamed.insert(pane.id, fresh);
+                pane.id = fresh;
             }
+        }
+        // Waits point at the copy's own panes.
+        for pane in copy.tabs.iter_mut().flat_map(|t| &mut t.panes) {
+            pane.after = pane.after.iter().filter_map(|id| renamed.get(id).copied()).collect();
         }
         copy
     }
@@ -715,6 +736,7 @@ mod tests {
             startup: vec!["docker compose up -d".into(), "npm run dev".into()],
             wait: false,
             teardown: vec!["docker compose down".into()],
+            ..Default::default()
         };
         tab.tags.push(Tag { label: "dev".into(), color: tag_color("green").unwrap(), tint_tab: false });
         let second = Tab::with_pane(Pane::new(PaneId::new(), "/tmp".into()));
@@ -812,7 +834,14 @@ mod tests {
         saved.remove_tab(second).unwrap();
         assert!(saved.remove_tab(added).is_err(), "the last tab stays");
         let pane = saved.tabs[0].panes[0].id;
-        let setup = PaneSetup { start_in: None, startup: vec!["make".into()], wait: true, teardown: vec!["make clean".into()] };
+        let setup = PaneSetup {
+            startup: vec!["make".into()],
+            wait: true,
+            teardown: vec!["make clean".into()],
+            after: vec![PaneId::new()],
+            ready_when: Some("Listening".into()),
+            ..Default::default()
+        };
         assert!(saved.set_pane_setup(pane, &setup));
         let (bench, _) = saved.to_bench().unwrap();
         assert_eq!(bench.tabs[0].panes[0].setup, setup);
