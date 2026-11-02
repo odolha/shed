@@ -69,12 +69,16 @@ TOML
 tab() { # name layout tags panes...   (tags: TOML inline array or empty)
   printf '\n[[tabs]]\nid = "%s"\nname = "%s"\nlayout = "%s"\nactive_pane = 0\n%s\n' "$(uuid)" "$1" "$2" "$3"
 }
-pane() { # cwd startup...
+pane() { # cwd startup...   (ID, READY and AFTER from the environment, if set)
   local cwd=$1; shift
   local cmds=""; for c in "$@"; do cmds+="\"$c\", "; done
-  printf '\n[[tabs.panes]]\nid = "%s"\ncwd = "%s"\nstartup = [%s]\n' "$(uuid)" "$cwd" "${cmds%, }"
+  printf '\n[[tabs.panes]]\nid = "%s"\ncwd = "%s"\nstartup = [%s]\n' "${ID:-$(uuid)}" "$cwd" "${cmds%, }"
+  [ -n "${READY:-}" ] && printf 'ready_when = "%s"\n' "$READY"
+  [ -n "${AFTER:-}" ] && printf 'after = ["%s"]\n' "$AFTER"
+  return 0
 }
-bench board blue "~/projects/board" "$(tab "dev server" "right 0.55 (0) (1)" ""; pane "~/projects/board" "clear" "./dev-server.sh"; pane "~/projects/board" "clear" "git log --oneline" "ls src/components")$(tab "shell" "0" ""; pane "~/projects/board" "clear" "ls -A")"
+dev=$(uuid)
+bench board blue "~/projects/board" "$(tab "dev server" "right 0.55 (0) (1)" ""; ID=$dev READY="ready in" pane "~/projects/board" "clear" "./dev-server.sh"; AFTER=$dev pane "~/projects/board" "clear" "git log --oneline" "ls src/components")$(tab "shell" "0" ""; pane "~/projects/board" "clear" "ls -A")"
 bench api violet "~/projects/api" "$(tab "tests" "0" ""; pane "~/projects/api" "./watch.sh")$(tab "db" "0" 'tags = [{ label = "local", color = "#5FD38D" }]'; pane "~/projects/api" "clear" "ls src")"
 bench infra amber "~/projects/infra" "$(tab "prod" "0" 'tags = [{ label = "prod", color = "#F0566A", tint = true }]'; pane "~/projects/infra" "clear" "ls k8s" "./rollout.sh")$(tab "staging" "0" ""; pane "~/projects/infra" "clear" "ls k8s")"
 bench docs teal "~/projects/docs" "$(tab "guides" "0" ""; pane "~/projects/docs" "clear" "ls guides")"

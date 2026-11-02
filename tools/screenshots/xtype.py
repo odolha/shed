@@ -27,11 +27,23 @@ ox = int(re.search(r"Absolute upper-left X:\s+(-?\d+)", info).group(1))
 oy = int(re.search(r"Absolute upper-left Y:\s+(-?\d+)", info).group(1))
 
 
+x11.XDefaultRootWindow.restype = ctypes.c_ulong
+x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+x11.XGrabKeyboard.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+x11.XUngrabKeyboard.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+
+
 def guard():
     w = ctypes.c_ulong(); r = ctypes.c_int()
     x11.XGetInputFocus(d, ctypes.byref(w), ctypes.byref(r))
     if w.value != target:
         sys.exit(f"focus is {w.value:#x}, not {target:#x}; aborting")
+    # A lock screen grabs the keyboard without taking focus: if the keyboard
+    # cannot be grabbed here, someone else has it, and keys would go there.
+    if x11.XGrabKeyboard(d, x11.XDefaultRootWindow(d), 0, 1, 1, 0) != 0:
+        sys.exit("the keyboard is grabbed (a lock screen?); aborting")
+    x11.XUngrabKeyboard(d, 0)
+    x11.XFlush(d)
 
 
 def key(combo):
