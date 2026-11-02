@@ -37,7 +37,7 @@ use gpui::{
     Point, ScrollWheelEvent, SharedString, StrikethroughStyle, Task, TextAlign, TextRun,
     UnderlineStyle, Window, canvas, div, point, prelude::*, px, size,
 };
-use shed_emu::keys::{self, KeyEvent, KeyInput, Mods};
+use shed_emu::keys::{self, KeyEvent, KeyInput, Modifier, Mods};
 use shed_emu::links::{self, Link};
 use shed_emu::marks::{Mark, MarkScanner, WalkState};
 use shed_emu::mouse::{self, Button, MouseAction};
@@ -103,6 +103,8 @@ pub struct TerminalView {
     /// Keys whose press went to the app: only their releases are reported
     /// (kitty protocol), not those of keys Shed kept, like its shortcuts.
     pressed: std::collections::HashSet<String>,
+    /// Modifier keys held, to tell which one a change pressed or released.
+    held: gpui::Modifiers,
 }
 
 struct Find {
@@ -142,6 +144,7 @@ impl TerminalView {
             find: None,
             preedit: None,
             pressed: Default::default(),
+            held: Default::default(),
             sync_timer: None,
         }
     }
@@ -382,6 +385,31 @@ impl TerminalView {
         if let Some(bytes) = keys::encode_event(input, KeyEvent::Release, self.emu.modes()) {
             self.send(bytes);
             cx.stop_propagation();
+        }
+    }
+
+    /// Modifier keys alone, for apps that asked the kitty protocol for every key.
+    fn on_modifiers_changed(&mut self, event: &gpui::ModifiersChangedEvent, window: &mut Window, _: &mut Context<Self>) {
+        let (before, after) = (std::mem::replace(&mut self.held, event.modifiers), event.modifiers);
+        if !self.focus.is_focused(window) {
+            return;
+        }
+        let mods = Mods { ctrl: after.control, alt: after.alt, shift: after.shift, super_: after.platform };
+        let changes = [
+            (Modifier::Shift, before.shift, after.shift),
+            (Modifier::Ctrl, before.control, after.control),
+            (Modifier::Alt, before.alt, after.alt),
+            (Modifier::Super, before.platform, after.platform),
+        ];
+        for (key, was, is) in changes {
+            let event = match (was, is) {
+                (false, true) => KeyEvent::Press,
+                (true, false) => KeyEvent::Release,
+                _ => continue,
+            };
+            if let Some(bytes) = keys::encode_modifier(key, event, mods, self.emu.modes()) {
+                self.send(bytes);
+            }
         }
     }
 
@@ -880,6 +908,7 @@ impl Render for TerminalView {
             .when(frame.background != self.palette.background, |d| d.bg(background))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
+            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::open_logbook))
             .on_action(cx.listener(Self::open_find))

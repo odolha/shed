@@ -321,6 +321,38 @@ fn ctrl_byte(key: &str) -> Option<u8> {
     })
 }
 
+/// A modifier key on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Modifier {
+    Shift,
+    Ctrl,
+    Alt,
+    Super,
+}
+
+/// The bytes for pressing or releasing a modifier key by itself, which only
+/// apps that asked the kitty protocol for every key (flag 8) hear about.
+/// `mods` is the state after the change. Left and right are not told apart:
+/// both are reported as the left key.
+pub fn encode_modifier(key: Modifier, event: KeyEvent, mods: Mods, modes: Modes) -> Option<Vec<u8>> {
+    let flags = modes.kitty;
+    if flags & 8 == 0 || (event == KeyEvent::Release && flags & 2 == 0) {
+        return None;
+    }
+    let code = match key {
+        Modifier::Shift => 57441,
+        Modifier::Ctrl => 57442,
+        Modifier::Alt => 57443,
+        Modifier::Super => 57444,
+    };
+    let params = match (mods.param(), event) {
+        (m, KeyEvent::Release) => format!(";{m}:3"),
+        (1, _) => String::new(),
+        (m, _) => format!(";{m}"),
+    };
+    Some(format!("\x1b[{code}{params}u").into_bytes())
+}
+
 /// Wraps pasted text for the PTY: bracketed if the app asked, with newlines as CR.
 pub fn encode_paste(text: &str, modes: Modes) -> Vec<u8> {
     // Strip the paste-end marker so a paste cannot break out of the bracket.
@@ -428,6 +460,19 @@ mod tests {
         assert_eq!(kitty(8 | 16, "e", Some("é"), Mods::NONE), "\x1b[101;1;233u");
         let app_cursor = Modes { kitty: 8, app_cursor: true, ..Default::default() };
         assert_eq!(encode(KeyInput { key: "up", text: None, mods: Mods::NONE }, app_cursor).unwrap(), b"\x1b[A");
+    }
+
+    #[test]
+    fn modifier_keys_alone_only_with_every_key_reported() {
+        let modes = |kitty| Modes { kitty, ..Default::default() };
+        let shift = Mods { shift: true, ..Mods::NONE };
+        let s = |b: Option<Vec<u8>>| b.map(|b| String::from_utf8(b).unwrap());
+        assert_eq!(s(encode_modifier(Modifier::Shift, KeyEvent::Press, shift, modes(1))), None);
+        assert_eq!(s(encode_modifier(Modifier::Shift, KeyEvent::Press, shift, modes(8))), Some("\x1b[57441;2u".into()));
+        assert_eq!(s(encode_modifier(Modifier::Shift, KeyEvent::Release, Mods::NONE, modes(8))), None);
+        assert_eq!(s(encode_modifier(Modifier::Shift, KeyEvent::Release, Mods::NONE, modes(10))), Some("\x1b[57441;1:3u".into()));
+        let ctrl_shift = Mods { ctrl: true, shift: true, ..Mods::NONE };
+        assert_eq!(s(encode_modifier(Modifier::Ctrl, KeyEvent::Press, ctrl_shift, modes(8))), Some("\x1b[57442;6u".into()));
     }
 
     fn kitty_event(flags: u8, key: &str, text: Option<&str>, mods: Mods, event: KeyEvent) -> Option<String> {

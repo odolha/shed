@@ -83,7 +83,8 @@ output, which lets it:
 
 The window process runs its own emulator per pane, fed by the replay and then the
 live output, and draws from it. Keys are encoded there, the xterm way or with the
-kitty keyboard protocol when a program asks for it, and sent to the keeper as input.
+kitty keyboard protocol when a program asks for it (presses, repeats, releases,
+and modifier keys on their own), and sent to the keeper as input.
 
 ## Shell integration
 
