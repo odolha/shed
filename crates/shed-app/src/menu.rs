@@ -11,11 +11,14 @@ use crate::assets::icon;
 use crate::theme::{UiColors, current_ui, hsla};
 
 pub type MenuAction<V> = Rc<dyn Fn(&mut V, &mut Window, &mut Context<V>)>;
+pub type MenuEntries<V> = Rc<dyn Fn(&mut V, &mut Context<V>) -> Vec<MenuEntry<V>>>;
 
 pub enum MenuEntry<V> {
     Item { label: SharedString, icon: Option<&'static str>, danger: bool, action: MenuAction<V> },
     /// Colours to pick from, as a grid of dots.
     Palette(Vec<Swatch<V>>),
+    /// Opens another menu in its place.
+    More { label: SharedString, icon: Option<&'static str>, entries: MenuEntries<V> },
     Separator,
 }
 
@@ -34,7 +37,7 @@ pub fn swatch_of<V>(color: Rgb, name: &'static str, current: bool, action: impl 
 impl<V> MenuEntry<V> {
     /// Shows a UI icon before the label.
     pub fn icon(mut self, name: &'static str) -> Self {
-        if let MenuEntry::Item { icon, .. } = &mut self {
+        if let MenuEntry::Item { icon, .. } | MenuEntry::More { icon, .. } = &mut self {
             *icon = Some(name);
         }
         self
@@ -43,6 +46,11 @@ impl<V> MenuEntry<V> {
 
 pub fn item<V>(label: impl Into<SharedString>, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> MenuEntry<V> {
     MenuEntry::Item { label: label.into(), icon: None, danger: false, action: Rc::new(action) }
+}
+
+/// An item that opens another menu, made when it is chosen.
+pub fn more<V>(label: impl Into<SharedString>, entries: impl Fn(&mut V, &mut Context<V>) -> Vec<MenuEntry<V>> + 'static) -> MenuEntry<V> {
+    MenuEntry::More { label: label.into(), icon: None, entries: Rc::new(entries) }
 }
 
 /// An item in red, for what stops or removes things.
@@ -111,7 +119,13 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
             this.menu_closed(window, cx);
         }));
     // With icons on some items, every label starts at the same place.
-    let icons = menu.entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. }));
+    let icons = menu.entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::More { icon: Some(_), .. }));
+    let lead = |glyph: &Option<&'static str>, color: Rgb| match glyph {
+        Some(name) => Some(svg().path(icon(name)).size(px(14.0)).text_color(hsla(color)).into_any_element()),
+        None if icons => Some(div().size(px(14.0)).into_any_element()),
+        None => None,
+    };
+    let position = menu.position;
     for (i, entry) in menu.entries.iter().enumerate() {
         list = list.child(match entry {
             MenuEntry::Separator => div().my_1().h(px(1.0)).bg(hsla(ui.divider)).into_any_element(),
@@ -142,14 +156,31 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
                         }))
                 }))
                 .into_any_element(),
+            MenuEntry::More { label, icon: glyph, entries } => {
+                let entries = entries.clone();
+                div()
+                    .id(("menu-item", i))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .cursor_pointer()
+                    .children(lead(glyph, ui.text_dim))
+                    .child(div().flex_1().child(label.clone()))
+                    .child(div().text_color(hsla(ui.text_dim)).child("›"))
+                    .on_click(cx.listener(move |this: &mut V, _, _, cx| {
+                        let entries = entries(this, cx);
+                        *this.menu_slot() = Some(Menu { position, entries });
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            }
             MenuEntry::Item { label, icon: glyph, danger, action } => {
                 let action = action.clone();
                 let color = if *danger { ui.danger } else { ui.text };
-                let lead = match glyph {
-                    Some(name) => Some(svg().path(icon(name)).size(px(14.0)).text_color(hsla(if *danger { color } else { ui.text_dim })).into_any_element()),
-                    None if icons => Some(div().size(px(14.0)).into_any_element()),
-                    None => None,
-                };
+                let lead = lead(glyph, if *danger { color } else { ui.text_dim });
                 div()
                     .id(("menu-item", i))
                     .flex()

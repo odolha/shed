@@ -30,6 +30,12 @@ async-channel.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+raw-window-handle = "0.6"
+
+# Changing an open window's icon on X11, which GPUI only sets at opening.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "0.13"
+
 [dev-dependencies]
 shed-keeper.workspace = true
 tokio.workspace = true

@@ -133,6 +133,13 @@ setup, aliases), which loads the file, applies it and saves it back, leaving the
 scrollback as it was. A running bench is changed in the tree instead, and the keeper
 refuses file edits to it.
 
+Moving a tab where either bench is closed (`MoveTabAcross`) combines the two: from
+a closed bench into a running one, the keeper starts the tab's panes as loading
+would and takes the tab out of the file; from a running bench into a closed one,
+it writes the tab into that file under new ids (so loading that bench cannot
+mistake its panes for the ones still stopping), then stops the panes as closing
+would; between closed benches it moves the tab and its scrollback between files.
+
 **Loading** rebuilds the bench in the keeper: panes start in their folder, with
 their old scrollback fed to the emulator dimmed above a "restored" line, then either
 run their startup commands or bring back what was running, by the rack rules
@@ -154,7 +161,8 @@ loaded again at once does not confuse old panes with new.
 
 The Shed window has the app id `dev.shed`; each bench window
 `dev.shed.bench.<key>`, where the key is the slug of the bench's first name and
-never changes. For each bench Shed writes a hidden desktop entry and an icon (the
+never changes. A bench window's icon is set as it opens and, on X11, replaced
+when the bench's colour or badge changes. For each bench Shed writes a hidden desktop entry and an icon (the
 workbench template, rendered in the bench's colour with resvg) to
 `~/.local/share`, so docks show one icon per bench and a pinned one runs
 `shed load <key>`. Installed packages provide Shed's own entry and icons in the

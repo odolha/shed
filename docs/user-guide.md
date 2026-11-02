@@ -75,7 +75,11 @@ show, dimmed, what was on screen when they were saved.
 - Double-click its title to rename it; the **×** in its corner closes it.
 - **New tab** at the end of a bench's cards adds one.
 - Drag a card onto another card to put it there, or onto another bench to move it
-  there. A tab moves with everything running in it.
+  there; **Move to Bench** in its menu does the same. Between running benches a
+  tab moves with everything running in it. Into a closed bench, what runs in it
+  stops (Shed asks first, and its teardown runs); it starts again when that bench
+  opens. A closed bench's tab moved into a running one starts as opening would
+  start it.
 - Right-click a card for its menu:
 
 ![A tab's menu](images/tab-menu.png)
@@ -85,9 +89,8 @@ Shed.
 
 **Closed benches** are managed the same way: rename, recolour or badge them; add,
 rename, tag, reorder or remove their tabs; change their setup and aliases. Each
-change goes into the bench's saved file, and the bench opens with it next time. Two
-things need the bench running: going to a tab (which opens the bench), and moving
-a tab to another bench (open both first).
+change goes into the bench's saved file, and the bench opens with it next time.
+Going to one of its tabs opens the bench.
 
 Type in the field at the top to filter: by bench, tab, tag, folder or the program
 running. Up and Down move through the tabs shown; Enter goes to the selected one;
@@ -109,7 +112,7 @@ the focused pane, when a tab is split.
 - **Splits**: Ctrl+Shift+E splits right, Ctrl+Shift+O splits down; drag the line
   between panes to resize; Alt+arrows move between panes.
 - **Right-click** a pane for copy, paste, split and close; a tab for rename, tags,
-  setup, private and close; the bench's name (right of the tab bar) for rename,
+  setup, private, **Move to Bench** and close; the bench's name (right of the tab bar) for rename,
   badge, colours, Show Shed and Close Bench.
 - On the right of the tab bar: the **house** brings Shed forward (or Super+Space),
   and the **rack** opens the Setup panel (or Ctrl+Shift+S).

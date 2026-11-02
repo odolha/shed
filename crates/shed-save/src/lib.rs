@@ -311,13 +311,23 @@ impl SavedBench {
     }
 
     pub fn remove_tab(&mut self, tab: TabId) -> Result<(), String> {
+        self.take_tab(tab).map(drop)
+    }
+
+    /// Takes a tab out, to put it in another bench; a bench keeps at least one.
+    pub fn take_tab(&mut self, tab: TabId) -> Result<SavedTab, String> {
         let Some(i) = self.tabs.iter().position(|t| t.id == tab) else { return Err("no such tab".into()) };
         if self.tabs.len() == 1 {
             return Err("a bench keeps at least one tab; delete the bench instead".into());
         }
-        self.tabs.remove(i);
+        let taken = self.tabs.remove(i);
         self.active_tab = self.active_tab.min(self.tabs.len() - 1);
-        Ok(())
+        Ok(taken)
+    }
+
+    /// Puts a tab from another bench at `index`.
+    pub fn insert_tab(&mut self, tab: SavedTab, index: usize) {
+        self.tabs.insert(index.min(self.tabs.len()), tab);
     }
 
     /// Moves a tab to `index` among the others.
@@ -770,6 +780,14 @@ mod tests {
         let tags = [Tag { label: "prod".into(), color: Rgb::hex(0xF0566A), tint_tab: true }];
         saved.tab_mut(added).unwrap().tags = saved_tags(&tags);
         assert_eq!(saved.to_bench().unwrap().0.tabs[0].tags, tags);
+
+        // Tabs move between benches whole.
+        let mut other = SavedBench::from_bench(&sample(), |_| PaneExtras::default());
+        let moving = other.tabs[1].id;
+        let tab = other.take_tab(moving).unwrap();
+        saved.insert_tab(tab, 0);
+        assert_eq!(saved.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [moving, added]);
+        assert!(other.take_tab(other.tabs[0].id).is_err(), "the last tab stays");
     }
 
     #[test]

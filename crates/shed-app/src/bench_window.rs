@@ -15,12 +15,12 @@ use shed_model::{
     default_tag_color, tag_color,
 };
 use shed_model::config::NewPaneDir;
-use shed_proto::ClientMsg;
+use shed_proto::{BenchRef, ClientMsg};
 
 use crate::actions::*;
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
-use crate::menu::{self, Menu, MenuEntry, MenuHost, danger};
+use crate::menu::{self, Menu, MenuEntry, MenuHost, danger, more};
 use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
@@ -338,10 +338,29 @@ impl BenchWindow {
             })
             .icon("private"),
         );
-        // Moving a tab to another bench is the pegboard's: drag it there.
+        entries.push(more("Move to Bench", move |this: &mut Self, cx| this.move_menu(tab_id, cx)).icon("bench"));
         entries.push(MenuEntry::Separator);
         entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)).icon("close"));
         entries
+    }
+
+    /// Every other bench, to move a tab to.
+    fn move_menu(&mut self, tab_id: TabId, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+        let from = BenchRef::Running(self.bench);
+        let destinations = self.state.read(cx).tab_destinations(&from, cx);
+        destinations
+            .into_iter()
+            .map(|d| {
+                let label = if d.closed { format!("{}  (closed)", d.name) } else { d.name.clone() };
+                let from = from.clone();
+                item(label, move |this: &mut Self, window, cx| {
+                    let Some(title) = this.tab(tab_id, cx).map(|t| t.display_title()) else { return };
+                    let conn = this.state.read(cx).conn.clone();
+                    crate::state::move_tab(&conn, tab_id, &title, from.clone(), d.to.clone(), &d.name, usize::MAX, window, cx);
+                })
+                .icon("bench")
+            })
+            .collect()
     }
 
     fn pane_menu(&self, pane: PaneId) -> Vec<MenuEntry<Self>> {

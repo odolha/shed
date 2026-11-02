@@ -281,3 +281,64 @@ fn closed_benches_change_in_place_and_launchers_still_find_them() {
     c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: RemoveTab { tab: first } });
     c.until("last tab kept", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Error(_))).then_some(()));
 }
+
+#[test]
+fn tabs_move_between_running_and_closed_benches() {
+    use shed_proto::BenchRef::{Running, Saved};
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let done = |c: &mut Client, what: &str| {
+        c.until(what, |f, _| match f {
+            Frame::Keeper(KeeperMsg::Done(text)) => Some(text.clone()),
+            Frame::Keeper(KeeperMsg::Error(e)) => panic!("{what}: {e}"),
+            _ => None,
+        })
+    };
+    let saved_tabs = |name: &str| {
+        let text = std::fs::read_to_string(dir.path().join(format!("benches/{name}.toml"))).unwrap();
+        shed_save::SavedBench::from_toml(&text).unwrap().tabs.iter().map(|t| t.id).collect::<Vec<_>>()
+    };
+
+    // "docs" has two tabs and is closed; "web" runs.
+    let docs = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("docs".into()), cwd: None });
+    tree_until(&mut c, "docs", |t| t.bench(docs).is_some());
+    c.msg(ClientMsg::NewTab { bench: docs, cwd: None });
+    let tree = tree_until(&mut c, "two tabs", |t| t.bench(docs).is_some_and(|b| b.tabs.len() == 2));
+    let notes = tree.bench(docs).unwrap().tabs[1].id;
+    c.msg(ClientMsg::CloseBench { bench: docs });
+    tree_until(&mut c, "docs closed", |t| t.bench(docs).is_none());
+    let web = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("web".into()), cwd: None });
+    tree_until(&mut c, "web", |t| t.bench(web).is_some());
+
+    // A closed bench's tab starts in the running one.
+    c.msg(ClientMsg::MoveTabAcross { tab: notes, from: Saved("docs".into()), to: Running(web), index: 0 });
+    done(&mut c, "into web");
+    let tree = tree_until(&mut c, "notes runs in web", |t| t.bench(web).is_some_and(|b| b.tabs.len() == 2));
+    assert_eq!(tree.bench(web).unwrap().tabs[0].id, notes);
+    assert_eq!(saved_tabs("docs").len(), 1);
+
+    // And goes back: saved there (with new ids), its teardown run here.
+    let marker = dir.path().join("torn-down");
+    let pane = tree.bench(web).unwrap().tabs[0].panes[0].id;
+    let teardown = vec![format!("echo done > {}", marker.display())];
+    c.msg(ClientMsg::SetPaneSetup { pane, setup: shed_model::PaneSetup { teardown, ..Default::default() } });
+    tree_until(&mut c, "setup", |t| t.pane(pane).is_some_and(|p| !p.setup.teardown.is_empty()));
+    c.msg(ClientMsg::MoveTabAcross { tab: notes, from: Running(web), to: Saved("docs".into()), index: 9 });
+    done(&mut c, "into docs");
+    tree_until(&mut c, "gone from web", |t| t.bench(web).is_some_and(|b| b.tabs.len() == 1));
+    assert!(marker.exists(), "the teardown did not run");
+    let tabs = saved_tabs("docs");
+    assert_eq!(tabs.len(), 2);
+    assert_ne!(tabs[1], notes, "a moved-out tab gets new ids");
+
+    // Between closed benches it is only files.
+    c.msg(ClientMsg::CloseBench { bench: web });
+    tree_until(&mut c, "web closed", |t| t.bench(web).is_none());
+    c.msg(ClientMsg::MoveTabAcross { tab: tabs[1], from: Saved("docs".into()), to: Saved("web".into()), index: 0 });
+    done(&mut c, "docs to web");
+    assert_eq!((saved_tabs("docs").len(), saved_tabs("web")[0]), (1, tabs[1]));
+    // A bench keeps one tab.
+    c.msg(ClientMsg::MoveTabAcross { tab: tabs[0], from: Saved("docs".into()), to: Saved("web".into()), index: 0 });
+    c.until("last tab kept", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Error(_))).then_some(()));
+}

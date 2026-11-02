@@ -12,13 +12,13 @@ use gpui::{
     PromptLevel, SharedString, Subscription, Window, div, prelude::*, px, svg,
 };
 use shed_model::{Bench, BenchColor, BenchId, PaneId, Rgb, Tab, TabId};
-use shed_proto::{ClientMsg, PegboardInfo, SavedEdit, ShowTarget};
+use shed_proto::{BenchRef, ClientMsg, PegboardInfo, SavedEdit, ShowTarget};
 use shed_save::home_relative;
 
 use crate::assets::icon;
 use crate::bench_window::{DraggedTab, with_tag};
 use crate::line_editor::{EditorEvent, LineEditor};
-use crate::menu::{self, Menu, MenuEntry, MenuHost, danger};
+use crate::menu::{self, Menu, MenuEntry, MenuHost, danger, more};
 use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
@@ -67,6 +67,15 @@ impl Entry {
 enum BenchKey {
     Running(BenchId),
     Closed(String),
+}
+
+impl BenchKey {
+    fn to_ref(&self) -> BenchRef {
+        match self {
+            BenchKey::Running(id) => BenchRef::Running(*id),
+            BenchKey::Closed(name) => BenchRef::Saved(name.clone()),
+        }
+    }
 }
 
 /// What can change about a tab, whether its bench runs or not.
@@ -225,23 +234,32 @@ impl Pegboard {
 
     /// Puts a tab at `index` in a bench. Between running benches it moves with
     /// whatever runs in it; a closed bench's tabs move within it.
-    fn move_tab(&mut self, tab: TabId, to: &BenchKey, index: usize, cx: &mut Context<Self>) {
-        let Some((from, _)) = self.find_tab(tab, cx) else { return };
-        let msg = match (&from, to) {
-            (BenchKey::Running(_), BenchKey::Running(bench)) => ClientMsg::MoveTab { tab, bench: *bench, index },
-            (BenchKey::Closed(a), BenchKey::Closed(b)) if a == b => {
-                ClientMsg::EditSaved { name: a.clone(), edit: SavedEdit::MoveTab { tab, index } }
-            }
-            _ => {
-                self.state.update(cx, |state, cx| {
-                    state.notice = Some("To move a tab to another bench, open both benches first.".into());
-                    cx.notify();
-                });
-                return;
-            }
+    fn move_tab(&mut self, tab: TabId, to: &BenchKey, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((from, t)) = self.find_tab(tab, cx) else { return };
+        let to_name = match to {
+            BenchKey::Running(id) => self.state.read(cx).tree.bench(*id).map(|b| b.name.clone()).unwrap_or_default(),
+            BenchKey::Closed(name) => name.clone(),
         };
-        self.send(msg, cx);
-        self.refresh(cx);
+        let conn = self.state.read(cx).conn.clone();
+        crate::state::move_tab(&conn, tab, &t.display_title(), from.to_ref(), to.to_ref(), &to_name, index, window, cx);
+    }
+
+    /// Every other bench, to move a tab to.
+    fn move_menu(&mut self, tab: TabId, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+        let Some((from, _)) = self.find_tab(tab, cx) else { return Vec::new() };
+        let state = self.state.read(cx);
+        state
+            .tab_destinations(&from.to_ref(), cx)
+            .into_iter()
+            .map(|d| {
+                let key = match d.to {
+                    BenchRef::Running(id) => BenchKey::Running(id),
+                    BenchRef::Saved(name) => BenchKey::Closed(name),
+                };
+                let label = if d.closed { format!("{}  (closed)", d.name) } else { d.name };
+                menu_item(label, move |this, window, cx| this.move_tab(tab, &key, usize::MAX, window, cx)).icon("bench")
+            })
+            .collect()
     }
 
     /// Every bench by name, each with the tabs the filter matches.
@@ -494,6 +512,7 @@ impl Pegboard {
             })
             .icon("private"),
         );
+        entries.push(more("Move to Bench", move |this: &mut Self, cx| this.move_menu(tab_id, cx)).icon("bench"));
         entries.push(MenuEntry::Separator);
         // A closed bench's tab has nothing running: it just goes.
         let close = if entry.status == Status::Closed { "Remove Tab" } else { "Close Tab" };
@@ -706,7 +725,7 @@ impl Pegboard {
                 this.open_menu(ev.position, entries, cx);
             }))
             .drag_over::<DraggedTab>(move |s, _, _, _| s.border_color(hsla(accent)))
-            .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| this.move_tab(d.tab, &drop_key, usize::MAX, cx)))
+            .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| this.move_tab(d.tab, &drop_key, usize::MAX, window, cx)))
             .child(header)
             .child(cards)
             .into_any_element()
@@ -842,9 +861,9 @@ impl Pegboard {
             .on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
             // Dropped on a card, a tab takes its place.
             .drag_over::<DraggedTab>(move |s, _, _, _| s.border_l_4().border_color(hsla(accent)))
-            .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
+            .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                 cx.stop_propagation();
-                this.move_tab(d.tab, &card_key, index, cx);
+                this.move_tab(d.tab, &card_key, index, window, cx);
             }))
             .on_click(cx.listener(move |this, _, _, cx| this.open(&e, Some(tab_id), cx)))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {

@@ -18,7 +18,7 @@ use shed_save::{PaneExtras, Relaunch, SavedBench, SessionBench, Store};
 use shed_model::config::{Config, FileWatch};
 use shed_model::{Bench, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
 use shed_proto::{
-    AliasTarget, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
+    AliasTarget, BenchRef, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
     PROTOCOL_VERSION, PegboardInfo, SavedEdit, ShowTarget, StoredBench,
 };
 use tokio::io::unix::AsyncFd;
@@ -799,6 +799,14 @@ impl Keeper {
                     apply_theme(&mut st);
                 }
             }
+            ClientMsg::MoveTabAcross { tab, from, to, index } => {
+                let result = self.move_tab_across(tab, from, to, index);
+                let st = self.lock();
+                match result {
+                    Ok(done) => st.send(client, KeeperMsg::Done(done)),
+                    Err(e) => st.send(client, KeeperMsg::Error(e)),
+                }
+            }
             ClientMsg::EditSaved { name, edit } => {
                 let st = self.lock();
                 match self.edit_saved(&st, &name, edit) {
@@ -1092,40 +1100,12 @@ impl Keeper {
             return Err(format!("another bench named {:?} is running", saved.name));
         }
         let (mut bench, panes) = saved.to_bench()?;
+        let bench_cwd = bench.cwd.clone();
         let mut started = Vec::new();
         for tab in &mut bench.tabs {
-            for pane in &mut tab.panes {
-                let sp = panes.iter().find(|(id, _)| *id == pane.id).map(|(_, p)| p.clone());
-                let restore = store.scrollback(&saved.name, pane.id).map(|text| shed_save::restored_scrollback(&text, &saved.saved));
-                // The pane's own startup wins over whatever was running at save time.
-                let after_prompt: VecDeque<(String, bool)> = if !pane.setup.startup.is_empty() {
-                    pane.setup.startup.iter().map(|c| (c.clone(), !pane.setup.wait)).collect()
-                } else {
-                    let tool = sp.as_ref().and_then(|p| p.tool.clone());
-                    tool.and_then(|cmd| match shed_save::relaunch(&st.config.rack, &cmd) {
-                        Relaunch::Run => Some((cmd, true)),
-                        Relaunch::Prefill => Some((cmd, false)),
-                        Relaunch::Skip => None,
-                    })
-                    .into_iter()
-                    .collect()
-                };
-                let cwd = [pane.setup.start_in.clone(), Some(pane.cwd.clone()), Some(bench.cwd.clone())]
-                    .into_iter()
-                    .flatten()
-                    .find(|d| d.is_dir())
-                    .unwrap_or_else(|| self.cfg.home.clone());
-                let spec = PaneSpec { id: pane.id, cwd, cols: pane.cols, rows: pane.rows, restore, after_prompt };
-                match self.spawn_pane_spec(st, bench.id, tab.id, spec) {
-                    Ok(spawned) => {
-                        started.push(pane.id);
-                        pane.cwd = spawned.cwd;
-                    }
-                    Err(e) => {
-                        st.hang_up(&started);
-                        return Err(format!("cannot start a shell: {e}"));
-                    }
-                }
+            if let Err(e) = self.start_saved_tab(st, &saved, &panes, bench.id, &bench_cwd, tab, &mut started) {
+                st.hang_up(&started);
+                return Err(e);
             }
         }
         let id = bench.id;
@@ -1133,6 +1113,152 @@ impl Keeper {
         st.tree.benches.push(bench);
         self.sync_alias_files(st);
         Ok(id)
+    }
+
+    /// Starts a saved tab's panes in bench `bench`: each in its folder with its
+    /// old scrollback, then its startup commands or what was running, by the
+    /// rack rules. Started panes are added to `started`.
+    #[allow(clippy::too_many_arguments)]
+    fn start_saved_tab(
+        self: &Arc<Self>,
+        st: &mut State,
+        saved: &SavedBench,
+        panes: &[(PaneId, shed_save::SavedPane)],
+        bench: BenchId,
+        bench_cwd: &Path,
+        tab: &mut Tab,
+        started: &mut Vec<PaneId>,
+    ) -> Result<(), String> {
+        let store = self.cfg.store.as_ref().ok_or("saving is turned off")?;
+        for pane in &mut tab.panes {
+            let sp = panes.iter().find(|(id, _)| *id == pane.id).map(|(_, p)| p.clone());
+            let restore = store.scrollback(&saved.name, pane.id).map(|text| shed_save::restored_scrollback(&text, &saved.saved));
+            // The pane's own startup wins over whatever was running at save time.
+            let after_prompt: VecDeque<(String, bool)> = if !pane.setup.startup.is_empty() {
+                pane.setup.startup.iter().map(|c| (c.clone(), !pane.setup.wait)).collect()
+            } else {
+                let tool = sp.as_ref().and_then(|p| p.tool.clone());
+                tool.and_then(|cmd| match shed_save::relaunch(&st.config.rack, &cmd) {
+                    Relaunch::Run => Some((cmd, true)),
+                    Relaunch::Prefill => Some((cmd, false)),
+                    Relaunch::Skip => None,
+                })
+                .into_iter()
+                .collect()
+            };
+            let cwd = [pane.setup.start_in.clone(), Some(pane.cwd.clone()), Some(bench_cwd.to_path_buf())]
+                .into_iter()
+                .flatten()
+                .find(|d| d.is_dir())
+                .unwrap_or_else(|| self.cfg.home.clone());
+            let spec = PaneSpec { id: pane.id, cwd, cols: pane.cols, rows: pane.rows, restore, after_prompt };
+            let spawned = self.spawn_pane_spec(st, bench, tab.id, spec).map_err(|e| format!("cannot start a shell: {e}"))?;
+            started.push(pane.id);
+            pane.cwd = spawned.cwd;
+        }
+        Ok(())
+    }
+
+    /// Moves a tab where either bench is closed. Into a running bench, a
+    /// closed bench's tab starts as loading would start it; into a closed
+    /// bench, a running tab is saved there and then stopped, as closing would.
+    fn move_tab_across(self: &Arc<Self>, tab: TabId, from: BenchRef, to: BenchRef, index: usize) -> Result<String, String> {
+        let store = self.cfg.store.as_ref().ok_or("saving is turned off")?;
+        let mut st = self.lock();
+        let running = |st: &State, name: &str| st.tree.benches.iter().any(|b| b.name == name);
+        let done = match (from, to) {
+            (BenchRef::Running(_), BenchRef::Running(bench)) => {
+                drop(st);
+                self.handle_msg(0, ClientMsg::MoveTab { tab, bench, index });
+                return Ok("moved a tab".into());
+            }
+            (BenchRef::Saved(a), BenchRef::Saved(b)) if a == b => {
+                drop(st);
+                return self.edit_saved(&self.lock(), &a, SavedEdit::MoveTab { tab, index });
+            }
+            (BenchRef::Saved(a), BenchRef::Saved(b)) => {
+                if running(&st, &a) || running(&st, &b) {
+                    return Err("one of these benches is running now".into());
+                }
+                let mut from = store.load(&a).map_err(|e| format!("cannot read {a:?}: {e}"))?;
+                let mut into = store.load(&b).map_err(|e| format!("cannot read {b:?}: {e}"))?;
+                let moved = from.take_tab(tab)?;
+                let scrollback: Vec<(PaneId, String)> = moved.panes.iter().filter_map(|p| Some((p.id, store.scrollback(&a, p.id)?))).collect();
+                into.insert_tab(moved, index);
+                store.save(&into, &scrollback).map_err(|e| format!("cannot save {b:?}: {e}"))?;
+                store.save(&from, &[]).map_err(|e| format!("cannot save {a:?}: {e}"))?;
+                format!("moved a tab from {a} to {b}")
+            }
+            (BenchRef::Saved(a), BenchRef::Running(bench)) => {
+                if running(&st, &a) {
+                    return Err(format!("{a:?} is running now"));
+                }
+                let into_name = st.tree.bench(bench).map(|b| b.name.clone()).ok_or("that bench is not running")?;
+                let mut from = store.load(&a).map_err(|e| format!("cannot read {a:?}: {e}"))?;
+                // Checks first that the tab may leave (it is not the last).
+                let mut rest = from.clone();
+                rest.take_tab(tab)?;
+                let (whole, panes) = from.to_bench()?;
+                let mut moved = whole.tabs.into_iter().find(|t| t.id == tab).ok_or("no such tab")?;
+                let mut started = Vec::new();
+                if let Err(e) = self.start_saved_tab(&mut st, &from, &panes, bench, &whole.cwd, &mut moved, &mut started) {
+                    st.hang_up(&started);
+                    return Err(e);
+                }
+                let target = st.tree.bench_mut(bench).unwrap();
+                target.tabs.insert(index.min(target.tabs.len()), moved);
+                target.active_tab = tab;
+                self.sync_alias_files(&mut st);
+                st.broadcast_tree();
+                // Windows showing the bench get the panes with their old scrollback.
+                let targets: Vec<ClientId> = st.clients.iter().filter(|(_, c)| c.attached.contains(&bench)).map(|(id, _)| *id).collect();
+                for c in targets {
+                    for id in &started {
+                        st.send_replay(c, *id);
+                    }
+                }
+                from = rest;
+                store.save(&from, &[]).map_err(|e| format!("cannot save {a:?}: {e}"))?;
+                format!("moved a tab from {a} to {into_name}")
+            }
+            (BenchRef::Running(bench), BenchRef::Saved(b)) => {
+                if running(&st, &b) {
+                    return Err(format!("{b:?} is running now"));
+                }
+                let mut into = store.load(&b).map_err(|e| format!("cannot read {b:?}: {e}"))?;
+                let (saved, scrollback) = self.snapshot(&st, &[bench], false).into_iter().next().ok_or("that bench is not running")?;
+                let mut moved = saved.tabs.into_iter().find(|t| t.id == tab).ok_or("no such tab")?;
+                // New ids: the panes still run here until they stop, and
+                // loading the other bench meanwhile must not mistake them.
+                moved.id = TabId::new();
+                let mut kept = Vec::new();
+                for pane in &mut moved.panes {
+                    let fresh = PaneId::new();
+                    if let Some((_, text)) = scrollback.iter().find(|(id, _)| *id == pane.id) {
+                        kept.push((fresh, text.clone()));
+                    }
+                    pane.id = fresh;
+                }
+                into.insert_tab(moved, index);
+                store.save(&into, &kept).map_err(|e| format!("cannot save {b:?}: {e}"))?;
+                let panes: Vec<PaneId> = st.tree.tab(tab).map(|t| t.panes.iter().map(|p| p.id).collect()).unwrap_or_default();
+                drop(st);
+                tokio::spawn(self.clone().stop_panes(panes));
+                format!("moved a tab to {b}")
+            }
+        };
+        self.stored_cache.lock().unwrap().clear();
+        Ok(done)
+    }
+
+    /// Stops panes as closing their bench would (tools stopped, teardowns
+    /// run), then hangs them up.
+    async fn stop_panes(self: Arc<Self>, panes: Vec<PaneId>) {
+        let steps: Vec<_> = panes.iter().map(|p| tokio::spawn(self.clone().teardown_pane(*p))).collect();
+        for step in steps {
+            let _ = tokio::time::timeout(TEARDOWN_LIMIT, step).await;
+        }
+        self.lock().hang_up(&panes);
     }
 
     /// Types the next queued command at a prompt: run, or left waiting for Enter.

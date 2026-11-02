@@ -5489,6 +5489,7 @@ dependencies = [
  "gpui_ce_platform",
  "image",
  "libc",
+ "raw-window-handle",
  "serde",
  "shed-desktop",
  "shed-emu",
@@ -5502,6 +5503,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "x11rb",
 ]
 
 [[package]]

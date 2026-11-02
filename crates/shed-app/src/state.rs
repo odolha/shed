@@ -10,8 +10,8 @@ use gpui::{
 };
 use shed_model::config::{Config, FileWatch};
 use shed_desktop::{BenchIdentity, Desktop};
-use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed};
-use shed_proto::{ClientMsg, Frame, KeeperMsg};
+use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed, TabId};
+use shed_proto::{BenchRef, ClientMsg, Frame, KeeperMsg};
 use tracing::{error, warn};
 
 use crate::bench_window::BenchWindow;
@@ -215,6 +215,13 @@ impl AppState {
                     let id = shed_desktop::app_id(&identity.launcher);
                     handle.update(cx, |_, window, _| window.set_app_id(&id)).ok();
                 }
+            }
+            // GPUI sets a window's icon only as it opens; X11 can change it.
+            if previous.is_some_and(|old| (old.color, &old.badge) != (identity.color, &identity.badge))
+                && let Some(handle) = self.windows.get(&bench.id)
+                && let Some(icon) = window_icon(&identity)
+            {
+                handle.update(cx, |_, window, _| set_window_icon(window, &icon)).ok();
             }
             let written = self.desktop.install(&BenchIdentity {
                 launcher: &identity.launcher,
@@ -435,6 +442,63 @@ impl AppState {
     pub fn window_at(&self, index: usize) -> Option<WindowHandle<BenchWindow>> {
         self.tree.benches.iter().filter_map(|b| self.windows.get(&b.id)).nth(index).copied()
     }
+
+    /// Where a tab of bench `from` can move: every other bench, running or
+    /// closed, by name.
+    pub fn tab_destinations(&self, from: &BenchRef, cx: &gpui::App) -> Vec<Destination> {
+        let running = self.tree.benches.iter().map(|b| Destination { name: b.name.clone(), closed: false, to: BenchRef::Running(b.id) });
+        let stored = cx.try_global::<PegboardData>().map(|d| d.0.stored.as_slice()).unwrap_or_default();
+        let closed = stored
+            .iter()
+            .filter(|s| self.tree.bench(s.bench.id).is_none())
+            .map(|s| Destination { name: s.bench.name.clone(), closed: true, to: BenchRef::Saved(s.bench.name.clone()) });
+        let mut all: Vec<Destination> = running.chain(closed).filter(|d| &d.to != from).collect();
+        all.sort_by_key(|d| d.name.to_lowercase());
+        all
+    }
+}
+
+/// A bench a tab can move to.
+pub struct Destination {
+    pub name: String,
+    pub closed: bool,
+    pub to: BenchRef,
+}
+
+/// Moves tab `tab` (titled `title`) from one bench to another, at `index`.
+/// Into a closed bench, what runs in the tab stops, so that asks first.
+#[allow(clippy::too_many_arguments)]
+pub fn move_tab(conn: &KeeperConn, tab: TabId, title: &str, from: BenchRef, to: BenchRef, to_name: &str, index: usize, window: &mut gpui::Window, cx: &mut gpui::App) {
+    let msg = match (&from, &to) {
+        (BenchRef::Running(_), BenchRef::Running(bench)) => ClientMsg::MoveTab { tab, bench: *bench, index },
+        (BenchRef::Saved(a), BenchRef::Saved(b)) if a == b => {
+            ClientMsg::EditSaved { name: a.clone(), edit: shed_proto::SavedEdit::MoveTab { tab, index } }
+        }
+        (BenchRef::Running(_), BenchRef::Saved(_)) => {
+            let answer = window.prompt(
+                gpui::PromptLevel::Warning,
+                &format!("Move “{title}” to {to_name}?"),
+                Some(&format!(
+                    "{to_name} is closed, so what runs in this tab stops now and its teardown commands run. \
+                     It starts again when {to_name} opens."
+                )),
+                &["Move", "Cancel"],
+                cx,
+            );
+            let conn = conn.clone();
+            cx.spawn(async move |_| {
+                if let Ok(0) = answer.await {
+                    conn.send_msg(ClientMsg::MoveTabAcross { tab, from, to, index });
+                    conn.send_msg(ClientMsg::Pegboard);
+                }
+            })
+            .detach();
+            return;
+        }
+        _ => ClientMsg::MoveTabAcross { tab, from, to, index },
+    };
+    conn.send_msg(msg);
+    conn.send_msg(ClientMsg::Pegboard);
 }
 
 pub fn window_title(bench: &str) -> String {
@@ -444,6 +508,39 @@ pub fn window_title(bench: &str) -> String {
 /// The bench icon as a window icon (X11 `_NET_WM_ICON`, Wayland `xdg-toplevel-icon`).
 fn window_icon(identity: &Identity) -> Option<std::sync::Arc<image::RgbaImage>> {
     rasterize(&shed_desktop::icon_svg(identity.color, identity.badge.as_deref()))
+}
+
+/// Replaces an open window's icon (X11 `_NET_WM_ICON`). On Wayland the dock
+/// shows the desktop entry's icon, which is rewritten instead.
+fn set_window_icon(window: &gpui::Window, icon: &image::RgbaImage) {
+    #[cfg(target_os = "linux")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, PropMode};
+        use x11rb::wrapper::ConnectionExt as _;
+
+        let id = match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
+            Ok(RawWindowHandle::Xcb(h)) => h.window.get(),
+            Ok(RawWindowHandle::Xlib(h)) => h.window as u32,
+            _ => return,
+        };
+        let set = || -> Result<(), Box<dyn std::error::Error>> {
+            let (conn, _) = x11rb::connect(None)?;
+            let atom = conn.intern_atom(false, b"_NET_WM_ICON")?.reply()?.atom;
+            let mut data = vec![icon.width(), icon.height()];
+            data.extend(icon.pixels().map(|p| {
+                let [r, g, b, a] = p.0;
+                (a as u32) << 24 | (r as u32) << 16 | (g as u32) << 8 | b as u32
+            }));
+            conn.change_property32(PropMode::REPLACE, id, atom, AtomEnum::CARDINAL, &data)?;
+            conn.flush()?;
+            Ok(())
+        };
+        if let Err(e) = set() {
+            warn!("cannot change the window icon: {e}");
+        }
+    }
 }
 
 fn rasterize(svg: &str) -> Option<std::sync::Arc<image::RgbaImage>> {
