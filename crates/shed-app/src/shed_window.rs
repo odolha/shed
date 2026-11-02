@@ -38,7 +38,7 @@ impl ShedWindow {
     }
 
     /// Closing Shed closes every bench; asks first if any is running.
-    fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.quitting {
             return;
         }

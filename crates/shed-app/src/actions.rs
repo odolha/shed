@@ -33,6 +33,7 @@ actions!(
         ToggleSetup,
         ShowShed,
         SearchScrollback,
+        Quit,
     ]
 );
 
@@ -98,6 +99,63 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("super-9", "focus_bench_9"),
 ];
 
+/// The default keymap on macOS: Cmd where Linux has Ctrl+Shift, as Mac
+/// terminals do; Option stays the system's (for typing, and word moves).
+pub const MAC_KEYS: &[(&str, &str)] = &[
+    ("cmd-c", "copy"),
+    ("cmd-v", "paste"),
+    ("cmd-=", "zoom_in"),
+    ("cmd-+", "zoom_in"),
+    ("cmd--", "zoom_out"),
+    ("cmd-0", "zoom_reset"),
+    ("shift-pageup", "scroll_page_up"),
+    ("shift-pagedown", "scroll_page_down"),
+    ("ctrl-r", "logbook"),
+    ("cmd-f", "search"),
+    ("cmd-t", "new_tab"),
+    ("cmd-w", "close_pane"),
+    ("ctrl-tab", "next_tab"),
+    ("ctrl-shift-tab", "prev_tab"),
+    ("cmd-shift-]", "next_tab"),
+    ("cmd-shift-[", "prev_tab"),
+    ("cmd-d", "split_right"),
+    ("cmd-shift-d", "split_down"),
+    ("cmd-alt-left", "focus_left"),
+    ("cmd-alt-right", "focus_right"),
+    ("cmd-alt-up", "focus_up"),
+    ("cmd-alt-down", "focus_down"),
+    ("cmd-n", "new_bench"),
+    ("cmd-shift-w", "close_bench"),
+    ("f2", "rename_tab"),
+    ("shift-f2", "rename_bench"),
+    ("cmd-shift-s", "setup"),
+    ("cmd-shift-space", "shed"),
+    ("cmd-q", "quit"),
+    ("cmd-1", "activate_tab_1"),
+    ("cmd-2", "activate_tab_2"),
+    ("cmd-3", "activate_tab_3"),
+    ("cmd-4", "activate_tab_4"),
+    ("cmd-5", "activate_tab_5"),
+    ("cmd-6", "activate_tab_6"),
+    ("cmd-7", "activate_tab_7"),
+    ("cmd-8", "activate_tab_8"),
+    ("cmd-9", "activate_tab_9"),
+    ("cmd-alt-1", "focus_bench_1"),
+    ("cmd-alt-2", "focus_bench_2"),
+    ("cmd-alt-3", "focus_bench_3"),
+    ("cmd-alt-4", "focus_bench_4"),
+    ("cmd-alt-5", "focus_bench_5"),
+    ("cmd-alt-6", "focus_bench_6"),
+    ("cmd-alt-7", "focus_bench_7"),
+    ("cmd-alt-8", "focus_bench_8"),
+    ("cmd-alt-9", "focus_bench_9"),
+];
+
+/// This system's default keymap.
+pub fn default_keys() -> &'static [(&'static str, &'static str)] {
+    if cfg!(target_os = "macos") { MAC_KEYS } else { DEFAULT_KEYS }
+}
+
 /// The binding of `key` to the action named `action`; `Ok(None)` for `"none"`.
 pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
     for part in key.split_whitespace() {
@@ -138,6 +196,8 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         "setup" => KeyBinding::new(key, ToggleSetup, w),
         // "pegboard" from before Shed had its own window.
         "shed" | "pegboard" => KeyBinding::new(key, ShowShed, w),
+        // Closes Shed, as closing its window does (asking first).
+        "quit" => KeyBinding::new(key, Quit, None),
         _ => {
             if let Some(i) = numbered("activate_tab_") {
                 KeyBinding::new(key, ActivateTab(i), w)
@@ -154,7 +214,7 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
 /// Returns problems with the overrides; the rest still apply.
 pub fn bind_keys(cx: &mut App, overrides: &BTreeMap<String, String>) -> Vec<String> {
     let mut keymap: BTreeMap<String, String> =
-        DEFAULT_KEYS.iter().map(|(k, a)| (k.to_string(), a.to_string())).collect();
+        default_keys().iter().map(|(k, a)| (k.to_string(), a.to_string())).collect();
     keymap.extend(overrides.iter().map(|(k, a)| (k.clone(), a.clone())));
     let mut errors = Vec::new();
     let mut bindings = Vec::new();
@@ -176,7 +236,7 @@ mod tests {
 
     #[test]
     fn every_default_binding_is_valid() {
-        for (key, action) in DEFAULT_KEYS {
+        for (key, action) in DEFAULT_KEYS.iter().chain(MAC_KEYS) {
             assert!(matches!(binding(key, action), Ok(Some(_))), "{key} = {action}");
         }
     }

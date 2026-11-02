@@ -58,10 +58,17 @@ pub fn prompt(request: &str, cx: &Context) -> String {
 }
 
 /// Runs `command` with `sh -c` in `cwd`, `input` on its stdin; its stdout,
-/// cleaned, is the command to type.
+/// cleaned, is the command to type. On macOS it runs in the user's login
+/// shell instead: apps opened from the Dock get a bare PATH, without
+/// Homebrew's or ~/.local/bin, where command-line AIs are.
 pub async fn run(command: &str, cwd: &Path, input: String) -> Result<String, String> {
-    let mut child = tokio::process::Command::new("sh")
-        .arg("-c")
+    let (shell, flags) = if cfg!(target_os = "macos") {
+        (std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into()), "-lc")
+    } else {
+        ("sh".to_string(), "-c")
+    };
+    let mut child = tokio::process::Command::new(shell)
+        .arg(flags)
         .arg(command)
         .current_dir(cwd)
         .stdin(Stdio::piped())

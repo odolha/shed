@@ -305,6 +305,25 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | Shift+PageUp / Shift+PageDown | Scroll a page |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in / out / reset |
 
+**On macOS** Cmd does what Ctrl+Shift does above, as in other Mac terminals:
+
+| Keys | Action |
+| --- | --- |
+| Cmd+T / Cmd+W | New tab / close pane |
+| Cmd+1 … Cmd+9, Cmd+Shift+] / Cmd+Shift+[ | Go to tab / next, previous tab |
+| Cmd+D / Cmd+Shift+D | Split right / split down |
+| Cmd+Option+arrows | Move between panes |
+| Cmd+Shift+S / Cmd+Shift+W | Setup panel / close bench |
+| Cmd+Shift+Space, Cmd+Option+1 … 9 | Bring Shed forward / raise bench window 1 … 9 |
+| Cmd+N (in Shed) | New bench |
+| Cmd+C / Cmd+V, Cmd+F | Copy / paste, find in scrollback |
+| Cmd+= / Cmd+- / Cmd+0 | Zoom |
+| Cmd+Q | Close Shed (as closing its window does) |
+
+Ctrl+R, the history keys and F2 are the same. Option types characters, as it
+does everywhere on a Mac; for shells' Alt keys (Alt+B, Alt+F) set
+`option_as_alt = true` under `[macos]`.
+
 Every key can be changed in [`shed.toml`](#settings-shedtoml).
 
 ## The `shed` command
@@ -350,6 +369,9 @@ icon_badges = false            # draw each bench's badge on its taskbar icon
 
 [shell]
 integration = true             # load Shed's bash or zsh integration into its shells
+
+[macos]
+option_as_alt = false          # Option sends Alt to the shell instead of typing é, @, …
 
 [ai]                           # the "> request" prompt
 command = "claude -p"          # gets the request on stdin, prints a command; "" turns it off
@@ -403,7 +425,9 @@ bench and tab aliases are saved with their bench.
 | Saved benches (`<name>.toml`, plain TOML you can edit) and their scrollback | `~/.local/share/shed/benches/` |
 | What ran when Shed last closed | `~/.local/share/shed/session.toml` |
 | The logbook (SQLite), per-tab shell history, the keeper's log | `~/.local/state/shed/` |
-| Launchers and icons for Shed and each bench | `~/.local/share/applications/`, `~/.local/share/icons/` |
+| Launchers and icons for Shed and each bench (Linux) | `~/.local/share/applications/`, `~/.local/share/icons/` |
+
+macOS uses the same folders under your home (`~/.config/shed/` and so on).
 
 ## Troubleshooting
 

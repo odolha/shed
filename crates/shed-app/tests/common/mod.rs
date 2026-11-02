@@ -115,7 +115,17 @@ pub struct Env {
 /// Starts a keeper with real bash in `dir`, saving benches to `dir/benches`.
 /// Each call gets its own socket, so a second keeper can follow a stopped one.
 pub fn start_in(dir: &Path, socket_name: &str) -> Env {
-    start_with_shell(dir, socket_name, Path::new("/bin/bash"))
+    start_with_shell(dir, socket_name, &bash())
+}
+
+/// bash for the tests: `SHED_TEST_BASH`, or the first `bash` on PATH (on
+/// macOS, Homebrew's bash 5 rather than the system's 3.2).
+pub fn bash() -> PathBuf {
+    if let Some(path) = std::env::var_os("SHED_TEST_BASH") {
+        return path.into();
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path).map(|d| d.join("bash")).find(|p| p.is_file()).unwrap_or_else(|| "/bin/bash".into())
 }
 
 /// zsh for the tests: `SHED_TEST_ZSH`, or `zsh` on PATH.

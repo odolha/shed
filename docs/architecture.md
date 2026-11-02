@@ -189,6 +189,22 @@ With `theme = "auto"`, the window process follows the desktop's colour scheme
 (through the XDG desktop portal) and tells the keeper, which answers programs'
 colour queries from the theme in effect.
 
+## macOS
+
+The same code runs on macOS, with these differences:
+
+- what a pane runs and where is read with `proc_pidinfo` and `KERN_PROCARGS2`
+  instead of `/proc`, and the keeper's process is found with `LOCAL_PEERPID`
+  instead of `SO_PEERCRED`;
+- the runtime folder (socket and lock) is `$TMPDIR/shed`;
+- zsh starts as a login shell, as Mac terminals start it, and the AI command runs
+  in the login shell too (apps opened from the Dock get a bare PATH);
+- there are no desktop entries or per-bench Dock icons: a Mac app has one Dock
+  icon. `Shed.app` (`packaging/macos/bundle.sh`) holds both binaries, and has a
+  menu bar with Quit (Cmd+Q, which asks as closing the Shed window does);
+- the default keys use Cmd, the default font is Menlo, and Option types
+  characters unless `[macos] option_as_alt` is set.
+
 ## Drawing
 
 A terminal view turns its emulator's visible cells into a frame: runs of text with

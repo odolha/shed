@@ -51,8 +51,9 @@ On top of that, Shed groups your work the way you think about it:
   faster than GNOME Terminal and kitty. Kitty keyboard protocol, input methods,
   find in scrollback, clickable links and paths, OSC 52 clipboard.
 
-Shed runs on Linux, under X11 or Wayland, with a Vulkan driver. Its shell
-integration (logbook, history keys, aliases) is for bash and zsh.
+Shed runs on Linux, under X11 or Wayland, with a Vulkan driver, and on macOS
+(new there: tried less). Its shell integration (logbook, history keys, aliases) is
+for bash and zsh.
 
 ## Install
 
@@ -79,6 +80,18 @@ sudo apt install ./target/debian/shed-terminal_*.deb
 Building needs `build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev
 libwayland-dev libxcb1-dev libfontconfig-dev` on Debian-likes, or `base-devel
 libxkbcommon-x11 wayland fontconfig` on Arch.
+
+**On macOS** (Rust 1.95 or newer, and `xcode-select --install`):
+
+```sh
+git clone https://github.com/odolha/shed && cd shed
+packaging/macos/bundle.sh
+cp -R target/macos/Shed.app /Applications/
+ln -s /Applications/Shed.app/Contents/MacOS/shed /usr/local/bin/shed   # the command, optional
+```
+
+`cargo install` (above) works on macOS too, without the app bundle. On a Mac one
+bench window looks like another in the Dock: bench icons are Linux's.
 
 After updating, run `shed stop` once (or let `shed` offer to): the keeper still
 running is the old one. Every bench is saved first.

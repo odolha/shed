@@ -102,6 +102,7 @@ pub fn connect(kind: ClientKind, start_keeper: bool) -> anyhow::Result<(KeeperCo
 }
 
 /// The process at the other end of a Unix socket (`SO_PEERCRED`).
+#[cfg(target_os = "linux")]
 fn peer_pid(stream: &UnixStream) -> Option<u32> {
     let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
@@ -118,14 +119,36 @@ fn peer_pid(stream: &UnixStream) -> Option<u32> {
     (rc == 0 && cred.pid > 0).then_some(cred.pid as u32)
 }
 
+/// The process at the other end of a Unix socket (`LOCAL_PEERPID`).
+#[cfg(target_os = "macos")]
+fn peer_pid(stream: &UnixStream) -> Option<u32> {
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: `pid` and `len` describe a writable buffer of the size the option fills.
+    let rc = unsafe {
+        libc::getsockopt(stream.as_raw_fd(), libc::SOL_LOCAL, libc::LOCAL_PEERPID, (&mut pid as *mut libc::pid_t).cast(), &mut len)
+    };
+    (rc == 0 && pid > 0).then_some(pid as u32)
+}
+
 /// Whether a process is still running (a zombie counts as gone).
+#[cfg(target_os = "linux")]
 pub fn alive(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| !s.contains(") Z "))
 }
 
+/// Whether a process is still running.
+#[cfg(not(target_os = "linux"))]
+pub fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
 fn keeper_binary() -> PathBuf {
+    // Through any symlink (`shed` linked onto PATH from Shed.app) to the real one.
     std::env::current_exe()
         .ok()
+        .and_then(|exe| exe.canonicalize().ok())
         .and_then(|exe| exe.parent().map(|dir| dir.join("shedd")))
         .filter(|p| p.exists())
         .unwrap_or_else(|| PathBuf::from("shedd"))

@@ -33,7 +33,8 @@ pub fn state_dir() -> PathBuf {
     xdg("XDG_STATE_HOME", ".local/state").join("shed")
 }
 
-/// `$XDG_RUNTIME_DIR/shed`, falling back to `/tmp/shed-<uid>`.
+/// `$XDG_RUNTIME_DIR/shed`, falling back to `$TMPDIR/shed` on macOS (a
+/// folder of the user's own) and `/tmp/shed-<uid>` elsewhere.
 ///
 /// `SHED_RUNTIME_DIR` overrides it, so tests and a second development keeper
 /// can run beside the real one.
@@ -43,6 +44,9 @@ pub fn runtime_dir() -> PathBuf {
     }
     match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("shed"),
+        _ if cfg!(target_os = "macos") && std::env::var_os("TMPDIR").is_some_and(|d| !d.is_empty()) => {
+            PathBuf::from(std::env::var_os("TMPDIR").unwrap()).join("shed")
+        }
         _ => {
             // SAFETY: getuid has no preconditions and cannot fail.
             let uid = unsafe { libc::getuid() };

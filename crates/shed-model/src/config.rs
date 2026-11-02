@@ -34,6 +34,16 @@ pub struct Config {
     /// closed (by hand or with the session). Off: every bench starts closed.
     pub auto_restore: bool,
     pub ai: AiConfig,
+    pub macos: MacosConfig,
+}
+
+/// Settings only macOS uses.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MacosConfig {
+    /// Option works as Alt (Meta) for the shell, as in Alt+B, Alt+F; off,
+    /// it types what macOS gives it (é, @, … on many layouts).
+    pub option_as_alt: bool,
 }
 
 /// The AI prompt: a line starting with `>` asks a command-line AI for the
@@ -73,7 +83,8 @@ pub struct FontConfig {
 
 impl Default for FontConfig {
     fn default() -> Self {
-        Self { family: "DejaVu Sans Mono".into(), size: 14.0, line_height: 1.25 }
+        let family = if cfg!(target_os = "macos") { "Menlo" } else { "DejaVu Sans Mono" };
+        Self { family: family.into(), size: 14.0, line_height: 1.25 }
     }
 }
 

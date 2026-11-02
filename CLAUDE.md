@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Shed is a GPU terminal for Linux (X11 and Wayland), in Rust. A background keeper
+Shed is a GPU terminal for Linux (X11 and Wayland) and macOS, in Rust. A background keeper
 (`shedd`) owns every PTY; windows (`shed`) only draw. Work is grouped into
 **benches** (each with its own window, colour and dock icon), made of **tabs**
 made of **panes**. The Shed window itself is only the overview ("pegboard") of all
@@ -17,6 +17,7 @@ cargo clippy --all-targets           # must stay clean (the libxkbcommon-x11 bui
 cargo test --workspace               # all tests; the shed-app ones run real bash (and zsh if found)
 cargo test -p shed-app --test benches closed_benches   # one integration test, by name filter
 cargo test -p shed-save closed_benches_change_tab_by_tab
+tools/mac-check.sh                   # clippy for aarch64-apple-darwin from Linux (no linking)
 ```
 
 Integration tests live in `crates/shed-keeper/tests/` (protocol, logout) and
@@ -133,11 +134,16 @@ produces replay on attach); each window runs its own emulator per visible pane
   update `docs/development.md`. Same commit as the code.
 - **Commits**: a sentence-case summary of what changed for the user, no
   conventional-commit prefix; bullet details in the body.
-- Linux only for now; macOS and Windows (via WSL) may come later.
+- **Platforms**: Linux and macOS (Windows via WSL may come later). OS-specific
+  code is kept to `shed-keeper/src/procinfo.rs`, `keeper_conn.rs` (peer pid),
+  `shed-model/src/paths.rs`, `shed-desktop` (Linux desktop entries),
+  `shed-app/src/macos.rs` (menus, Dock) and `cfg!`s for keys, fonts and the
+  primary selection. Keep `tools/mac-check.sh` clean; CI runs both.
 
 ## Packaging
 
 `packaging/deb/build.sh` builds the `shed-terminal` .deb (Debian already has a
 `shed` package); `packaging/arch/PKGBUILD` builds `shed-terminal-git` from GitHub;
-`packaging/linux/` has the desktop entry (`dev.shed`), optional `shedd.service`.
+`packaging/linux/` has the desktop entry (`dev.shed`), optional `shedd.service`;
+`packaging/macos/bundle.sh` builds `Shed.app` on a Mac.
 App icons: `cargo run -p shed-desktop --example app_icons -- <dir>`.

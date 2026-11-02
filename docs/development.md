@@ -81,9 +81,19 @@ focus).
 every colour; `--example app_icons -- <dir>` writes the app icon's hicolor tree, as
 the packages do.
 
+## macOS
+
+`tools/mac-check.sh` lints the macOS build from Linux
+(`rustup target add aarch64-apple-darwin` first): it stands in for Apple's C
+compiler, so it checks and lints but cannot link. To run it, use a Mac, or the
+CI: `.github/workflows/ci.yml` builds, lints and tests on Linux and macOS, and
+uploads `Shed.app` (zipped) from the macOS run.
+
 ## Packages
 
 - `packaging/deb/build.sh` builds the Debian package into `target/debian/`.
+- `packaging/macos/bundle.sh` builds `Shed.app` (and a zip of it) into
+  `target/macos/`, on a Mac.
 - `packaging/arch/PKGBUILD` builds the latest commit from GitHub (`makepkg -si`).
 - `packaging/linux/` holds the desktop entry, the optional systemd user unit and
   the copyright notice they share.

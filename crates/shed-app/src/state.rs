@@ -368,6 +368,16 @@ impl AppState {
     }
 
     /// Opens or raises the Shed window.
+    /// Closes Shed as closing its window does: asking first if benches run.
+    pub fn request_quit(&mut self, cx: &mut Context<Self>) {
+        match self.shed_window {
+            Some(handle) => {
+                handle.update(cx, |shed, window, cx| shed.request_quit(window, cx)).ok();
+            }
+            None => self.conn.send_msg(ClientMsg::QuitShed),
+        }
+    }
+
     pub fn show_shed(&mut self, cx: &mut Context<Self>) {
         if let Some(handle) = self.shed_window {
             handle.update(cx, |_, window, _| window.activate()).ok();
@@ -542,6 +552,8 @@ fn set_window_icon(window: &gpui::Window, icon: &image::RgbaImage) {
             warn!("cannot change the window icon: {e}");
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window, icon);
 }
 
 fn rasterize(svg: &str) -> Option<std::sync::Arc<image::RgbaImage>> {

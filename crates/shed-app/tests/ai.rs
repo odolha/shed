@@ -77,7 +77,7 @@ fn asks_and_types_the_answer(shell: &Path) {
 
 #[test]
 fn bash_asks_the_ai() {
-    asks_and_types_the_answer(Path::new("/bin/bash"));
+    asks_and_types_the_answer(&common::bash());
 }
 
 #[test]

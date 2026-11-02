@@ -19,6 +19,16 @@ fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
     }
 }
 
+/// `SHED_TEST_BASH`, or the first `bash` on PATH (Homebrew's on macOS, whose
+/// own is too old for Shed's hook).
+fn bash() -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("SHED_TEST_BASH") {
+        return path.into();
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path).map(|d| d.join("bash")).find(|p| p.is_file()).unwrap_or_else(|| "/bin/bash".into())
+}
+
 #[test]
 fn sigterm_saves_benches_even_as_their_tools_die() {
     let dir = tempfile::tempdir().unwrap();
@@ -29,7 +39,7 @@ fn sigterm_saves_benches_even_as_their_tools_die() {
     let mut keeper = Command::new(env!("CARGO_BIN_EXE_shedd"))
         .arg("--foreground")
         .env("HOME", d("home"))
-        .env("SHELL", "/bin/bash")
+        .env("SHELL", bash())
         .env("SHED_RUNTIME_DIR", d("run"))
         .env("XDG_DATA_HOME", d("data"))
         .env("XDG_STATE_HOME", d("state"))

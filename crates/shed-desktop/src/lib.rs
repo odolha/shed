@@ -111,7 +111,11 @@ impl Desktop {
 
     /// Writes the bench's icon and desktop entry. Files already up to date
     /// are left alone, so docks are not prodded to reload for nothing.
+    /// Desktop entries are a Linux thing: elsewhere this does nothing.
     pub fn install(&self, bench: &BenchIdentity<'_>) -> io::Result<()> {
+        if !cfg!(target_os = "linux") {
+            return Ok(());
+        }
         let icon = self.icon_path(bench.launcher);
         write_if_changed(&icon, &icon_svg(bench.color, bench.badge))?;
         let entry = format!(
@@ -139,6 +143,9 @@ impl Desktop {
     /// unless an installed package provides them; then any copy written
     /// before, by a build run from its source tree, is removed.
     pub fn install_shed(&self, shed: &Path) -> io::Result<()> {
+        if !cfg!(target_os = "linux") {
+            return Ok(());
+        }
         let entry_path = self.data_home.join("applications").join(format!("{SHED_APP_ID}.desktop"));
         let icon = self.data_home.join("icons/hicolor/scalable/apps").join(format!("{SHED_APP_ID}.svg"));
         if packaged_launcher() {

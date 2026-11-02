@@ -14,6 +14,8 @@
 
 [[ $- == *i* ]] || return 0
 [[ -n ${SHED_PANE:-} && -z ${__shed_loaded:-} ]] || return 0
+# PS0 and bind -x with READLINE_LINE need bash 4.4; macOS's own bash is 3.2.
+((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4))) || return 0
 __shed_loaded=1
 
 # Local history: one file per tab, shared by its panes. Bash reads HISTFILE

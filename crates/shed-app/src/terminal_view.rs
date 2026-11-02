@@ -107,6 +107,8 @@ pub struct TerminalView {
     pressed: std::collections::HashSet<String>,
     /// Modifier keys held, to tell which one a change pressed or released.
     held: gpui::Modifiers,
+    /// macOS: Option sends Alt to the shell instead of typing characters.
+    option_as_alt: bool,
 }
 
 struct Find {
@@ -148,6 +150,7 @@ impl TerminalView {
             preedit: None,
             pressed: Default::default(),
             held: Default::default(),
+            option_as_alt: settings.config.macos.option_as_alt,
             sync_timer: None,
         }
     }
@@ -217,6 +220,7 @@ impl TerminalView {
         self.font = settings.font.clone();
         self.padding = settings.padding;
         self.ui = settings.ui.clone();
+        self.option_as_alt = settings.config.macos.option_as_alt;
         self.dirty = true;
         cx.notify();
     }
@@ -368,8 +372,14 @@ impl TerminalView {
             cx.notify();
         }
 
-        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, super_: m.platform };
-        let input = KeyInput { key, text: ks.key_char.as_deref(), mods };
+        // On macOS Option types characters (ƒ for Option+F, @ on many layouts),
+        // unless it is set to be Alt; then the key's own character goes, Alt'd.
+        let mac_option = cfg!(target_os = "macos") && m.alt && key.chars().count() == 1;
+        let alt_text = (mac_option && self.option_as_alt).then(|| if m.shift { key.to_uppercase() } else { key.to_string() });
+        let option_types = mac_option && !self.option_as_alt && ks.key_char.is_some();
+        let mods = Mods { ctrl: m.control, alt: m.alt && !option_types, shift: m.shift, super_: m.platform };
+        let text = alt_text.as_deref().or(ks.key_char.as_deref());
+        let input = KeyInput { key, text, mods };
         let kind = if event.is_held { KeyEvent::Repeat } else { KeyEvent::Press };
         if let Some(bytes) = keys::encode_event(input, kind, self.emu.modes()) {
             if self.emu.display_offset() != 0 {
@@ -566,6 +576,8 @@ impl TerminalView {
                 self.dirty = true;
                 cx.notify();
             }
+            // X11 and Wayland convention: middle-click pastes the primary selection.
+            #[cfg(target_os = "linux")]
             Button::Middle => {
                 if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
                     self.emu.scroll_to_bottom();
@@ -583,12 +595,14 @@ impl TerminalView {
         if self.mouse_report(MouseAction::Release(button), event.position, event.modifiers) {
             return;
         }
-        if std::mem::take(&mut self.selecting)
-            && let Some(text) = self.emu.selection_text()
-        {
-            // X11 convention: selecting copies to the primary selection.
+        let selected = std::mem::take(&mut self.selecting);
+        // X11 convention: selecting copies to the primary selection.
+        #[cfg(target_os = "linux")]
+        if selected && let Some(text) = self.emu.selection_text() {
             cx.write_to_primary(ClipboardItem::new_string(text));
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (selected, &cx);
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {

@@ -7,6 +7,8 @@ mod keeper_conn;
 mod line_editor;
 mod logbook;
 mod logbook_view;
+#[cfg(target_os = "macos")]
+mod macos;
 mod menu;
 mod pegboard;
 mod prompt;
@@ -323,29 +325,33 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
     if target != ShowTarget::Shed {
         conn.send_msg(ClientMsg::Show(target));
     }
-    gpui_platform::application()
-        .with_assets(assets::Assets)
-        .with_quit_mode(QuitMode::Explicit)
-        .run(move |cx: &mut App| {
-            prompt::install(cx);
-            // `theme = "auto"` follows the desktop, which can change while Shed runs.
-            let dark = theme::is_dark(cx.window_appearance());
-            let settings = settings::Settings::load(&settings::Settings { dark, ..Default::default() });
-            conn.send_msg(ClientMsg::SetAppearance { dark });
-            let state = cx.new(|_| AppState::new(conn, settings.clone()));
-            state.update(cx, |state, cx| state.apply_settings(settings, cx));
-            let receiving = state.clone();
-            cx.spawn(async move |cx| AppState::receive(receiving, rx, cx).await).detach();
-            cx.spawn(async move |cx| AppState::watch_config(state, cx).await).detach();
-            if terminal_view::perf::enabled() {
-                cx.spawn(async move |cx| loop {
-                    cx.background_executor().timer(Duration::from_secs(1)).await;
-                    eprintln!("perf: {}", terminal_view::perf::report());
-                })
-                .detach();
-            }
-            cx.activate(true);
-        });
+    let app = gpui_platform::application().with_assets(assets::Assets).with_quit_mode(QuitMode::Explicit);
+    #[cfg(target_os = "macos")]
+    app.on_reopen(macos::reopen);
+    app.run(move |cx: &mut App| {
+        prompt::install(cx);
+        // `theme = "auto"` follows the desktop, which can change while Shed runs.
+        let dark = theme::is_dark(cx.window_appearance());
+        let settings = settings::Settings::load(&settings::Settings { dark, ..Default::default() });
+        conn.send_msg(ClientMsg::SetAppearance { dark });
+        let state = cx.new(|_| AppState::new(conn, settings.clone()));
+        state.update(cx, |state, cx| state.apply_settings(settings, cx));
+        let quitting = state.clone();
+        cx.on_action(move |_: &actions::Quit, cx| quitting.update(cx, |state, cx| state.request_quit(cx)));
+        #[cfg(target_os = "macos")]
+        macos::install(state.clone(), cx);
+        let receiving = state.clone();
+        cx.spawn(async move |cx| AppState::receive(receiving, rx, cx).await).detach();
+        cx.spawn(async move |cx| AppState::watch_config(state, cx).await).detach();
+        if terminal_view::perf::enabled() {
+            cx.spawn(async move |cx| loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                eprintln!("perf: {}", terminal_view::perf::report());
+            })
+            .detach();
+        }
+        cx.activate(true);
+    });
     Ok(())
 }
 
