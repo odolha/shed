@@ -205,6 +205,8 @@ you are (`bench 3/120`) and which tab a command came from.
 tab, this bench and everything; `tag:prod` keeps only commands from tabs tagged
 `prod`. Enter puts the command on the prompt, Alt+Enter runs it.
 
+![The logbook search](images/logbook.png)
+
 Commands typed with a leading space are not kept. `shed log` lists recent commands
 from a shell (`shed log docker --scope bench`).
 
@@ -239,6 +241,9 @@ an ordinary shell line again (in bash, a redirection).
 - **Ctrl+Shift+F** finds text in the scrollback. The newest match comes first; Enter
   goes to older ones, Shift+Enter to newer; Escape closes the bar. Matching ignores
   case unless you type a capital.
+
+  ![Finding in the scrollback](images/find.png)
+
 - **Selecting** text copies it to the primary selection; middle-click pastes it.
   Ctrl+Shift+C and Ctrl+Shift+V copy and paste with the clipboard. In programs that
   use the mouse (vim, htop), hold Shift to select.
