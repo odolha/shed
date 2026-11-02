@@ -13,6 +13,8 @@ pub mod perf {
     pub static PAINTS: AtomicU64 = AtomicU64::new(0);
     pub static PAINT_US: AtomicU64 = AtomicU64::new(0);
     pub static WINDOW_RENDERS: AtomicU64 = AtomicU64::new(0);
+    pub static BOARD_RENDERS: AtomicU64 = AtomicU64::new(0);
+    pub static BOARD_US: AtomicU64 = AtomicU64::new(0);
 
     pub fn enabled() -> bool {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -22,11 +24,13 @@ pub mod perf {
     pub fn report() -> String {
         let take = |a: &AtomicU64| a.swap(0, Ordering::Relaxed);
         let (r, rus, p, pus) = (take(&RENDERS), take(&RENDER_US), take(&PAINTS), take(&PAINT_US));
+        let (b, bus) = (take(&BOARD_RENDERS), take(&BOARD_US));
         format!(
-            "window renders {}/s, terminal renders {r}/s ({} µs avg), paints {p}/s ({} µs avg)",
+            "window renders {}/s, terminal renders {r}/s ({} µs avg), paints {p}/s ({} µs avg), Shed window renders {b}/s ({} µs avg)",
             take(&WINDOW_RENDERS),
             rus.checked_div(r).unwrap_or(0),
-            pus.checked_div(p).unwrap_or(0)
+            pus.checked_div(p).unwrap_or(0),
+            bus.checked_div(b).unwrap_or(0)
         )
     }
 }

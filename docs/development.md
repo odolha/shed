@@ -50,7 +50,8 @@ cargo clippy --all-targets
 - The keeper logs to `~/.local/state/shed/shedd.log`; `SHED_LOG=debug` raises the
   level for both binaries; `shedd --foreground` logs to stderr.
 - `shed debug-type 'echo hi\r'` types into the first pane through the keeper.
-- `SHED_PERF=1` makes the window process print redraws per second and their cost.
+- `SHED_PERF=1` makes the window process print redraws per second and their cost,
+  for terminals and for the Shed window.
   It applies to the process that owns the windows, so use a separate
   `SHED_RUNTIME_DIR`. Per-process GPU time is in `/proc/<pid>/fdinfo/*`
   (`drm-engine-render`).

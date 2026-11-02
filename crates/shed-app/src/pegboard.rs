@@ -23,10 +23,11 @@ use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
-/// How often the previews refresh while the Shed window is active; ten
-/// times slower while it is not.
-const REFRESH: Duration = Duration::from_secs(1);
-const IDLE_REFRESH_TICKS: u32 = 10;
+/// How often the previews refresh while the Shed window is active (so they
+/// look live); four times slower while it is not. The board redraws only
+/// when a preview changed.
+const REFRESH: Duration = Duration::from_millis(250);
+const IDLE_REFRESH_TICKS: u32 = 4;
 const CARD_WIDTH: f32 = 300.0;
 
 /// The keeper's last answer: stored benches and previews.
@@ -980,6 +981,19 @@ fn short_time(saved: &str) -> String {
 
 impl Render for Pegboard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let started = std::time::Instant::now();
+        let element = self.render_board(cx);
+        if crate::terminal_view::perf::enabled() {
+            use std::sync::atomic::Ordering;
+            crate::terminal_view::perf::BOARD_RENDERS.fetch_add(1, Ordering::Relaxed);
+            crate::terminal_view::perf::BOARD_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
+        element
+    }
+}
+
+impl Pegboard {
+    fn render_board(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let ui = self.state.read(cx).settings.ui.clone();
         let entries = self.entries(cx);
         let count = flat(&entries).len();
@@ -1036,6 +1050,7 @@ impl Render for Pegboard {
             .child(div().id("pegboard-list").flex_1().min_h_0().overflow_y_scroll().child(list))
             .when_some(setup, |el, panel| el.child(div().absolute().top_0().right_0().h_full().child(panel)))
             .children(menu)
+            .into_any_element()
     }
 }
 
