@@ -1,7 +1,7 @@
 //! A one-line text field, for renaming tabs and benches.
 
 use gpui::{
-    Context, EventEmitter, FocusHandle, Focusable, KeyDownEvent, Window, div, prelude::*, px,
+    Context, EventEmitter, FocusHandle, Focusable, KeyDownEvent, Subscription, Window, div, prelude::*, px,
 };
 
 use crate::theme::hsla;
@@ -18,6 +18,9 @@ pub struct LineEditor {
     /// Cursor position in characters.
     cursor: usize,
     focus: FocusHandle,
+    /// Shown dimmed beside the field: how to finish.
+    hint: Option<&'static str>,
+    _blur: Option<Subscription>,
 }
 
 impl EventEmitter<EditorEvent> for LineEditor {}
@@ -31,7 +34,21 @@ impl Focusable for LineEditor {
 impl LineEditor {
     pub fn new(text: String, cx: &mut Context<Self>) -> Self {
         let cursor = text.chars().count();
-        Self { text, all_selected: false, cursor, focus: cx.focus_handle() }
+        Self { text, all_selected: false, cursor, focus: cx.focus_handle(), hint: None, _blur: None }
+    }
+
+    /// For renaming and the like: clicking or typing elsewhere keeps what was
+    /// typed, as Enter does, so the field never stays open behind the user.
+    pub fn submit_on_blur(mut self, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        self._blur = Some(cx.on_blur(&self.focus, window, |this, _, cx| cx.emit(EditorEvent::Submit(this.text.trim().to_string()))));
+        self.hint = Some("Enter saves · Esc cancels");
+        self
+    }
+
+    /// Without the hint beside the field, where there is no room for it.
+    pub fn without_hint(mut self) -> Self {
+        self.hint = None;
+        self
     }
 
     /// With the text selected, as for renaming: typing replaces it.
@@ -115,10 +132,9 @@ impl Render for LineEditor {
         let (before, after) = self.text.split_at(at);
         let selection = self.all_selected.then(|| div().rounded_sm().bg(crate::theme::hsla_alpha(ui.accent, 0.3)).child(self.text.clone()));
         let (before, after) = if self.all_selected { (String::new(), String::new()) } else { (before.to_string(), after.to_string()) };
-        div()
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::on_key))
+        let field = div()
             .flex()
+            .flex_1()
             .items_center()
             .px_1()
             .min_w(px(80.0))
@@ -130,6 +146,14 @@ impl Render for LineEditor {
             .children(selection)
             .child(before)
             .child(div().w(px(1.5)).h(px(14.0)).bg(hsla(ui.text)))
-            .child(after)
+            .child(after);
+        div()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_key))
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(field)
+            .children(self.hint.map(|hint| div().flex_none().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(hint)))
     }
 }

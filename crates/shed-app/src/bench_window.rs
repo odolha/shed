@@ -38,6 +38,18 @@ enum EditTarget {
     Color,
 }
 
+impl EditTarget {
+    fn describe(&self) -> &'static str {
+        match self {
+            EditTarget::TabName(_) => "Renaming the tab",
+            EditTarget::BenchName => "Renaming the bench",
+            EditTarget::AddTag(_) => "Adding a tag",
+            EditTarget::Badge => "Setting the badge",
+            EditTarget::Color => "Choosing a colour (#rrggbb or a name)",
+        }
+    }
+}
+
 /// `tags` with the one `text` describes added: "prod", or "prod red".
 pub fn with_tag(tags: &[Tag], text: &str) -> Option<Vec<Tag>> {
     let mut words = text.split_whitespace();
@@ -258,7 +270,7 @@ impl BenchWindow {
             EditTarget::Color => self.bench(cx).map(|b| format!("#{:06X}", b.color.accent().to_hex())),
         };
         let Some(current) = current else { return };
-        let editor = cx.new(|cx| LineEditor::selected(current, cx));
+        let editor = cx.new(|cx| LineEditor::selected(current, cx).submit_on_blur(window, cx).without_hint());
         window.focus(&editor.read(cx).focus_handle(cx), cx);
         let sub = cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| {
             let Some((target, _, _)) = this.editing.take() else { return };
@@ -781,6 +793,24 @@ impl Render for BenchWindow {
                     .child(content)
                     .when_some(self.setup.as_ref().map(|(p, _)| p.clone()), |el, panel| {
                         el.child(div().absolute().top_0().right_0().h_full().child(panel))
+                    })
+                    // What the field in the tab bar is for, and how to finish.
+                    .when_some(self.editing.as_ref().map(|(t, _, _)| t.describe()), |el, what| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .top(px(4.0))
+                                .left(px(8.0))
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .text_size(px(12.0))
+                                .bg(hsla(self.ui.tab_active))
+                                .border_1()
+                                .border_color(hsla(self.ui.accent))
+                                .text_color(hsla(self.ui.text))
+                                .child(format!("{what} · Enter saves · Esc cancels · clicking elsewhere saves")),
+                        )
                     }),
             )
             .when(!errors.is_empty(), |el| {

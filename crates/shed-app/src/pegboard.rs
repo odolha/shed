@@ -359,7 +359,12 @@ impl Pegboard {
     }
 
     fn start_edit(&mut self, edit: Edit, initial: String, window: &mut Window, cx: &mut Context<Self>) {
-        let editor = cx.new(|cx| LineEditor::selected(initial, cx));
+        // Tab titles sit in narrow cards: no room for the hint there.
+        let narrow = matches!(edit, Edit::TabName(_) | Edit::AddTag(_));
+        let editor = cx.new(|cx| {
+            let editor = LineEditor::selected(initial, cx).submit_on_blur(window, cx);
+            if narrow { editor.without_hint() } else { editor }
+        });
         window.focus(&editor.read(cx).focus_handle(cx), cx);
         let sub = cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| {
             let Some((edit, _, _)) = this.editing.take() else { return };
@@ -562,6 +567,33 @@ impl Pegboard {
             .into_any_element()
     }
 
+    /// A pencil shown while the pointer is over `group`: names can be edited.
+    fn rename_button(
+        &self,
+        id: String,
+        group: SharedString,
+        ui: &UiColors,
+        cx: &mut Context<Self>,
+        on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> AnyElement {
+        div()
+            .id(SharedString::from(id))
+            .flex_none()
+            .p_0p5()
+            .rounded_sm()
+            .invisible()
+            .group_hover(group, |s| s.visible())
+            .cursor_pointer()
+            .hover(|s| s.bg(hsla(ui.tab_hover)))
+            .tooltip(menu::tooltip("Rename"))
+            .child(svg().path(icon("pencil")).size(px(12.0)).text_color(hsla(ui.text_dim)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                on(this, window, cx)
+            }))
+            .into_any_element()
+    }
+
     fn render_bench(&self, entry: &Entry, first: usize, previews: &HashMap<PaneId, Vec<String>>, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
         let bench = &entry.bench;
         let accent = bench.color.accent();
@@ -606,16 +638,28 @@ impl Pegboard {
             Some(editor) => div().w(px(240.0)).child(editor).into_any_element(),
             None => {
                 let (k, n) = (key.clone(), bench.name.clone());
+                let (k2, n2) = (key.clone(), bench.name.clone());
+                let group = SharedString::from(format!("bench-name-{id}"));
                 div()
-                    .id(SharedString::from(format!("name-{id}")))
-                    .text_size(px(15.0))
-                    .text_color(hsla(ui.text))
-                    .cursor_text()
-                    .child(bench.name.clone())
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if e.click_count() >= 2 {
-                            this.start_edit(Edit::BenchName(k.clone()), n.clone(), window, cx);
-                        }
+                    .group(group.clone())
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("name-{id}")))
+                            .text_size(px(15.0))
+                            .text_color(hsla(ui.text))
+                            .cursor_text()
+                            .child(bench.name.clone())
+                            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                if e.click_count() >= 2 {
+                                    this.start_edit(Edit::BenchName(k.clone()), n.clone(), window, cx);
+                                }
+                            })),
+                    )
+                    .child(self.rename_button(format!("rename-bench-{id}"), group, ui, cx, move |this, window, cx| {
+                        this.start_edit(Edit::BenchName(k2.clone()), n2.clone(), window, cx)
                     }))
                     .into_any_element()
             }
@@ -768,20 +812,32 @@ impl Pegboard {
         head = match self.editor_for(&Edit::TabName(tab_id)) {
             Some(editor) => head.child(div().flex_1().min_w_0().child(editor)),
             None => {
-                let t = title.clone();
+                let (t, t2) = (title.clone(), title.clone());
+                let group = SharedString::from(format!("tab-title-{tab_id}"));
                 head.child(
                     div()
-                        .id(SharedString::from(format!("title-{tab_id}")))
+                        .group(group.clone())
+                        .flex()
+                        .items_center()
+                        .gap_1()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
-                        .text_color(hsla(ui.text))
-                        .child(title.clone())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            if e.click_count() >= 2 {
-                                cx.stop_propagation();
-                                this.start_edit(Edit::TabName(tab_id), t.clone(), window, cx);
-                            }
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("title-{tab_id}")))
+                                .min_w_0()
+                                .truncate()
+                                .text_color(hsla(ui.text))
+                                .child(title.clone())
+                                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                    if e.click_count() >= 2 {
+                                        cx.stop_propagation();
+                                        this.start_edit(Edit::TabName(tab_id), t.clone(), window, cx);
+                                    }
+                                })),
+                        )
+                        .child(self.rename_button(format!("rename-tab-{tab_id}"), group, ui, cx, move |this, window, cx| {
+                            this.start_edit(Edit::TabName(tab_id), t2.clone(), window, cx)
                         })),
                 )
             }

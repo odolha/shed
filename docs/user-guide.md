@@ -64,7 +64,9 @@ show, dimmed, what was on screen when they were saved.
   one forward. Beside it, **Hide** closes its window and keeps it running,
   **Close…** stops its programs and runs its teardown, and **Delete…** removes it;
   the last two ask first.
-- Double-click the **name** to rename the bench.
+- Double-click the **name**, or the pencil beside it, to rename the bench. Enter
+  or clicking elsewhere keeps the new name; Escape leaves it as it was (this goes
+  for every name and tag you type, in Shed and in bench windows).
 - Click the **colour dot** to pick another colour.
 - **⋯**, or a right-click anywhere on the bench, has everything else: new tab,
   rename, badge, colours, hide, close, delete.
@@ -73,7 +75,8 @@ show, dimmed, what was on screen when they were saved.
 **Tabs** (the cards):
 
 - Click a card to go to that tab, opening the bench if needed.
-- Double-click its title to rename it; the **×** in its corner closes it.
+- Double-click its title (or its pencil) to rename it; the **×** in its corner
+  closes it.
 - **New tab** at the end of a bench's cards adds one.
 - Drag a card onto another card to put it there, or onto another bench to move it
   there; **Move to Bench** in its menu does the same. Between running benches a
