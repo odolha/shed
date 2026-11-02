@@ -306,7 +306,7 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | Ctrl+R (at a prompt) | Search the logbook |
 | Up, Ctrl+Up, Ctrl+Shift+Up (at a prompt) | Walk tab / bench / all history |
 | Shift+PageUp / Shift+PageDown | Scroll a page |
-| Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in / out / reset |
+| Ctrl+= / Ctrl+- / Ctrl+0 | Zoom the tab in / out / reset (kept with the tab, and saved) |
 
 **On macOS** Cmd does what Ctrl+Shift does above, as in other Mac terminals:
 

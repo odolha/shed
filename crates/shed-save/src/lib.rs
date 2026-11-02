@@ -85,6 +85,9 @@ pub struct SavedTab {
     pub active_pane: usize,
     #[serde(default, skip_serializing_if = "Aliases::is_empty")]
     pub aliases: Aliases,
+    /// Font size points over the configured size (the tab's zoom).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub zoom: f32,
     pub panes: Vec<SavedPane>,
 }
 
@@ -123,6 +126,10 @@ pub struct SavedPane {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn default_cols() -> u16 {
@@ -180,6 +187,7 @@ impl SavedBench {
                     layout: format_layout(&tab.layout, &order),
                     active_pane: order.iter().position(|id| *id == tab.active_pane).unwrap_or(0),
                     aliases: tab.aliases.clone(),
+                    zoom: tab.zoom,
                     panes,
                 }
             })
@@ -245,6 +253,7 @@ impl SavedBench {
                 layout,
                 panes,
                 aliases: st.aliases.clone(),
+                zoom: st.zoom,
             });
         }
         if tabs.is_empty() {
@@ -295,6 +304,7 @@ impl SavedBench {
             layout: "0".into(),
             active_pane: 0,
             aliases: Aliases::new(),
+            zoom: 0.0,
             panes: vec![SavedPane {
                 id: PaneId::new(),
                 cwd: self.cwd.clone(),
@@ -671,6 +681,7 @@ mod tests {
         tab.split(first, Pane::new(PaneId::new(), home.join("code/api")), SplitDir::Right);
         tab.layout.set_ratio(&[], 0.6);
         tab.name = Some("api".into());
+        tab.zoom = 2.0;
         tab.aliases.insert("t".into(), "cargo test".into());
         tab.panes[0].setup = PaneSetup {
             start_in: Some(home.join("code")),
@@ -714,6 +725,7 @@ mod tests {
         assert_eq!(loaded.tabs[0].panes[0].setup, bench.tabs[0].panes[0].setup);
         assert_eq!(loaded.aliases, bench.aliases);
         assert_eq!(loaded.tabs[0].aliases, bench.tabs[0].aliases);
+        assert_eq!((loaded.tabs[0].zoom, loaded.tabs[1].zoom), (2.0, 0.0));
 
         let again = SavedBench::from_bench(&loaded, |id| PaneExtras { tool: panes.iter().find(|p| p.0 == id).and_then(|p| p.1.tool.clone()) });
         let again = SavedBench { saved: saved.saved.clone(), ..again };

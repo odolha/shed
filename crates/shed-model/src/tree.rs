@@ -176,6 +176,8 @@ pub struct Tab {
     pub active_pane: PaneId,
     /// Aliases for this tab's shells, over the bench's and global ones.
     pub aliases: Aliases,
+    /// Points added to the configured font size in this tab's panes.
+    pub zoom: f32,
 }
 
 impl Tab {
@@ -191,6 +193,7 @@ impl Tab {
             active_pane: pane.id,
             panes: vec![pane],
             aliases: Aliases::new(),
+            zoom: 0.0,
         }
     }
 

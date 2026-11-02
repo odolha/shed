@@ -187,6 +187,9 @@ impl AppState {
                             cx.notify();
                         });
                     }
+                    if view.read(cx).zoom != tab.zoom {
+                        view.update(cx, |view, cx| view.set_zoom(tab.zoom, cx));
+                    }
                 }
             }
         }

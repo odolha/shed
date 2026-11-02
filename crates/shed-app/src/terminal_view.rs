@@ -68,7 +68,12 @@ pub struct TerminalView {
     conn: KeeperConn,
     emu: AlacrittyEmulator,
     palette: Palette,
+    /// The font in use: the configured one, at its size plus `zoom`.
     font: FontSettings,
+    /// The configured font size, before zoom.
+    base_size: f32,
+    /// The tab's zoom, in points; kept by the keeper and saved with the bench.
+    pub zoom: f32,
     /// Space between the pane's edge and the grid.
     padding: f32,
     metrics: Option<(FontSettings, CellMetrics)>,
@@ -126,6 +131,8 @@ impl TerminalView {
             conn,
             emu: AlacrittyEmulator::new(GridSize::new(80, 24), palette.clone()),
             palette,
+            base_size: font.size,
+            zoom: 0.0,
             font,
             padding: settings.padding,
             metrics: None,
@@ -218,6 +225,8 @@ impl TerminalView {
     pub fn apply(&mut self, settings: &Settings, cx: &mut Context<Self>) {
         self.palette = settings.palette.clone();
         self.font = settings.font.clone();
+        self.base_size = self.font.size;
+        self.font.size = zoomed(self.base_size, self.zoom);
         self.padding = settings.padding;
         self.ui = settings.ui.clone();
         self.option_as_alt = settings.config.macos.option_as_alt;
@@ -475,12 +484,19 @@ impl TerminalView {
         }
     }
 
+    /// Zooms the whole tab: the keeper keeps the zoom and saves it with the bench.
     fn zoom(&mut self, delta: f32, cx: &mut Context<Self>) {
-        self.font.size = if delta == 0.0 {
-            FontSettings::default().size
-        } else {
-            (self.font.size + delta).clamp(6.0, 72.0)
-        };
+        let zoom = if delta == 0.0 { 0.0 } else { zoomed(self.base_size, self.zoom + delta) - self.base_size };
+        self.set_zoom(zoom, cx);
+        if let Some(here) = self.here {
+            self.conn.send_msg(ClientMsg::SetZoom { tab: here.tab, zoom });
+        }
+    }
+
+    pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        self.zoom = zoom;
+        self.font.size = zoomed(self.base_size, zoom);
+        self.dirty = true;
         cx.notify();
     }
 
@@ -1125,4 +1141,9 @@ fn short(text: &str, max: usize) -> String {
         return line.to_string();
     }
     format!("{}…", line.chars().take(max - 1).collect::<String>())
+}
+
+/// A font size `zoom` points from `base`, within what stays readable.
+fn zoomed(base: f32, zoom: f32) -> f32 {
+    (base + zoom).clamp(6.0, 72.0)
 }

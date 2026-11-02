@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -95,6 +95,8 @@ pub enum ClientMsg {
     MoveTabAcross { tab: TabId, from: BenchRef, to: BenchRef, index: usize },
     /// Stops a pane's AI request.
     CancelAsk { pane: PaneId },
+    /// A tab's zoom: points over the configured font size.
+    SetZoom { tab: TabId, zoom: f32 },
 }
 
 /// What can change in a closed bench without opening it.

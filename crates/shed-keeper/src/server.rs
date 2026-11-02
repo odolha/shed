@@ -761,6 +761,7 @@ impl Keeper {
             ClientMsg::RenameTab { tab, name } => self.edit_tab(tab, |t| t.name = name.filter(|n| !n.trim().is_empty())),
             ClientMsg::SetTags { tab, tags } => self.edit_tab(tab, |t| t.tags = tags),
             ClientMsg::SetPrivate { tab, private } => self.edit_tab(tab, |t| t.private = private),
+            ClientMsg::SetZoom { tab, zoom } => self.edit_tab(tab, |t| t.zoom = zoom.clamp(-20.0, 60.0)),
             ClientMsg::SetBenchColor { bench, color } => self.edit_bench(bench, |b| b.color = color),
             ClientMsg::SetBadge { bench, badge } => self.edit_bench(bench, |b| b.badge = badge),
             ClientMsg::MoveTab { tab, bench, index } => {
