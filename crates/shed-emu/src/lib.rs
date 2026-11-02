@@ -13,6 +13,7 @@ pub mod marks;
 pub mod mouse;
 mod palette;
 mod snapshot;
+mod tail;
 
 pub use alacritty::AlacrittyEmulator;
 pub use palette::Palette;
@@ -133,8 +134,10 @@ pub trait Emulator: Send {
     fn snapshot(&self, palette: &Palette, out: &mut Snapshot);
 
     /// Bytes that bring a fresh emulator of the same size to this state:
-    /// scrollback, both screens, cursor, pen, modes, colours and title.
-    /// A synchronized update in progress is applied first.
+    /// scrollback, both screens, cursor, pen, modes, colours and title, then
+    /// any escape sequence the parser is in the middle of, so that the rest of
+    /// it, arriving later, completes it. A synchronized update in progress is
+    /// applied first.
     fn replay(&mut self) -> Vec<u8>;
 
     fn start_selection(&mut self, kind: SelectionKind, at: GridPoint);

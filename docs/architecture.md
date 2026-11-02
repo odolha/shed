@@ -77,7 +77,9 @@ output, which lets it:
   whole state (scrollback, both screens, cursor, pen, modes, charsets, tab stops,
   colours, title, keyboard flags) as bytes that bring a fresh emulator to the same
   state, and sends them before any further output. A full-screen editor reappears
-  mid-edit.
+  mid-edit. If the output so far stops inside an escape sequence or a UTF-8
+  character, the replay ends with that unfinished part, so the rest of it,
+  arriving next, completes it in the window too.
 
 The window process runs its own emulator per pane, fed by the replay and then the
 live output, and draws from it. Keys are encoded there, the xterm way or with the

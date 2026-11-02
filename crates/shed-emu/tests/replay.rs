@@ -141,17 +141,27 @@ fn synchronized_update_in_progress_is_kept() {
     assert!(restored.dump_text().contains("inside sync"));
 }
 
-/// Real program output recorded with `script`, cut at many points.
+/// Real program output recorded with `script`, cut at many points: where a
+/// control sequence starts, as a PTY read boundary usually does, and anywhere
+/// else, inside sequences and characters.
 #[test]
 fn recorded_sessions_cut_anywhere() {
     for name in ["vi.raw", "less.raw", "ls.raw"] {
         let path = format!("{}/tests/recordings/{name}", env!("CARGO_MANIFEST_DIR"));
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-        // Cut where a control sequence starts, as a PTY read boundary usually does.
-        let cuts: Vec<usize> = (1..bytes.len()).filter(|&i| bytes[i] == 0x1b).step_by(7).collect();
-        assert!(!cuts.is_empty(), "{name} has no escape sequences");
+        let at_escapes = (1..bytes.len()).filter(|&i| bytes[i] == 0x1b).step_by(7);
+        let cuts: Vec<usize> = at_escapes.chain((1..bytes.len()).step_by(5)).collect();
+        assert!(cuts.iter().any(|&i| bytes[i] == 0x1b), "{name} has no escape sequences");
         for cut in cuts {
             check(&format!("{name} cut at {cut}"), &bytes[..cut], &bytes[cut..]);
         }
+    }
+}
+
+#[test]
+fn cut_inside_a_sequence_or_character() {
+    let text = "\x1b]0;a title\x07\x1b[1;31mred \x1b[38;2;10;20;30mrgb\x1b[0m é 😀\r\n".as_bytes();
+    for cut in 1..text.len() {
+        check(&format!("cut at {cut}"), &text[..cut], &text[cut..]);
     }
 }

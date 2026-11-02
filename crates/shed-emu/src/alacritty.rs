@@ -32,6 +32,8 @@ pub struct AlacrittyEmulator {
     /// Answers colour queries (OSC 4/10/11) when the app has not set the colour itself.
     palette: Palette,
     search: Option<Search>,
+    /// A sequence the parser has begun but not finished, for replays.
+    tail: crate::tail::Tail,
 }
 
 /// A scrollback search in progress.
@@ -95,7 +97,7 @@ impl AlacrittyEmulator {
         let events = Arc::new(Mutex::new(Vec::new()));
         let config = term::Config { scrolling_history: SCROLLBACK, kitty_keyboard: true, ..Default::default() };
         let term = Term::new(config, &Dims(size), Listener(events.clone()));
-        Self { term, processor: Processor::new(), events, size, palette, search: None }
+        Self { term, processor: Processor::new(), events, size, palette, search: None, tail: Default::default() }
     }
 
     fn resolve(&self, color: Color, palette: &Palette) -> Rgb {
@@ -144,6 +146,7 @@ fn named(name: NamedColor, p: &Palette) -> Rgb {
 impl Emulator for AlacrittyEmulator {
     fn advance(&mut self, bytes: &[u8]) {
         self.processor.advance(&mut self.term, bytes);
+        self.tail.advance(bytes);
     }
 
     fn take_replies(&mut self) -> Vec<u8> {
@@ -384,7 +387,9 @@ impl Emulator for AlacrittyEmulator {
         if self.processor.sync_timeout().sync_timeout().is_some() {
             self.processor.stop_sync(&mut self.term);
         }
-        replay::serialize(&self.term)
+        let mut bytes = replay::serialize(&self.term);
+        bytes.extend_from_slice(self.tail.pending());
+        bytes
     }
 
     fn start_selection(&mut self, kind: SelectionKind, at: GridPoint) {
