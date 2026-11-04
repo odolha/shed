@@ -34,6 +34,17 @@ impl ShedWindow {
         })
         .detach();
         let board = cx.new(|cx| Pegboard::new(state.clone(), window, cx));
+        // SHED_PERF_FRAMES=<n>: redraw n times a second, as hovering does, to
+        // measure what a frame of this window costs.
+        if let Some(fps) = std::env::var("SHED_PERF_FRAMES").ok().and_then(|v| v.parse::<u64>().ok()).filter(|n| *n > 0) {
+            cx.spawn_in(window, async move |_, cx| loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(1000 / fps)).await;
+                if cx.update(|window, _| window.refresh()).is_err() {
+                    break;
+                }
+            })
+            .detach();
+        }
         Self { state, board, quitting: false }
     }
 

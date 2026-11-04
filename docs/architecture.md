@@ -219,9 +219,14 @@ A terminal view turns its emulator's visible cells into a frame: runs of text wi
 the same style shaped together, and backgrounds only where they differ from the
 default. On integrated GPUs every window-sized quad costs milliseconds per frame, so
 a frame is kept to one window-sized layer: the vendored `gpui_ce_wgpu` turns the
-first opaque full-window background into the clear colour, which is close to free.
-The vendored `gpui_ce_linux` fixes key releases lost on X11. Both patches are
-described in `SHED_PATCHES.md` in their folders.
+first opaque full-window background into the clear colour, which is close to free,
+and draws border-only boxes (cards, a focused pane's frame) as four edge strips,
+which with the vendored `gpui_ce_render` (quads rasterized only inside their clip)
+cost their border rather than their area. Shed never uses GPUI's `opacity`, which
+draws through a window-sized layer. GPUI redraws a whole window whenever something
+under the pointer changes its hover style, so the Shed window's frames are kept
+to a few milliseconds. The vendored `gpui_ce_linux` fixes key releases lost on X11.
+The patches are described in `SHED_PATCHES.md` in their folders.
 
 ## The code
 
@@ -236,6 +241,6 @@ described in `SHED_PATCHES.md` in their folders.
 | `shed-desktop` | Bench and app icons, desktop entries |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 
-`vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu` and
-`gpui_ce_linux`; `packaging/` the Debian and Arch packaging, desktop entry and
+`vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,
+`gpui_ce_render` and `gpui_ce_linux`; `packaging/` the Debian and Arch packaging, desktop entry and
 systemd unit; `tools/screenshots/` the demo setup the docs' screenshots come from.

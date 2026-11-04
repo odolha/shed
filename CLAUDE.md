@@ -112,8 +112,9 @@ produces replay on attach); each window runs its own emulator per visible pane
 ### Vendored crates
 
 `vendor/` holds patched `alacritty_terminal` (read-only accessors for replay),
-`gpui_ce_wgpu` (first full-window quad becomes the clear colour) and
-`gpui_ce_linux` (X11 key releases not dropped), wired in through
+`gpui_ce_wgpu` (first full-window quad becomes the clear colour; border-only quads
+drawn as edge strips), `gpui_ce_render` (quads rasterized only inside their clip)
+and `gpui_ce_linux` (X11 key releases not dropped), wired in through
 `[patch.crates-io]`. Each has a `SHED_PATCHES.md`; patched lines are marked
 `// Shed patch`. GPUI is `gpui-ce =0.3.0`, pinned exactly.
 
@@ -125,7 +126,10 @@ produces replay on attach); each window runs its own emulator per visible pane
 - **Saved files** (`shed-save`, `shed-model` config): new fields need serde
   defaults so older files still load.
 - **Drawing**: keep a frame to one window-sized layer; every extra full-window
-  quad costs ~4 ms on integrated GPUs with fractional scaling.
+  quad costs ~4 ms on integrated GPUs with fractional scaling. Never use
+  `.opacity()`: gpui-ce draws it through a window-sized offscreen layer per
+  element; dim with colour alpha instead. Every hover change redraws the whole
+  window, so a frame must stay cheap (`SHED_PERF=1 SHED_PERF_FRAMES=60` measures it).
 - **UI**: actions get icon + text where there is room; icon-only is for mode
   toggles (with a tooltip). Shed's accent is coral, kept distinct from `danger` red;
   destructive actions use `danger` and ask first (with "…" in the label).

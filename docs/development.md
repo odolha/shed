@@ -51,7 +51,9 @@ cargo clippy --all-targets
   level for both binaries; `shedd --foreground` logs to stderr.
 - `shed debug-type 'echo hi\r'` types into the first pane through the keeper.
 - `SHED_PERF=1` makes the window process print redraws per second and their cost,
-  for terminals and for the Shed window.
+  for terminals and for the Shed window. `SHED_PERF_FRAMES=60` makes the Shed
+  window redraw 60 times a second, as fast hovering does, to measure a frame
+  without moving the mouse.
   It applies to the process that owns the windows, so use a separate
   `SHED_RUNTIME_DIR`. Per-process GPU time is in `/proc/<pid>/fdinfo/*`
   (`drm-engine-render`).

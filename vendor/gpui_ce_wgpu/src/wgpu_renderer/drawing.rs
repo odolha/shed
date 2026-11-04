@@ -26,6 +26,20 @@ impl WgpuRenderer {
         } else {
             &pipelines.quads
         };
+        // Shed patch: a large quad that is only a border (a card's outline)
+        // ran the quad shader over its whole area. Drawn as four edge strips
+        // of the same quad, each clipped to its strip (gpui_ce_render draws a
+        // quad only inside its clip), it costs its border.
+        if quads.iter().any(|q| strips(q).is_some()) {
+            let split: Vec<Quad> = quads
+                .iter()
+                .flat_map(|q| match strips(q) {
+                    Some(strips) => strips.into_iter().flatten().collect::<Vec<_>>(),
+                    None => vec![q.clone()],
+                })
+                .collect();
+            return self.draw_instances(&split, pipeline, instances, pass);
+        }
         self.draw_instances(quads, pipeline, instances, pass)
     }
 
@@ -281,4 +295,61 @@ impl WgpuRenderer {
         pass.draw(vertex_slice.range(), 0..1);
         Ok(())
     }
+}
+
+/// Shed patch: a border-only quad as four copies, each clipped to one edge
+/// strip (wide enough for the border, its corner radii and antialiasing).
+/// `None` for quads with a fill, a faded clip (narrowing it would move the
+/// fade), or too small for the split to save anything.
+pub(super) fn strips(quad: &Quad) -> Option<[Option<Quad>; 4]> {
+    const MIN_AREA: f32 = 64.0 * 64.0;
+    let b = quad.bounds;
+    let mask = quad.content_mask.bounds;
+    let fade = &quad.content_mask.fade_out;
+    if !quad.background.is_transparent()
+        || b.size.width.0 * b.size.height.0 < MIN_AREA
+        || [fade.top, fade.right, fade.bottom, fade.left].iter().any(|f| f.0 != 0.0)
+    {
+        return None;
+    }
+    let (w, r) = (&quad.border_widths, &quad.corner_radii);
+    if [w.top, w.right, w.bottom, w.left].iter().all(|e| e.0 == 0.0) {
+        return None;
+    }
+    let pad = 2.0;
+    let top = w.top.0.max(r.top_left.0).max(r.top_right.0) + pad;
+    let bottom = w.bottom.0.max(r.bottom_left.0).max(r.bottom_right.0) + pad;
+    let left = w.left.0.max(r.top_left.0).max(r.bottom_left.0) + pad;
+    let right = w.right.0.max(r.top_right.0).max(r.bottom_right.0) + pad;
+    let (x, y, width, height) = (b.origin.x.0, b.origin.y.0, b.size.width.0, b.size.height.0);
+    if top + bottom >= height || left + right >= width {
+        return None;
+    }
+    let strip = |sx: f32, sy: f32, sw: f32, sh: f32| -> Option<Quad> {
+        let x0 = sx.max(mask.origin.x.0);
+        let y0 = sy.max(mask.origin.y.0);
+        let x1 = (sx + sw).min(mask.origin.x.0 + mask.size.width.0);
+        let y1 = (sy + sh).min(mask.origin.y.0 + mask.size.height.0);
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let mut q = quad.clone();
+        q.content_mask.bounds = gpui::Bounds {
+            origin: gpui::point(ScaledPixels(x0), ScaledPixels(y0)),
+            size: gpui::size(ScaledPixels(x1 - x0), ScaledPixels(y1 - y0)),
+        };
+        Some(q)
+    };
+    let middle = height - top - bottom;
+    Some([
+        strip(x, y, width, top),
+        strip(x, y + height - bottom, width, bottom),
+        strip(x, y + top, left, middle),
+        strip(x + width - right, y + top, right, middle),
+    ])
+}
+
+/// Shed patch: how many instances a quad takes at most, split or not.
+pub(super) fn quad_instances(quad: &Quad) -> usize {
+    if strips(quad).is_some() { 4 } else { 1 }
 }

@@ -958,9 +958,9 @@ impl Pegboard {
             .font_family(mono)
             .text_size(px(9.0))
             .line_height(px(11.0))
-            .text_color(hsla(ui.text_dim))
-            // A closed bench's screen is a memory: dimmer than live ones.
-            .when(!running, |d| d.opacity(0.55))
+            // A closed bench's screen is a memory: dimmer than live ones. (By
+            // colour: `opacity` draws through a window-sized layer, per card.)
+            .text_color(if running { hsla(ui.text_dim) } else { hsla_alpha(ui.text_dim, 0.55) })
             .children(lines.into_iter().map(|l| div().whitespace_nowrap().overflow_hidden().child(if l.is_empty() { " ".to_string() } else { l })));
 
         let mut foot = vec![pane.map(|p| home_relative(&p.cwd)).unwrap_or_default()];

@@ -48,6 +48,8 @@ zstd = "0.13"
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
 # Window-sized backgrounds drawn as the clear colour; see vendor/gpui_ce_wgpu/SHED_PATCHES.md.
 gpui_ce_wgpu = { path = "vendor/gpui_ce_wgpu" }
+# Quads drawn only inside their clip; see vendor/gpui_ce_render/SHED_PATCHES.md.
+gpui_ce_render = { path = "vendor/gpui_ce_render" }
 # X11 key releases no longer lost when two arrive together; see vendor/gpui_ce_linux/SHED_PATCHES.md.
 gpui_ce_linux = { path = "vendor/gpui_ce_linux" }
 

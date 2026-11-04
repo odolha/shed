@@ -285,7 +285,9 @@ impl FrameRequirements {
                     reserve(std::mem::size_of::<Shadow>(), range.len())
                 }
                 PrimitiveBatch::Quads { range, .. } => {
-                    reserve(std::mem::size_of::<Quad>(), range.len())
+                    // Shed patch: room for border-only quads drawn as four strips.
+                    let count = scene.quads[range.clone()].iter().map(super::drawing::quad_instances).sum();
+                    reserve(std::mem::size_of::<Quad>(), count)
                 }
                 PrimitiveBatch::Paths {
                     rasterization_vertex_count,

@@ -2522,8 +2522,6 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b326f0a39d3ca9c3e40efa3156bf4d371158e1c2281258bb6dafd97a6f321ca"
 dependencies = [
  "gpui-ce",
  "naga 24.0.0",
