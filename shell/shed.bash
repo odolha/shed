@@ -38,12 +38,28 @@ __shed_preexec() {
     builtin printf '\e]133;C\a'
 }
 
+# The shell's own aliases, as edited in Shed, are in SHED_SHELL_ALIASES (which
+# ~/.bashrc sources too, once one is edited). When it changes it is read
+# again, and the shell's aliases are sent to Shed again.
+__shed_alias_names=()
+__shed_shell_sync() {
+    local file=${SHED_SHELL_ALIASES:-} content= name
+    [[ -n $file && -r $file ]] && IFS= builtin read -r -d '' content <"$file"
+    [[ -n ${__shed_shell_aliases+x} && $content == "${__shed_shell_last-}" ]] && return
+    __shed_shell_last=$content
+    for name in "${__shed_alias_names[@]}"; do builtin unalias "$name" 2>/dev/null; done
+    builtin eval "${__shed_shell_aliases-}"
+    builtin eval "$content"
+    __shed_shell_aliases=$(builtin alias -p)
+    builtin printf '\e]7777;shed;aliases;%s\a' "$(builtin printf '%s' "$__shed_shell_aliases" | command base64 | command tr -d '\n')"
+    # Shed's own go back over them.
+    unset __shed_alias_last
+}
+__shed_shell_sync
+
 # Shed's aliases (global, bench, tab) come from a file the keeper keeps for
 # this tab, one "name<TAB>command" per line. They are applied over the
 # shell's own aliases; removing one brings the shell's version back.
-__shed_shell_aliases=$(builtin alias -p)
-builtin printf '\e]7777;shed;aliases;%s\a' "$(builtin printf '%s' "$__shed_shell_aliases" | command base64 | command tr -d '\n')"
-__shed_alias_names=()
 __shed_alias_sync() {
     local file="${SHED_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/shed}/aliases/${SHED_TAB:-none}" content=
     [[ -r $file ]] && IFS= builtin read -r -d '' content <"$file"
@@ -66,6 +82,7 @@ __shed_precmd() {
     # Also clears kitty keyboard flags a crashed program may have left on:
     # readline reads keys the legacy way.
     builtin printf '\e]133;D;%s\a\e]7;file://%s%s\a\e[=0;1u' "$status" "${HOSTNAME:-}" "$PWD"
+    __shed_shell_sync
     __shed_alias_sync
     builtin history -a
     __shed_hist_next=$HISTCMD

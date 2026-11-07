@@ -1,4 +1,4 @@
-//! A bench as a reproducible workspace: aliases at three levels, and each
+//! A bench as a reproducible workspace: aliases at four levels, and each
 //! pane's own startup and teardown.
 
 mod common;
@@ -75,6 +75,45 @@ fn aliases_layer_over_the_shells_own() {
     let tree = tree_until(&mut c, "shell aliases", |t| t.pane(pane).is_some_and(|p| p.shell_aliases.contains_key("only")));
     assert_eq!(tree.pane(pane).unwrap().shell_aliases["ll"], "echo shell-ll");
     assert!(std::fs::read_to_string(dir.path().join("aliases.toml")).unwrap().contains("Shed's global aliases"));
+}
+
+#[test]
+fn the_shells_own_aliases_are_edited_in_a_file_its_startup_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join(".bashrc"), "alias ll='echo shell-ll'\n").unwrap();
+
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let (bench, pane) = new_bench(&mut c, "shell", None);
+    c.prompt(pane);
+
+    // Edited in Shed: the running shell has it at its next prompt.
+    c.msg(ClientMsg::SetShellAlias { name: "ll".into(), value: Some("echo edited-ll".into()) });
+    run_ll(&mut c, pane, "edited-ll");
+    let file = std::fs::read_to_string(dir.path().join("shell-aliases.sh")).unwrap();
+    assert!(file.contains("alias ll='echo edited-ll'"), "{file}");
+    let bashrc = std::fs::read_to_string(home.join(".bashrc")).unwrap();
+    let sourced = format!(". \"{}\"", dir.path().join("shell-aliases.sh").display());
+    assert!(bashrc.starts_with("alias ll='echo shell-ll'\n") && bashrc.contains(&sourced), "{bashrc}");
+    tree_until(&mut c, "shell alias", |t| t.pane(pane).is_some_and(|p| p.shell_aliases.get("ll").is_some_and(|v| v == "echo edited-ll")));
+
+    // A new shell starts with it.
+    c.msg(ClientMsg::NewTab { bench, cwd: None });
+    let tree = tree_until(&mut c, "second tab", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 2));
+    let second = tree.bench(bench).unwrap().tabs[1].active_pane;
+    c.msg(ClientMsg::Attach { bench: Some(bench) });
+    c.prompt(second);
+    run_ll(&mut c, second, "edited-ll");
+
+    // Removing it removes the one in ~/.bashrc too.
+    c.msg(ClientMsg::SetShellAlias { name: "ll".into(), value: None });
+    c.input(pane, "\n");
+    c.prompt(pane);
+    c.input(pane, "ll\n");
+    c.output_until(pane, "ll: command not found");
+    tree_until(&mut c, "shell alias gone", |t| t.pane(pane).is_some_and(|p| !p.shell_aliases.contains_key("ll")));
 }
 
 #[test]

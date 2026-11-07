@@ -32,16 +32,30 @@ __shed_preexec() {
     builtin printf '\e]133;C\a'
 }
 
+# The shell's own aliases, as edited in Shed, are in SHED_SHELL_ALIASES (which
+# ~/.zshrc sources too, once one is edited). They are read at the first
+# prompt, once ~/.zshrc has made the rest, and again when the file changes;
+# then the shell's aliases are sent to Shed again.
+typeset -ga __shed_alias_names=()
+__shed_shell_sync() {
+    local file=${SHED_SHELL_ALIASES:-} content= name
+    [[ -n $file && -r $file ]] && content="$(<"$file")"
+    (( ${+__shed_shell_aliases} )) && [[ $content == "${__shed_shell_last-}" ]] && return
+    typeset -g __shed_shell_last=$content
+    for name in "${__shed_alias_names[@]}"; do builtin unalias -- "$name" 2>/dev/null; done
+    builtin eval "${__shed_shell_aliases-}"
+    builtin eval "$content"
+    typeset -g __shed_shell_aliases="$(builtin alias -rL)"
+    builtin printf '\e]7777;shed;aliases;%s\a' "$(__shed_b64 "$__shed_shell_aliases")"
+    # Shed's own go back over them.
+    unset __shed_alias_last
+}
+
 # Shed's aliases (global, bench, tab) come from a file the keeper keeps for
 # this tab, one "name<TAB>command" per line. They are applied over the
-# shell's own aliases; removing one brings the shell's version back. The
-# shell's own are read at the first prompt, once ~/.zshrc has made them.
-typeset -ga __shed_alias_names=()
+# shell's own aliases; removing one brings the shell's version back.
 __shed_alias_sync() {
-    if (( ! ${+__shed_shell_aliases} )); then
-        typeset -g __shed_shell_aliases="$(builtin alias -rL)"
-        builtin printf '\e]7777;shed;aliases;%s\a' "$(__shed_b64 "$__shed_shell_aliases")"
-    fi
+    __shed_shell_sync
     local file="$__shed_state_dir/aliases/${SHED_TAB:-none}" content=
     [[ -r $file ]] && content="$(<"$file")"
     [[ $content == "${__shed_alias_last-}" ]] && return

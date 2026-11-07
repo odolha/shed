@@ -110,7 +110,12 @@ the logbook. The folder and the program in the foreground are also read from
 
 The hook also gives each tab its own history file, binds Ctrl+Up and Ctrl+Shift+Up to
 walk the logbook (through `shed hook walk`), and applies Shed's aliases from a file
-the keeper writes per tab, at every prompt.
+the keeper writes per tab, at every prompt. The shell's own aliases edited in Shed
+(`SetShellAlias`) are lines in `shell-aliases.sh` in the config folder, which the
+keeper edits and makes `~/.bashrc` and `~/.zshrc` source; the hook (told the path by
+`SHED_SHELL_ALIASES`) reads it at the first prompt and again whenever it changes,
+then sends the shell's aliases again. Bash runs signal traps only once a line is
+entered, so changes wait for the next prompt rather than interrupting the one shown.
 
 ## The AI prompt
 

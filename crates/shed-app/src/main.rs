@@ -166,6 +166,10 @@ struct AliasLevelArgs {
     /// This tab (the default inside Shed).
     #[arg(long)]
     tab: bool,
+    /// The shell's own: kept in ~/.config/shed/shell-aliases.sh, which
+    /// ~/.bashrc and ~/.zshrc source, so it works in every terminal.
+    #[arg(long)]
+    shell: bool,
 }
 
 impl AliasLevelArgs {
@@ -176,6 +180,8 @@ impl AliasLevelArgs {
             Some(setup_cli::Level::Bench)
         } else if self.tab {
             Some(setup_cli::Level::Tab)
+        } else if self.shell {
+            Some(setup_cli::Level::Shell)
         } else {
             None
         }

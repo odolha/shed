@@ -201,15 +201,22 @@ anyway.
 Click a value to edit it, empty it (or use ×) to remove it. Changes are saved at
 once and apply the next time the bench opens or closes.
 
-**Aliases** live at three levels: **tab**, **bench** and **global**. A tab's shells
-see all three, tab over bench over global, and all of them over the aliases your
-shell defines itself, which stay available. The panel lists every alias in effect
-with its level and what it overrides; add one as `name = command` and pick its
-level. Shells pick up changes at their next prompt.
+**Aliases** live at four levels: **tab**, **bench**, **global** and your **shell**'s
+own. A tab's shells see all of them, tab over bench over global over the shell's.
+The panel lists every alias in effect with its level and what it overrides ("show
+the shell's own" adds the shell's); add one as `name = command` and pick its level.
+Every one can be changed or removed there, and shells pick up changes at their next
+prompt, with nothing to reload.
+
+The shell's own aliases you change in Shed go to `~/.config/shed/shell-aliases.sh`,
+and the first change adds a line to `~/.bashrc` (and `~/.zshrc`, if you have one)
+that sources it, so they work in every terminal, not only Shed's. Changing one
+defined in `~/.bashrc` overrides it there; removing one adds an `unalias` line, so it
+is gone everywhere. Other terminals see changes when they next start.
 
 From a shell inside Shed, `shed setup` prints the same, `shed setup --edit` opens it
-in your editor, and `shed alias add gs "git status"` (with `--bench` or `--global`)
-or `shed alias rm gs` change aliases.
+in your editor, and `shed alias add gs "git status"` (with `--bench`, `--global` or
+`--shell`) or `shed alias rm gs` change aliases.
 
 ## History and the logbook
 
@@ -366,7 +373,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed save NAME [--as COPY]` | Saves a bench now; `--as` saves a copy, handy as a template |
 | `shed delete NAME` | Deletes a bench |
 | `shed setup [--edit]` | Shows (or edits) this tab's startup and teardown |
-| `shed alias [add NAME CMD \| rm NAME] [--bench\|--global]` | Lists or changes aliases |
+| `shed alias [add NAME CMD \| rm NAME] [--bench\|--global\|--shell]` | Lists or changes aliases |
 | `shed tag add LABEL [--color C] [--tint]` | Tags this tab |
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |
@@ -445,7 +452,8 @@ section for Shed's own colours (`background`, `tab_active`, `tab_hover`, `text`,
 `shed-light` are good starting points.
 
 **Global aliases** are in `~/.config/shed/aliases.toml`, as `name = "command"`;
-bench and tab aliases are saved with their bench.
+bench and tab aliases are saved with their bench, and the shell's own that you
+change in Shed are in `~/.config/shed/shell-aliases.sh`.
 
 ## Where things are kept
 

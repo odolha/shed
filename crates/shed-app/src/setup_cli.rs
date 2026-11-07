@@ -190,6 +190,8 @@ pub enum Level {
     Global,
     Bench,
     Tab,
+    /// The shell's own, in the file its startup files source.
+    Shell,
 }
 
 pub fn list_aliases() -> anyhow::Result<()> {
@@ -220,6 +222,15 @@ pub fn list_aliases() -> anyhow::Result<()> {
 }
 
 pub fn change_alias(name: &str, value: Option<&str>, level: Option<Level>) -> anyhow::Result<()> {
+    if let Some(Level::Shell) = level {
+        let msg = ClientMsg::SetShellAlias { name: name.to_string(), value: value.map(str::to_string) };
+        let done = crate::request(msg, |m| match m {
+            KeeperMsg::Done(text) => Some(text),
+            _ => None,
+        })?;
+        println!("{done}");
+        return Ok(());
+    }
     let tree = tree()?;
     let inside = here().ok();
     // Inside Shed the narrowest level is the default, so nothing else changes by surprise.
@@ -229,6 +240,7 @@ pub fn change_alias(name: &str, value: Option<&str>, level: Option<Level>) -> an
         (Level::Bench, Some((_, b))) => (AliasTarget::Bench(b), tree.bench(b).map(|b| b.aliases.clone()).unwrap_or_default()),
         (Level::Tab, Some((t, _))) => (AliasTarget::Tab(t), tree.tab(t).map(|t| t.aliases.clone()).unwrap_or_default()),
         (_, None) => bail!("--bench and --tab only work inside Shed"),
+        (Level::Shell, _) => unreachable!("handled above"),
     };
     match value {
         Some(v) => {
@@ -254,5 +266,6 @@ fn level_name(level: Level) -> &'static str {
         Level::Global => "everything (global)",
         Level::Bench => "this bench",
         Level::Tab => "this tab",
+        Level::Shell => "the shell",
     }
 }

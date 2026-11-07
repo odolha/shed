@@ -800,6 +800,25 @@ impl Keeper {
                     warn!("cannot save where the Shed window is: {e}");
                 }
             }
+            ClientMsg::SetShellAlias { name, value } => {
+                let result = self.set_shell_alias(&name, value.as_deref());
+                let mut st = self.lock();
+                match result {
+                    Ok(note) => {
+                        // Every shell reads the file again at its next prompt and
+                        // says what it has; until then, this is what it will have.
+                        for pane in st.tree.benches.iter_mut().flat_map(|b| &mut b.tabs).flat_map(|t| &mut t.panes) {
+                            match &value {
+                                Some(v) => pane.shell_aliases.insert(name.clone(), v.clone()),
+                                None => pane.shell_aliases.remove(&name),
+                            };
+                        }
+                        st.broadcast_tree();
+                        st.send(client, KeeperMsg::Done(note));
+                    }
+                    Err(e) => st.send(client, KeeperMsg::Error(e)),
+                }
+            }
             ClientMsg::Hide { bench } => {
                 let st = self.lock();
                 let Some(name) = st.tree.bench(bench).map(|b| b.name.clone()) else {
@@ -1503,6 +1522,54 @@ impl Keeper {
         }
     }
 
+    /// The file of the shell's own aliases Shed edits, beside Shed's global ones.
+    fn shell_aliases_file(&self) -> PathBuf {
+        self.cfg.aliases_file.with_file_name("shell-aliases.sh")
+    }
+
+    /// Changes one of the shell's own aliases in its file, and makes the
+    /// shell's startup files source that file. Says what it did.
+    fn set_shell_alias(&self, name: &str, value: Option<&str>) -> Result<String, String> {
+        use shed_model::config::{edit_shell_aliases, source_from, valid_alias_name};
+        if !valid_alias_name(name) {
+            return Err(format!("{name:?} is not a valid alias name"));
+        }
+        let file = self.shell_aliases_file();
+        let text = match std::fs::read_to_string(&file) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(format!("cannot read {}: {e}", file.display())),
+        };
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+        }
+        std::fs::write(&file, edit_shell_aliases(&text, name, value)).map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+
+        // The startup files of the shell Shed runs, and of any other the user has.
+        let home = &self.cfg.home;
+        let shell = self.cfg.shell.clone().unwrap_or_else(pty::default_shell);
+        let shell = shell.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let zdotdir = std::env::var_os("ZDOTDIR").map(PathBuf::from).filter(|d| d.starts_with(home));
+        let mut sourced = Vec::new();
+        for (rc, theirs) in [(home.join(".bashrc"), shell == "bash"), (zdotdir.unwrap_or_else(|| home.clone()).join(".zshrc"), shell == "zsh")] {
+            if !(theirs || rc.exists()) {
+                continue;
+            }
+            match source_from(&rc, &file, home) {
+                Ok(true) => sourced.push(shed_save::home_relative(&rc)),
+                Ok(false) => {}
+                Err(e) => warn!("cannot add Shed's aliases to {}: {e}", rc.display()),
+            }
+        }
+        let what = if value.is_some() { "set" } else { "removed" };
+        let mut note = format!("{name}: {what} in your shell's aliases ({})", shed_save::home_relative(&file));
+        if !sourced.is_empty() {
+            note.push_str(&format!("; {} now sources that file", sourced.join(" and ")));
+        }
+        note.push_str(". Shells in Shed pick it up at their next prompt, others when they start.");
+        Ok(note)
+    }
+
     /// Writes each tab's alias file (global, then bench, then tab aliases)
     /// where its shells read it at every prompt. Unchanged files are left alone.
     fn sync_alias_files(&self, st: &mut State) {
@@ -1806,6 +1873,7 @@ impl Keeper {
         let mut env = env;
         env.extend(self.cfg.env.iter().cloned());
         env.push(("SHED_STATE_DIR".into(), self.cfg.state_dir.clone().into()));
+        env.push(("SHED_SHELL_ALIASES".into(), self.shell_aliases_file().into()));
         // The hooks hand lines starting with `>` to the AI prompt only when it is on.
         if st.config.ai.enabled() {
             env.push(("SHED_AI".into(), "1".into()));

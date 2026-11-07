@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -106,6 +106,9 @@ pub enum ClientMsg {
     SetWindow { bench: Option<BenchId>, place: WindowPlace },
     /// Closes a bench's window; it keeps running.
     Hide { bench: BenchId },
+    /// Sets (or, with no value, removes) one of the shell's own aliases, in
+    /// the file its startup files source.
+    SetShellAlias { name: String, value: Option<String> },
 }
 
 /// What can change in a closed bench without opening it.

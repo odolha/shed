@@ -41,8 +41,8 @@ On top of that, Shed groups your work the way you think about it:
   your dock and it opens that bench.
 - **History across tabs and benches**, with prefix matching, a search overlay, tags
   (`prod`, `staging`) and private tabs that keep their history to themselves.
-- **Aliases at three levels**, global, per bench and per tab, layered over your
-  shell's own.
+- **Aliases at four levels**, per tab, per bench, global and your shell's own,
+  all editable in Shed and picked up at the next prompt.
 - **Ask for a command.** Type `> start this project` and an AI (Claude Code by
   default, or any command-line AI) looks at the folder and puts the command on
   your prompt, for you to check and run.

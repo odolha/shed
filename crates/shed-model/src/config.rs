@@ -393,6 +393,94 @@ pub fn save_aliases(path: &Path, aliases: &Aliases) -> std::io::Result<()> {
     std::fs::write(path, format!("# Shed's global aliases: name = \"command\". Benches and tabs can override them.\n{body}"))
 }
 
+/// The shell's own aliases as edited in Shed: `alias` and `unalias` lines,
+/// sourced by ~/.bashrc and ~/.zshrc (Shed adds the line), so they work in
+/// every terminal, and read again by Shed's shells when it changes.
+pub fn shell_aliases_path() -> PathBuf {
+    paths::config_dir().join("shell-aliases.sh")
+}
+
+const SHELL_ALIASES_HEADER: &str = "\
+# Your shell's aliases, as edited in Shed (Setup panel, or `shed alias --shell`).
+# ~/.bashrc and ~/.zshrc source this file, so they work in every terminal. You can
+# edit it too: Shed changes only the lines of the aliases it is asked to.
+";
+
+/// Whether `name` can be an alias in bash and zsh.
+pub fn valid_alias_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && name.chars().all(|c| c.is_alphanumeric() || "_-.:@+%,^~!".contains(c))
+}
+
+/// `value` in single quotes, for the shell.
+pub fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// The shell-aliases file `text` with `name` set to `value`, or with it
+/// removed: an `unalias` line, so a definition in the shell's own startup
+/// files goes too. Other lines stay as they are.
+pub fn edit_shell_aliases(text: &str, name: &str, value: Option<&str>) -> String {
+    let line = match value {
+        Some(v) => format!("alias {name}={}", shell_quote(v)),
+        None => format!("unalias {name} 2>/dev/null"),
+    };
+    let names = |l: &str| {
+        let l = l.trim_start();
+        let rest = l.strip_prefix("alias ").or_else(|| l.strip_prefix("unalias "))?;
+        let rest = rest.trim_start().strip_prefix("-- ").unwrap_or(rest.trim_start());
+        Some(rest.split(['=', ' ']).next().unwrap_or_default().to_string())
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut placed = false;
+    for l in text.lines() {
+        if names(l).as_deref() == Some(name) {
+            if !placed {
+                out.push(line.clone());
+                placed = true;
+            }
+        } else {
+            out.push(l.to_string());
+        }
+    }
+    if out.is_empty() {
+        out.extend(SHELL_ALIASES_HEADER.lines().map(String::from));
+    }
+    if !placed {
+        out.push(line);
+    }
+    out.join("\n") + "\n"
+}
+
+/// The lines that make a shell's startup file source `file`.
+pub fn source_lines(file: &Path, home: &Path) -> String {
+    let path = match file.strip_prefix(home) {
+        Ok(rel) => format!("$HOME/{}", rel.display()),
+        Err(_) => file.display().to_string(),
+    };
+    format!("\n# Added by Shed: the aliases you edit in Shed, in every terminal.\n[ -f \"{path}\" ] && . \"{path}\"\n")
+}
+
+/// Makes the startup file `rc` source `file`, unless it already does.
+/// True if it was added.
+pub fn source_from(rc: &Path, file: &Path, home: &Path) -> std::io::Result<bool> {
+    let text = match std::fs::read_to_string(rc) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let lines = source_lines(file, home);
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    if text.lines().any(|l| l.contains(name) && !l.trim_start().starts_with('#')) {
+        return Ok(false);
+    }
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(rc)?;
+    f.write_all(lines.as_bytes())?;
+    Ok(true)
+}
+
 /// Where an alias comes from, weakest first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AliasLevel {
@@ -465,6 +553,39 @@ impl FileWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_aliases_file_edits() {
+        let text = edit_shell_aliases("", "ll", Some("ls -la"));
+        assert!(text.starts_with("# Your shell's aliases"));
+        assert!(text.ends_with("alias ll='ls -la'\n"));
+        let text = edit_shell_aliases(&text, "say", Some("echo 'hi'"));
+        assert!(text.contains(r"alias say='echo '\''hi'\'''"));
+        // Changing one replaces its line in place; removing leaves an unalias.
+        let text = edit_shell_aliases(&text, "ll", Some("ls -l"));
+        let text = edit_shell_aliases(&text, "say", None);
+        let body: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(body, ["alias ll='ls -l'", "unalias say 2>/dev/null"]);
+        // The user's own lines stay.
+        let own = "# mine\nalias gs='git status'\nexport X=1\n";
+        assert_eq!(edit_shell_aliases(own, "gs", None), "# mine\nunalias gs 2>/dev/null\nexport X=1\n");
+        assert!(valid_alias_name("g.s") && !valid_alias_name("a b") && !valid_alias_name("a=b") && !valid_alias_name("-x"));
+    }
+
+    #[test]
+    fn startup_files_source_it_once() {
+        let dir = std::env::temp_dir().join(format!("shed-rc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rc = dir.join(".bashrc");
+        std::fs::write(&rc, "alias x=y\n").unwrap();
+        let file = dir.join(".config/shed/shell-aliases.sh");
+        assert!(source_from(&rc, &file, &dir).unwrap());
+        assert!(!source_from(&rc, &file, &dir).unwrap());
+        let text = std::fs::read_to_string(&rc).unwrap();
+        assert!(text.starts_with("alias x=y\n"));
+        assert!(text.contains(r#"[ -f "$HOME/.config/shed/shell-aliases.sh" ] && . "$HOME/.config/shed/shell-aliases.sh""#));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn globs() {

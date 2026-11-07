@@ -204,9 +204,19 @@ impl SetupPanel {
             Field::ReadyWhen(p) => self.set_setup(p, |s| s.ready_when = (!text.is_empty()).then_some(text), cx),
             Field::Alias(existing) => {
                 let level = existing.as_ref().map_or(self.new_alias_level, |(l, _)| *l);
-                let Some((target, mut aliases)) = self.aliases_at(level, cx) else { return };
                 // Not an alias: leave things as they were rather than lose one.
                 let Some(parsed) = parse_alias(&text) else { return };
+                if level == AliasLevel::Shell {
+                    let old = existing.map(|(_, name)| name).filter(|old| parsed.as_ref().is_none_or(|(name, _)| name != old));
+                    if let Some(old) = old {
+                        self.send(ClientMsg::SetShellAlias { name: old, value: None }, cx);
+                    }
+                    if let Some((name, value)) = parsed {
+                        self.send(ClientMsg::SetShellAlias { name, value: Some(value) }, cx);
+                    }
+                    return;
+                }
+                let Some((target, mut aliases)) = self.aliases_at(level, cx) else { return };
                 if let Some((_, old)) = &existing {
                     aliases.remove(old);
                 }
@@ -444,18 +454,13 @@ impl SetupPanel {
         let shown = rows.into_iter().filter(|r| self.show_shell || r.2 != AliasLevel::Shell);
         let mut list = div().flex().flex_col().gap_0p5();
         for (i, (name, value, level, hidden)) in shown.enumerate() {
-            let editable = level != AliasLevel::Shell;
             let level_color = match level {
                 AliasLevel::Tab | AliasLevel::Bench => accent,
                 AliasLevel::Global => ui.text,
                 AliasLevel::Shell => ui.text_dim,
             };
             let text = format!("{name} = {value}");
-            let content = if editable {
-                self.value(format!("alias-{i}").into(), Field::Alias(Some((level, name.clone()))), text, "", ui, cx)
-            } else {
-                div().flex_1().min_w_0().truncate().px_1().text_color(hsla(ui.text_dim)).child(text).into_any_element()
-            };
+            let content = self.value(format!("alias-{i}").into(), Field::Alias(Some((level, name.clone()))), text, "", ui, cx);
             let over = (!hidden.is_empty()).then(|| {
                 div()
                     .flex_none()
@@ -470,15 +475,15 @@ impl SetupPanel {
                 .child(div().w(px(48.0)).flex_none().text_size(px(11.0)).text_color(hsla(level_color)).child(level.name()))
                 .child(div().flex_1().min_w_0().font_family(mono.clone()).child(content))
                 .children(over);
-            if editable {
-                let name = name.clone();
-                row = row.child(self.remove_button(format!("alias-rm-{i}").into(), ui, cx, move |this, cx| {
-                    if let Some((target, mut aliases)) = this.aliases_at(level, cx) {
-                        aliases.remove(&name);
-                        this.send_aliases(target, aliases, cx);
-                    }
-                }));
-            }
+            let name = name.clone();
+            row = row.child(self.remove_button(format!("alias-rm-{i}").into(), ui, cx, move |this, cx| {
+                if level == AliasLevel::Shell {
+                    this.send(ClientMsg::SetShellAlias { name: name.clone(), value: None }, cx);
+                } else if let Some((target, mut aliases)) = this.aliases_at(level, cx) {
+                    aliases.remove(&name);
+                    this.send_aliases(target, aliases, cx);
+                }
+            }));
             list = list.child(row);
         }
         if shell_count > 0 {
@@ -493,7 +498,7 @@ impl SetupPanel {
             }));
         }
 
-        let levels = div().flex().gap_1().children([AliasLevel::Tab, AliasLevel::Bench, AliasLevel::Global].map(|level| {
+        let levels = div().flex().gap_1().children([AliasLevel::Tab, AliasLevel::Bench, AliasLevel::Global, AliasLevel::Shell].map(|level| {
             let on = level == self.new_alias_level;
             div()
                 .id(SharedString::from(format!("level-{}", level.name())))
@@ -506,6 +511,8 @@ impl SetupPanel {
                 .child(level.name())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.new_alias_level = level;
+                    // Adding one of the shell's own, see them.
+                    this.show_shell |= level == AliasLevel::Shell;
                     cx.notify();
                 }))
         }));
@@ -528,7 +535,11 @@ impl SetupPanel {
                 div()
                     .text_size(px(11.0))
                     .text_color(hsla(ui.text_dim))
-                    .child("Tab over bench over global over your shell's own. Changes apply at the next prompt."),
+                    .child(
+                        "Tab over bench over global over your shell's own. Changes apply at each shell's next prompt; \
+                         the shell's own are kept in ~/.config/shed/shell-aliases.sh, which your shell's startup file \
+                         sources, so they work in every terminal.",
+                    ),
             )
             .child(list)
             .child(div().flex().items_center().gap_2().child(add).child(levels))
