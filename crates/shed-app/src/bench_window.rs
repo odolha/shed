@@ -24,6 +24,7 @@ use crate::menu::{self, Menu, MenuEntry, MenuHost, danger, more};
 use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
+use crate::window_place::{PlaceTracker, Placed};
 
 const TAB_BAR_HEIGHT: f32 = 32.0;
 
@@ -110,16 +111,26 @@ pub struct BenchWindow {
     drag: Option<SplitDrag>,
     /// The Setup panel, while open.
     setup: Option<(Entity<SetupPanel>, Subscription)>,
+    place: PlaceTracker,
+    _following: Subscription,
+}
+
+impl Placed for BenchWindow {
+    fn tracker(&mut self) -> &mut PlaceTracker {
+        &mut self.place
+    }
 }
 
 impl BenchWindow {
-    pub fn new(bench: BenchId, state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let closing = state.downgrade();
-        window.on_window_should_close(cx, move |_, cx| {
-            closing.update(cx, |state, _| state.window_closed(bench)).ok();
-            true
+    pub fn new(bench: BenchId, state: Entity<AppState>, place: PlaceTracker, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Closing the window closes the bench, after asking; hiding is its own button.
+        let this = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            this.update(cx, |this, cx| this.close_from_window(window, cx)).ok();
+            false
         });
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        let following = PlaceTracker::follow(window, cx);
         Self {
             bench,
             state,
@@ -131,6 +142,8 @@ impl BenchWindow {
             split_bounds: Rc::default(),
             drag: None,
             setup: None,
+            place,
+            _following: following,
         }
     }
 
@@ -241,13 +254,15 @@ impl BenchWindow {
         let Some(bench) = self.bench(cx) else { return };
         let message = format!("Close the bench “{}”?", bench.name);
         let name = bench.name.clone();
+        // Kept with the saved bench, so it opens the same next time.
+        self.place.record(window);
         let answer = window.prompt(
             PromptLevel::Warning,
             &message,
             Some(
                 "Closing stops every tool in it and keeps it saved, to load again later. \
                  Deleting also removes the saved bench and its launcher.\n\n\
-                 To keep the tools running, close the window instead.",
+                 To keep the tools running, hide the bench instead.",
             ),
             &["Close Bench", "Delete Bench", "Cancel"],
             cx,
@@ -259,6 +274,40 @@ impl BenchWindow {
             _ => {}
         })
         .detach();
+    }
+
+    /// The window's close button: closes the bench, after asking, or hides it.
+    fn close_from_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bench) = self.bench(cx) else { return };
+        if bench.closing {
+            return;
+        }
+        let message = format!("Close the bench “{}”?", bench.name);
+        self.place.record(window);
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &message,
+            Some(
+                "Closing stops every tool in it and keeps it saved, to load again later.\n\n\
+                 Hiding closes only the window: the tools keep running, and Shed shows it again.",
+            ),
+            &["Close Bench", "Hide", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| match answer.await {
+            Ok(0) => this.update(cx, |this, cx| this.send(ClientMsg::CloseBench { bench: this.bench }, cx)).ok(),
+            Ok(1) => this.update_in(cx, |this, window, cx| this.hide(window, cx)).ok(),
+            _ => None,
+        })
+        .detach();
+    }
+
+    /// Closes the window; the bench keeps running, and Shed shows it again.
+    fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.place.record(window);
+        let (bench, state) = (self.bench, self.state.clone());
+        // Closing this window from its own update would borrow it twice.
+        cx.defer(move |cx| state.update(cx, |state, cx| state.hide_bench(bench, cx)));
     }
 
     fn start_edit(&mut self, target: EditTarget, window: &mut Window, cx: &mut Context<Self>) {
@@ -421,6 +470,7 @@ impl BenchWindow {
         entries.push(item("Custom Colour…", |this, window, cx| this.start_edit(EditTarget::Color, window, cx)).icon("bench-color"));
         entries.push(MenuEntry::Separator);
         entries.push(item("Show Shed", |this, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))).icon("shed"));
+        entries.push(item("Hide Bench", |this, window, cx| this.hide(window, cx)).icon("detach"));
         entries.push(danger("Close Bench…", |this: &mut Self, window, cx| this.close_bench(window, cx)).icon("power"));
         entries
     }
@@ -555,6 +605,18 @@ impl BenchWindow {
                 .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
                 })),
+        )
+        .child(
+            div()
+                .id("hide-button")
+                .flex()
+                .items_center()
+                .px_2()
+                .cursor_pointer()
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .tooltip(menu::tooltip("Hide: close the window, keep the bench running"))
+                .on_click(cx.listener(|this, _, window, cx| this.hide(window, cx)))
+                .child(svg().path(icon("detach")).size(px(16.0)).text_color(hsla(ui.text_dim))),
         )
         .child(
             div()
@@ -782,6 +844,7 @@ impl Render for BenchWindow {
             .on_action(cx.listener(|this, _: &FocusUp, _, cx| this.move_focus(Direction::Up, cx)))
             .on_action(cx.listener(|this, _: &FocusDown, _, cx| this.move_focus(Direction::Down, cx)))
             .on_action(cx.listener(|this, _: &CloseBench, window, cx| this.close_bench(window, cx)))
+            .on_action(cx.listener(|this, _: &HideBench, window, cx| this.hide(window, cx)))
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| {
                 if let Some(tab) = this.active_tab(cx).map(|t| t.id) {
                     this.start_edit(EditTarget::TabName(tab), window, cx);

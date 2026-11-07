@@ -4,10 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use gpui::{
-    AppContext, AsyncApp, Bounds, Context, Entity, TitlebarOptions, WindowBounds, WindowHandle,
-    WindowOptions, px, size,
-};
+use gpui::{AppContext, AsyncApp, Context, Entity, TitlebarOptions, WindowHandle, WindowOptions, px, size};
 use shed_model::config::{Config, FileWatch};
 use shed_desktop::{BenchIdentity, Desktop};
 use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed, TabId};
@@ -20,6 +17,7 @@ use crate::pegboard::PegboardData;
 use crate::shed_window::ShedWindow;
 use crate::terminal_view::TerminalView;
 use crate::settings::Settings;
+use crate::window_place::{PlaceTracker, Placed, open_bounds};
 
 /// How long the receive loop may run before letting a frame be drawn.
 const FRAME_BUDGET: Duration = Duration::from_millis(8);
@@ -117,6 +115,7 @@ impl AppState {
             }
             Frame::Keeper(KeeperMsg::Show { bench }) => self.show(bench, cx),
             Frame::Keeper(KeeperMsg::ShowShed) => self.show_shed(cx),
+            Frame::Keeper(KeeperMsg::Hide { bench }) => self.hide_bench(bench, cx),
             Frame::Keeper(KeeperMsg::Pegboard(info)) => {
                 // A global, so only the pegboard redraws, not every window.
                 if cx.try_global::<PegboardData>().is_none_or(|d| d.0 != info) {
@@ -255,9 +254,18 @@ impl AppState {
         handle.update(cx, |bw, window, cx| bw.sync(title, active, window, cx)).ok();
     }
 
+    /// A pane's view, at its tab's zoom: a window opening again (after hiding,
+    /// or loading the bench) shows the tab as it was.
     fn new_view(&self, pane: PaneId, cx: &mut Context<Self>) -> Entity<TerminalView> {
         let (conn, settings) = (self.conn.clone(), self.settings.clone());
-        cx.new(|cx| TerminalView::new(pane, conn, &settings, cx))
+        let zoom = self.tree.locate_pane(pane).and_then(|(_, tab)| self.tree.tab(tab)).map_or(0.0, |t| t.zoom);
+        cx.new(|cx| {
+            let mut view = TerminalView::new(pane, conn, &settings, cx);
+            if zoom != 0.0 {
+                view.set_zoom(zoom, cx);
+            }
+            view
+        })
     }
 
     /// Applies a reloaded config to keys, panes and windows.
@@ -334,9 +342,11 @@ impl AppState {
             }
         }
         let bench = self.tree.bench(bench_id).unwrap();
+        let bounds = open_bounds(bench.window, size(px(960.0), px(640.0)), cx);
+        let tracker = PlaceTracker::new(Some(bench_id), self.conn.clone(), bounds, bench.window);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(window_title(&bench.name).into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(960.0), px(640.0)), cx))),
+            window_bounds: Some(bounds),
             app_id: Some(shed_desktop::app_id(&bench.launcher)),
             icon: window_icon(&Identity::of(bench, self.settings.icon_badges)),
             ..Default::default()
@@ -346,7 +356,7 @@ impl AppState {
         cx.spawn(async move |this, cx| {
             let Some(state) = this.upgrade() else { return };
             let opened = cx.update(|cx| {
-                cx.open_window(options, |window, cx| cx.new(|cx| BenchWindow::new(bench_id, state, window, cx)))
+                cx.open_window(options, |window, cx| cx.new(|cx| BenchWindow::new(bench_id, state, tracker, window, cx)))
             });
             match opened {
                 Ok(handle) => {
@@ -394,9 +404,11 @@ impl AppState {
         if let Err(e) = self.desktop.install_shed(&shed) {
             warn!("cannot write Shed's desktop entry: {e}");
         }
+        let bounds = open_bounds(self.tree.window, size(px(1120.0), px(740.0)), cx);
+        let tracker = PlaceTracker::new(None, self.conn.clone(), bounds, self.tree.window);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some("Shed".into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1120.0), px(740.0)), cx))),
+            window_bounds: Some(bounds),
             app_id: Some(shed_desktop::SHED_APP_ID.into()),
             icon: rasterize(shed_desktop::SHED_ICON),
             ..Default::default()
@@ -404,7 +416,7 @@ impl AppState {
         // As with bench windows: its render reads this state, so open it after this update.
         cx.spawn(async move |this, cx| {
             let Some(state) = this.upgrade() else { return };
-            let opened = cx.update(|cx| cx.open_window(options, |window, cx| cx.new(|cx| ShedWindow::new(state, window, cx))));
+            let opened = cx.update(|cx| cx.open_window(options, |window, cx| cx.new(|cx| ShedWindow::new(state, tracker, window, cx))));
             this.update(cx, |this, _| {
                 this.opening_shed = false;
                 match opened {
@@ -420,10 +432,22 @@ impl AppState {
     /// Hides a bench: its window closes, its tools keep running.
     pub fn hide_bench(&mut self, bench: BenchId, cx: &mut Context<Self>) {
         if let Some(handle) = self.windows.get(&bench).copied() {
-            handle.update(cx, |_, window, _| window.remove_window()).ok();
+            handle
+                .update(cx, |bw, window, _| {
+                    bw.tracker().record(window);
+                    window.remove_window();
+                })
+                .ok();
         }
         self.window_closed(bench);
         cx.notify();
+    }
+
+    /// Sends where every bench window is, before they all close.
+    pub fn record_places(&mut self, cx: &mut Context<Self>) {
+        for handle in self.windows.values() {
+            handle.update(cx, |bw, window, _| bw.tracker().record(window)).ok();
+        }
     }
 
     /// Called when a bench's window closes: its tools keep running in the keeper.

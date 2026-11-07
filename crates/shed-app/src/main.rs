@@ -20,6 +20,7 @@ mod shed_window;
 mod state;
 mod terminal_view;
 mod theme;
+mod window_place;
 
 use std::time::Duration;
 
@@ -70,6 +71,8 @@ enum Command {
     /// Open a bench by name: raise its window, reattach it, or load it from
     /// its saved file.
     Load { name: String },
+    /// Hide a running bench: its window closes, its tools keep running.
+    Hide { name: String },
     /// Save a running bench now (it also saves itself every minute).
     Save {
         name: String,
@@ -204,6 +207,21 @@ fn main() -> anyhow::Result<()> {
             run_app(ShowTarget::NewBench { name, cwd })
         }
         Some(Command::Load { name }) => run_app(ShowTarget::Load { name }),
+        Some(Command::Hide { name }) => {
+            let tree = request(ClientMsg::Status, |m| match m {
+                KeeperMsg::Status(s) => Some(s.tree),
+                _ => None,
+            })?;
+            let Some(bench) = tree.benches.iter().find(|b| b.name == name).map(|b| b.id) else {
+                bail!("no running bench named {name:?}");
+            };
+            let done = request(ClientMsg::Hide { bench }, |m| match m {
+                KeeperMsg::Done(text) => Some(text),
+                _ => None,
+            })?;
+            println!("{done}");
+            Ok(())
+        }
         Some(Command::Save { name, as_name }) => {
             let tree = request(ClientMsg::Status, |m| match m {
                 KeeperMsg::Status(s) => Some(s.tree),

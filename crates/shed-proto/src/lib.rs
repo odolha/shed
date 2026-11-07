@@ -9,10 +9,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag};
+use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -101,6 +101,11 @@ pub enum ClientMsg {
     SetBenchOrder(Vec<BenchId>),
     /// Starts a pane's held startup without waiting for the panes it waits for.
     StartNow { pane: PaneId },
+    /// Where a bench's window is (or, without a bench, the Shed window's), to
+    /// open it there again.
+    SetWindow { bench: Option<BenchId>, place: WindowPlace },
+    /// Closes a bench's window; it keeps running.
+    Hide { bench: BenchId },
 }
 
 /// What can change in a closed bench without opening it.
@@ -173,6 +178,8 @@ pub enum KeeperMsg {
     Pegboard(PegboardInfo),
     /// To the window process: open (or raise) the Shed window.
     ShowShed,
+    /// To the window process: close this bench's window, keeping the bench.
+    Hide { bench: BenchId },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

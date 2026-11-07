@@ -41,8 +41,9 @@ instance: running `shed` again, or a bench's launcher, only asks the keeper to h
 the existing window process show something. Every other `shed` subcommand is a
 short-lived client of the keeper.
 
-Windows hold no state of their own beyond what they draw. Closing a bench's window
-detaches from it; the keeper keeps it running, hidden.
+Windows hold no state of their own beyond what they draw. Hiding a bench closes its
+window and detaches from it; the keeper keeps it running. Closing a bench's window
+asks first whether to close the bench or hide it.
 
 ## The protocol
 
@@ -192,6 +193,17 @@ with resvg) to
 `shed load <key>`. Installed packages provide Shed's own entry and icons in the
 hicolor theme.
 
+Each window's place (size and position while not maximized, and whether it is
+maximized or full screen) is sent to the keeper half a second after it stops
+changing (`SetWindow`), and when the window hides or Shed closes. The keeper keeps a
+bench's in the tree and its saved file, and the Shed window's in `window.toml`;
+windows open from it, centered instead if no display shows that spot any more. On
+X11 the vendored `gpui_ce_linux` makes that work: it asks the window manager for
+the position (with static gravity, so it means the window's content, not its
+frame), reads where the window really is on screen, and sets a starting maximized
+or full-screen state as a property before mapping, which is when window managers
+read it.
+
 Settings (`shed.toml`) and themes are watched and applied live by both processes.
 With `theme = "auto"`, the window process follows the desktop's colour scheme
 (through the XDG desktop portal) and tells the keeper, which answers programs'
@@ -225,7 +237,8 @@ which with the vendored `gpui_ce_render` (quads rasterized only inside their cli
 cost their border rather than their area. Shed never uses GPUI's `opacity`, which
 draws through a window-sized layer. GPUI redraws a whole window whenever something
 under the pointer changes its hover style, so the Shed window's frames are kept
-to a few milliseconds. The vendored `gpui_ce_linux` fixes key releases lost on X11.
+to a few milliseconds. The vendored `gpui_ce_linux` fixes key releases lost on X11, and window placement
+there (see above).
 The patches are described in `SHED_PATCHES.md` in their folders.
 
 ## The code

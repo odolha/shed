@@ -31,7 +31,7 @@ sleep 6
 sleep 4
 "$shed" load board; sleep 2
 "$shed" load api; sleep 2
-wmctrl -i -c "$(win 'api —')"
+"$shed" hide api >/dev/null
 sleep 8
 shed_win=$(win Shed)
 wmctrl -i -r "$shed_win" -e 0,200,40,2240,1760; sleep 1.5

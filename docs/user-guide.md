@@ -131,12 +131,19 @@ A new tab or pane opens in the folder of the one you were in. (Set
 
 **Hiding** a bench closes its window and nothing else. Its programs keep running,
 and opening it again shows every pane exactly as it is: the screen, the scrollback,
-even a full-screen editor mid-edit. Closing a bench's window hides it.
+even a full-screen editor mid-edit. Hide a bench with the **hide** button in its tab
+bar (beside the Shed button), from its name's menu, with Ctrl+Shift+H, or from Shed.
 
 **Closing** a bench saves it, then stops what runs in it: each pane gets Ctrl+C (and
 SIGTERM if that is not enough), then its teardown commands run at the prompt, one
-by one. Close a bench from Shed, from its name's menu, or with Ctrl+Shift+Q; the
-dialog also offers to delete it.
+by one. Closing a bench's window asks whether to close the bench or only hide it.
+Close a bench from Shed, from its name's menu, or with Ctrl+Shift+Q; that dialog
+also offers to delete it.
+
+Windows open as you left them: the same size and place, maximized or full screen,
+and each tab at its zoom, whether the bench was hidden, closed, or Shed itself was
+closed. The Shed window keeps its place too. (On Wayland the desktop decides where a
+window goes; its size and state are still kept.)
 
 **Opening** a closed bench rebuilds it: every tab and split, every pane in its
 folder with its old scrollback dimmed above the prompt under a "restored" line.
@@ -314,6 +321,7 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | F2 / Shift+F2 | Rename tab / bench |
 | Ctrl+Shift+S | Setup panel |
 | Ctrl+Shift+Q | Close bench |
+| Ctrl+Shift+H | Hide bench (it keeps running) |
 | Super+Space, Ctrl+Shift+Space | Bring Shed forward |
 | Super+1 … Super+9 | Raise bench window 1 … 9 |
 | Ctrl+Shift+N (in Shed) | New bench |
@@ -333,6 +341,7 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | Cmd+D / Cmd+Shift+D | Split right / split down |
 | Cmd+Option+arrows | Move between panes |
 | Cmd+Shift+S / Cmd+Shift+W | Setup panel / close bench |
+| Cmd+Shift+H | Hide bench |
 | Cmd+Shift+Space, Cmd+Option+1 … 9 | Bring Shed forward / raise bench window 1 … 9 |
 | Cmd+N (in Shed) | New bench |
 | Cmd+C / Cmd+V, Cmd+F | Copy / paste, find in scrollback |
@@ -352,6 +361,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed` | Opens the Shed window (starting the keeper if needed) |
 | `shed new [--name N] [--cwd DIR]` | Makes a bench and opens it |
 | `shed load NAME` | Opens a bench: raises it, shows it, or loads it if closed |
+| `shed hide NAME` | Hides a running bench: closes its window, keeps it running |
 | `shed list` | Lists benches: open, hidden and closed |
 | `shed save NAME [--as COPY]` | Saves a bench now; `--as` saves a copy, handy as a template |
 | `shed delete NAME` | Deletes a bench |
@@ -423,7 +433,7 @@ of a pipe: `cd app && npm run dev` restarts, `tail -f log | grep ERROR` restarts
 **Key actions**: `copy`, `paste`, `zoom_in`, `zoom_out`, `zoom_reset`,
 `scroll_page_up`, `scroll_page_down`, `logbook`, `search`, `new_tab`, `close_tab`,
 `close_pane`, `next_tab`, `prev_tab`, `split_right`, `split_down`, `focus_left`,
-`focus_right`, `focus_up`, `focus_down`, `new_bench`, `close_bench`, `rename_tab`,
+`focus_right`, `focus_up`, `focus_down`, `new_bench`, `close_bench`, `hide_bench`, `rename_tab`,
 `rename_bench`, `setup`, `shed`, `activate_tab_1` … `activate_tab_9`,
 `focus_bench_1` … `focus_bench_9`. Keys are written like `ctrl-shift-t`,
 `alt-left`, `super-space`, `f2`.

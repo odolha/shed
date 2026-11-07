@@ -43,7 +43,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use shed_model::config::RackConfig;
-use shed_model::{Aliases, Bench, BenchColor, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId, Tag, paths, slug, tag_color};
+use shed_model::{Aliases, Bench, BenchColor, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId, Tag, WindowPlace, paths, slug, tag_color};
 
 pub use layout::{format_layout, parse_layout};
 
@@ -66,6 +66,9 @@ pub struct SavedBench {
     pub active_tab: usize,
     #[serde(default, skip_serializing_if = "Aliases::is_empty")]
     pub aliases: Aliases,
+    /// Where its window was last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowPlace>,
     pub tabs: Vec<SavedTab>,
 }
 
@@ -210,6 +213,7 @@ impl SavedBench {
             saved: utc_now(),
             active_tab: bench.tab_index(bench.active_tab).unwrap_or(0),
             aliases: bench.aliases.clone(),
+            window: bench.window,
             tabs,
         }
     }
@@ -281,6 +285,7 @@ impl SavedBench {
             aliases: self.aliases.clone(),
             closing: false,
             launcher: self.launcher(),
+            window: self.window,
         };
         Ok((bench, panes_out))
     }
@@ -577,6 +582,20 @@ impl Store {
         self.dir.join("../order.toml")
     }
 
+    fn window_file(&self) -> PathBuf {
+        self.dir.join("../window.toml")
+    }
+
+    /// Where the Shed window was last.
+    pub fn shed_window(&self) -> Option<WindowPlace> {
+        std::fs::read_to_string(self.window_file()).ok().and_then(|t| toml::from_str(&t).ok())
+    }
+
+    pub fn save_shed_window(&self, place: &WindowPlace) -> io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        write_atomic(&self.window_file(), toml::to_string(place).unwrap().as_bytes())
+    }
+
     /// The order benches are listed in, as the user arranged them (by id, so
     /// renaming keeps the place).
     pub fn order(&self) -> Vec<BenchId> {
@@ -720,7 +739,7 @@ pub fn utc_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shed_model::SplitDir;
+    use shed_model::{SplitDir, WindowState};
 
     fn sample() -> Bench {
         let home = home().unwrap_or_else(|| "/".into());
@@ -751,6 +770,7 @@ mod tests {
             aliases: [("up".to_string(), "docker compose up -d".to_string())].into(),
             closing: false,
             launcher: "backend".into(),
+            window: Some(WindowPlace { x: 40.0, y: 30.0, width: 1200.0, height: 800.0, state: WindowState::Maximized }),
         }
     }
 
@@ -799,6 +819,10 @@ mod tests {
         ];
         store.save_session(&session).unwrap();
         assert_eq!(store.session(), session);
+        assert_eq!(store.shed_window(), None);
+        let place = WindowPlace { x: 10.0, y: 20.0, width: 900.0, height: 600.0, state: WindowState::Fullscreen };
+        store.save_shed_window(&place).unwrap();
+        assert_eq!(store.shed_window(), Some(place));
         // Sessions from before hiding list only names: each had a window.
         std::fs::write(store.session_file(), "benches = [\"old\"]\n").unwrap();
         assert_eq!(store.session(), [SessionBench { name: "old".into(), open: true }]);

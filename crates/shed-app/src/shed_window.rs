@@ -1,7 +1,7 @@
 //! The Shed window: the pegboard, with the Shed icon. It lives as long as
 //! Shed does; closing it closes every bench and Shed with them.
 
-use gpui::{Context, Entity, PromptLevel, SharedString, Window, div, prelude::*, px, svg};
+use gpui::{Context, Entity, PromptLevel, SharedString, Subscription, Window, div, prelude::*, px, svg};
 use shed_model::config::Appearance;
 use shed_proto::{ClientMsg, ShowTarget};
 
@@ -10,16 +10,25 @@ use crate::assets::icon;
 use crate::pegboard::Pegboard;
 use crate::state::AppState;
 use crate::theme::{hsla, hsla_alpha, is_dark};
+use crate::window_place::{PlaceTracker, Placed};
 
 pub struct ShedWindow {
     state: Entity<AppState>,
     board: Entity<Pegboard>,
     /// Shed is closing: benches are being closed, then it quits.
     quitting: bool,
+    place: PlaceTracker,
+    _following: Subscription,
+}
+
+impl Placed for ShedWindow {
+    fn tracker(&mut self) -> &mut PlaceTracker {
+        &mut self.place
+    }
 }
 
 impl ShedWindow {
-    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, place: PlaceTracker, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let this = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             this.update(cx, |this, cx| this.request_quit(window, cx)).ok();
@@ -45,7 +54,8 @@ impl ShedWindow {
             })
             .detach();
         }
-        Self { state, board, quitting: false }
+        let following = PlaceTracker::follow(window, cx);
+        Self { state, board, quitting: false, place, _following: following }
     }
 
     /// Closing Shed closes every bench; asks first if any is running.
@@ -53,6 +63,9 @@ impl ShedWindow {
         if self.quitting {
             return;
         }
+        // Every window's place, so all open the same next time.
+        self.place.record(window);
+        self.state.update(cx, |state, cx| state.record_places(cx));
         let running = self.state.read(cx).tree.benches.len();
         if running == 0 {
             self.quit(cx);
@@ -65,7 +78,7 @@ impl ShedWindow {
             Some(
                 "Every bench is saved, then the programs running in it stop and its teardown \
                  commands run. Open benches again from Shed to bring them back.\n\n\
-                 To keep a bench running, leave Shed open; closing a bench's window only hides it.",
+                 To keep a bench running, leave Shed open; hiding a bench closes only its window.",
             ),
             &["Close Shed", "Cancel"],
             cx,

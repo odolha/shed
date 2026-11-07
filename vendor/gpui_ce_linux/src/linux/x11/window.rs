@@ -542,7 +542,7 @@ impl X11WindowState {
                     visual.depth,
                     x_window,
                     visual_set.root,
-                    bounds.origin.x.0 + 2,
+                    bounds.origin.x.0,
                     bounds.origin.y.0,
                     bounds.size.width.0,
                     bounds.size.height.0
@@ -552,7 +552,9 @@ impl X11WindowState {
                 visual.depth,
                 x_window,
                 visual_set.root,
-                (bounds.origin.x.0 + 2) as i16,
+                // Shed patch: exactly where asked, not 2px right of it, so a
+                // window reopened where it was does not creep.
+                bounds.origin.x.0 as i16,
                 bounds.origin.y.0 as i16,
                 bounds.size.width.0 as u16,
                 bounds.size.height.0 as u16,
@@ -798,6 +800,15 @@ impl X11WindowState {
                     Some((f32::from(size.width) as i32, f32::from(size.height) as i32));
             }
             size_hints.max_size = Some((max_texture_size as i32, max_texture_size as i32));
+            // Shed patch: the window opens where it was asked to (window
+            // managers place it themselves otherwise), with the position
+            // meaning the window's content, not its frame.
+            size_hints.position = Some((
+                x11rb::properties::WmSizeHintsSpecification::UserSpecified,
+                bounds.origin.x.0,
+                bounds.origin.y.0,
+            ));
+            size_hints.win_gravity = Some(xproto::Gravity::STATIC);
             check_reply(
                 || {
                     format!(
@@ -1002,6 +1013,36 @@ impl X11Window {
         )?;
         xcb_flush(&self.0.xcb);
         Ok(())
+    }
+
+    /// Shed patch: window managers ignore `_NET_WM_STATE` requests for a
+    /// window not mapped yet, and read the property when it maps instead
+    /// (EWMH). GPUI asks for a window's starting state before mapping it, so
+    /// until then the state is added to the property. False once mapped.
+    fn set_state_before_map(&self, atoms: &[u32]) -> bool {
+        let unmapped = self
+            .0
+            .xcb
+            .get_window_attributes(self.0.x_window)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|a| a.map_state == xproto::MapState::UNMAPPED);
+        if !unmapped {
+            return false;
+        }
+        let state = self.0.state.borrow();
+        check_reply(
+            || "X11 ChangeProperty32 on _NET_WM_STATE failed.",
+            self.0.xcb.change_property32(
+                xproto::PropMode::APPEND,
+                self.0.x_window,
+                state.atoms._NET_WM_STATE,
+                xproto::AtomEnum::ATOM,
+                atoms,
+            ),
+        )
+        .log_err();
+        true
     }
 
     fn get_root_position(
@@ -1309,12 +1350,25 @@ impl X11WindowStatePtr {
             let is_resize = bounds.size.width != state.bounds.size.width
                 || bounds.size.height != state.bounds.size.height;
 
-            // If it's a resize event (only width/height changed), we ignore `bounds.origin`
-            // because it contains wrong values.
-            if is_resize {
-                state.bounds.size = bounds.size;
-            } else {
-                state.bounds = bounds;
+            // Shed patch: a ConfigureNotify from the X server gives the
+            // position within the window manager's frame, so where the window
+            // is on screen is asked for. (Upstream kept the origin only for
+            // moves, and the frame-relative one even then.)
+            let root = self
+                .xcb
+                .translate_coordinates(self.x_window, state.x_root_window, 0, 0)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok());
+            match root {
+                Some(root) => {
+                    state.bounds.size = bounds.size;
+                    state.bounds.origin = gpui::point(
+                        px(root.dst_x as f32 / state.scale_factor),
+                        px(root.dst_y as f32 / state.scale_factor),
+                    );
+                }
+                None if is_resize => state.bounds.size = bounds.size,
+                None => state.bounds = bounds,
             }
 
             let gpu_size = query_render_extent(&self.xcb, self.x_window)?;
@@ -1731,6 +1785,13 @@ impl PlatformWindow for X11Window {
 
     fn zoom(&self) {
         let state = self.0.state.borrow();
+        // Shed patch: a window opening maximized.
+        if self.set_state_before_map(&[
+            state.atoms._NET_WM_STATE_MAXIMIZED_VERT,
+            state.atoms._NET_WM_STATE_MAXIMIZED_HORZ,
+        ]) {
+            return;
+        }
         self.set_wm_hints(
             || "X11 SendEvent to maximize a window failed.",
             WmHintPropertyState::Toggle,
@@ -1742,6 +1803,10 @@ impl PlatformWindow for X11Window {
 
     fn toggle_fullscreen(&self) {
         let state = self.0.state.borrow();
+        // Shed patch: a window opening full screen.
+        if self.set_state_before_map(&[state.atoms._NET_WM_STATE_FULLSCREEN]) {
+            return;
+        }
         self.set_wm_hints(
             || "X11 SendEvent to fullscreen a window failed.",
             WmHintPropertyState::Toggle,

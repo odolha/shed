@@ -11,6 +11,30 @@ pub struct Shed {
     pub benches: Vec<Bench>,
     /// Shed's global aliases (from aliases.toml).
     pub aliases: Aliases,
+    /// Where the Shed window was last, to open it there again.
+    pub window: Option<WindowPlace>,
+}
+
+/// Where a window is on screen and how big, in logical pixels, to open it
+/// the same way again.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowPlace {
+    /// Its size and position when neither maximized nor full screen.
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub state: WindowState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowState {
+    #[default]
+    Normal,
+    Maximized,
+    Fullscreen,
 }
 
 impl Shed {
@@ -135,6 +159,8 @@ pub struct Bench {
     /// the slug of its name when it was made. Renaming keeps it, so a
     /// launcher pinned to a dock keeps working.
     pub launcher: String,
+    /// Where its window was last, to open it there again.
+    pub window: Option<WindowPlace>,
 }
 
 /// A bench name made safe for app IDs and file names.
@@ -569,6 +595,7 @@ mod tests {
             aliases: Aliases::new(),
             closing: false,
             launcher: "main".into(),
+            window: None,
         }
     }
 

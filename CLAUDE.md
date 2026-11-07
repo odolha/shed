@@ -103,6 +103,7 @@ produces replay on attach); each window runs its own emulator per visible pane
   bar, splits). `setup_panel.rs`: startup/teardown/aliases drawer.
   `logbook_view.rs`: Ctrl+R history. `menu.rs`: shared context menus and tooltips.
   `line_editor.rs`: the single-line text field. `actions.rs`: keybindings.
+  `window_place.rs`: windows reopen at their last size, position and state.
 - `theme.rs`: `UiColors` (chrome colours from the theme's `[ui]` section, with
   `accent` and `danger`). Use `ui.ink(color)` for text/icons in a bench or tag
   colour, so they stay readable on light themes.
@@ -114,7 +115,8 @@ produces replay on attach); each window runs its own emulator per visible pane
 `vendor/` holds patched `alacritty_terminal` (read-only accessors for replay),
 `gpui_ce_wgpu` (first full-window quad becomes the clear colour; border-only quads
 drawn as edge strips), `gpui_ce_render` (quads rasterized only inside their clip)
-and `gpui_ce_linux` (X11 key releases not dropped), wired in through
+and `gpui_ce_linux` (X11: key releases not dropped; windows open where asked,
+maximized or full screen, and report their real position), wired in through
 `[patch.crates-io]`. Each has a `SHED_PATCHES.md`; patched lines are marked
 `// Shed patch`. GPUI is `gpui-ce =0.3.0`, pinned exactly.
 

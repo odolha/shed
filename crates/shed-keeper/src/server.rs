@@ -312,6 +312,7 @@ impl Keeper {
         let bash_rc = write_bash_rc(cfg.socket.parent().unwrap_or(Path::new("/tmp")));
         let zsh_dir = write_zsh_dir(cfg.socket.parent().unwrap_or(Path::new("/tmp")));
         let host = nix::unistd::gethostname().ok().and_then(|h| h.into_string().ok()).unwrap_or_default();
+        let shed_window = cfg.store.as_ref().and_then(Store::shed_window);
         Arc::new(Self {
             cfg,
             state: Mutex::new(State {
@@ -319,7 +320,7 @@ impl Keeper {
                 config_watch: FileWatch::default(),
                 aliases_watch: FileWatch::default(),
                 alias_files: HashMap::new(),
-                tree: Shed::default(),
+                tree: Shed { window: shed_window, ..Shed::default() },
                 panes: HashMap::new(),
                 clients: HashMap::new(),
                 next_client: 1,
@@ -788,6 +789,32 @@ impl Keeper {
                 let mut st = self.lock();
                 self.release(&mut st, pane);
             }
+            ClientMsg::SetWindow { bench: Some(bench), place } => self.edit_bench(bench, |b| b.window = Some(place)),
+            ClientMsg::SetWindow { bench: None, place } => {
+                let mut st = self.lock();
+                st.tree.window = Some(place);
+                st.broadcast_tree();
+                if let Some(store) = &self.cfg.store
+                    && let Err(e) = store.save_shed_window(&place)
+                {
+                    warn!("cannot save where the Shed window is: {e}");
+                }
+            }
+            ClientMsg::Hide { bench } => {
+                let st = self.lock();
+                let Some(name) = st.tree.bench(bench).map(|b| b.name.clone()) else {
+                    st.send(client, KeeperMsg::Error(format!("no bench {bench}")));
+                    return;
+                };
+                let done = match st.window_client(client) {
+                    Some(window) if st.shown.contains(&bench) => {
+                        st.send(window, KeeperMsg::Hide { bench });
+                        format!("hid {name}")
+                    }
+                    _ => format!("{name} has no window"),
+                };
+                st.send(client, KeeperMsg::Done(done));
+            }
             ClientMsg::SetBenchOrder(order) => {
                 if let Some(store) = &self.cfg.store
                     && let Err(e) = store.save_order(&order)
@@ -981,7 +1008,11 @@ impl Keeper {
                     }
                 }
                 match st.window_client(client) {
-                    Some(window) => st.send(window, KeeperMsg::ShowShed),
+                    Some(window) => {
+                        // The tree first: it says where the Shed window was.
+                        st.broadcast_tree();
+                        st.send(window, KeeperMsg::ShowShed);
+                    }
                     None => {
                         st.send(client, KeeperMsg::Error("no window is open to show it in".into()));
                         return;
@@ -1732,6 +1763,7 @@ impl Keeper {
             active_tab: tab_id,
             aliases: Default::default(),
             closing: false,
+            window: None,
         });
         self.sync_alias_files(st);
         Ok(id)
