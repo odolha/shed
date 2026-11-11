@@ -227,6 +227,35 @@ pub enum TabKind {
     #[default]
     Terminal,
     Project(Project),
+    Ai(AiTab),
+}
+
+/// A Claude Code conversation, shown in an AI tab. The keeper runs it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AiTab {
+    /// Where Claude Code works and keeps its sessions.
+    pub folder: PathBuf,
+    /// More folders it may read and change (the bench's other projects).
+    pub add_dirs: Vec<PathBuf>,
+    /// The session shown and continued; a new one when `None`.
+    pub session: Option<String>,
+    pub model: Option<String>,
+    /// Claude Code's permission mode: `default`, `acceptEdits`, `plan`.
+    pub mode: String,
+    pub effort: Option<String>,
+    /// Files it edits open in the bench's project tabs as it goes.
+    pub follow: bool,
+    /// Where the conversation is, for the tab bar.
+    pub activity: AiActivity,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AiActivity {
+    #[default]
+    Idle,
+    Working,
+    /// It waits for the user to allow or deny something.
+    Waiting,
 }
 
 /// A folder of code, shown in a project tab.
@@ -279,11 +308,26 @@ impl Tab {
         }
     }
 
+    /// An AI tab for Claude Code working in `folder`.
+    pub fn ai(folder: PathBuf) -> Self {
+        let mut tab = Self::project(folder.clone());
+        tab.kind = TabKind::Ai(AiTab { folder, mode: "default".into(), ..Default::default() });
+        tab
+    }
+
     /// The project this tab shows, if it is a project tab.
     pub fn project_info(&self) -> Option<&Project> {
         match &self.kind {
             TabKind::Project(p) => Some(p),
-            TabKind::Terminal => None,
+            _ => None,
+        }
+    }
+
+    /// The conversation this tab shows, if it is an AI tab.
+    pub fn ai_info(&self) -> Option<&AiTab> {
+        match &self.kind {
+            TabKind::Ai(a) => Some(a),
+            _ => None,
         }
     }
 
@@ -303,6 +347,9 @@ impl Tab {
         }
         if let Some(project) = self.project_info() {
             return folder_name(&project.root);
+        }
+        if let Some(ai) = self.ai_info() {
+            return format!("Claude · {}", folder_name(&ai.folder));
         }
         let Some(pane) = self.active() else { return "shell".into() };
         if let Some(title) = pane.title.as_deref().filter(|t| !t.trim().is_empty()) {

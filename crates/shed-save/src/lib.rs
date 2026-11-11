@@ -95,8 +95,55 @@ pub struct SavedTab {
     /// What a project tab shows; a terminal tab has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<SavedProject>,
+    /// What an AI tab shows; others have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai: Option<SavedAi>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub panes: Vec<SavedPane>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedAi {
+    pub folder: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_dirs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub follow: bool,
+}
+
+impl SavedAi {
+    fn of(a: &shed_model::AiTab) -> Self {
+        Self {
+            folder: home_relative(&a.folder),
+            add_dirs: a.add_dirs.iter().map(|d| home_relative(d)).collect(),
+            session: a.session.clone(),
+            model: a.model.clone(),
+            mode: a.mode.clone(),
+            effort: a.effort.clone(),
+            follow: a.follow,
+        }
+    }
+
+    fn to_ai(&self) -> shed_model::AiTab {
+        shed_model::AiTab {
+            folder: expand_home(&self.folder),
+            add_dirs: self.add_dirs.iter().map(|d| expand_home(d)).collect(),
+            session: self.session.clone(),
+            model: self.model.clone(),
+            mode: if self.mode.is_empty() { "default".into() } else { self.mode.clone() },
+            effort: self.effort.clone(),
+            follow: self.follow,
+            activity: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -218,7 +265,8 @@ impl SavedBench {
                     })
                     .collect();
                 let project = tab.project_info().map(SavedProject::of);
-                let layout = if project.is_some() { String::new() } else { format_layout(&tab.layout, &order) };
+                let ai = tab.ai_info().map(SavedAi::of);
+                let layout = if project.is_some() || ai.is_some() { String::new() } else { format_layout(&tab.layout, &order) };
                 SavedTab {
                     id: tab.id,
                     name: tab.name.clone(),
@@ -233,6 +281,7 @@ impl SavedBench {
                     aliases: tab.aliases.clone(),
                     zoom: tab.zoom,
                     project,
+                    ai,
                     panes,
                 }
             })
@@ -264,9 +313,13 @@ impl SavedBench {
                 .iter()
                 .map(|t| Tag { label: t.label.clone(), color: tag_color(&t.color).unwrap_or(Rgb::hex(0x8A93A3)), tint_tab: t.tint })
                 .collect();
-            if let Some(project) = &st.project {
-                let mut tab = Tab::project(expand_home(&project.root));
-                tab.kind = TabKind::Project(project.to_project());
+            if st.project.is_some() || st.ai.is_some() {
+                let mut tab = Tab::project(PathBuf::new());
+                tab.kind = match (&st.project, &st.ai) {
+                    (Some(project), _) => TabKind::Project(project.to_project()),
+                    (None, Some(ai)) => TabKind::Ai(ai.to_ai()),
+                    (None, None) => unreachable!(),
+                };
                 tab.id = st.id;
                 tab.name = st.name.clone();
                 tab.tags = tags;
@@ -367,6 +420,7 @@ impl SavedBench {
             aliases: Aliases::new(),
             zoom: 0.0,
             project: None,
+            ai: None,
             panes: vec![SavedPane {
                 id: PaneId::new(),
                 cwd: self.cwd.clone(),
@@ -397,8 +451,18 @@ impl SavedBench {
             aliases: Aliases::new(),
             zoom: 0.0,
             project: Some(SavedProject { root: home_relative(root), open: Vec::new(), active: None, exclude: Vec::new() }),
+            ai: None,
             panes: Vec::new(),
         });
+        id
+    }
+
+    /// Adds an AI tab working in `folder`.
+    pub fn add_ai_tab(&mut self, folder: &Path) -> TabId {
+        let id = self.add_project_tab(folder);
+        let tab = self.tab_mut(id).unwrap();
+        tab.project = None;
+        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false });
         id
     }
 
@@ -829,6 +893,12 @@ mod tests {
             p.active = Some(0);
             p.exclude = vec!["dist".into()];
         }
+        let mut ai = Tab::ai(home.join("code/api"));
+        if let shed_model::TabKind::Ai(a) = &mut ai.kind {
+            a.session = Some("abc".into());
+            a.add_dirs = vec![home.join("code/web")];
+            a.follow = true;
+        }
         Bench {
             id: BenchId::new(),
             name: "backend".into(),
@@ -836,7 +906,7 @@ mod tests {
             badge: Some("B".into()),
             cwd: home.join("code"),
             active_tab: second.id,
-            tabs: vec![tab, second, project],
+            tabs: vec![tab, second, project, ai],
             aliases: [("up".to_string(), "docker compose up -d".to_string())].into(),
             closing: false,
             launcher: "backend".into(),
@@ -858,7 +928,8 @@ mod tests {
         assert!(text.contains("[tabs.project]\nroot = \"~/code/api\"\nopen = [\"src/main.rs\"]"), "{text}");
 
         let (loaded, panes) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
-        assert_eq!(loaded.tabs.len(), 3);
+        assert_eq!(loaded.tabs.len(), 4);
+        assert_eq!(loaded.tabs[3].kind, bench.tabs[3].kind);
         assert_eq!(loaded.tabs[2].kind, bench.tabs[2].kind);
         assert!(loaded.tabs[2].panes.is_empty());
         assert_eq!(loaded.tabs[2].display_title(), "api code");
@@ -923,6 +994,7 @@ mod tests {
     fn closed_benches_change_tab_by_tab() {
         let mut saved = SavedBench::from_bench(&sample(), |_| PaneExtras::default());
         let (first, second, project) = (saved.tabs[0].id, saved.tabs[1].id, saved.tabs[2].id);
+        saved.remove_tab(saved.tabs[3].id).unwrap();
         let added = saved.add_tab();
         assert_eq!(saved.tabs.len(), 4);
         assert_eq!(saved.tabs[3].panes[0].cwd, saved.cwd);
@@ -957,6 +1029,7 @@ mod tests {
         let tab = other.take_tab(moving).unwrap();
         saved.insert_tab(tab, 0);
         assert_eq!(saved.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [moving, added]);
+        other.take_tab(other.tabs[1].id).unwrap();
         other.take_tab(other.tabs[1].id).unwrap();
         assert!(other.take_tab(other.tabs[0].id).is_err(), "the last tab stays");
     }

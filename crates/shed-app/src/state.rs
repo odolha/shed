@@ -11,6 +11,7 @@ use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed, Tab, TabId};
 use shed_proto::{BenchRef, ClientMsg, Frame, KeeperMsg};
 use tracing::{error, warn};
 
+use crate::ai_view::{AiLimits, AiView};
 use crate::bench_window::BenchWindow;
 use crate::keeper_conn::KeeperConn;
 use crate::pegboard::PegboardData;
@@ -35,6 +36,8 @@ pub struct AppState {
     pub panes: HashMap<PaneId, Entity<TerminalView>>,
     /// The view of every project tab of an open bench.
     pub projects: HashMap<TabId, Entity<ProjectView>>,
+    /// The view of every AI tab of an open bench.
+    pub ai_views: HashMap<TabId, Entity<AiView>>,
     /// Per open bench, the tabs shown most recently, newest first.
     recent_tabs: HashMap<BenchId, Vec<TabId>>,
     windows: HashMap<BenchId, WindowHandle<BenchWindow>>,
@@ -80,6 +83,7 @@ impl AppState {
             settings,
             panes: HashMap::new(),
             projects: HashMap::new(),
+            ai_views: HashMap::new(),
             recent_tabs: HashMap::new(),
             windows: HashMap::new(),
             shed_window: None,
@@ -152,6 +156,22 @@ impl AppState {
                 }
             }
             Frame::Keeper(KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Done(_)) => {}
+            Frame::Keeper(KeeperMsg::AiUpdate { tab, from, entries, status }) => {
+                let Some(view) = self.ai_views.get(&tab).cloned() else { return };
+                view.update(cx, |v, cx| v.update(from as usize, entries, status, cx));
+                self.follow_edits(&view, cx);
+            }
+            Frame::Keeper(KeeperMsg::AiInfo { tab, commands, models }) => {
+                if let Some(view) = self.ai_views.get(&tab) {
+                    view.update(cx, |v, cx| v.set_info(commands, models, cx));
+                }
+            }
+            Frame::Keeper(KeeperMsg::AiLimits(limits)) => {
+                cx.set_global(AiLimits(limits));
+                for view in self.ai_views.values() {
+                    view.update(cx, |_, cx| cx.notify());
+                }
+            }
             Frame::Client(_) | Frame::Input { .. } => warn!("unexpected frame from keeper"),
         }
     }
@@ -219,6 +239,7 @@ impl AppState {
         }
 
         self.sync_projects(cx);
+        self.sync_ai(cx);
         self.sync_identities(cx);
         let benches: Vec<BenchId> = self.windows.keys().copied().collect();
         for bench in benches {
@@ -255,6 +276,88 @@ impl AppState {
         }
     }
 
+    /// A view for every AI tab of an open bench, kept while the tab is in
+    /// the tree, following its settings and the bench's project folders.
+    fn sync_ai(&mut self, cx: &mut Context<Self>) {
+        let open: HashSet<BenchId> = self.windows.keys().chain(&self.opening).copied().collect();
+        let all: Vec<(BenchId, TabId, shed_model::AiTab, shed_model::Rgb, Vec<std::path::PathBuf>)> = self
+            .tree
+            .benches
+            .iter()
+            .flat_map(|b| {
+                let projects: Vec<std::path::PathBuf> = b.tabs.iter().filter_map(|t| Some(t.project_info()?.root.clone())).collect();
+                b.tabs.iter().filter_map(move |t| Some((b.id, t.id, t.ai_info()?.clone(), b.color.accent(), projects.clone())))
+            })
+            .collect();
+        self.ai_views.retain(|id, _| all.iter().any(|w| w.1 == *id));
+        for (bench, tab, ai, accent, projects) in all {
+            match self.ai_views.get(&tab) {
+                Some(view) => view.update(cx, |v, cx| {
+                    (v.bench, v.accent) = (bench, accent);
+                    if v.projects != projects {
+                        v.projects = projects;
+                        cx.notify();
+                    }
+                    v.set_ai(ai, cx);
+                }),
+                None if open.contains(&bench) => {
+                    let (conn, settings) = (self.conn.clone(), self.settings.clone());
+                    let view = cx.new(|cx| {
+                        let mut v = AiView::new(bench, tab, ai, accent, conn, settings, cx);
+                        v.projects = projects;
+                        v
+                    });
+                    self.ai_views.insert(tab, view);
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Files an AI tab finished editing open in their project tab, when it
+    /// follows edits.
+    fn follow_edits(&mut self, view: &Entity<AiView>, cx: &mut Context<Self>) {
+        let (bench, follow) = { let v = view.read(cx); (v.bench, v.ai.follow) };
+        let edits = view.read(cx).finished_edits();
+        let new: Vec<(String, String)> = edits.into_iter().filter(|(id, _)| !view.read(cx).followed.contains(id)).collect();
+        if new.is_empty() {
+            return;
+        }
+        view.update(cx, |v, _| v.followed.extend(new.iter().map(|(id, _)| id.clone())));
+        if !follow {
+            return;
+        }
+        for (_, file) in new {
+            let path = std::path::PathBuf::from(file);
+            let Some(b) = self.tree.bench(bench) else { return };
+            let tab = b.tabs.iter().filter_map(|t| Some((t.id, &t.project_info()?.root))).filter(|(_, r)| path.starts_with(r)).max_by_key(|(_, r)| r.as_os_str().len()).map(|(id, _)| id);
+            if let Some(view) = tab.and_then(|t| self.projects.get(&t)) {
+                view.update(cx, |v, cx| v.show_quietly(path, cx));
+            }
+        }
+    }
+
+    /// Goes to the bench's AI tab for `folder`, or opens one.
+    pub fn open_ai_for(&mut self, bench: BenchId, folder: std::path::PathBuf) {
+        let existing = self.tree.bench(bench).and_then(|b| b.tabs.iter().find(|t| t.ai_info().is_some_and(|a| a.folder == folder))).map(|t| t.id);
+        match existing {
+            Some(tab) => self.conn.send_msg(ClientMsg::FocusTab { tab }),
+            None => self.conn.send_msg(ClientMsg::NewAiTab { bench, folder }),
+        }
+    }
+
+    /// Puts text into the bench's AI tab for the folder holding `path` (or
+    /// its only AI tab), and shows it.
+    pub fn send_to_ai(&mut self, bench: BenchId, path: &std::path::Path, text: &str, cx: &mut Context<Self>) -> bool {
+        let Some(b) = self.tree.bench(bench) else { return false };
+        let ais: Vec<(TabId, std::path::PathBuf)> = b.tabs.iter().filter_map(|t| Some((t.id, t.ai_info()?.folder.clone()))).collect();
+        let tab = ais.iter().filter(|(_, f)| path.starts_with(f)).max_by_key(|(_, f)| f.as_os_str().len()).or(ais.first()).map(|(t, _)| *t);
+        let Some(view) = tab.and_then(|t| self.ai_views.get(&t)).cloned() else { return false };
+        self.conn.send_msg(ClientMsg::FocusTab { tab: tab.unwrap() });
+        view.update(cx, |v, cx| v.insert(text, cx));
+        true
+    }
+
     /// Opens a file in the project tab of `bench` whose folder holds it, at
     /// a line and column (from 1). False if no project tab holds it.
     pub fn open_in_project(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) -> bool {
@@ -279,6 +382,10 @@ impl AppState {
         let tab = self.tree.bench(bench)?.active_tab()?;
         if tab.project_info().is_some() {
             let view = self.projects.get(&tab.id)?;
+            return Some((Focus::Tab(tab.id), view.read(cx).focus_target(cx)));
+        }
+        if tab.ai_info().is_some() {
+            let view = self.ai_views.get(&tab.id)?;
             return Some((Focus::Tab(tab.id), view.read(cx).focus_target(cx)));
         }
         let view = self.panes.get(&tab.active_pane)?;
@@ -363,6 +470,9 @@ impl AppState {
         }
         for view in self.projects.values() {
             view.update(cx, |view, cx| view.apply(&self.settings, cx));
+        }
+        for view in self.ai_views.values() {
+            view.update(cx, |view, cx| view.apply_settings(&self.settings, cx));
         }
         cx.notify();
     }
@@ -653,6 +763,12 @@ pub fn move_tab(conn: &KeeperConn, tab: TabId, title: &str, from: BenchRef, to: 
 pub fn close_tab(conn: &KeeperConn, tab: &Tab, bench: BenchRef, window: &mut gpui::Window, cx: &mut gpui::App) {
     let (title, id) = (tab.display_title(), tab.id);
     let (message, detail, button, msg) = match bench {
+        BenchRef::Running(_) if tab.ai_info().is_some() => (
+            format!("Close the AI tab “{title}”?"),
+            "Claude Code stops if it is working. The session is kept: open it again from a new AI tab.",
+            "Close Tab",
+            ClientMsg::CloseTab { tab: id },
+        ),
         BenchRef::Running(_) if tab.project_info().is_some() => (
             format!("Close the project tab “{title}”?"),
             "Its files stay where they are; open the folder again to bring it back.",

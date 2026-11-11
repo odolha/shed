@@ -505,6 +505,7 @@ impl ProjectView {
         match ks.key.as_str() {
             "p" if sec && !ks.modifiers.shift => self.open_quick(window, cx),
             "f" if sec && ks.modifiers.shift => self.open_search(window, cx),
+            "a" if sec && ks.modifiers.shift => self.send_to_ai(None, cx),
             "w" if sec && !ks.modifiers.shift => {
                 if let Some(i) = self.active {
                     self.close_file(i, window, cx);
@@ -513,6 +514,16 @@ impl ProjectView {
             _ => return,
         }
         cx.stop_propagation();
+    }
+
+    /// Opens a file, or shows it if open, without taking the keyboard: for
+    /// following what the AI edits.
+    pub fn show_quietly(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if !path.is_file() {
+            return;
+        }
+        self.open_file(path.clone(), None, false, cx);
+        self.reveal(&path, cx);
     }
 
     /// Opens a file (or shows it if open), at a line and column from 1.
@@ -1127,6 +1138,38 @@ impl ProjectView {
         cx.notify();
     }
 
+    /// Puts a file (or the editor's selection, with where it is from) into
+    /// the bench's AI tab's prompt.
+    fn send_to_ai(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        let active = self.active.and_then(|i| self.open.get(i));
+        let (path, text) = match (path, active) {
+            (Some(p), _) => (p.clone(), format!("{} ", p.display())),
+            (None, Some(file)) => {
+                let rel = file.path.strip_prefix(&self.root).unwrap_or(&file.path).display().to_string();
+                let selection = file.view().map(|v| {
+                    let b = &v.read(cx).buffer;
+                    let r = b.selection().range();
+                    (b.slice(r.clone()), b.line_of(r.start) + 1, b.line_of(r.end) + 1)
+                });
+                match selection {
+                    Some((text, a, b)) if !text.is_empty() => {
+                        let lang = file.lang.map(|l| l.name.to_lowercase()).unwrap_or_default();
+                        (file.path.clone(), format!("In {rel}, lines {a}–{b}:\n```{lang}\n{text}\n```\n"))
+                    }
+                    _ => (file.path.clone(), format!("{} ", file.path.display())),
+                }
+            }
+            (None, None) => return,
+        };
+        let bench = self.bench;
+        let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) else { return };
+        let sent = state.update(cx, |s, cx| s.send_to_ai(bench, &path, &text, cx));
+        if !sent {
+            self.notice = Some("This bench has no AI tab yet: use Ask AI above to open one.".into());
+            cx.notify();
+        }
+    }
+
     fn row_menu(&self, path: &Path, dir: bool) -> Vec<MenuEntry<Self>> {
         let folder = if dir { path.to_path_buf() } else { path.parent().unwrap_or(&self.root).to_path_buf() };
         let relative = path.strip_prefix(&self.root).unwrap_or(path).display().to_string();
@@ -1136,7 +1179,9 @@ impl ProjectView {
             let open = path.to_path_buf();
             entries.push(menu::item("Open", move |this: &mut Self, _, cx| this.open_path(open.clone(), None, cx)).icon("file"));
         }
+        let to_ai = path.to_path_buf();
         entries.extend([
+            menu::item("Send to AI", move |this: &mut Self, _, cx| this.send_to_ai(Some(to_ai.clone()), cx)).icon("ai"),
             menu::item("Open Terminal Here", move |this: &mut Self, _, _| this.open_terminal(&folder)).icon("terminal"),
             menu::item("Show in File Manager", move |_, _, cx| cx.reveal_path(&file)).icon("folder"),
             MenuEntry::Separator,
@@ -1261,6 +1306,12 @@ impl ProjectView {
             .child(div().flex_none().text_size(px(14.0)).text_color(hsla(ui.text)).child(name))
             .child(div().flex_1().min_w_0().truncate().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(shed_save::home_relative(&self.root)))
             .child(button("project-open", "file", "Open File").tooltip(menu::tooltip("Open a file by name (Ctrl+P)")).on_click(cx.listener(|this, _, window, cx| this.open_quick(window, cx))))
+            .child(button("project-ai", "ai", "Ask AI").tooltip(menu::tooltip("Go to the AI tab for this project, or open one")).on_click(cx.listener(|this, _, _, cx| {
+                let (bench, root) = (this.bench, this.root.clone());
+                if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+                    state.update(cx, |s, _| s.open_ai_for(bench, root));
+                }
+            })))
             .child(button("project-terminal", "terminal", "Terminal").on_click(cx.listener(|this, _, _, _| this.open_terminal(&this.root.clone()))))
             .child(button("project-files", "folder", "File Manager").on_click(move |_, _, cx| cx.open_with_system(&root)))
             .child(button("project-refresh", "refresh", "Refresh").on_click(cx.listener(|this, _, _, cx| this.refresh(cx))))

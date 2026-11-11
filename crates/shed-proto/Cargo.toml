@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 shed-model.workspace = true
+shed-ai.workspace = true
 serde.workspace = true
 postcard.workspace = true
 thiserror.workspace = true

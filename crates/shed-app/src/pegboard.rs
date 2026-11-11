@@ -584,7 +584,7 @@ impl Pegboard {
         let bench = entry.bench.id;
         let title = tab.display_title();
         entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::TabName(tab_id), title.clone(), window, cx)).icon("pencil"));
-        if tab.project_info().is_none() {
+        if tab.project_info().is_none() && tab.ai_info().is_none() {
             entries.push(menu_item("Setup…", move |this, window, cx| this.open_setup(bench, tab_id, window, cx)).icon("rack"));
         }
         entries.push(menu_item("Add Tag…", move |this, window, cx| this.start_edit(Edit::AddTag(tab_id), String::new(), window, cx)).icon("tag"));
@@ -911,9 +911,13 @@ impl Pegboard {
         let card_key = entry.key();
 
         let project = tab.project_info().map(|p| p.root.clone());
+        let ai = tab.ai_info().map(|a| a.folder.clone());
         let mut head = div().flex().items_center().gap_1p5().min_w_0();
         if project.is_some() {
             head = head.child(svg().path(icon("project")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
+        }
+        if ai.is_some() {
+            head = head.child(svg().path(icon("ai")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
         }
         if waiting {
             head = head.child(svg().path(icon("tool-waiting")).size(px(12.0)).flex_none().text_color(hsla(accent)));
@@ -975,19 +979,21 @@ impl Pegboard {
         // colour: `opacity` draws through a window-sized layer, per card.)
         let color = if running { hsla(ui.text_dim) } else { hsla_alpha(ui.text_dim, 0.55) };
         let preview = div().h(px(PREVIEW_LINES as f32 * 11.0)).overflow_hidden();
-        // A project has no screen: its folder stands in.
-        let preview = match &project {
+        // A project or a conversation has no screen: its icon stands in.
+        let glyph = if ai.is_some() { "ai" } else { "project" };
+        let preview = match project.as_ref().or(ai.as_ref()) {
             Some(_) => preview
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(svg().path(icon("project")).size(px(36.0)).text_color(hsla_alpha(ui.ink(accent), if running { 0.5 } else { 0.3 }))),
+                .child(svg().path(icon(glyph)).size(px(36.0)).text_color(hsla_alpha(ui.ink(accent), if running { 0.5 } else { 0.3 }))),
             None => preview.child(preview_text(lines, mono, color)),
         };
 
-        let mut foot = match &project {
-            Some(root) => vec![home_relative(root), "project".into()],
-            None => vec![pane.map(|p| home_relative(&p.cwd)).unwrap_or_default()],
+        let mut foot = match (&project, &ai) {
+            (Some(root), _) => vec![home_relative(root), "project".into()],
+            (None, Some(folder)) => vec![home_relative(folder), "Claude Code".into()],
+            (None, None) => vec![pane.map(|p| home_relative(&p.cwd)).unwrap_or_default()],
         };
         if let Some(t) = &tool {
             foot.push(t.clone());

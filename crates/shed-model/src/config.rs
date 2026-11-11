@@ -62,7 +62,7 @@ pub struct AiConfig {
 
 impl Default for AiConfig {
     fn default() -> Self {
-        Self { command: "claude -p".into(), history: true, screen: true }
+        Self { command: "claude -p --no-session-persistence".into(), history: true, screen: true }
     }
 }
 

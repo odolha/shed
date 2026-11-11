@@ -66,7 +66,9 @@ Crates (`crates/`), lowest first:
 - `shed-desktop`: bench icons (SVG template recoloured, resvg) and desktop entries.
 - `shed-text`: an editable text buffer (rope, selection, undo, editor edits, reload).
 - `shed-project`: a project's file list, folder watching, fuzzy file ranking,
-  tree-sitter colouring.
+  tree-sitter colouring, search in files.
+- `shed-ai`: Claude Code conversations from its stream-json events and session
+  files; the keeper runs `claude` per AI tab (`shed-keeper/src/server/ai.rs`).
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.
 - `shed-app`: `shed` binary: GPUI windows and the CLI.
 
@@ -106,7 +108,8 @@ produces replay on attach); each window runs its own emulator per visible pane
   bar, splits). `setup_panel.rs`: startup/teardown/aliases drawer.
   `logbook_view.rs`: Ctrl+R history. `project_view.rs`: a project tab (file
   tree, open files, quick open, following the disk; tabs have a `TabKind`,
-  project tabs no panes). `text_view.rs`: the editor view over a `shed-text` buffer. `menu.rs`: shared context menus and tooltips.
+  project tabs no panes). `text_view.rs`: the editor view over a `shed-text` buffer.
+  `ai_view.rs`: an AI tab (sessions, conversation, prompt). `menu.rs`: shared context menus and tooltips.
   `line_editor.rs`: the single-line text field. `actions.rs`: keybindings.
   `window_place.rs`: windows reopen at their last size, position and state.
 - `theme.rs`: `UiColors` (chrome colours from the theme's `[ui]` section, with

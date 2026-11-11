@@ -8,6 +8,7 @@ what you see is what Shed shows.
 - [The Shed window](#the-shed-window)
 - [A bench's window](#a-benchs-window)
 - [Project tabs](#project-tabs)
+- [AI tabs](#ai-tabs)
 - [Opening, hiding, closing](#opening-hiding-closing)
 - [Setup: startup, teardown and aliases](#setup-startup-teardown-and-aliases)
 - [History and the logbook](#history-and-the-logbook)
@@ -199,6 +200,50 @@ it, at that line.
 The open files are saved with the bench and open again with it. Closing a
 project tab asks first, as for any tab, and leaves its files alone. A bench whose
 last terminal has exited stays open while it has a project tab.
+
+## AI tabs
+
+An **AI tab** is a [Claude Code](https://claude.com/claude-code) conversation with
+an interface of its own: Claude Code does the work, Shed shows it. It works in one
+folder (where Claude Code keeps its sessions) and can be given the bench's other
+project folders too.
+
+To open one: **Ask AI** in a project tab's header (it goes to that project's AI
+tab, or opens one), **New AI Tab** in the new-tab button's menu or the bench's
+menu (pick one of the bench's folders or another), or `shed ai [DIR]` in a
+terminal of the bench.
+
+- **Sessions** are on the left, newest first, with Claude Code's own titles (else
+  the first prompt), when they were last used, the Git branch and how many
+  prompts. Type to filter. Click one to show it and carry on with it; **New
+  Session** starts afresh. Right-click a session to continue it in a terminal
+  (`claude --resume`), in Claude Code's own interface. The quick commands that the
+  `> request` prompt makes are not saved as sessions, so they do not crowd the list.
+- **The prompt** grows with what you type. Enter sends; Shift+Enter breaks the
+  line. Typing `/` lists Claude Code's commands and skills to complete (Tab or
+  Enter picks one). Ctrl+Up and Ctrl+Down go through earlier prompts. Paste a
+  screenshot with Ctrl+V and it goes with the prompt; drop files to put their
+  paths in. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
+  its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu
+  sends a file or folder.
+- **The conversation** streams in: answers in Markdown, each tool Claude uses on
+  one line (click it for the command, the change as a diff, and what came back),
+  thinking folded away. Right-click to copy an answer or the whole conversation.
+- **Permission**: when Claude wants to change a file or run a command that needs
+  your say, a card shows what and how, with **Allow**, **Allow for This Session**
+  and **Deny**; the tab's icon shows it is waiting. **Stop** (or Escape at the
+  prompt) interrupts.
+- **Below the prompt**: the model and its effort, the mode (**Ask Before Edits**,
+  **Accept Edits**, **Plan Only**), and the eye, which makes files Claude edits
+  open in their project tab as it goes.
+- **Above**: the session's title, your usage limits for the 5-hour window and the
+  week (with when they reset), what the session has cost, and how full its
+  context is. **Also works in** lists the bench's other projects: click one to
+  let Claude read and change it too.
+
+Claude Code runs in the keeper, like a terminal's programs: hiding the bench or
+closing its window does not stop it. Closing the tab or the bench does; the
+session stays, and opens again with the tab.
 
 ## Opening, hiding, closing
 
@@ -451,6 +496,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed setup [--edit]` | Shows (or edits) this tab's startup and teardown |
 | `shed alias [add NAME CMD \| rm NAME] [--bench\|--global\|--shell]` | Lists or changes aliases |
 | `shed project [DIR] [--bench NAME]` | Opens a folder (by default the Git repository you are in) as a project tab |
+| `shed ai [DIR] [--bench NAME]` | Opens an AI tab working in a folder (by default the Git repository you are in) |
 | `shed tag add LABEL [--color C] [--tint]` | Tags this tab |
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |
@@ -488,7 +534,7 @@ integration = true             # load Shed's bash or zsh integration into its sh
 option_as_alt = false          # Option sends Alt to the shell instead of typing é, @, …
 
 [ai]                           # the "> request" prompt
-command = "claude -p"          # gets the request on stdin, prints a command; "" turns it off
+command = "claude -p --no-session-persistence"   # request on stdin, prints a command; "" turns it off
 history = true                 # send the tab's recent commands along
 screen = true                  # send the text on the screen along
 

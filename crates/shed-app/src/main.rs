@@ -1,6 +1,7 @@
 //! `shed`: the bench windows, plus the CLI.
 
 mod actions;
+mod ai_view;
 mod assets;
 mod bench_window;
 mod emoji;
@@ -101,6 +102,14 @@ enum Command {
         #[arg(long)]
         bench: Option<String>,
     },
+    /// Open an AI tab (Claude Code) in this bench, working in DIR (by
+    /// default the Git repository you are in, else this folder).
+    Ai {
+        dir: Option<std::path::PathBuf>,
+        /// Into this bench instead (by name).
+        #[arg(long)]
+        bench: Option<String>,
+    },
     /// Tag the current tab (run inside Shed).
     Tag {
         #[command(subcommand)]
@@ -141,6 +150,17 @@ enum Command {
     /// Types text into the first bench's active pane (for testing; `\r` is Enter).
     #[command(hide = true)]
     DebugType { text: String },
+    /// Sends a prompt to the first AI tab (for testing), optionally choosing its model first.
+    #[command(hide = true)]
+    DebugAi {
+        #[arg(default_value = "")]
+        text: String,
+        #[arg(long)]
+        model: Option<String>,
+        /// Instead of a prompt, answer every waiting request: allow or deny.
+        #[arg(long)]
+        answer: Option<String>,
+    },
     /// Called by the shell hook.
     #[command(hide = true)]
     Hook {
@@ -299,9 +319,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Alias { action: Some(AliasAction::Rm { name, level }) }) => setup_cli::change_alias(&name, None, level.level()),
         Some(Command::Status) => status(),
         Some(Command::Tag { action }) => tag(action),
-        Some(Command::Project { dir, bench }) => project(dir, bench),
+        Some(Command::Project { dir, bench }) => project(dir, bench, false),
+        Some(Command::Ai { dir, bench }) => project(dir, bench, true),
         Some(Command::Stop) => stop(),
         Some(Command::DebugType { text }) => debug_type(&text),
+        Some(Command::DebugAi { text, model, answer }) => debug_ai(text, model, answer),
         Some(Command::Init { shell }) => match shell.as_str() {
             "bash" => {
                 print!("{}", shed_logbook::BASH_HOOK);
@@ -584,7 +606,7 @@ fn debug_type(text: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn project(dir: Option<std::path::PathBuf>, bench: Option<String>) -> anyhow::Result<()> {
+fn project(dir: Option<std::path::PathBuf>, bench: Option<String>, ai: bool) -> anyhow::Result<()> {
     let here = std::env::current_dir()?;
     let root = match dir {
         Some(d) => std::fs::canonicalize(here.join(d))?,
@@ -608,11 +630,34 @@ fn project(dir: Option<std::path::PathBuf>, bench: Option<String>) -> anyhow::Re
             tab.and_then(|t| tree.bench_of_tab(t)).unwrap_or(id)
         }
     };
-    let done = request(ClientMsg::NewProjectTab { bench, root }, |m| match m {
+    let msg = if ai { ClientMsg::NewAiTab { bench, folder: root } } else { ClientMsg::NewProjectTab { bench, root } };
+    let done = request(msg, |m| match m {
         KeeperMsg::Done(text) => Some(text),
         _ => None,
     })?;
     println!("{done}");
+    Ok(())
+}
+
+fn debug_ai(text: String, model: Option<String>, answer: Option<String>) -> anyhow::Result<()> {
+    let tree = request(ClientMsg::Status, |m| match m {
+        KeeperMsg::Status(s) => Some(s.tree),
+        _ => None,
+    })?;
+    let Some((tab, ai)) = tree.benches.iter().flat_map(|b| &b.tabs).find_map(|t| Some((t.id, t.ai_info()?.clone()))) else {
+        bail!("no AI tab");
+    };
+    let (conn, _rx) = keeper_conn::connect(ClientKind::Cli, false)?;
+    if let Some(answer) = answer {
+        conn.send_msg(ClientMsg::AiAnswer { tab, request: "*".into(), allow: answer == "allow", always: false });
+        std::thread::sleep(Duration::from_millis(200));
+        return Ok(());
+    }
+    if let Some(model) = model {
+        conn.send_msg(ClientMsg::AiSettings { tab, settings: shed_model::AiTab { model: Some(model), ..ai } });
+    }
+    conn.send_msg(ClientMsg::AiSend { tab, text, images: Vec::new() });
+    std::thread::sleep(Duration::from_millis(200));
     Ok(())
 }
 

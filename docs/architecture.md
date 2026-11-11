@@ -190,6 +190,37 @@ written to `$XDG_STATE_HOME/shed/recovery/` 1.5 s after typing pauses and read
 back when the file next opens. A terminal's Ctrl+click on a path asks `AppState`
 (through the `AppHandle` global) to open it in the bench's project tab.
 
+## AI tabs
+
+An AI tab (`TabKind::Ai`: folder, extra folders, session id, model, mode, effort,
+following) is a Claude Code conversation. The keeper runs `claude -p
+--input-format stream-json --output-format stream-json --include-partial-messages
+--permission-prompt-tool stdio` in the folder (`--resume` with the tab's session),
+one process per tab, started by the first prompt (or as the user starts typing,
+`AiStart`) and kept between turns (`server/ai.rs`). It sends `initialize` first;
+the reply lists the commands and models (`AiInfo`). Prompts go in as JSON lines;
+every line coming out goes through `shed_ai::Transcript`, which turns stream
+events, tool calls, tool results and permission requests (`control_request`
+`can_use_tool`) into entries. Changes are sent to every window as `AiUpdate`
+(entries from the first changed one on, at most every 40 ms), and the tab's
+activity (idle, working, waiting) and session id go into the tree. The user's
+answer to a permission request goes back as a `control_response` (with
+Claude Code's suggested rules for "for this session"); Stop is a `control_request`
+`interrupt`. Model and mode changes go to the running process; other folders or
+effort start a new one at the next prompt. `rate_limit_event`s carry the usage
+limits (`AiLimits`).
+
+Sessions are read from Claude Code's own files
+(`~/.claude/projects/<folder>/<id>.jsonl`), by the window to list them (titles from
+its `ai-title` records) and by the keeper to show a session again. `shed-ai` has
+no UI and no processes; its tests replay recorded streams
+(`crates/shed-ai/tests/streams/`), and `crates/shed-app/tests/ai_tabs.rs` runs the
+keeper against a stand-in `claude` (`SHED_CLAUDE`).
+
+`ai_view.rs` draws the conversation with GPUI's `list` (variable-height rows,
+only those in view, following the end as it grows), a light Markdown renderer,
+and the prompt as a `TextView`.
+
 ## Saving and loading benches
 
 A bench is saved as `~/.local/share/shed/benches/<name>.toml`, plain TOML meant to be
@@ -320,6 +351,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-desktop` | Bench and app icons, desktop entries |
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
 | `shed-project` | A project's file list, folder watching, ranking files by name, colouring |
+| `shed-ai` | Claude Code conversations from its stream or session files; session lists |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 
 `vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,

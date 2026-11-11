@@ -7,8 +7,8 @@ shells on remote servers that stay alive. It records what is feasible, the
 design choices and their reasons, and the order of work.
 
 Status: agreed 2026-11-11 (see [Decisions](#decisions)). The order may change;
-all of it is wanted in the end. Done: steps 1–4 (tab kinds, text core, files
-and editor, search).
+all of it is wanted in the end. Done: steps 1–5 and 7 (tab kinds, text core,
+files and editor, search, AI tabs).
 
 ## The picture
 

@@ -30,6 +30,8 @@ use tracing::{debug, info, warn};
 
 use crate::procinfo;
 use crate::ask;
+
+mod ai;
 use crate::pty::{self, SpawnOptions};
 
 /// How long a pane keeps draining output after its shell exits, for
@@ -99,6 +101,8 @@ pub struct Keeper {
     save_soon: Notify,
     /// Wakes the task that broadcasts batched tree changes.
     tree_dirty: Notify,
+    /// Wakes the task that sends what changed in AI conversations.
+    ai_dirty: Notify,
     /// Finished commands, on their way to the logbook writer thread.
     logbook: Option<std::sync::mpsc::Sender<NewEntry>>,
     /// The bash startup file that loads ~/.bashrc and then Shed's hook.
@@ -136,6 +140,10 @@ struct State {
     shown: HashSet<BenchId>,
     /// The desktop prefers dark, as the window process last said.
     dark: bool,
+    /// Each AI tab's conversation and Claude Code process.
+    ai: HashMap<TabId, ai::AiRt>,
+    /// The account's usage limits, as Claude Code last reported them.
+    ai_limits: Option<shed_ai::Limits>,
 }
 
 struct PaneRt {
@@ -328,12 +336,15 @@ impl Keeper {
                 palette: Palette::default(),
                 shown: HashSet::new(),
                 dark: true,
+                ai: HashMap::new(),
+                ai_limits: None,
             }),
             shutdown: Notify::new(),
             stopping: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             save_soon: Notify::new(),
             tree_dirty: Notify::new(),
+            ai_dirty: Notify::new(),
             logbook,
             bash_rc,
             zsh_dir,
@@ -355,6 +366,7 @@ impl Keeper {
         let poll = tokio::spawn(self.clone().poll_loop());
         let flush = tokio::spawn(self.clone().flush_loop());
         let autosave = tokio::spawn(self.clone().autosave_loop());
+        let ai_flush = tokio::spawn(self.clone().ai_flush_loop());
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -372,6 +384,8 @@ impl Keeper {
         poll.abort();
         flush.abort();
         autosave.abort();
+        ai_flush.abort();
+        self.lock().ai.clear();
         self.finish();
         Ok(())
     }
@@ -650,6 +664,50 @@ impl Keeper {
                     st.hang_up(&panes);
                 }
             }
+            ClientMsg::NewCommandTab { bench, cwd, command } => {
+                let mut st = self.lock();
+                let Some(b) = st.tree.bench(bench) else { return };
+                let index = b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1);
+                let tab_id = TabId::new();
+                let mut spec = PaneSpec::fresh(cwd);
+                spec.after_prompt.push_back((command, true));
+                match self.spawn_pane_spec(&mut st, bench, tab_id, spec) {
+                    Ok(pane) => {
+                        let mut tab = Tab::with_pane(pane);
+                        tab.id = tab_id;
+                        let b = st.tree.bench_mut(bench).unwrap();
+                        b.tabs.insert(index, tab);
+                        b.active_tab = tab_id;
+                        self.sync_alias_files(&mut st);
+                        st.broadcast_tree();
+                    }
+                    Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
+                }
+            }
+            ClientMsg::NewAiTab { bench, folder } => {
+                let mut st = self.lock();
+                let Some(b) = st.tree.bench_mut(bench) else { return };
+                let folder = shed_save::expand_home(&folder.to_string_lossy());
+                if !folder.is_dir() {
+                    st.send(client, KeeperMsg::Error(format!("{} is not a folder", folder.display())));
+                    return;
+                }
+                let tab = Tab::ai(folder);
+                let (id, index) = (tab.id, b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1));
+                b.tabs.insert(index, tab);
+                b.active_tab = id;
+                st.broadcast_tree();
+                st.send(client, KeeperMsg::Done("opened an AI tab".into()));
+                drop(st);
+                self.save_soon.notify_one();
+            }
+            ClientMsg::AiWatch { tab } => self.ai_watch(client, tab),
+            ClientMsg::AiSend { tab, text, images } => self.ai_send(client, tab, text, images),
+            ClientMsg::AiStop { tab } => self.ai_stop(tab),
+            ClientMsg::AiStart { tab } => self.ai_start(client, tab),
+            ClientMsg::AiAnswer { tab, request, allow, always } => self.ai_answer(tab, request, allow, always),
+            ClientMsg::AiOpenSession { tab, session } => self.ai_open_session(tab, session),
+            ClientMsg::AiSettings { tab, settings } => self.ai_settings(tab, settings),
             ClientMsg::SetProject { tab, project } => {
                 let mut st = self.lock();
                 let Some(t) = st.tree.tab_mut(tab) else { return };
@@ -1030,6 +1088,11 @@ impl Keeper {
     /// Takes a bench out of the tree and hangs up its shells.
     fn drop_bench(&self, st: &mut State, bench: BenchId) {
         let panes = st.pane_rt_ids_in(bench);
+        // Its conversations' processes stop with it.
+        let tabs: Vec<TabId> = st.tree.bench(bench).map(|b| b.tabs.iter().map(|t| t.id).collect()).unwrap_or_default();
+        for tab in tabs {
+            st.ai.remove(&tab);
+        }
         st.tree.benches.retain(|b| b.id != bench);
         st.shown.remove(&bench);
         st.broadcast_tree();
@@ -1197,6 +1260,14 @@ impl Keeper {
                 }
                 saved.add_project_tab(&root);
                 format!("added a project tab to {name}")
+            }
+            SavedEdit::NewAiTab { folder } => {
+                let folder = shed_save::expand_home(&folder.to_string_lossy());
+                if !folder.is_dir() {
+                    return Err(format!("{} is not a folder", folder.display()));
+                }
+                saved.add_ai_tab(&folder);
+                format!("added an AI tab to {name}")
             }
             SavedEdit::RemoveTab { tab } => {
                 saved.remove_tab(tab)?;
@@ -2338,6 +2409,7 @@ fn apply_theme(st: &mut State) {
 /// with it if it was the last.
 fn close_paneless_tab(st: &mut State, tab: TabId) {
     let Some(bench) = st.tree.bench_of_tab(tab) else { return };
+    st.ai.remove(&tab);
     if st.tree.close_paneless_tab(tab).is_some() {
         if st.tree.bench(bench).is_none() {
             st.shown.remove(&bench);

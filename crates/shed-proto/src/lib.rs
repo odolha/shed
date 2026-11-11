@@ -9,10 +9,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
+use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -113,6 +113,34 @@ pub enum ClientMsg {
     NewProjectTab { bench: BenchId, root: PathBuf },
     /// A project tab's open files and excludes, as its view changes them.
     SetProject { tab: TabId, project: Project },
+    /// Adds an AI tab for Claude Code working in `folder`.
+    NewAiTab { bench: BenchId, folder: PathBuf },
+    /// Asks for an AI tab's whole conversation (`AiUpdate` from 0) and what
+    /// Claude Code can do (`AiInfo`).
+    AiWatch { tab: TabId },
+    /// Sends a prompt, starting Claude Code if it is not running.
+    AiSend { tab: TabId, text: String, images: Vec<AiImage> },
+    /// Interrupts the turn under way.
+    AiStop { tab: TabId },
+    /// Answers a permission request; `always` keeps the answer for the session.
+    AiAnswer { tab: TabId, request: String, allow: bool, always: bool },
+    /// Shows and continues another session, or (`None`) starts a new one.
+    AiOpenSession { tab: TabId, session: Option<String> },
+    /// Changes an AI tab's folders, model, mode, effort or following.
+    AiSettings { tab: TabId, settings: AiTab },
+    /// Opens a terminal tab in `cwd` after the active one and runs `command` at its first prompt.
+    NewCommandTab { bench: BenchId, cwd: PathBuf, command: String },
+    /// Starts an AI tab's Claude Code ahead of its first prompt (the user
+    /// is typing), so its commands and models are known.
+    AiStart { tab: TabId },
+}
+
+/// A picture sent with a prompt.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AiImage {
+    /// `image/png` and the like.
+    pub media_type: String,
+    pub data: Vec<u8>,
 }
 
 /// What can change in a closed bench without opening it.
@@ -133,6 +161,8 @@ pub enum SavedEdit {
     Aliases { tab: Option<TabId>, aliases: Aliases },
     /// Adds a project tab for the folder `root`.
     NewProjectTab { root: PathBuf },
+    /// Adds an AI tab working in `folder`.
+    NewAiTab { folder: PathBuf },
 }
 
 /// A bench, running or closed.
@@ -189,6 +219,13 @@ pub enum KeeperMsg {
     ShowShed,
     /// To the window process: close this bench's window, keeping the bench.
     Hide { bench: BenchId },
+    /// An AI tab's conversation from entry `from` on (replacing what the
+    /// window has from there), with its state.
+    AiUpdate { tab: TabId, from: u32, entries: Vec<shed_ai::Entry>, status: shed_ai::Status },
+    /// What Claude Code offers in an AI tab: commands and models.
+    AiInfo { tab: TabId, commands: Vec<shed_ai::Command>, models: Vec<shed_ai::Model> },
+    /// The account's usage limits, as Claude Code last reported them.
+    AiLimits(shed_ai::Limits),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

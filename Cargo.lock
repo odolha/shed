@@ -5661,6 +5661,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shed-ai"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "shed-app"
 version = "0.1.0"
 dependencies = [
@@ -5674,6 +5683,7 @@ dependencies = [
  "libc",
  "raw-window-handle",
  "serde",
+ "shed-ai",
  "shed-desktop",
  "shed-emu",
  "shed-keeper",
@@ -5715,9 +5725,12 @@ name = "shed-keeper"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "libc",
  "nix",
+ "serde_json",
+ "shed-ai",
  "shed-desktop",
  "shed-emu",
  "shed-logbook",
@@ -5791,6 +5804,7 @@ version = "0.1.0"
 dependencies = [
  "postcard",
  "serde",
+ "shed-ai",
  "shed-model",
  "thiserror 2.0.21",
 ]

@@ -275,6 +275,32 @@ impl BenchWindow {
         .detach();
     }
 
+    /// Where a new AI tab can work: the bench's projects, its folder, or one to pick.
+    fn ai_folder_menu(&mut self, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+        let Some(bench) = self.bench(cx) else { return Vec::new() };
+        let mut folders: Vec<std::path::PathBuf> = bench.tabs.iter().filter_map(|t| Some(t.project_info()?.root.clone())).collect();
+        if !folders.contains(&bench.cwd) {
+            folders.push(bench.cwd.clone());
+        }
+        let mut entries: Vec<MenuEntry<Self>> = folders
+            .into_iter()
+            .map(|folder| {
+                let label = shed_save::home_relative(&folder);
+                item(label, move |this, _, cx| this.send(ClientMsg::NewAiTab { bench: this.bench, folder: folder.clone() }, cx)).icon("folder")
+            })
+            .collect();
+        entries.push(item("Other Folder…", |_, window, cx| {
+            let picked = crate::state::pick_folder(cx);
+            cx.spawn_in(window, async move |this, cx| {
+                if let Ok(Some(folder)) = picked.await {
+                    this.update(cx, |this, cx| this.send(ClientMsg::NewAiTab { bench: this.bench, folder }, cx)).ok();
+                }
+            })
+            .detach();
+        }));
+        entries
+    }
+
     /// Opens the project a pane is in (its Git repository, else its folder).
     fn open_pane_project(&mut self, pane: PaneId, cx: &mut Context<Self>) {
         let Some(cwd) = self.state.read(cx).tree.pane(pane).map(|p| p.cwd.clone()) else { return };
@@ -406,6 +432,7 @@ impl BenchWindow {
             item("Add Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)).icon("tag"),
         ];
         match tab.project_info() {
+            _ if tab.ai_info().is_some() => {}
             Some(project) => {
                 let (root, path) = (project.root.clone(), project.root.display().to_string());
                 entries.push(
@@ -513,6 +540,7 @@ impl BenchWindow {
         let current = self.bench(cx).map(|b| b.color);
         let mut entries = vec![
             item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
+            more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(cx)).icon("ai"),
             MenuEntry::Separator,
             item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)).icon("pencil"),
             item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
@@ -608,6 +636,11 @@ impl BenchWindow {
             if tab.project_info().is_some() {
                 el = el.child(svg().path(icon("project")).size(px(14.0)).flex_none().text_color(hsla(ui.ink(accent))));
             }
+            if let Some(ai) = tab.ai_info() {
+                let glyph = if ai.activity == shed_model::AiActivity::Waiting { "tool-waiting" } else { "ai" };
+                let color = if ai.activity == shed_model::AiActivity::Idle { ui.text_dim } else { ui.ink(accent) };
+                el = el.child(svg().path(icon(glyph)).size(px(14.0)).flex_none().text_color(hsla(color)));
+            }
             if tab.private {
                 el = el.child(svg().path(icon("private")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
             }
@@ -647,6 +680,7 @@ impl BenchWindow {
                     let entries = vec![
                         item("New Terminal Tab", |this, _, cx| this.new_tab(cx)).icon("terminal"),
                         item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
+                        more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(cx)).icon("ai"),
                     ];
                     this.open_menu(e.position, entries, cx);
                 }))
@@ -853,6 +887,10 @@ impl Render for BenchWindow {
         let accent = bench.color.accent();
         let content = match bench.active_tab() {
             Some(tab) if tab.project_info().is_some() => match self.state.read(cx).projects.get(&tab.id) {
+                Some(view) => div().size_full().child(view.clone()).into_any_element(),
+                None => div().into_any_element(),
+            },
+            Some(tab) if tab.ai_info().is_some() => match self.state.read(cx).ai_views.get(&tab.id) {
                 Some(view) => div().size_full().child(view.clone()).into_any_element(),
                 None => div().into_any_element(),
             },
