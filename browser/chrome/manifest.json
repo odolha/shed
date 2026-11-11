@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Shed",
+  "description": "Lets Shed bring an open tab forward instead of opening the same page again.",
+  "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtq9ZMwqsmLuwOIYJORodLHfMO+fpOZwZ5r1l2Xr7KRuwDVWQmQOo0VY4Vziom6bdL1Ia/kDFPCOAN4FLoqZUuyu/KKMJHYZ5Cx5iH0oiTOnS54smVHpPvdXjhy0jjpg7XbKpaFv9mw/OW2XpBL0OUk3t4gknBkGDHGwujlUGDxcHPNb78s1NLODPXGOviyHKN0tcrLJbLp8tDDwTzKGho/Fa7ts2rjQQRnXstCuKB9Tt92kgsJnQ/4Bu+Z2PBUDjvAQIrpQ0B2cxmgCywFRmq0YxndKWMej4/9fETYjpgw58TjFAWK/RrM+UgOnp/XUd8GSCAnjS17nPV/FqQN6l/QIDAQAB",
+  "permissions": ["tabs", "nativeMessaging"],
+  "background": { "service_worker": "background.js" },
+  "icons": { "128": "icon.png" }
+}

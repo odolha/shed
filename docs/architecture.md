@@ -210,6 +210,21 @@ switches made outside Shed show) and after every action; a fetch runs every
 drawn as a `uniform_list` of rows: hunk headers with their actions, lines with
 both numbers, or old and new side by side.
 
+## Links and the browser
+
+A project tab's links (`Project.links`) open through Shed's browser extension
+when it is there (`browser.rs`, `browser/chrome/`). The extension (Manifest V3,
+its ID fixed by the public key in its manifest) connects at browser start to the
+native messaging host `dev.shed.browser`, which `shed browser setup` registers in
+each Chromium-based browser's `NativeMessagingHosts` folder; the host is
+`shed browser-host` (through a small script that keeps `SHED_RUNTIME_DIR`). The
+host listens on `browser.sock` in Shed's runtime folder. To open a link the
+window writes a JSON line there; the host passes it to the extension as a native
+message (length, then JSON), which focuses the most recently used tab whose
+address starts with the link's (origin and path), or opens one, and answers the
+same way. No socket, or no answer within three seconds, means no extension: the
+link opens with the desktop's opener.
+
 ## AI tabs
 
 An AI tab (`TabKind::Ai`: folder, extra folders, session id, model, mode, effort,
@@ -375,6 +390,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 
-`vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,
+`browser/chrome/` is the browser extension (built into `shed`, written out by
+`shed browser setup`). `vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,
 `gpui_ce_render` and `gpui_ce_linux`; `packaging/` the Debian and Arch packaging, desktop entry and
 systemd unit; `tools/screenshots/` the demo setup the docs' screenshots come from.

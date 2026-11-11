@@ -269,6 +269,14 @@ pub struct Project {
     /// Globs (relative to the root, as in `.gitignore`) the tab leaves out
     /// of its file list, search and watching.
     pub exclude: Vec<String>,
+    /// The project's web apps: local, staging, production…
+    pub links: Vec<ProjectLink>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectLink {
+    pub name: String,
+    pub url: String,
 }
 
 impl Tab {

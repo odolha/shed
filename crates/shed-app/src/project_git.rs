@@ -119,6 +119,11 @@ impl DiffView {
 }
 
 impl GitState {
+    /// A field of its own is open (the new branch's name).
+    pub fn has_field(&self) -> bool {
+        self.new_branch.is_some()
+    }
+
     pub fn new(root: &Path, settings: &Settings, cx: &mut Context<ProjectView>) -> Option<Self> {
         let repo = Repo::find(root)?;
         let options = TextOptions { wrap: true, auto_height: Some((3, 10)), placeholder: Some("Commit message".into()), ..Default::default() };

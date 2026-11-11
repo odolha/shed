@@ -157,18 +157,20 @@ pub struct SavedProject {
     pub active: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<shed_model::ProjectLink>,
 }
 
 impl SavedProject {
     fn of(p: &shed_model::Project) -> Self {
         let rel = |f: &PathBuf| f.strip_prefix(&p.root).unwrap_or(f).display().to_string();
-        Self { root: home_relative(&p.root), open: p.open.iter().map(rel).collect(), active: p.active, exclude: p.exclude.clone() }
+        Self { root: home_relative(&p.root), open: p.open.iter().map(rel).collect(), active: p.active, exclude: p.exclude.clone(), links: p.links.clone() }
     }
 
     fn to_project(&self) -> shed_model::Project {
         let root = expand_home(&self.root);
         let open = self.open.iter().map(|f| root.join(f)).collect();
-        shed_model::Project { root, open, active: self.active, exclude: self.exclude.clone() }
+        shed_model::Project { root, open, active: self.active, exclude: self.exclude.clone(), links: self.links.clone() }
     }
 }
 
@@ -450,7 +452,7 @@ impl SavedBench {
             active_pane: 0,
             aliases: Aliases::new(),
             zoom: 0.0,
-            project: Some(SavedProject { root: home_relative(root), open: Vec::new(), active: None, exclude: Vec::new() }),
+            project: Some(SavedProject { root: home_relative(root), open: Vec::new(), active: None, exclude: Vec::new(), links: Vec::new() }),
             ai: None,
             panes: Vec::new(),
         });
@@ -892,6 +894,7 @@ mod tests {
             p.open = vec![home.join("code/api/src/main.rs")];
             p.active = Some(0);
             p.exclude = vec!["dist".into()];
+            p.links = vec![shed_model::ProjectLink { name: "local".into(), url: "http://localhost:3000/".into() }];
         }
         let mut ai = Tab::ai(home.join("code/api"));
         if let shed_model::TabKind::Ai(a) = &mut ai.kind {

@@ -5683,6 +5683,7 @@ dependencies = [
  "libc",
  "raw-window-handle",
  "serde",
+ "serde_json",
  "shed-ai",
  "shed-desktop",
  "shed-emu",

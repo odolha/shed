@@ -221,6 +221,20 @@ menu (or a diff's bar) shows that file's commits.
 the AI tab to resolve it (**Ask AI**), and **Mark Resolved** saves and stages it.
 The − and + beside a conflicted file take our or their whole version.
 
+**Links.** A project's web apps (local, staging, production) sit as buttons in
+its header: **Add Link…** in the **⋯** menu, then type a name and the address,
+`local localhost:3000`. Clicking one brings forward the browser tab already
+showing it (anywhere under that address) instead of opening it again; right-click
+for **Open in New Tab**, copying the address, or removing the link. Links are
+saved with the bench.
+
+Bringing a tab forward needs Shed's small browser extension, since browsers do
+not let other programs find their tabs. Run `shed browser setup` once: it
+registers Shed with Chrome, Chromium, Brave, Edge and Vivaldi and writes the
+extension; then load it in the browser (its extensions page, Developer mode,
+**Load unpacked**, and the folder it names). Without it, links open in a new tab
+each time.
+
 **From a terminal.** Ctrl+click a path in a terminal of the bench, such as a
 compiler's `src/main.rs:12:5`, and it opens in the project tab whose folder holds
 it, at that line.
@@ -525,6 +539,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed alias [add NAME CMD \| rm NAME] [--bench\|--global\|--shell]` | Lists or changes aliases |
 | `shed project [DIR] [--bench NAME]` | Opens a folder (by default the Git repository you are in) as a project tab |
 | `shed ai [DIR] [--bench NAME]` | Opens an AI tab working in a folder (by default the Git repository you are in) |
+| `shed browser setup` | Registers Shed's browser extension, so links bring their open tab forward |
 | `shed tag add LABEL [--color C] [--tint]` | Tags this tab |
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |

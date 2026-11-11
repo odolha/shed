@@ -3,6 +3,7 @@
 mod actions;
 mod ai_view;
 mod assets;
+mod browser;
 mod bench_window;
 mod emoji;
 mod keeper_conn;
@@ -63,6 +64,17 @@ enum TagAction {
 }
 
 #[derive(Subcommand)]
+enum BrowserAction {
+    /// Writes Shed's browser extension and registers its native host with
+    /// the browsers found (Chrome, Chromium, Brave, Edge, Vivaldi).
+    Setup {
+        /// Register with these browser profile folders instead.
+        #[arg(long)]
+        profile: Vec<std::path::PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Open a new bench in its own window.
     New {
@@ -109,6 +121,17 @@ enum Command {
         /// Into this bench instead (by name).
         #[arg(long)]
         bench: Option<String>,
+    },
+    /// Lets Shed bring forward a browser tab already showing a project's link.
+    Browser {
+        #[command(subcommand)]
+        action: BrowserAction,
+    },
+    /// The browser extension's native host, started by the browser.
+    #[command(hide = true)]
+    BrowserHost {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Tag the current tab (run inside Shed).
     Tag {
@@ -319,6 +342,24 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Alias { action: Some(AliasAction::Rm { name, level }) }) => setup_cli::change_alias(&name, None, level.level()),
         Some(Command::Status) => status(),
         Some(Command::Tag { action }) => tag(action),
+        Some(Command::BrowserHost { .. }) => Ok(browser::host()?),
+        Some(Command::Browser { action: BrowserAction::Setup { profile } }) => {
+            let browsers = browser::install(&profile)?;
+            if browsers.is_empty() {
+                println!("No Chrome, Chromium, Brave, Edge or Vivaldi found; links open the usual way.");
+            } else {
+                for b in &browsers {
+                    println!("registered with {}", b.display());
+                }
+                println!(
+                    "\nNow load the extension once: open chrome://extensions (or brave://extensions),\n\
+                     turn on Developer mode, choose \"Load unpacked\", and pick\n  {}\n\
+                     Links in project tabs then bring their tab forward instead of opening it again.",
+                    browser::extension_dir().display()
+                );
+            }
+            Ok(())
+        }
         Some(Command::Project { dir, bench }) => project(dir, bench, false),
         Some(Command::Ai { dir, bench }) => project(dir, bench, true),
         Some(Command::Stop) => stop(),

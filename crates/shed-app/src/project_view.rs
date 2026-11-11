@@ -14,7 +14,7 @@ use gpui::{
     MouseMoveEvent, PromptLevel, ScrollStrategy, SharedString, StyledText, Subscription, Task, UniformListScrollHandle,
     Window, div, img, prelude::*, px, svg, uniform_list,
 };
-use shed_model::{BenchId, Project, Rgb, TabId};
+use shed_model::{BenchId, Project, ProjectLink, Rgb, TabId};
 use shed_project::search::{FileHits, Query};
 use shed_project::{Excluder, Lang, Style, Watch};
 use shed_proto::ClientMsg;
@@ -189,6 +189,12 @@ pub struct ProjectView {
     resizing: Option<(f32, f32)>,
     /// The repository the folder is in, if any, and its state.
     git: Option<GitState>,
+    /// The project's web apps, as buttons in the header.
+    links: Vec<ProjectLink>,
+    /// The field for a new link, while open.
+    new_link: Option<(Entity<LineEditor>, Subscription)>,
+    /// Links opened without the browser extension, once said.
+    told_about_extension: bool,
 }
 
 impl ProjectView {
@@ -222,6 +228,9 @@ impl ProjectView {
             tree_width: TREE_WIDTH,
             resizing: None,
             git: None,
+            links: project.links.clone(),
+            new_link: None,
+            told_about_extension: false,
         };
         view.rebuild();
         view.start_walk(cx);
@@ -274,6 +283,10 @@ impl ProjectView {
             self.exclude = project.exclude.clone();
             self.start_walk(cx);
         }
+        if project.links != self.links {
+            self.links = project.links.clone();
+            cx.notify();
+        }
     }
 
     /// Tells the keeper what is open, to be saved with the bench.
@@ -285,6 +298,7 @@ impl ProjectView {
             open: files.iter().map(|i| self.open[*i].path.clone()).collect(),
             active: self.active.and_then(|a| files.iter().position(|i| *i == a)),
             exclude: self.exclude.clone(),
+            links: self.links.clone(),
         };
         self.conn.send_msg(ClientMsg::SetProject { tab: self.tab, project });
     }
@@ -1234,8 +1248,64 @@ impl ProjectView {
         entries
     }
 
+    /// Opens a link: through the browser extension, bringing forward a tab
+    /// already on it (unless `new_tab`); without it, the usual way.
+    fn open_link(&mut self, url: String, new_tab: bool, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let u = url.clone();
+            let asked = cx.background_executor().spawn(async move { crate::browser::open(&u, new_tab) }).await;
+            this.update(cx, |this, cx| {
+                if asked.is_err() {
+                    cx.open_url(&url);
+                    if !std::mem::replace(&mut this.told_about_extension, true) {
+                        this.notice = Some("Opened in a new browser tab. To bring an open tab forward instead, run `shed browser setup` and load Shed's extension.".into());
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn start_new_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = cx.new(|cx| LineEditor::new(String::new(), cx).submit_on_blur(window, cx));
+        window.focus(&editor.read(cx).focus_handle(cx), cx);
+        let sub = cx.subscribe(&editor, |this, _, event: &crate::line_editor::EditorEvent, cx| {
+            this.new_link = None;
+            if let crate::line_editor::EditorEvent::Submit(text) = event
+                && let Some(link) = parse_link(text)
+            {
+                this.links.retain(|l| l.name != link.name);
+                this.links.push(link);
+                this.publish();
+            }
+            cx.notify();
+        });
+        self.new_link = Some((editor, sub));
+        cx.notify();
+    }
+
+    fn link_menu(&self, i: usize) -> Vec<MenuEntry<Self>> {
+        let Some(link) = self.links.get(i).cloned() else { return Vec::new() };
+        let (a, b, c) = (link.url.clone(), link.url.clone(), link.url.clone());
+        vec![
+            menu::item("Open", move |this: &mut Self, _, cx| this.open_link(a.clone(), false, cx)).icon("link"),
+            menu::item("Open in New Tab", move |this: &mut Self, _, cx| this.open_link(b.clone(), true, cx)),
+            menu::item("Copy URL", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(c.clone()))),
+            MenuEntry::Separator,
+            menu::danger("Remove Link", move |this: &mut Self, _, cx| {
+                this.links.retain(|l| l.name != link.name);
+                this.publish();
+                cx.notify();
+            })
+            .icon("close"),
+        ]
+    }
+
     fn header_menu(&self) -> Vec<MenuEntry<Self>> {
         let mut entries = vec![
+            menu::item("Add Link…", |this: &mut Self, window, cx| this.start_new_link(window, cx)).icon("link"),
             menu::item("Open File by Name…", |this: &mut Self, window, cx| this.open_quick(window, cx)).icon("file"),
             menu::item("Refresh", |this: &mut Self, _, cx| this.refresh(cx)).icon("refresh"),
         ];
@@ -1340,6 +1410,35 @@ impl ProjectView {
             .child(div().flex_none().text_size(px(14.0)).text_color(hsla(ui.text)).child(name))
             .children(self.render_branch_chip(ui, cx))
             .child(div().flex_1().min_w_0().truncate().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(shed_save::home_relative(&self.root)))
+            .children(self.links.iter().enumerate().map(|(i, link)| {
+                let url = link.url.clone();
+                div()
+                    .id(("link", i))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hsla_alpha(self.accent, 0.5))
+                    .cursor_pointer()
+                    .text_size(px(12.0))
+                    .text_color(hsla(ui.ink(self.accent)))
+                    .hover(|s| s.bg(hsla_alpha(self.accent, 0.15)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_link(url.clone(), false, cx)))
+                    .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        let entries = this.link_menu(i);
+                        this.open_menu(e.position, entries, cx);
+                    }))
+                    .child(svg().path(icon("link")).size(px(12.0)).text_color(hsla(ui.ink(self.accent))))
+                    .child(link.name.clone())
+            }))
+            .when_some(self.new_link.as_ref().map(|(e, _)| e.clone()), |d, e| {
+                d.child(div().flex_none().w(px(320.0)).text_size(px(12.0)).child(e))
+                    .child(div().flex_none().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("name url"))
+            })
             .child(button("project-open", "file", "Open File").tooltip(menu::tooltip("Open a file by name (Ctrl+P)")).on_click(cx.listener(|this, _, window, cx| this.open_quick(window, cx))))
             .child(button("project-ai", "ai", "Ask AI").tooltip(menu::tooltip("Go to the AI tab for this project, or open one")).on_click(cx.listener(|this, _, _, cx| {
                 let (bench, root) = (this.bench, this.root.clone());
@@ -1357,7 +1456,6 @@ impl ProjectView {
                     .rounded_md()
                     .cursor_pointer()
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
-                    .tooltip(menu::tooltip("More"))
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                         let entries = this.header_menu();
                         this.open_menu(e.position, entries, cx);
@@ -1658,6 +1756,21 @@ fn read_folder(dir: &Path, depth: usize) -> Vec<Row> {
     rows
 }
 
+/// A link typed as `name url`, or just a URL (named by its host).
+fn parse_link(text: &str) -> Option<ProjectLink> {
+    let text = text.trim();
+    let (name, url) = match text.rsplit_once(char::is_whitespace) {
+        Some((name, url)) => (name.trim().to_string(), url.to_string()),
+        None => (String::new(), text.to_string()),
+    };
+    let url = if url.contains("://") { url } else if url.starts_with("localhost") || url.starts_with("127.") { format!("http://{url}") } else { format!("https://{url}") };
+    let host = url.split("://").nth(1)?.split(['/', '?', '#']).next()?.to_string();
+    if host.is_empty() {
+        return None;
+    }
+    Some(ProjectLink { name: if name.is_empty() { host } else { name }, url })
+}
+
 /// The project a folder belongs to: the nearest folder above it (or itself)
 /// with a `.git`, else the folder itself.
 pub fn project_root(dir: &Path) -> PathBuf {
@@ -1670,7 +1783,11 @@ impl MenuHost for ProjectView {
     }
 
     fn menu_closed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.focus_editor = true;
+        // A choice may have opened a field of its own, which keeps the keyboard.
+        let field_open = self.new_link.is_some() || self.quick.is_some() || self.git.as_ref().is_some_and(|g| g.has_field());
+        if !field_open {
+            self.focus_editor = true;
+        }
         cx.notify();
     }
 }
@@ -1771,6 +1888,10 @@ mod tests {
         }
         let names: Vec<String> = read_folder(dir.path(), 0).iter().map(|r| r.name.to_string()).collect();
         assert_eq!(names, ["Docs", "src", ".env", "A.md", "b.rs"]);
+        let l = parse_link("local localhost:3000/app").unwrap();
+        assert_eq!((l.name.as_str(), l.url.as_str()), ("local", "http://localhost:3000/app"));
+        assert_eq!(parse_link("https://stage.example.com").unwrap().name, "stage.example.com");
+        assert!(parse_link("").is_none());
         std::fs::create_dir_all(dir.path().join("src/deep")).unwrap();
         assert_eq!(project_root(&dir.path().join("src/deep")), dir.path());
     }
