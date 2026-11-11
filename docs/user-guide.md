@@ -544,6 +544,14 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | Shift+PageUp / Shift+PageDown | Scroll a page |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom the tab in / out / reset (kept with the tab, and saved) |
 
+In a **project tab**: Ctrl+P opens a file by name, Ctrl+Shift+F searches every
+file, Ctrl+Shift+A sends the selection (or the file) to the AI tab, Ctrl+W closes
+the file, and the editor's own keys are listed under [Project tabs](#project-tabs).
+In an **AI tab**: Enter sends, Shift+Enter breaks the line, Ctrl+Up and Ctrl+Down
+go through earlier prompts, Escape stops a turn, Ctrl+F finds in the conversation.
+`new_project_tab` can be bound to a key in `[keys]`. On macOS, Cmd takes Ctrl's
+place in these.
+
 **On macOS** Cmd does what Ctrl+Shift does above, as in other Mac terminals:
 
 | Keys | Action |
