@@ -116,7 +116,8 @@ produces replay on attach); each window runs its own emulator per visible pane
 `gpui_ce_wgpu` (first full-window quad becomes the clear colour; border-only quads
 drawn as edge strips), `gpui_ce_render` (quads rasterized only inside their clip)
 and `gpui_ce_linux` (X11: key releases not dropped; windows open where asked,
-maximized or full screen, and report their real position), wired in through
+maximized or full screen, and report their real position; an idle window's frame
+timer parks), wired in through
 `[patch.crates-io]`. Each has a `SHED_PATCHES.md`; patched lines are marked
 `// Shed patch`. GPUI is `gpui-ce =0.3.0`, pinned exactly.
 

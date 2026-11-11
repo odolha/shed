@@ -27,3 +27,13 @@ Changes marked `// Shed patch`, in `src/linux/x11/client.rs` and
   state before mapping it, and window managers ignore `_NET_WM_STATE` requests
   for unmapped windows (EWMH has the client set the property instead). Until the
   window is mapped, `zoom` and `toggle_fullscreen` append to the property.
+- **An idle window stops ticking.** Each visible window had a timer at the
+  display's refresh rate (165 times a second on a 165 Hz panel) that asked GPUI
+  for a frame whether or not anything had changed, so an idle Shed woke a few
+  hundred times a second. The timer now parks after a second in which GPUI
+  asked for nothing (`RefreshState::Parked`). The window implements
+  `PlatformWindow::frame_waker`, which GPUI calls when a window becomes dirty
+  or wants another frame; it records the time and, if the timer is parked,
+  pings a calloop source that starts it again (the ping, because the waker can
+  run while the client is borrowed). GPU recovery wakes it too. Wayland already
+  worked this way.

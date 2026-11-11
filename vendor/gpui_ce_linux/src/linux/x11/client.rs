@@ -11,7 +11,7 @@ use gpui_util::ResultExt as _;
 use log::Level;
 use smallvec::SmallVec;
 use std::{
-    cell::{RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     collections::{BTreeMap, HashSet},
     ops::Deref,
     path::PathBuf,
@@ -82,6 +82,9 @@ const GPUI_X11_SCALE_FACTOR_ENV: &str = "GPUI_X11_SCALE_FACTOR";
 pub(crate) struct WindowRef {
     window: X11WindowStatePtr,
     refresh_state: Option<RefreshState>,
+    // Shed patch: wakes the refresh loop after it parked.
+    frame_wake: Rc<FrameWake>,
+    frame_wake_token: RegistrationToken,
     last_visibility: Visibility,
     is_mapped: bool,
 }
@@ -115,10 +118,39 @@ enum RefreshState {
     Hidden {
         refresh_rate: Duration,
     },
+    // Shed patch: visible, but nothing asked for a frame lately, so no timer runs.
+    Parked {
+        refresh_rate: Duration,
+    },
     PeriodicRefresh {
         refresh_rate: Duration,
         event_loop_token: RegistrationToken,
     },
+}
+
+// Shed patch: a visible window's refresh loop ticked at the display's rate
+// forever, waking the process hundreds of times a second while nothing
+// changed. It now parks once GPUI has not asked for a frame for this long;
+// GPUI's frame waker (`PlatformWindow::frame_waker`) starts it again.
+const PARK_REFRESH_AFTER: Duration = Duration::from_secs(1);
+
+/// Shed patch: shared by a window's `WindowRef`, its refresh loop and the
+/// frame waker GPUI holds.
+pub(crate) struct FrameWake {
+    last_wake: Cell<Instant>,
+    parked: Cell<bool>,
+    ping: calloop::ping::Ping,
+}
+
+impl FrameWake {
+    /// GPUI wants a frame: keeps the loop running, or restarts a parked one
+    /// (through the ping, as the client may be borrowed here).
+    pub(crate) fn wake(&self) {
+        self.last_wake.set(Instant::now());
+        if self.parked.replace(false) {
+            self.ping.ping();
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -256,12 +288,15 @@ impl X11ClientStatePtr {
         };
         let mut state = client.0.borrow_mut();
 
-        if let Some(window_ref) = state.windows.remove(&x_window)
-            && let Some(RefreshState::PeriodicRefresh {
+        if let Some(window_ref) = state.windows.remove(&x_window) {
+            // Shed patch
+            state.loop_handle.remove(window_ref.frame_wake_token);
+            if let Some(RefreshState::PeriodicRefresh {
                 event_loop_token, ..
             }) = window_ref.refresh_state
-        {
-            state.loop_handle.remove(event_loop_token);
+            {
+                state.loop_handle.remove(event_loop_token);
+            }
         }
         if state.mouse_focused_window == Some(x_window) {
             state.mouse_focused_window = None;
@@ -344,11 +379,15 @@ impl Drop for X11Connection {
         let refresh_tokens = state
             .windows
             .values_mut()
-            .filter_map(|window| match window.refresh_state.take() {
-                Some(RefreshState::PeriodicRefresh {
-                    event_loop_token, ..
-                }) => Some(event_loop_token),
-                _ => None,
+            .flat_map(|window| {
+                // Shed patch
+                let refresh = match window.refresh_state.take() {
+                    Some(RefreshState::PeriodicRefresh {
+                        event_loop_token, ..
+                    }) => Some(event_loop_token),
+                    _ => None,
+                };
+                refresh.into_iter().chain([window.frame_wake_token])
             })
             .collect::<Vec<_>>();
         for token in refresh_tokens {
@@ -1756,9 +1795,32 @@ impl X11Client {
         .log_err();
         xcb_flush(&state.xcb_connection);
 
+        // Shed patch
+        let (ping, ping_source) = calloop::ping::make_ping()
+            .map_err(|err| anyhow!("Failed to create the frame waker: {err:?}"))?;
+        let frame_wake_token = state
+            .loop_handle
+            .insert_source(ping_source, {
+                let this = state.this.clone();
+                move |(), &mut (), _| {
+                    if let Some(client) = this.get_client() {
+                        client.0.borrow_mut().resume_refresh_loop(x_window);
+                    }
+                }
+            })
+            .map_err(|err| anyhow!("Failed to register the frame waker: {err:?}"))?;
+        let frame_wake = Rc::new(FrameWake {
+            last_wake: Cell::new(Instant::now()),
+            parked: Cell::new(false),
+            ping,
+        });
+        window.0.state.borrow_mut().frame_wake = Some(frame_wake.clone());
+
         let window_ref = WindowRef {
             window: window.0.clone(),
             refresh_state: None,
+            frame_wake,
+            frame_wake_token,
             last_visibility: Visibility::UNOBSCURED,
             is_mapped: false,
         };
@@ -1988,8 +2050,14 @@ impl X11ClientState {
         match (is_visible, window_ref.refresh_state.take()) {
             (false, refresh_state @ Some(RefreshState::Hidden { .. }))
             | (false, refresh_state @ None)
-            | (true, refresh_state @ Some(RefreshState::PeriodicRefresh { .. })) => {
+            | (true, refresh_state @ Some(RefreshState::PeriodicRefresh { .. }))
+            | (true, refresh_state @ Some(RefreshState::Parked { .. })) => {
                 window_ref.refresh_state = refresh_state;
+            }
+            // Shed patch
+            (false, Some(RefreshState::Parked { refresh_rate })) => {
+                window_ref.frame_wake.parked.set(false);
+                window_ref.refresh_state = Some(RefreshState::Hidden { refresh_rate });
             }
             (
                 false,
@@ -2002,6 +2070,7 @@ impl X11ClientState {
                 window_ref.refresh_state = Some(RefreshState::Hidden { refresh_rate });
             }
             (true, Some(RefreshState::Hidden { refresh_rate })) => {
+                window_ref.frame_wake.last_wake.set(Instant::now()); // Shed patch
                 let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
                 let Some(window_ref) = self.windows.get_mut(&x_window) else {
                     return;
@@ -2048,6 +2117,9 @@ impl X11ClientState {
                     }
                 };
 
+                if let Some(window_ref) = self.windows.get(&x_window) {
+                    window_ref.frame_wake.last_wake.set(Instant::now()); // Shed patch
+                }
                 let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
                 let Some(window_ref) = self.windows.get_mut(&x_window) else {
                     return;
@@ -2060,12 +2132,31 @@ impl X11ClientState {
         }
     }
 
+    // Shed patch: GPUI asked a parked window for a frame.
+    fn resume_refresh_loop(&mut self, x_window: xproto::Window) {
+        let Some(window_ref) = self.windows.get_mut(&x_window) else {
+            return;
+        };
+        let Some(RefreshState::Parked { refresh_rate }) = window_ref.refresh_state else {
+            return;
+        };
+        let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
+        if let Some(window_ref) = self.windows.get_mut(&x_window) {
+            window_ref.refresh_state = Some(RefreshState::PeriodicRefresh {
+                refresh_rate,
+                event_loop_token,
+            });
+        }
+    }
+
     #[must_use]
     fn start_refresh_loop(
         &self,
         x_window: xproto::Window,
         refresh_rate: Duration,
     ) -> RegistrationToken {
+        // Shed patch
+        let frame_wake = self.windows.get(&x_window).map(|w| w.frame_wake.clone());
         self.loop_handle
             .insert_source(calloop::timer::Timer::immediate(), {
                 let this = self.this.clone();
@@ -2089,6 +2180,20 @@ impl X11ClientState {
                         xcb_connection
                     };
                     client.process_x11_events(&xcb_connection).log_err();
+
+                    // Shed patch: park once nothing has asked for a frame for a while.
+                    if let Some(wake) = &frame_wake
+                        && wake.last_wake.get().elapsed() >= PARK_REFRESH_AFTER
+                    {
+                        let mut state = client.0.borrow_mut();
+                        if let Some(window_ref) = state.windows.get_mut(&x_window)
+                            && matches!(window_ref.refresh_state, Some(RefreshState::PeriodicRefresh { .. }))
+                        {
+                            window_ref.refresh_state = Some(RefreshState::Parked { refresh_rate });
+                            wake.parked.set(true);
+                            return calloop::timer::TimeoutAction::Drop;
+                        }
+                    }
 
                     // Take into account that some frames have been skipped
                     let now = Instant::now();

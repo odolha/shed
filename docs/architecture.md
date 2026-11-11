@@ -243,7 +243,8 @@ cost their border rather than their area. Shed never uses GPUI's `opacity`, whic
 draws through a window-sized layer. GPUI redraws a whole window whenever something
 under the pointer changes its hover style, so the Shed window's frames are kept
 to a few milliseconds. The vendored `gpui_ce_linux` fixes key releases lost on X11, and window placement
-there (see above).
+there (see above); it also stops an idle window's frame timer, which upstream ran
+at the display's refresh rate for as long as the window was visible.
 The patches are described in `SHED_PATCHES.md` in their folders.
 
 ## The code

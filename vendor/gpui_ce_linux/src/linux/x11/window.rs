@@ -286,6 +286,8 @@ pub struct X11WindowState {
     visibility: WindowVisibility,
     hovered: bool,
     force_render_after_recovery: bool,
+    /// Shed patch: set by the client once the window is registered.
+    pub(crate) frame_wake: Option<Rc<super::client::FrameWake>>,
     fullscreen: bool,
     client_side_decorations_supported: bool,
     decorations: WindowDecorations,
@@ -863,6 +865,7 @@ impl X11WindowState {
                 visibility: WindowVisibility::Hidden,
                 hovered: false,
                 force_render_after_recovery: false,
+                frame_wake: None,
                 fullscreen: false,
                 maximized_vertical: false,
                 maximized_horizontal: false,
@@ -1824,6 +1827,12 @@ impl PlatformWindow for X11Window {
         self.0.callbacks.borrow_mut().request_frame = Some(callback);
     }
 
+    // Shed patch: lets the client park the refresh loop of an idle window.
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        let wake = self.0.state.borrow().frame_wake.clone()?;
+        Some(Rc::new(move || wake.wake()))
+    }
+
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
         self.0.callbacks.borrow_mut().input = Some(callback);
     }
@@ -1895,6 +1904,10 @@ impl PlatformWindow for X11Window {
             }
 
             inner.force_render_after_recovery = true;
+            // Shed patch: the retry needs a frame from a parked loop too.
+            if let Some(wake) = &inner.frame_wake {
+                wake.wake();
+            }
             return;
         }
 
@@ -1902,6 +1915,9 @@ impl PlatformWindow for X11Window {
 
         if renderer.needs_redraw() {
             inner.force_render_after_recovery = true;
+            if let Some(wake) = &inner.frame_wake {
+                wake.wake();
+            }
         }
     }
 
