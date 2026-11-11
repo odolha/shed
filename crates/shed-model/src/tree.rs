@@ -230,9 +230,16 @@ pub enum TabKind {
 }
 
 /// A folder of code, shown in a project tab.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub root: PathBuf,
+    /// Files open in the tab, in tab order.
+    pub open: Vec<PathBuf>,
+    /// Which of `open` is shown.
+    pub active: Option<usize>,
+    /// Globs (relative to the root, as in `.gitignore`) the tab leaves out
+    /// of its file list, search and watching.
+    pub exclude: Vec<String>,
 }
 
 impl Tab {
@@ -259,7 +266,7 @@ impl Tab {
         let none = PaneId::new();
         Self {
             id: TabId::new(),
-            kind: TabKind::Project(Project { root }),
+            kind: TabKind::Project(Project { root, ..Default::default() }),
             name: None,
             tags: Vec::new(),
             auto_tags: Vec::new(),

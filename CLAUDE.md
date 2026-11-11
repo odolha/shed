@@ -64,6 +64,9 @@ Crates (`crates/`), lowest first:
   and `shell/shed.zsh` (keep them doing the same things; the keeper writes them to
   the runtime dir and points bash/zsh at them).
 - `shed-desktop`: bench icons (SVG template recoloured, resvg) and desktop entries.
+- `shed-text`: an editable text buffer (rope, selection, undo, editor edits, reload).
+- `shed-project`: a project's file list, folder watching, fuzzy file ranking,
+  tree-sitter colouring.
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.
 - `shed-app`: `shed` binary: GPUI windows and the CLI.
 
@@ -101,8 +104,9 @@ produces replay on attach); each window runs its own emulator per visible pane
 - `shed_window.rs` hosts `pegboard.rs` (the overview: bench rows, tab cards,
   menus, drag and drop, inline editors). `bench_window.rs`: a bench's window (tab
   bar, splits). `setup_panel.rs`: startup/teardown/aliases drawer.
-  `logbook_view.rs`: Ctrl+R history. `project_view.rs`: a project tab (a
-  folder's header and file tree; tabs have a `TabKind`, project tabs no panes). `menu.rs`: shared context menus and tooltips.
+  `logbook_view.rs`: Ctrl+R history. `project_view.rs`: a project tab (file
+  tree, open files, quick open, following the disk; tabs have a `TabKind`,
+  project tabs no panes). `text_view.rs`: the editor view over a `shed-text` buffer. `menu.rs`: shared context menus and tooltips.
   `line_editor.rs`: the single-line text field. `actions.rs`: keybindings.
   `window_place.rs`: windows reopen at their last size, position and state.
 - `theme.rs`: `UiColors` (chrome colours from the theme's `[ui]` section, with

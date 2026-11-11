@@ -22,6 +22,7 @@ mod setup_panel;
 mod shed_window;
 mod state;
 mod terminal_view;
+mod text_view;
 mod theme;
 mod window_place;
 
@@ -374,6 +375,7 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
         let settings = settings::Settings::load(&settings::Settings { dark, ..Default::default() });
         conn.send_msg(ClientMsg::SetAppearance { dark });
         let state = cx.new(|_| AppState::new(conn, settings.clone()));
+        cx.set_global(state::AppHandle(state.downgrade()));
         state.update(cx, |state, cx| state.apply_settings(settings, cx));
         let quitting = state.clone();
         cx.on_action(move |_: &actions::Quit, cx| quitting.update(cx, |state, cx| state.request_quit(cx)));

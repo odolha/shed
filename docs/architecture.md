@@ -146,7 +146,8 @@ filters on one table. Commands from private tabs are kept with the tab only.
 ## Tab kinds
 
 A tab has a kind (`TabKind`). A **terminal** tab holds panes, each a PTY in the
-keeper. A **project** tab holds a folder (`Project { root }`) and no panes: its
+keeper. A **project** tab holds a folder (`Project { root, open, active, exclude }`:
+its open files and excluded globs too, sent by the view with `SetProject`) and no panes: its
 layout and active pane name a pane that does not exist, and `locate_pane` skips
 it. The keeper keeps it in the tree and saves it; closing it (`CloseTab`) takes it
 out at once, since nothing in it has to stop. A bench leaves the tree when its
@@ -154,10 +155,37 @@ last tab does, so a bench whose shells have all exited stays while it has a
 project tab.
 
 What a project tab shows lives in the window process: `ProjectView`
-(`project_view.rs`), one per project tab of an open bench, made and dropped with
-them by `AppState`. It reads the folder from the disk as the user opens folders in
-its tree. In a bench window, keyboard focus goes to the active tab's active pane,
-or to the project view (`state::Focus`).
+(`project_view.rs`), made when its bench first opens and kept while the tab is in
+the tree, so unsaved edits survive hiding the bench. In a bench window, keyboard
+focus goes to the active tab's active pane, or to the project view (`state::Focus`).
+
+The parts without UI are crates of their own:
+
+- `shed-project`: the file list (the `ignore` crate's parallel walk, honouring
+  Git's ignore rules and the tab's excludes); a watch per folder (`notify`,
+  inotify on Linux, non-recursive so ignored trees cost nothing), whose changes
+  arrive in batches about 40 ms apart, new folders being watched as they appear;
+  ranking files by a typed name (`nucleo-matcher`); and colouring
+  (`tree-sitter-highlight` with compiled-in grammars, spans per line by byte
+  range; Kotlin's query is Shed's own, in `queries/`).
+- `shed-text`: the text being edited: a rope (`ropey`), one selection, undo
+  grouped by typing runs, the editor's edits (indent, comment, move and
+  duplicate lines, find and replace), and `reload`, which applies only the lines
+  that differ (`similar`) so the cursor stays with its text.
+
+`text_view.rs` draws a `shed-text` buffer: only the rows in view, each shaped and
+painted on one canvas (no element per line), positions on the monospace cell
+grid. It is editable or read-only, numbered or not, wrapped or not, and can grow
+with its text, for the prompts to come. Colouring runs off the UI thread a moment
+after typing pauses; the colours of the previous version show meanwhile.
+
+Following the disk: watch batches reach `ProjectView::on_disk_change`, which
+updates the file list and tree and, for an open file, reloads it if it has no
+unsaved edits or flags the conflict if it has. Saving writes the file; the watch
+event that follows finds the text unchanged and does nothing. Unsaved edits are
+written to `$XDG_STATE_HOME/shed/recovery/` 1.5 s after typing pauses and read
+back when the file next opens. A terminal's Ctrl+click on a path asks `AppState`
+(through the `AppHandle` global) to open it in the bench's project tab.
 
 ## Saving and loading benches
 
@@ -287,6 +315,8 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-save` | Saved bench files, layouts as text, rack rules, scrollback, the session |
 | `shed-logbook` | The logbook database, and the bash and zsh hooks |
 | `shed-desktop` | Bench and app icons, desktop entries |
+| `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
+| `shed-project` | A project's file list, folder watching, ranking files by name, colouring |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 
 `vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,

@@ -227,35 +227,50 @@ impl AppState {
         cx.notify();
     }
 
-    /// A view for every project tab of an open bench (or one being opened),
-    /// following its folder; none for anything else. They are cheap: a
-    /// folder listing, read again when a bench opens.
+    /// A view for every project tab of an open bench (or one being
+    /// opened), made as the bench first opens and kept while the tab is in
+    /// the tree, so unsaved edits survive hiding the bench.
     fn sync_projects(&mut self, cx: &mut Context<Self>) {
         let open: HashSet<BenchId> = self.windows.keys().chain(&self.opening).copied().collect();
-        let wanted: Vec<(BenchId, TabId, std::path::PathBuf, shed_model::Rgb)> = self
+        let all: Vec<(BenchId, TabId, shed_model::Project, shed_model::Rgb)> = self
             .tree
             .benches
             .iter()
-            .filter(|b| open.contains(&b.id))
-            .flat_map(|b| b.tabs.iter().filter_map(|t| Some((b.id, t.id, t.project_info()?.root.clone(), b.color.accent()))))
+            .flat_map(|b| b.tabs.iter().filter_map(|t| Some((b.id, t.id, t.project_info()?.clone(), b.color.accent()))))
             .collect();
-        self.projects.retain(|id, _| wanted.iter().any(|w| w.1 == *id));
-        for (bench, tab, root, accent) in wanted {
+        self.projects.retain(|id, _| all.iter().any(|w| w.1 == *id));
+        for (bench, tab, project, accent) in all {
             match self.projects.get(&tab) {
                 Some(view) => view.update(cx, |v, cx| {
-                    if (v.bench, &v.root, v.accent) != (bench, &root, accent) {
-                        (v.bench, v.accent) = (bench, accent);
-                        v.set_root(root);
-                        cx.notify();
-                    }
+                    (v.bench, v.accent) = (bench, accent);
+                    v.set_project(&project, cx);
                 }),
-                None => {
-                    let conn = self.conn.clone();
-                    let view = cx.new(|cx| ProjectView::new(bench, root, accent, conn, cx));
+                None if open.contains(&bench) => {
+                    let (conn, settings) = (self.conn.clone(), self.settings.clone());
+                    let view = cx.new(|cx| ProjectView::new(bench, tab, &project, accent, conn, settings, cx));
                     self.projects.insert(tab, view);
                 }
+                None => {}
             }
         }
+    }
+
+    /// Opens a file in the project tab of `bench` whose folder holds it, at
+    /// a line and column (from 1). False if no project tab holds it.
+    pub fn open_in_project(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) -> bool {
+        let Some(b) = self.tree.bench(bench) else { return false };
+        let tab = b
+            .tabs
+            .iter()
+            .filter_map(|t| Some((t.id, &t.project_info()?.root)))
+            .filter(|(_, root)| path.starts_with(root))
+            .max_by_key(|(_, root)| root.as_os_str().len())
+            .map(|(id, _)| id);
+        let Some(tab) = tab else { return false };
+        let Some(view) = self.projects.get(&tab).cloned() else { return false };
+        self.conn.send_msg(ClientMsg::FocusTab { tab });
+        view.update(cx, |v, cx| v.open_path(path, at, cx));
+        true
     }
 
     /// What should have the keyboard in a bench's window: its active tab's
@@ -264,7 +279,7 @@ impl AppState {
         let tab = self.tree.bench(bench)?.active_tab()?;
         if tab.project_info().is_some() {
             let view = self.projects.get(&tab.id)?;
-            return Some((Focus::Tab(tab.id), view.read(cx).focus_handle().clone()));
+            return Some((Focus::Tab(tab.id), view.read(cx).focus_target(cx)));
         }
         let view = self.panes.get(&tab.active_pane)?;
         Some((Focus::Pane(tab.active_pane), view.read(cx).focus_handle().clone()))
@@ -344,6 +359,9 @@ impl AppState {
         self.settings = settings;
         self.sync_identities(cx);
         for view in self.panes.values() {
+            view.update(cx, |view, cx| view.apply(&self.settings, cx));
+        }
+        for view in self.projects.values() {
             view.update(cx, |view, cx| view.apply(&self.settings, cx));
         }
         cx.notify();
@@ -526,11 +544,6 @@ impl AppState {
             self.conn.send_msg(ClientMsg::Detach { bench });
         }
         self.recent_tabs.remove(&bench);
-        if let Some(b) = self.tree.bench(bench) {
-            for tab in &b.tabs {
-                self.projects.remove(&tab.id);
-            }
-        }
         let shown = self.shown_panes();
         self.panes.retain(|id, _| shown.contains(id));
         release_freed_memory();
@@ -670,6 +683,12 @@ pub fn close_tab(conn: &KeeperConn, tab: &Tab, bench: BenchRef, window: &mut gpu
     })
     .detach();
 }
+
+/// The app state, for views that reach across benches (a terminal's
+/// Ctrl+click opening a file in a project tab).
+pub struct AppHandle(pub gpui::WeakEntity<AppState>);
+
+impl gpui::Global for AppHandle {}
 
 /// What has the keyboard in a bench window: a pane, or a tab without panes.
 #[derive(Clone, Copy, Debug, PartialEq)]

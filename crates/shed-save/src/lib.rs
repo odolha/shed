@@ -103,6 +103,26 @@ pub struct SavedTab {
 pub struct SavedProject {
     /// The project's folder, `~/`-relative when under home.
     pub root: String,
+    /// Open files, relative to the root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+}
+
+impl SavedProject {
+    fn of(p: &shed_model::Project) -> Self {
+        let rel = |f: &PathBuf| f.strip_prefix(&p.root).unwrap_or(f).display().to_string();
+        Self { root: home_relative(&p.root), open: p.open.iter().map(rel).collect(), active: p.active, exclude: p.exclude.clone() }
+    }
+
+    fn to_project(&self) -> shed_model::Project {
+        let root = expand_home(&self.root);
+        let open = self.open.iter().map(|f| root.join(f)).collect();
+        shed_model::Project { root, open, active: self.active, exclude: self.exclude.clone() }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -197,7 +217,7 @@ impl SavedBench {
                         ready_when: p.setup.ready_when.clone(),
                     })
                     .collect();
-                let project = tab.project_info().map(|p| SavedProject { root: home_relative(&p.root) });
+                let project = tab.project_info().map(SavedProject::of);
                 let layout = if project.is_some() { String::new() } else { format_layout(&tab.layout, &order) };
                 SavedTab {
                     id: tab.id,
@@ -246,6 +266,7 @@ impl SavedBench {
                 .collect();
             if let Some(project) = &st.project {
                 let mut tab = Tab::project(expand_home(&project.root));
+                tab.kind = TabKind::Project(project.to_project());
                 tab.id = st.id;
                 tab.name = st.name.clone();
                 tab.tags = tags;
@@ -375,7 +396,7 @@ impl SavedBench {
             active_pane: 0,
             aliases: Aliases::new(),
             zoom: 0.0,
-            project: Some(SavedProject { root: home_relative(root) }),
+            project: Some(SavedProject { root: home_relative(root), open: Vec::new(), active: None, exclude: Vec::new() }),
             panes: Vec::new(),
         });
         id
@@ -803,6 +824,11 @@ mod tests {
         let second = Tab::with_pane(Pane::new(PaneId::new(), "/tmp".into()));
         let mut project = Tab::project(home.join("code/api"));
         project.name = Some("api code".into());
+        if let shed_model::TabKind::Project(p) = &mut project.kind {
+            p.open = vec![home.join("code/api/src/main.rs")];
+            p.active = Some(0);
+            p.exclude = vec!["dist".into()];
+        }
         Bench {
             id: BenchId::new(),
             name: "backend".into(),
@@ -829,7 +855,7 @@ mod tests {
         assert!(text.contains("cwd = \"~/code/api\""));
         assert!(text.contains("teardown = [\"docker compose down\"]"), "{text}");
         assert!(text.contains("[aliases]") && text.contains("[tabs.aliases]"), "{text}");
-        assert!(text.contains("[tabs.project]\nroot = \"~/code/api\""), "{text}");
+        assert!(text.contains("[tabs.project]\nroot = \"~/code/api\"\nopen = [\"src/main.rs\"]"), "{text}");
 
         let (loaded, panes) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
         assert_eq!(loaded.tabs.len(), 3);

@@ -16,7 +16,7 @@ use shed_emu::marks::{Mark, MarkScanner};
 use shed_logbook::{Logbook, NewEntry};
 use shed_save::{PaneExtras, Relaunch, SavedBench, SessionBench, Store};
 use shed_model::config::{Config, FileWatch};
-use shed_model::{AiState, Bench, Held, PaneSetup, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, Tool};
+use shed_model::{AiState, Bench, Held, PaneSetup, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, TabKind, Tool};
 use shed_proto::{
     AliasTarget, BenchRef, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
     PROTOCOL_VERSION, PegboardInfo, SavedEdit, ShowTarget, StoredBench,
@@ -649,6 +649,17 @@ impl Keeper {
                 } else {
                     st.hang_up(&panes);
                 }
+            }
+            ClientMsg::SetProject { tab, project } => {
+                let mut st = self.lock();
+                let Some(t) = st.tree.tab_mut(tab) else { return };
+                if !matches!(t.kind, TabKind::Project(_)) || !project.root.is_dir() {
+                    return;
+                }
+                t.kind = TabKind::Project(project);
+                st.broadcast_tree();
+                drop(st);
+                self.save_soon.notify_one();
             }
             ClientMsg::NewProjectTab { bench, root } => {
                 let mut st = self.lock();

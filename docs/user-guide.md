@@ -145,14 +145,52 @@ To open one:
 - run `shed project` in a terminal of the bench (the same), or `shed project DIR`;
 - in Shed, **New Project Tab…** in a bench's menu, running or closed.
 
-The tab shows the folder's files as a tree on the left: click a folder (or press
-Right and Left) to open and close it, arrows to move. Right-click a file or folder
-to open a terminal there, show it in the file manager, or copy its path. Above
-the tree, **Terminal** opens a terminal tab in the project's folder, **File
-Manager** opens the folder, and **Refresh** reads the tree again.
+**Files.** The folder's files are a tree on the left: click a folder (or press
+Right and Left) to open and close it, a file to open it. **Ctrl+P** (or **Open
+File**) opens a file by typing part of its name: `pv` finds `project_view.rs`. The
+list leaves out what Git ignores (`.gitignore`) and what you exclude: right-click
+a file or folder and choose **Exclude from Project**; the **⋯** menu brings
+excluded ones back. Right-click also opens a terminal there, shows it in the file
+manager, or copies its path. Above the tree, **Terminal** opens a terminal tab in
+the project's folder, **File Manager** opens the folder, and **Refresh** reads
+everything again.
 
-Closing a project tab asks first, as for any tab, and leaves its files alone. A
-bench whose last terminal has exited stays open while it has a project tab.
+**Editing.** Open files are tabs above the editor; middle-click or **×** closes
+one (asking first if it has unsaved changes, marked with a dot). The editor
+colours Rust, JavaScript, TypeScript, HTML, CSS, Java, Kotlin, JSON, XML, YAML,
+TOML, Markdown, Python, shell, Go, C and C++, and edits as editors do:
+
+| Keys | Does |
+| --- | --- |
+| Ctrl+S | Saves |
+| Ctrl+Z, Ctrl+Shift+Z (or Ctrl+Y) | Undo, redo |
+| Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste; with nothing selected, the whole line |
+| Ctrl+D | Duplicates the line (or the selection) |
+| Ctrl+Shift+K | Deletes the line |
+| Alt+Shift+Up, Down | Moves the line |
+| Tab, Shift+Tab | Indents, outdents |
+| Ctrl+/ | Comments the lines out, or back in |
+| Ctrl+F, Ctrl+H | Find, find and replace (Enter next, Shift+Enter back; Alt+C case, Alt+W whole word) |
+| Ctrl+G | Goes to a line (`120`, or `120:8`) |
+| Ctrl+W | Closes the file |
+
+On a Mac, Cmd takes Ctrl's place.
+
+**Following the disk.** When a file changes on disk (the AI edited it, Git
+switched branches, a build wrote it), an open file without unsaved changes
+reloads at once: the changed lines flash, and the cursor stays with its text. The
+tree marks files changed in the last few minutes with a dot, and the folders
+they are in. A file with unsaved changes is not touched: a bar offers the disk's
+version or keeping yours. Unsaved changes are also kept aside as you type, so if
+Shed or the bench closes first, they come back the next time the file opens.
+
+**From a terminal.** Ctrl+click a path in a terminal of the bench, such as a
+compiler's `src/main.rs:12:5`, and it opens in the project tab whose folder holds
+it, at that line.
+
+The open files are saved with the bench and open again with it. Closing a
+project tab asks first, as for any tab, and leaves its files alone. A bench whose
+last terminal has exited stays open while it has a project tab.
 
 ## Opening, hiding, closing
 

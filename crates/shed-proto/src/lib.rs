@@ -9,10 +9,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag, WindowPlace};
+use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -111,6 +111,8 @@ pub enum ClientMsg {
     SetShellAlias { name: String, value: Option<String> },
     /// Adds a project tab for the folder `root` after the bench's active tab.
     NewProjectTab { bench: BenchId, root: PathBuf },
+    /// A project tab's open files and excludes, as its view changes them.
+    SetProject { tab: TabId, project: Project },
 }
 
 /// What can change in a closed bench without opening it.

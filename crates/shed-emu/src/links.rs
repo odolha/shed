@@ -36,6 +36,22 @@ pub fn link_at(line: &str, col: usize) -> Option<Link> {
     (looks_like_path && path.len() > 1).then(|| Link::Path(path.to_string()))
 }
 
+/// The line and column (from 1) written after a path under character
+/// `col`, as compilers write `src/main.rs:12:5`.
+pub fn position_at(line: &str, col: usize) -> Option<(usize, Option<usize>)> {
+    let chars: Vec<char> = line.chars().collect();
+    if col >= chars.len() || chars[col].is_whitespace() {
+        return None;
+    }
+    let breaks = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>' | '|' | '(' | ')');
+    let start = (0..col).rev().find(|&i| breaks(chars[i])).map_or(0, |i| i + 1);
+    let end = (col..chars.len()).find(|&i| breaks(chars[i])).unwrap_or(chars.len());
+    let word: String = chars[start..end].iter().collect();
+    let mut parts = word.split(':').skip(1).map(|p| p.trim_end_matches([',', '.', ';']).parse::<usize>().ok());
+    let line = parts.next().flatten()?;
+    Some((line, parts.next().flatten()))
+}
+
 /// Drops punctuation that ends a sentence or closes a bracket the link did not open.
 fn trim_trailing(word: &mut String) {
     while let Some(last) = word.chars().last() {
@@ -70,5 +86,8 @@ mod tests {
         assert_eq!(link_at("error at src/main.rs:12:5: bad", 12), Some(Link::Path("src/main.rs".into())));
         assert_eq!(link_at("edit ~/.bashrc now", 7), Some(Link::Path("~/.bashrc".into())));
         assert_eq!(link_at("plain words", 2), None);
+        assert_eq!(position_at("error at src/main.rs:12:5: bad", 12), Some((12, Some(5))));
+        assert_eq!(position_at("--> src/lib.rs:7", 6), Some((7, None)));
+        assert_eq!(position_at("see src/lib.rs now", 6), None);
     }
 }

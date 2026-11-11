@@ -686,6 +686,17 @@ impl TerminalView {
                         Some(rest) => std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(rest))?,
                         None => self.cwd.join(&path),
                     };
+                    // A file in one of the bench's projects opens there, at its line.
+                    if expanded.is_file()
+                        && let Some(bench) = self.here.map(|h| h.bench)
+                        && let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade())
+                    {
+                        let at = links::position_at(&text, index);
+                        let file = std::fs::canonicalize(&expanded).unwrap_or(expanded.clone());
+                        if state.update(cx, |state, cx| state.open_in_project(bench, file, at, cx)) {
+                            return None;
+                        }
+                    }
                     expanded.exists().then(|| format!("file://{}", expanded.display()))
                 }
             }
