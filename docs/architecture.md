@@ -190,6 +190,26 @@ written to `$XDG_STATE_HOME/shed/recovery/` 1.5 s after typing pauses and read
 back when the file next opens. A terminal's Ctrl+click on a path asks `AppState`
 (through the `AppHandle` global) to open it in the bench's project tab.
 
+## Git
+
+Git runs through the `git` program (`shed-git`), so the user's config, credential
+helpers, SSH agent, hooks and signing apply. It never waits on a terminal
+prompt (`GIT_TERMINAL_PROMPT=0`): a command that needs one fails and says why.
+Reads use machine formats: `status --porcelain=v2 --branch -z` for the branch,
+upstream, ahead/behind and every changed file, `log` with NUL-separated fields,
+`blame --line-porcelain`. A diff is made from the two versions of the file
+(`git show HEAD:path`, `:path` for the index, the file on disk) with `similar`,
+as hunks; staging, unstaging or discarding one hunk applies that hunk as a patch
+(`git apply --cached`, `-R`).
+
+In a project tab (`project_git.rs`, a child module of `project_view.rs`), every
+Git command runs on the background executor. The status is read again 150 ms
+after any change the folder watch reports (`.git` included, so commits and
+switches made outside Shed show) and after every action; a fetch runs every
+`fetch_minutes`. Diffs open as tabs among the files (not saved with the bench),
+drawn as a `uniform_list` of rows: hunk headers with their actions, lines with
+both numbers, or old and new side by side.
+
 ## AI tabs
 
 An AI tab (`TabKind::Ai`: folder, extra folders, session id, model, mode, effort,
@@ -352,6 +372,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
 | `shed-project` | A project's file list, folder watching, ranking files by name, colouring |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists |
+| `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 
 `vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,

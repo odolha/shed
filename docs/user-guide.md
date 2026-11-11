@@ -193,6 +193,34 @@ they are in. A file with unsaved changes is not touched: a bar offers the disk's
 version or keeping yours. Unsaved changes are also kept aside as you type, so if
 Shed or the bench closes first, they come back the next time the file opens.
 
+**Git.** When the folder is in a Git repository, the header shows the branch, how
+far it is ahead (↑) and behind (↓) its upstream, and how many files changed; it
+turns red during a merge or rebase. Shed fetches every five minutes while the tab
+is open, so "behind" stays true (`[git] fetch_minutes` in `shed.toml`; 0 turns it
+off). Click the branch for its menu: new branch, switch (or check out a remote
+branch), merge into the current branch, rebase onto another, delete (asking first),
+stash, pop the stash, and history.
+
+**Changes** (beside Files and Search) lists conflicted, staged and changed files.
+Hover a file to stage (+), unstage (−) or discard it (↺, after asking); **Stage
+All** and **Unstage All** do every file. Click a file for its diff: hunk by hunk,
+each with **Stage**, **Unstage** or **Discard…**, unified or **Side by Side**.
+Below the list, write the message and **Commit**, or **Commit and Push**; **Amend**
+changes the last commit (its message comes in to edit). **Fetch**, **Pull** and
+**Push** are above, with the counts; right-click Push to force-push (with lease,
+after asking). Git runs as in your terminal, with your credentials and SSH keys;
+when it needs a password it cannot ask for, it says so.
+
+**History** lists commits, newest first, with their branches and tags; click one
+for its files, a file for what the commit changed in it. **History** in a file's
+menu (or a diff's bar) shows that file's commits.
+
+**Conflicts.** After a merge or rebase stops on conflicts, Changes says so, with
+**Continue** and **Abort**. Open a conflicted file: a bar takes **Ours**,
+**Theirs** or **Both** for the conflict at the cursor, goes to the **Next**, asks
+the AI tab to resolve it (**Ask AI**), and **Mark Resolved** saves and stages it.
+The − and + beside a conflicted file take our or their whole version.
+
 **From a terminal.** Ctrl+click a path in a terminal of the bench, such as a
 compiler's `src/main.rs:12:5`, and it opens in the project tab whose folder holds
 it, at that line.
@@ -537,6 +565,9 @@ option_as_alt = false          # Option sends Alt to the shell instead of typing
 command = "claude -p --no-session-persistence"   # request on stdin, prints a command; "" turns it off
 history = true                 # send the tab's recent commands along
 screen = true                  # send the text on the screen along
+
+[git]                          # Git in project tabs
+fetch_minutes = 5              # fetch this often while a project tab is open; 0: never
 
 [rack]                         # what restarts by itself when a bench opens
 auto = ["nvim", "vim", "hx", "ssh", "htop", "btop", "less", "tail -f", "cargo watch", "npm run dev"]

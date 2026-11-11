@@ -35,6 +35,22 @@ pub struct Config {
     pub auto_restore: bool,
     pub ai: AiConfig,
     pub macos: MacosConfig,
+    pub git: GitConfig,
+}
+
+/// Git in project tabs.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GitConfig {
+    /// Minutes between fetches while a project tab is open, so "behind" is
+    /// true; 0 turns it off.
+    pub fetch_minutes: u64,
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self { fetch_minutes: 5 }
+    }
 }
 
 /// Settings only macOS uses.

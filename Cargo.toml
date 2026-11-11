@@ -20,6 +20,7 @@ shed-desktop = { path = "crates/shed-desktop" }
 shed-text = { path = "crates/shed-text" }
 shed-project = { path = "crates/shed-project" }
 shed-ai = { path = "crates/shed-ai" }
+shed-git = { path = "crates/shed-git" }
 
 # GPUI community edition, pinned exactly: upgrade on purpose, one version at a time.
 gpui = { package = "gpui-ce", version = "=0.3.0" }

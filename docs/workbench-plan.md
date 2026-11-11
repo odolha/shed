@@ -7,8 +7,9 @@ shells on remote servers that stay alive. It records what is feasible, the
 design choices and their reasons, and the order of work.
 
 Status: agreed 2026-11-11 (see [Decisions](#decisions)). The order may change;
-all of it is wanted in the end. Done: steps 1–5 and 7 (tab kinds, text core,
-files and editor, search, AI tabs).
+all of it is wanted in the end. Done: steps 1–7 (tab kinds, text core, files
+and editor, search, AI tabs, Git core) and most of 10 (branches, history,
+conflicts by marker; blame in the editor and a three-pane merge view remain).
 
 ## The picture
 

@@ -21,6 +21,10 @@ use shed_proto::ClientMsg;
 
 use crate::assets::icon;
 use crate::keeper_conn::KeeperConn;
+
+#[path = "project_git.rs"]
+mod git;
+use git::{DiffSource, GitState};
 use crate::line_editor::LineEditor;
 use crate::menu::{self, Menu, MenuEntry, MenuHost};
 use crate::settings::Settings;
@@ -54,6 +58,8 @@ struct Row {
 
 enum Content {
     Text(Entity<TextView>),
+    /// Two versions of a file compared (Git).
+    Diff(Box<git::DiffView>),
     Image,
     Binary,
     TooLarge(u64),
@@ -98,6 +104,8 @@ impl OpenFile {
 enum Panel {
     Files,
     Search,
+    Changes,
+    History,
 }
 
 /// Search in files (Ctrl+Shift+F).
@@ -179,6 +187,8 @@ pub struct ProjectView {
     tree_width: f32,
     /// The left panel's edge being dragged: where the mouse and the width started.
     resizing: Option<(f32, f32)>,
+    /// The repository the folder is in, if any, and its state.
+    git: Option<GitState>,
 }
 
 impl ProjectView {
@@ -211,9 +221,14 @@ impl ProjectView {
             search: None,
             tree_width: TREE_WIDTH,
             resizing: None,
+            git: None,
         };
         view.rebuild();
         view.start_walk(cx);
+        let settings = view.settings.clone();
+        view.git = GitState::new(&view.root, &settings, cx);
+        view.git_refresh(cx);
+        view.start_fetching(cx);
         for path in &project.open {
             if path.is_file() {
                 view.open_file(path.clone(), None, false, cx);
@@ -263,10 +278,12 @@ impl ProjectView {
 
     /// Tells the keeper what is open, to be saved with the bench.
     fn publish(&self) {
+        // Diffs are not kept with the bench; files are.
+        let files: Vec<usize> = (0..self.open.len()).filter(|i| !matches!(self.open[*i].content, Content::Diff(_))).collect();
         let project = Project {
             root: self.root.clone(),
-            open: self.open.iter().map(|f| f.path.clone()).collect(),
-            active: self.active,
+            open: files.iter().map(|i| self.open[*i].path.clone()).collect(),
+            active: self.active.and_then(|a| files.iter().position(|i| *i == a)),
             exclude: self.exclude.clone(),
         };
         self.conn.send_msg(ClientMsg::SetProject { tab: self.tab, project });
@@ -321,6 +338,8 @@ impl ProjectView {
 
     /// Paths changed on disk: the file list, the tree and open files follow.
     fn on_disk_change(&mut self, batch: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // Any change (in `.git` too) may change what Git says.
+        self.git_refresh(cx);
         let excluder = Excluder::new(&self.root, &self.exclude);
         let now = Instant::now();
         let mut files = (*self.files).clone();
@@ -533,7 +552,7 @@ impl ProjectView {
     }
 
     fn open_file(&mut self, path: PathBuf, at: Option<(usize, Option<usize>)>, focus: bool, cx: &mut Context<Self>) -> usize {
-        let i = match self.open.iter().position(|f| f.path == path) {
+        let i = match self.open.iter().position(|f| f.path == path && !matches!(f.content, Content::Diff(_))) {
             Some(i) => i,
             None => {
                 let file = self.load(path, cx);
@@ -1126,6 +1145,14 @@ impl ProjectView {
                     .tooltip(menu::tooltip("Search in files (Ctrl+Shift+F)"))
                     .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
             )
+            .when(self.git.is_some(), |d| {
+                d.child(tab("panel-changes", "branch", "Changes", Panel::Changes).on_click(cx.listener(|this, _, _, cx| {
+                    this.panel = Panel::Changes;
+                    this.git_refresh(cx);
+                    cx.notify();
+                })))
+                .child(tab("panel-history", "history", "History", Panel::History).on_click(cx.listener(|this, _, _, cx| this.open_history(None, cx))))
+            })
     }
 
     fn on_resize(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1180,6 +1207,13 @@ impl ProjectView {
             entries.push(menu::item("Open", move |this: &mut Self, _, cx| this.open_path(open.clone(), None, cx)).icon("file"));
         }
         let to_ai = path.to_path_buf();
+        if let Some(git) = &self.git
+            && let Ok(rel) = path.strip_prefix(&git.repo.root)
+        {
+            let (a, b) = (rel.display().to_string(), rel.display().to_string());
+            entries.push(menu::item("Show Changes", move |this: &mut Self, _, cx| this.open_diff(a.clone(), DiffSource::Unstaged, cx)).icon("branch"));
+            entries.push(menu::item("History", move |this: &mut Self, _, cx| this.open_history(Some(b.clone()), cx)).icon("history"));
+        }
         entries.extend([
             menu::item("Send to AI", move |this: &mut Self, _, cx| this.send_to_ai(Some(to_ai.clone()), cx)).icon("ai"),
             menu::item("Open Terminal Here", move |this: &mut Self, _, _| this.open_terminal(&folder)).icon("terminal"),
@@ -1304,6 +1338,7 @@ impl ProjectView {
             .bg(hsla(ui.background))
             .child(svg().path(icon("project")).size(px(16.0)).flex_none().text_color(hsla(ui.ink(self.accent))))
             .child(div().flex_none().text_size(px(14.0)).text_color(hsla(ui.text)).child(name))
+            .children(self.render_branch_chip(ui, cx))
             .child(div().flex_1().min_w_0().truncate().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(shed_save::home_relative(&self.root)))
             .child(button("project-open", "file", "Open File").tooltip(menu::tooltip("Open a file by name (Ctrl+P)")).on_click(cx.listener(|this, _, window, cx| this.open_quick(window, cx))))
             .child(button("project-ai", "ai", "Ask AI").tooltip(menu::tooltip("Go to the AI tab for this project, or open one")).on_click(cx.listener(|this, _, _, cx| {
@@ -1354,7 +1389,10 @@ impl ProjectView {
                 .text_color(hsla(if active { ui.text } else { ui.text_dim }))
                 .on_click(cx.listener(move |this, _, _, cx| this.activate(i, cx)))
                 .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| this.close_file(i, window, cx)))
-                .child(file.name());
+                .child(match &file.content {
+                    Content::Diff(d) => d.title(),
+                    _ => file.name(),
+                });
             el = if active { el.bg(hsla(ui.tab_active)).border_t_2().border_color(hsla(accent)) } else { el.hover(|s| s.bg(hsla(ui.tab_hover))) };
             if file.disk != Disk::Same {
                 el = el.child(div().text_color(hsla(ui.danger)).child("!"));
@@ -1384,9 +1422,12 @@ impl ProjectView {
         strip
     }
 
-    fn render_bar(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_bar(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let i = self.active?;
         let file = self.open.get(i)?;
+        if file.disk == Disk::Same && !file.restored {
+            return self.render_conflict_bar(i, ui, cx);
+        }
         let (text, color, actions): (String, Rgb, Vec<(&'static str, u8)>) = match (file.disk, file.restored) {
             (Disk::Changed, _) => ("Changed on disk while you were editing it.".into(), ui.danger, vec![("Take the Disk's Version", 0), ("Keep Mine", 1)]),
             (Disk::Deleted, _) => ("Deleted on disk. Saving writes it again.".into(), ui.danger, vec![("Close", 2)]),
@@ -1428,7 +1469,7 @@ impl ProjectView {
                     })),
             );
         }
-        Some(bar)
+        Some(bar.into_any_element())
     }
 
     fn render_status(&self, ui: &UiColors, cx: &gpui::App) -> Option<impl IntoElement> {
@@ -1466,7 +1507,7 @@ impl ProjectView {
         )
     }
 
-    fn render_content(&self, ui: &UiColors) -> gpui::AnyElement {
+    fn render_content(&self, ui: &UiColors, cx: &mut Context<Self>) -> gpui::AnyElement {
         let empty = |label: String| {
             div()
                 .size_full()
@@ -1486,6 +1527,7 @@ impl ProjectView {
         };
         match &file.content {
             Content::Text(view) => view.clone().into_any_element(),
+            Content::Diff(_) => self.render_diff(self.active.unwrap_or(0), ui, cx),
             Content::Image => div().size_full().p_4().flex().items_center().justify_center().child(img(file.path.clone()).max_w_full().max_h_full()).into_any_element(),
             Content::Binary => empty(format!("{} is not text", file.name())),
             Content::TooLarge(size) => empty(format!("{} is too large to open here ({} MB)", file.name(), size / (1024 * 1024))),
@@ -1655,7 +1697,7 @@ impl Render for ProjectView {
             .when(!self.open.is_empty(), |d| d.child(self.render_strip(&ui, cx)))
             .children(self.render_bar(&ui, cx))
             .when_some(notice, |d, n| d.child(div().flex_none().px_3().py_1().text_size(px(12.0)).bg(hsla_alpha(ui.danger, 0.15)).text_color(hsla(ui.text)).child(n)))
-            .child(div().flex_1().min_h_0().child(self.render_content(&ui)))
+            .child(div().flex_1().min_h_0().child(self.render_content(&ui, cx)))
             .children(self.render_status(&ui, cx));
         div()
             .key_context("Project")
@@ -1682,9 +1724,13 @@ impl Render for ProjectView {
                             .flex_col()
                             .bg(hsla(ui.background))
                             .child(self.render_panel_switch(&ui, cx))
-                            .child(match (self.panel, self.render_search(&ui, cx)) {
-                                (Panel::Search, Some(search)) => div().flex_1().min_h_0().child(search),
-                                _ => div().flex_1().min_h_0().track_focus(&self.tree_focus).on_key_down(cx.listener(Self::tree_key)).child(tree),
+                            .child(match self.panel {
+                                Panel::Changes => div().flex_1().min_h_0().child(self.render_changes(&ui, window, cx)),
+                                Panel::History => div().flex_1().min_h_0().child(self.render_history(&ui, cx)),
+                                panel => match (panel, self.render_search(&ui, cx)) {
+                                    (Panel::Search, Some(search)) => div().flex_1().min_h_0().child(search),
+                                    _ => div().flex_1().min_h_0().track_focus(&self.tree_focus).on_key_down(cx.listener(Self::tree_key)).child(tree),
+                                },
                             }),
                     )
                     .child(

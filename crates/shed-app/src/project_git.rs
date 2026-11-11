@@ -1,0 +1,1245 @@
+//! Git in a project tab: the branch and how it stands against its upstream,
+//! always in view; changed files to stage, unstage and throw away, by file
+//! or by hunk; diffs; commit, fetch, pull, push; branches; history; and
+//! conflicts. Every Git command runs off the UI thread, through `shed-git`.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use gpui::{
+    AnyElement, Context, Entity, Focusable, MouseButton, MouseDownEvent, PromptLevel, Subscription, Task, UniformListScrollHandle,
+    Window, div, prelude::*, px, svg, uniform_list,
+};
+use shed_git::{Commit, Entry as GitEntry, Hunk, LineKind, Repo, Status};
+use shed_model::Rgb;
+
+use super::{Content, OpenFile, Panel, ProjectView, ROW_HEIGHT};
+use crate::assets::icon;
+use crate::line_editor::{EditorEvent, LineEditor};
+use crate::menu::{self, MenuEntry, MenuHost};
+use crate::settings::Settings;
+use crate::text_view::{TextEvent, TextOptions, TextView};
+use crate::theme::{UiColors, current_ui, hsla, hsla_alpha};
+
+const DIFF_ROW: f32 = 20.0;
+
+pub(super) struct GitState {
+    pub repo: Repo,
+    pub status: Option<Status>,
+    /// What runs now (`Pushing…`), if anything.
+    pub busy: Option<String>,
+    pub error: Option<String>,
+    refresh: Option<Task<()>>,
+    op: Option<Task<()>>,
+    _fetcher: Option<Task<()>>,
+    pub message: Entity<TextView>,
+    pub amend: bool,
+    log: Vec<Commit>,
+    /// The file the history is for, if not the whole repository.
+    log_for: Option<String>,
+    log_task: Option<Task<()>>,
+    /// Commits opened to their files, and those files.
+    expanded: HashSet<String>,
+    commit_files: HashMap<String, Vec<(char, String)>>,
+    history_scroll: UniformListScrollHandle,
+    new_branch: Option<(Entity<LineEditor>, Subscription)>,
+    _message_sub: Subscription,
+}
+
+/// Which two versions a diff compares.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum DiffSource {
+    /// The index against the working folder.
+    Unstaged,
+    /// HEAD against the index.
+    Staged,
+    /// A commit against its first parent.
+    Commit(String),
+}
+
+pub(super) enum DiffRow {
+    Hunk(usize),
+    Line(usize, usize),
+    /// Side by side: the old line and the new.
+    Pair(Option<(usize, usize)>, Option<(usize, usize)>),
+}
+
+pub(super) struct DiffView {
+    /// Relative to the repository's root.
+    pub path: String,
+    pub source: DiffSource,
+    hunks: Vec<Hunk>,
+    rows: Vec<DiffRow>,
+    side: bool,
+    scroll: UniformListScrollHandle,
+    untracked: bool,
+}
+
+impl DiffView {
+    pub fn title(&self) -> String {
+        let name = Path::new(&self.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match &self.source {
+            DiffSource::Unstaged => format!("Δ {name}"),
+            DiffSource::Staged => format!("Δ {name} (staged)"),
+            DiffSource::Commit(h) => format!("Δ {name} @{}", &h[..h.len().min(7)]),
+        }
+    }
+
+    fn layout(&mut self) {
+        self.rows.clear();
+        for (h, hunk) in self.hunks.iter().enumerate() {
+            self.rows.push(DiffRow::Hunk(h));
+            if !self.side {
+                self.rows.extend((0..hunk.lines.len()).map(|l| DiffRow::Line(h, l)));
+                continue;
+            }
+            // Removed lines face the added lines that replace them.
+            let lines = &hunk.lines;
+            let mut i = 0;
+            while i < lines.len() {
+                match lines[i].kind {
+                    LineKind::Context => {
+                        self.rows.push(DiffRow::Pair(Some((h, i)), Some((h, i))));
+                        i += 1;
+                    }
+                    _ => {
+                        let removed: Vec<usize> = (i..lines.len()).take_while(|j| lines[*j].kind == LineKind::Removed).collect();
+                        let after = i + removed.len();
+                        let added: Vec<usize> = (after..lines.len()).take_while(|j| lines[*j].kind == LineKind::Added).collect();
+                        for k in 0..removed.len().max(added.len()) {
+                            self.rows.push(DiffRow::Pair(removed.get(k).map(|l| (h, *l)), added.get(k).map(|l| (h, *l))));
+                        }
+                        i = after + added.len();
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl GitState {
+    pub fn new(root: &Path, settings: &Settings, cx: &mut Context<ProjectView>) -> Option<Self> {
+        let repo = Repo::find(root)?;
+        let options = TextOptions { wrap: true, auto_height: Some((3, 10)), placeholder: Some("Commit message".into()), ..Default::default() };
+        let message = cx.new(|cx| TextView::new("", options, settings, cx));
+        let sub = cx.subscribe(&message, |this, _, event: &TextEvent, cx| {
+            if let TextEvent::Changed = event {
+                cx.notify();
+            }
+            // Ctrl+S in the message commits, as a shortcut.
+            if let TextEvent::Save = event {
+                this.commit(false, cx);
+            }
+        });
+        Some(Self {
+            repo,
+            status: None,
+            busy: None,
+            error: None,
+            refresh: None,
+            op: None,
+            _fetcher: None,
+            message,
+            amend: false,
+            log: Vec::new(),
+            log_for: None,
+            log_task: None,
+            expanded: HashSet::new(),
+            commit_files: HashMap::new(),
+            history_scroll: UniformListScrollHandle::new(),
+            new_branch: None,
+            _message_sub: sub,
+        })
+    }
+}
+
+impl ProjectView {
+    /// Starts fetching every few minutes (as configured), so "behind" is true.
+    pub(super) fn start_fetching(&mut self, cx: &mut Context<Self>) {
+        let minutes = self.settings.config.git.fetch_minutes;
+        let Some(git) = &mut self.git else { return };
+        if minutes == 0 {
+            git._fetcher = None;
+            return;
+        }
+        let repo = git.repo.clone();
+        git._fetcher = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(minutes * 60)).await;
+                let repo = repo.clone();
+                // Quietly: a failed background fetch (offline) says nothing.
+                let fetched = cx.background_executor().spawn(async move { repo.fetch() }).await;
+                if this.update(cx, |this, cx| if fetched.is_ok() { this.git_refresh(cx) }).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// Reads the status again, a moment after changes settle.
+    pub(super) fn git_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(git) = &mut self.git else { return };
+        let repo = git.repo.clone();
+        git.refresh = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            let status = cx.background_executor().spawn(async move { repo.status() }).await;
+            this.update(cx, |this, cx| {
+                let mut head_moved = false;
+                if let Some(git) = &mut this.git {
+                    match status {
+                        Ok(s) => {
+                            head_moved = git.status.as_ref().is_none_or(|old| old.branch.oid != s.branch.oid);
+                            git.status = Some(s);
+                        }
+                        Err(e) => git.error = Some(e.0),
+                    }
+                }
+                // New commits (here or outside Shed) show in an open history.
+                if head_moved && this.panel == Panel::History {
+                    let path = this.git.as_ref().and_then(|g| g.log_for.clone());
+                    this.open_history(path, cx);
+                }
+                this.refresh_diffs(cx);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Runs a Git command away from the UI, showing it runs; then reads the
+    /// status again.
+    fn git_op(&mut self, label: &str, op: impl FnOnce(&Repo) -> shed_git::Result<String> + Send + 'static, cx: &mut Context<Self>) {
+        let Some(git) = &mut self.git else { return };
+        if git.busy.is_some() {
+            return;
+        }
+        git.busy = Some(label.to_string());
+        git.error = None;
+        let repo = git.repo.clone();
+        git.op = Some(cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move { op(&repo) }).await;
+            this.update(cx, |this, cx| {
+                if let Some(git) = &mut this.git {
+                    git.busy = None;
+                    git.error = result.err().map(|e| e.0);
+                    git.log.clear();
+                }
+                this.git_refresh(cx);
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn entry_paths(entries: &[&GitEntry]) -> Vec<String> {
+        entries.iter().map(|e| e.path.clone()).collect()
+    }
+
+    fn stage_all(&mut self, cx: &mut Context<Self>) {
+        let Some(s) = self.git.as_ref().and_then(|g| g.status.clone()) else { return };
+        let paths = Self::entry_paths(&s.unstaged().collect::<Vec<_>>());
+        self.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
+    }
+
+    fn unstage_all(&mut self, cx: &mut Context<Self>) {
+        let Some(s) = self.git.as_ref().and_then(|g| g.status.clone()) else { return };
+        let paths = Self::entry_paths(&s.staged().collect::<Vec<_>>());
+        self.git_op("Unstaging…", move |r| r.unstage(&paths).map(|_| String::new()), cx);
+    }
+
+    fn discard(&mut self, entries: Vec<GitEntry>, window: &mut Window, cx: &mut Context<Self>) {
+        if entries.is_empty() {
+            return;
+        }
+        let names: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+        let what = if names.len() == 1 { format!("“{}”", names[0]) } else { format!("{} files", names.len()) };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Discard the changes to {what}?"),
+            Some("They are lost: tracked files go back to what is staged, new files are deleted."),
+            &["Discard", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                let tracked: Vec<String> = entries.iter().filter(|e| !e.untracked).map(|e| e.path.clone()).collect();
+                let untracked: Vec<String> = entries.iter().filter(|e| e.untracked).map(|e| e.path.clone()).collect();
+                this.git_op("Discarding…", move |r| r.discard(&tracked, &untracked).map(|_| String::new()), cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn commit(&mut self, push: bool, cx: &mut Context<Self>) {
+        let Some(git) = &self.git else { return };
+        let message = git.message.read(cx).buffer.text();
+        if message.trim().is_empty() {
+            self.git.as_mut().unwrap().error = Some("Write a commit message first.".into());
+            cx.notify();
+            return;
+        }
+        let amend = git.amend;
+        let branch = git.status.as_ref().map(|s| s.branch.clone()).unwrap_or_default();
+        let field = git.message.clone();
+        self.git_op(
+            if push { "Committing and pushing…" } else { "Committing…" },
+            move |r| {
+                let out = r.commit(&message, amend)?;
+                if push { r.push(false, &branch) } else { Ok(out) }
+            },
+            cx,
+        );
+        // Cleared now; the commit's own result shows any error.
+        field.update(cx, |f, cx| {
+            f.buffer.select_all();
+            f.buffer.insert("");
+            cx.notify();
+        });
+        if let Some(git) = &mut self.git {
+            git.amend = false;
+        }
+    }
+
+    fn toggle_amend(&mut self, cx: &mut Context<Self>) {
+        let Some(git) = &mut self.git else { return };
+        git.amend = !git.amend;
+        if git.amend && git.message.read(cx).buffer.len_chars() == 0 {
+            let last = git.repo.last_message();
+            git.message.update(cx, |m, cx| m.paste_text(&last, cx));
+        }
+        cx.notify();
+    }
+
+    fn push(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(branch) = self.git.as_ref().and_then(|g| g.status.as_ref()).map(|s| s.branch.clone()) else { return };
+        if !force {
+            return self.git_op("Pushing…", move |r| r.push(false, &branch), cx);
+        }
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Force-push?",
+            Some("This replaces the remote branch with yours, unless someone pushed to it since you last fetched (--force-with-lease)."),
+            &["Force-Push", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                this.update(cx, |this, cx| this.git_op("Force-pushing…", move |r| r.push(true, &branch), cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Opens (or shows) a diff of a file.
+    pub(super) fn open_diff(&mut self, path: String, source: DiffSource, cx: &mut Context<Self>) {
+        let full = self.git.as_ref().map(|g| g.repo.root.join(&path)).unwrap_or_default();
+        let existing = self.open.iter().position(|f| matches!(&f.content, Content::Diff(d) if d.path == path && d.source == source));
+        let i = match existing {
+            Some(i) => i,
+            None => {
+                let view = DiffView { path, source, hunks: Vec::new(), rows: Vec::new(), side: false, scroll: UniformListScrollHandle::new(), untracked: false };
+                self.open.push(OpenFile {
+                    path: full,
+                    content: Content::Diff(Box::new(view)),
+                    lang: None,
+                    disk: super::Disk::Same,
+                    restored: false,
+                    highlight: None,
+                    recovery: None,
+                    _sub: None,
+                });
+                self.open.len() - 1
+            }
+        };
+        self.active = Some(i);
+        self.load_diff(i, cx);
+        cx.notify();
+    }
+
+    /// Reads the two versions of an open diff again, off the UI thread.
+    fn load_diff(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(git) = &self.git else { return };
+        let Some(Content::Diff(d)) = self.open.get(i).map(|f| &f.content) else { return };
+        let (repo, path, source) = (git.repo.clone(), d.path.clone(), d.source.clone());
+        let untracked = git.status.as_ref().is_some_and(|s| s.entries.iter().any(|e| e.path == path && e.untracked));
+        cx.spawn(async move |this, cx| {
+            let hunks = cx
+                .background_executor()
+                .spawn(async move {
+                    let (old, new) = match &source {
+                        DiffSource::Unstaged => {
+                            let old = if untracked { String::new() } else { repo.show("", &path) };
+                            (old, std::fs::read_to_string(repo.root.join(&path)).unwrap_or_default())
+                        }
+                        DiffSource::Staged => (repo.show("HEAD", &path), repo.show("", &path)),
+                        DiffSource::Commit(h) => (repo.show(&format!("{h}^"), &path), repo.show(h, &path)),
+                    };
+                    shed_git::diff_texts(&old, &new, 3)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let Some(file) = this.open.get_mut(i) else { return };
+                if let Content::Diff(d) = &mut file.content {
+                    d.hunks = hunks;
+                    d.untracked = untracked;
+                    d.layout();
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn refresh_diffs(&mut self, cx: &mut Context<Self>) {
+        for i in 0..self.open.len() {
+            if matches!(&self.open[i].content, Content::Diff(d) if d.source != DiffSource::Commit(String::new())) {
+                self.load_diff(i, cx);
+            }
+        }
+    }
+
+    /// Stages, unstages or throws away one hunk of an open diff.
+    fn hunk_action(&mut self, i: usize, h: usize, action: HunkAction, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Content::Diff(d)) = self.open.get(i).map(|f| &f.content) else { return };
+        let Some(hunk) = d.hunks.get(h) else { return };
+        let path = d.path.clone();
+        if d.untracked {
+            let paths = vec![path];
+            return self.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
+        }
+        let patch = shed_git::hunk_patch(&path, hunk);
+        match action {
+            HunkAction::Stage => self.git_op("Staging…", move |r| r.apply(&patch, true, false).map(|_| String::new()), cx),
+            HunkAction::Unstage => self.git_op("Unstaging…", move |r| r.apply(&patch, true, true).map(|_| String::new()), cx),
+            HunkAction::Discard => {
+                let answer = window.prompt(PromptLevel::Warning, "Discard this change?", Some("It is lost from the working folder."), &["Discard", "Cancel"], cx);
+                cx.spawn(async move |this, cx| {
+                    if matches!(answer.await, Ok(0)) {
+                        this.update(cx, |this, cx| this.git_op("Discarding…", move |r| r.apply(&patch, false, true).map(|_| String::new()), cx)).ok();
+                    }
+                })
+                .detach();
+            }
+        }
+    }
+
+    pub(super) fn open_history(&mut self, path: Option<String>, cx: &mut Context<Self>) {
+        let Some(git) = &mut self.git else { return };
+        git.log_for = path.clone();
+        git.log.clear();
+        git.expanded.clear();
+        let repo = git.repo.clone();
+        git.log_task = Some(cx.spawn(async move |this, cx| {
+            let log = cx.background_executor().spawn(async move { repo.log(path.as_deref(), 400) }).await;
+            this.update(cx, |this, cx| {
+                if let Some(git) = &mut this.git {
+                    match log {
+                        Ok(l) => git.log = l,
+                        Err(e) => git.error = Some(e.0),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        self.panel = Panel::History;
+        cx.notify();
+    }
+
+    fn toggle_commit(&mut self, hash: String, cx: &mut Context<Self>) {
+        let Some(git) = &mut self.git else { return };
+        if !git.expanded.remove(&hash) {
+            git.expanded.insert(hash.clone());
+            if !git.commit_files.contains_key(&hash) {
+                let files = git.repo.commit_files(&hash).unwrap_or_default();
+                git.commit_files.insert(hash, files);
+            }
+        }
+        cx.notify();
+    }
+
+    fn branch_menu(&mut self, _: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+        let Some(git) = &self.git else { return Vec::new() };
+        let local = git.repo.branches().unwrap_or_default();
+        let current = git.status.as_ref().and_then(|s| s.branch.head.clone());
+        let others: Vec<String> = local.iter().filter(|b| Some(*b) != current.as_ref()).cloned().collect();
+        let mut entries = vec![menu::item("New Branch…", |this: &mut Self, window, cx| this.start_new_branch(window, cx)).icon("plus")];
+        if !others.is_empty() {
+            entries.push(MenuEntry::Separator);
+        }
+        for b in others.iter().take(12) {
+            let name = b.clone();
+            entries.push(menu::item(format!("Switch to {b}"), move |this: &mut Self, _, cx| {
+                let n = name.clone();
+                this.git_op("Switching…", move |r| r.switch(&n), cx)
+            }).icon("branch"));
+        }
+        entries.push(menu::more("Remote Branches", |this: &mut Self, _| {
+            let remote = this.git.as_ref().map(|g| g.repo.remote_branches().unwrap_or_default()).unwrap_or_default();
+            remote
+                .into_iter()
+                .take(30)
+                .map(|b| {
+                    let label = format!("Check out {b}");
+                    menu::item(label, move |this: &mut Self, _, cx| {
+                        let n = b.clone();
+                        this.git_op("Checking out…", move |r| r.switch(&n), cx)
+                    })
+                })
+                .collect()
+        }));
+        if !others.is_empty() {
+            let (m, r, d) = (others.clone(), others.clone(), others.clone());
+            entries.push(MenuEntry::Separator);
+            entries.push(menu::more("Merge into Current", move |_, _| {
+                m.iter().map(|b| {
+                    let n = b.clone();
+                    menu::item(b.clone(), move |this: &mut Self, _, cx| {
+                        let n = n.clone();
+                        this.git_op("Merging…", move |r| r.merge(&n), cx)
+                    })
+                }).collect()
+            }));
+            entries.push(menu::more("Rebase Current onto", move |_, _| {
+                r.iter().map(|b| {
+                    let n = b.clone();
+                    menu::item(b.clone(), move |this: &mut Self, _, cx| {
+                        let n = n.clone();
+                        this.git_op("Rebasing…", move |r| r.rebase(&n), cx)
+                    })
+                }).collect()
+            }));
+            entries.push(menu::more("Delete Branch", move |_, _| {
+                d.iter().map(|b| {
+                    let n = b.clone();
+                    menu::danger(format!("Delete {b}…"), move |this: &mut Self, window, cx| this.delete_branch(n.clone(), window, cx))
+                }).collect()
+            }));
+        }
+        entries.push(MenuEntry::Separator);
+        entries.push(menu::item("Stash Changes", |this: &mut Self, _, cx| this.git_op("Stashing…", |r| r.stash(), cx)));
+        entries.push(menu::item("Pop Stash", |this: &mut Self, _, cx| this.git_op("Popping the stash…", |r| r.stash_pop(), cx)));
+        entries.push(menu::item("History", |this: &mut Self, _, cx| this.open_history(None, cx)).icon("history"));
+        entries
+    }
+
+    fn delete_branch(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Delete the branch “{name}”?"),
+            Some("Only if it is merged; otherwise Git refuses, and you can delete it anyway."),
+            &["Delete Branch", "Delete Even If Not Merged", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let force = match answer.await {
+                Ok(0) => false,
+                Ok(1) => true,
+                _ => return,
+            };
+            this.update(cx, |this, cx| this.git_op("Deleting the branch…", move |r| r.delete_branch(&name, force), cx)).ok();
+        })
+        .detach();
+    }
+
+    fn start_new_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(git) = &mut self.git else { return };
+        let editor = cx.new(|cx| LineEditor::new(String::new(), cx).submit_on_blur(window, cx));
+        window.focus(&editor.read(cx).focus_handle(cx), cx);
+        let sub = cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| {
+            if let Some(git) = &mut this.git {
+                git.new_branch = None;
+            }
+            if let EditorEvent::Submit(name) = event
+                && !name.is_empty()
+            {
+                let name = name.replace(' ', "-");
+                this.git_op("Creating the branch…", move |r| r.create_branch(&name), cx);
+            }
+            cx.notify();
+        });
+        git.new_branch = Some((editor, sub));
+        self.panel = Panel::Changes;
+        cx.notify();
+    }
+
+    /// The branch, how it stands, and what changed: for the header.
+    pub(super) fn render_branch_chip(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let git = self.git.as_ref()?;
+        let s = git.status.as_ref()?;
+        let head = s.branch.head.clone().unwrap_or_else(|| format!("detached at {}", s.branch.oid));
+        let mut label = head;
+        if s.branch.ahead > 0 {
+            label.push_str(&format!(" ↑{}", s.branch.ahead));
+        }
+        if s.branch.behind > 0 {
+            label.push_str(&format!(" ↓{}", s.branch.behind));
+        }
+        let changed = s.entries.len();
+        let accent = self.accent;
+        let color = if s.conflicts().next().is_some() || s.operation.is_some() { ui.danger } else if s.branch.behind > 0 { ui.ink(accent) } else { ui.text_dim };
+        Some(
+            div()
+                .id("branch-chip")
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .border_1()
+                .border_color(hsla(ui.divider))
+                .cursor_pointer()
+                .text_size(px(12.0))
+                .text_color(hsla(color))
+                .hover(|st| st.bg(hsla(ui.tab_hover)))
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    let entries = this.branch_menu(cx);
+                    this.open_menu(e.position, entries, cx);
+                }))
+                .child(svg().path(icon("branch")).size(px(13.0)).text_color(hsla(color)))
+                .child(label)
+                .when(changed > 0, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("· {changed} changed"))))
+                .when_some(s.operation.clone(), |d, op| d.child(div().text_color(hsla(ui.danger)).child(format!("· {op}"))))
+                .into_any_element(),
+        )
+    }
+
+    /// The Changes panel: sync buttons, files by state, the commit box.
+    pub(super) fn render_changes(&self, ui: &UiColors, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(git) = &self.git else {
+            return div().p_3().text_color(hsla(ui.text_dim)).child("Not a Git repository.").into_any_element();
+        };
+        let accent = self.accent;
+        let Some(s) = git.status.clone() else { return div().p_3().text_color(hsla(ui.text_dim)).child("Reading…").into_any_element() };
+        let button = |id: &'static str, glyph: &'static str, label: String| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_1p5()
+                .py_0p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(hsla(ui.divider))
+                .cursor_pointer()
+                .text_color(hsla(ui.text_dim))
+                .hover(|st| st.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                .child(svg().path(icon(glyph)).size(px(12.0)).text_color(hsla(ui.text_dim)))
+                .child(label)
+        };
+        let sync = div()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .child(button("git-fetch", "refresh", "Fetch".into()).on_click(cx.listener(|this, _, _, cx| this.git_op("Fetching…", |r| r.fetch(), cx))))
+            .child(button("git-pull", "pull", if s.branch.behind > 0 { format!("Pull {}", s.branch.behind) } else { "Pull".into() }).on_click(cx.listener(|this, _, _, cx| this.git_op("Pulling…", |r| r.pull(), cx))))
+            .child(
+                button("git-push", "push", if s.branch.ahead > 0 { format!("Push {}", s.branch.ahead) } else { "Push".into() })
+                    .on_click(cx.listener(|this, _, window, cx| this.push(false, window, cx)))
+                    .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                        let entries = vec![menu::danger("Force-Push…", |this: &mut Self, window, cx| this.push(true, window, cx))];
+                        this.open_menu(e.position, entries, cx);
+                    })),
+            );
+        let mut list = div().id("git-files").flex_1().min_h_0().overflow_y_scroll().flex().flex_col();
+        if let Some(op) = &s.operation {
+            let op2 = op.clone();
+            let op3 = op.clone();
+            list = list.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_2()
+                    .mb_1()
+                    .rounded_sm()
+                    .bg(hsla_alpha(ui.danger, 0.15))
+                    .text_color(hsla(ui.text))
+                    .child(format!("A {op} is under way. Resolve the conflicts, stage them, then continue."))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_1()
+                            .child(button("op-continue", "go", "Continue".into()).on_click(cx.listener(move |this, _, _, cx| {
+                                let op = op2.clone();
+                                this.git_op("Continuing…", move |r| r.finish_operation(&op, "continue"), cx)
+                            })))
+                            .child(button("op-abort", "close", "Abort".into()).on_click(cx.listener(move |this, _, _, cx| {
+                                let op = op3.clone();
+                                this.git_op("Aborting…", move |r| r.finish_operation(&op, "abort"), cx)
+                            }))),
+                    ),
+            );
+        }
+        let conflicts: Vec<GitEntry> = s.conflicts().cloned().collect();
+        let staged: Vec<GitEntry> = s.staged().cloned().collect();
+        let unstaged: Vec<GitEntry> = s.unstaged().cloned().collect();
+        if !conflicts.is_empty() {
+            list = list.child(self.section_header("Conflicts", conflicts.len(), None, ui, cx));
+            for (n, e) in conflicts.iter().enumerate() {
+                list = list.child(self.file_row(n + 10_000, e, Section::Conflict, ui, cx));
+            }
+        }
+        if !staged.is_empty() {
+            list = list.child(self.section_header("Staged", staged.len(), Some(("Unstage All", Section::Staged)), ui, cx));
+            for (n, e) in staged.iter().enumerate() {
+                list = list.child(self.file_row(n + 20_000, e, Section::Staged, ui, cx));
+            }
+        }
+        if !unstaged.is_empty() {
+            list = list.child(self.section_header("Changes", unstaged.len(), Some(("Stage All", Section::Unstaged)), ui, cx));
+            for (n, e) in unstaged.iter().enumerate() {
+                list = list.child(self.file_row(n + 30_000, e, Section::Unstaged, ui, cx));
+            }
+        }
+        if s.entries.is_empty() {
+            list = list.child(div().p_2().text_color(hsla(ui.text_dim)).child("Nothing changed."));
+        }
+        let can_commit = !staged.is_empty() || git.amend;
+        let commit_button = |id: &'static str, label: &'static str, push: bool| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .border_1()
+                .border_color(hsla(if can_commit { accent } else { ui.divider }))
+                .text_color(hsla(if can_commit { ui.ink(accent) } else { ui.text_dim }))
+                .cursor_pointer()
+                .hover(|st| st.bg(hsla_alpha(accent, 0.2)))
+                .on_click(cx.listener(move |this, _, _, cx| this.commit(push, cx)))
+                .child(label)
+        };
+        let _ = window;
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .text_size(px(12.0))
+            .child(sync)
+            .when_some(git.new_branch.as_ref().map(|(e, _)| e.clone()), |d, e| {
+                d.child(div().flex().items_center().gap_1().child(div().text_color(hsla(ui.text_dim)).child("New branch:")).child(div().flex_1().child(e)))
+            })
+            .when_some(git.busy.clone(), |d, b| d.child(div().text_color(hsla(ui.ink(accent))).child(b)))
+            .when_some(git.error.clone(), |d, e| d.child(div().p_1().rounded_sm().bg(hsla_alpha(ui.danger, 0.15)).text_color(hsla(ui.text)).child(e)))
+            .child(list)
+            .child(div().rounded_md().border_1().border_color(hsla(ui.divider)).bg(hsla(ui.tab_active)).child(git.message.clone()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("amend")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .cursor_pointer()
+                            .text_color(hsla(if git.amend { ui.text } else { ui.text_dim }))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_amend(cx)))
+                            .child(if git.amend { "☑" } else { "☐" })
+                            .child("Amend"),
+                    )
+                    .child(div().flex_1())
+                    .child(commit_button("commit-push", "Commit and Push", true))
+                    .child(commit_button("commit", "Commit", false)),
+            )
+            .into_any_element()
+    }
+
+    fn section_header(&self, title: &str, count: usize, action: Option<(&'static str, Section)>, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .mt_1()
+            .px_1()
+            .text_color(hsla(ui.text_dim))
+            .child(div().flex_1().child(format!("{title} ({count})")))
+            .when_some(action, |d, (label, section)| {
+                d.child(
+                    div()
+                        .id(label)
+                        .cursor_pointer()
+                        .text_color(hsla(ui.ink(self.accent)))
+                        .on_click(cx.listener(move |this, _, _, cx| match section {
+                            Section::Staged => this.unstage_all(cx),
+                            _ => this.stage_all(cx),
+                        }))
+                        .child(label),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn file_row(&self, id: usize, e: &GitEntry, section: Section, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
+        let code = match section {
+            Section::Conflict => 'U',
+            Section::Staged => e.index,
+            Section::Unstaged if e.untracked => 'A',
+            Section::Unstaged => e.worktree,
+        };
+        let color = match code {
+            'A' => Rgb::hex(0x57AB5A),
+            'D' | 'U' => ui.danger,
+            'R' | 'C' => Rgb::hex(0x539BF5),
+            _ => Rgb::hex(0xC69026),
+        };
+        let name = Path::new(&e.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir = Path::new(&e.path).parent().map(|p| p.display().to_string()).unwrap_or_default();
+        let (path, entry, entry2) = (e.path.clone(), e.clone(), e.clone());
+        let action = |aid: (&'static str, usize), glyph: &'static str, tip: &'static str| {
+            div()
+                .id(aid)
+                .flex_none()
+                .p_0p5()
+                .rounded_sm()
+                .invisible()
+                .group_hover("git-row", |s| s.visible())
+                .hover(|s| s.bg(hsla(ui.divider)))
+                .tooltip(menu::tooltip(tip))
+                .child(svg().path(icon(glyph)).size(px(12.0)).text_color(hsla(ui.text_dim)))
+        };
+        let mut row = div()
+            .id(("git-row", id))
+            .group("git-row")
+            .h(px(ROW_HEIGHT))
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .px_1()
+            .rounded_sm()
+            .cursor_pointer()
+            .hover(|s| s.bg(hsla(ui.tab_hover)))
+            .on_click(cx.listener(move |this, _, _, cx| match section {
+                Section::Conflict => {
+                    let full = this.git.as_ref().map(|g| g.repo.root.join(&path)).unwrap_or_default();
+                    this.open_path(full, None, cx);
+                }
+                Section::Staged => this.open_diff(path.clone(), DiffSource::Staged, cx),
+                Section::Unstaged => this.open_diff(path.clone(), DiffSource::Unstaged, cx),
+            }))
+            .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(code.to_string()))
+            .child(div().flex_none().text_color(hsla(ui.text)).child(name))
+            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(dir));
+        row = match section {
+            Section::Unstaged => row
+                .child(action(("discard", id), "discard", "Discard changes…").on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.discard(vec![entry.clone()], window, cx);
+                })))
+                .child(action(("stage", id), "plus", "Stage").on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    let p = vec![entry2.path.clone()];
+                    this.git_op("Staging…", move |r| r.stage(&p).map(|_| String::new()), cx);
+                }))),
+            Section::Staged => row.child(action(("unstage", id), "minus", "Unstage").on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                let p = vec![entry.path.clone()];
+                this.git_op("Unstaging…", move |r| r.unstage(&p).map(|_| String::new()), cx);
+            }))),
+            Section::Conflict => {
+                let (a, b) = (entry.path.clone(), entry2.path.clone());
+                row.child(action(("ours", id), "minus", "Take ours, whole").on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    let p = a.clone();
+                    this.git_op("Resolving…", move |r| r.resolve_with(&p, true).map(|_| String::new()), cx);
+                })))
+                .child(action(("theirs", id), "plus", "Take theirs, whole").on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    let p = b.clone();
+                    this.git_op("Resolving…", move |r| r.resolve_with(&p, false).map(|_| String::new()), cx);
+                })))
+            }
+        };
+        row.into_any_element()
+    }
+
+    /// The History panel: commits, each opening to its files.
+    pub(super) fn render_history(&self, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
+        let Some(git) = &self.git else { return div().into_any_element() };
+        let rows = self.history_rows();
+        let count = rows.len();
+        let title = match &git.log_for {
+            Some(p) => format!("History of {p}"),
+            None => "History".into(),
+        };
+        let list = uniform_list("history", count, cx.processor(|this, range, _, cx| this.render_history_rows(range, cx)))
+            .track_scroll(&git.history_scroll)
+            .flex_1()
+            .min_h_0();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .p_2()
+            .gap_1()
+            .text_size(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(div().flex_1().text_color(hsla(ui.text_dim)).child(title))
+                    .when(git.log_for.is_some(), |d| {
+                        d.child(div().id("history-all").cursor_pointer().text_color(hsla(ui.ink(self.accent))).on_click(cx.listener(|this, _, _, cx| this.open_history(None, cx))).child("All"))
+                    }),
+            )
+            .child(list)
+            .into_any_element()
+    }
+
+    fn history_rows(&self) -> Vec<(usize, Option<usize>)> {
+        let Some(git) = &self.git else { return Vec::new() };
+        let mut rows = Vec::new();
+        for (i, c) in git.log.iter().enumerate() {
+            rows.push((i, None));
+            if git.expanded.contains(&c.hash) {
+                let n = git.commit_files.get(&c.hash).map_or(0, Vec::len);
+                rows.extend((0..n).map(|f| (i, Some(f))));
+            }
+        }
+        rows
+    }
+
+    fn render_history_rows(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let ui = current_ui(cx);
+        let accent = self.accent;
+        let rows = self.history_rows();
+        let Some(git) = &self.git else { return Vec::new() };
+        range
+            .filter_map(|n| {
+                let (i, file) = *rows.get(n)?;
+                let c = git.log.get(i)?;
+                let hash = c.hash.clone();
+                let row = div().id(("hist", n)).h(px(ROW_HEIGHT)).flex().items_center().gap_1p5().px_1().rounded_sm().cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover)));
+                Some(match file {
+                    None => {
+                        let open = git.expanded.contains(&c.hash);
+                        let refs = c.refs.replace("HEAD -> ", "");
+                        row.on_click(cx.listener(move |this, _, _, cx| this.toggle_commit(hash.clone(), cx)))
+                            .child(div().flex_none().w(px(10.0)).text_color(hsla(ui.text_dim)).child(if open { "▾" } else { "▸" }))
+                            .when(!refs.is_empty(), |d| d.child(div().flex_none().px_1().rounded_sm().bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))).child(refs)))
+                            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(c.subject.clone()))
+                            .child(div().flex_none().text_color(hsla(ui.text_dim)).child(format!("{} · {}", c.author.split_whitespace().next().unwrap_or(""), short_ago(c.time))))
+                            .into_any_element()
+                    }
+                    Some(f) => {
+                        let (code, path) = git.commit_files.get(&c.hash)?.get(f)?.clone();
+                        let p = path.clone();
+                        row.pl(px(22.0))
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_diff(p.clone(), DiffSource::Commit(hash.clone()), cx)))
+                            .child(div().flex_none().w(px(12.0)).text_color(hsla(ui.text_dim)).child(code.to_string()))
+                            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(path))
+                            .into_any_element()
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// An open diff: a bar of actions, then the hunks.
+    pub(super) fn render_diff(&self, i: usize, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
+        let Some(Content::Diff(d)) = self.open.get(i).map(|f| &f.content) else { return div().into_any_element() };
+        let accent = self.accent;
+        let bar_button = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .px_1p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(hsla(ui.divider))
+                .cursor_pointer()
+                .text_color(hsla(ui.text_dim))
+                .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                .child(label)
+        };
+        let what = match &d.source {
+            DiffSource::Unstaged => "Changes not staged".to_string(),
+            DiffSource::Staged => "Staged changes".to_string(),
+            DiffSource::Commit(h) => format!("Commit {}", &h[..h.len().min(10)]),
+        };
+        let path = d.path.clone();
+        let full = self.git.as_ref().map(|g| g.repo.root.join(&path)).unwrap_or_default();
+        let source = d.source.clone();
+        let bar = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .text_size(px(12.0))
+            .border_b_1()
+            .border_color(hsla(ui.divider))
+            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(format!("{what} · {path}")))
+            .child(bar_button("diff-side", if d.side { "Unified" } else { "Side by Side" }).on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(Content::Diff(d)) = this.open.get_mut(i).map(|f| &mut f.content) {
+                    d.side = !d.side;
+                    d.layout();
+                }
+                cx.notify();
+            })))
+            .child(bar_button("diff-open", "Open File").on_click(cx.listener(move |this, _, _, cx| this.open_path(full.clone(), None, cx))))
+            .child(bar_button("diff-history", "History").on_click(cx.listener(move |this, _, _, cx| this.open_history(Some(path.clone()), cx))));
+        let empty = d.rows.is_empty();
+        let list = uniform_list(("diff", i), d.rows.len(), cx.processor(move |this, range, _, cx| this.render_diff_rows(i, range, cx)))
+            .track_scroll(&d.scroll)
+            .flex_1()
+            .min_h_0();
+        let _ = (source, accent);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(bar)
+            .child(if empty {
+                div().flex_1().flex().items_center().justify_center().text_color(hsla(ui.text_dim)).child("No differences").into_any_element()
+            } else {
+                list.into_any_element()
+            })
+            .into_any_element()
+    }
+
+    fn render_diff_rows(&mut self, i: usize, range: std::ops::Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let ui = current_ui(cx);
+        let mono = self.settings.font.family.clone();
+        let accent = self.accent;
+        let Some(Content::Diff(d)) = self.open.get(i).map(|f| &f.content) else { return Vec::new() };
+        let red = Rgb::hex(0xE5534B);
+        let green = Rgb::hex(0x57AB5A);
+        let num = |n: Option<usize>| div().flex_none().w(px(40.0)).text_color(hsla(ui.text_dim)).child(n.map(|n| n.to_string()).unwrap_or_default());
+        let cell = |line: Option<&shed_git::Line>| {
+            let (bg, sign) = match line.map(|l| l.kind) {
+                Some(LineKind::Added) => (Some(green), "+"),
+                Some(LineKind::Removed) => (Some(red), "-"),
+                Some(LineKind::Context) => (None, " "),
+                None => (Some(ui.divider), " "),
+            };
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .when_some(bg, |d, c| d.bg(hsla_alpha(c, 0.15)))
+                .child(num(line.and_then(|l| l.old.or(l.new))))
+                .child(div().flex_none().w(px(12.0)).text_color(hsla(ui.text_dim)).child(sign))
+                .child(div().whitespace_nowrap().child(line.map(|l| l.text.clone()).unwrap_or_default()))
+        };
+        let source = d.source.clone();
+        range
+            .filter_map(|n| {
+                let row = d.rows.get(n)?;
+                let base = div().id(("drow", n)).h(px(DIFF_ROW)).w_full().flex().items_center().font_family(mono.clone()).text_size(px(12.0)).text_color(hsla(ui.text));
+                Some(match row {
+                    DiffRow::Hunk(h) => {
+                        let hunk = &d.hunks[*h];
+                        let h = *h;
+                        let act = |id: &'static str, label: &'static str, action: HunkAction| {
+                            div()
+                                .id((id, h))
+                                .px_1()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_color(hsla(ui.ink(accent)))
+                                .hover(|s| s.bg(hsla_alpha(accent, 0.2)))
+                                .on_click(cx.listener(move |this, _, window, cx| this.hunk_action(i, h, action, window, cx)))
+                                .child(label)
+                        };
+                        let mut el = base.gap_2().px_2().bg(hsla_alpha(accent, 0.08)).child(div().flex_1().text_color(hsla(ui.text_dim)).child(hunk.header()));
+                        el = match source {
+                            DiffSource::Unstaged => el.child(act("stage-hunk", "Stage", HunkAction::Stage)).child(act("discard-hunk", "Discard…", HunkAction::Discard)),
+                            DiffSource::Staged => el.child(act("unstage-hunk", "Unstage", HunkAction::Unstage)),
+                            DiffSource::Commit(_) => el,
+                        };
+                        el.into_any_element()
+                    }
+                    DiffRow::Line(h, l) => {
+                        let line = &d.hunks[*h].lines[*l];
+                        let (bg, sign) = match line.kind {
+                            LineKind::Added => (Some(green), "+"),
+                            LineKind::Removed => (Some(red), "-"),
+                            LineKind::Context => (None, " "),
+                        };
+                        base.when_some(bg, |d, c| d.bg(hsla_alpha(c, 0.15)))
+                            .child(num(line.old))
+                            .child(num(line.new))
+                            .child(div().flex_none().w(px(12.0)).text_color(hsla(ui.text_dim)).child(sign))
+                            .child(div().whitespace_nowrap().child(line.text.clone()))
+                            .into_any_element()
+                    }
+                    DiffRow::Pair(a, b) => {
+                        let left = a.map(|(h, l)| &d.hunks[h].lines[l]);
+                        let right = b.map(|(h, l)| &d.hunks[h].lines[l]);
+                        base.child(cell(left)).child(div().flex_none().w(px(1.0)).h_full().bg(hsla(ui.divider))).child(cell(right)).into_any_element()
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Conflict markers in the active file, as blocks of lines: start,
+    /// separator, end (from 0).
+    fn conflicts_in(&self, view: &Entity<TextView>, cx: &gpui::App) -> Vec<(usize, usize, usize)> {
+        let b = &view.read(cx).buffer;
+        let mut blocks = Vec::new();
+        let mut start = None;
+        let mut sep = None;
+        for l in 0..b.len_lines() {
+            let line = b.line(l);
+            if line.starts_with("<<<<<<<") {
+                start = Some(l);
+                sep = None;
+            } else if line.starts_with("=======") && start.is_some() {
+                sep = Some(l);
+            } else if line.starts_with(">>>>>>>")
+                && let (Some(s), Some(m)) = (start, sep)
+            {
+                blocks.push((s, m, l));
+                start = None;
+            }
+        }
+        blocks
+    }
+
+    /// A bar for a file with conflict markers: take ours, theirs or both at
+    /// the cursor, go to the next, ask the AI, mark it resolved.
+    pub(super) fn render_conflict_bar(&self, i: usize, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let file = self.open.get(i)?;
+        let view = file.view()?.clone();
+        let blocks = self.conflicts_in(&view, cx);
+        let in_conflict = self.git.as_ref().and_then(|g| g.status.as_ref()).is_some_and(|s| s.conflicts().any(|e| g_path(&self.git, &e.path) == file.path));
+        if blocks.is_empty() && !in_conflict {
+            return None;
+        }
+        let accent = self.accent;
+        let btn = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .px_1p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(hsla(ui.divider))
+                .cursor_pointer()
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .child(label)
+        };
+        let take = move |this: &mut Self, which: u8, cx: &mut Context<Self>| {
+            let blocks = this.conflicts_in(&view, cx);
+            view.update(cx, |v, cx| {
+                let line = v.buffer.line_of(v.buffer.selection().head);
+                let Some(&(s, m, e)) = blocks.iter().find(|(s, _, e)| line >= *s && line <= *e).or_else(|| blocks.iter().find(|(s, _, _)| *s >= line)).or(blocks.first()) else { return };
+                let lines: Vec<String> = (s..=e).map(|l| v.buffer.line(l)).collect();
+                // A diff3 base section (|||||||) belongs to neither side.
+                let ours: Vec<String> = lines[1..m - s].iter().take_while(|l| !l.starts_with("|||||||")).cloned().collect();
+                let theirs: Vec<String> = lines[m - s + 1..e - s].to_vec();
+                let keep = match which {
+                    0 => ours,
+                    1 => theirs,
+                    _ => ours.into_iter().chain(theirs).collect(),
+                };
+                let start = v.buffer.line_start(s);
+                let end = v.buffer.line_start(e + 1).max(v.buffer.line_start(e) + v.buffer.line_len(e));
+                let mut text = keep.join("\n");
+                if !keep.is_empty() && v.buffer.line_start(e + 1) > v.buffer.line_start(e) {
+                    text.push('\n');
+                }
+                v.buffer.replace(start..end, &text);
+                cx.emit(TextEvent::Changed);
+                cx.notify();
+            });
+        };
+        let (t0, t1, t2) = (take.clone(), take.clone(), take);
+        let path = file.path.clone();
+        let rel = self.git.as_ref().map(|g| file.path.strip_prefix(&g.repo.root).unwrap_or(&file.path).display().to_string()).unwrap_or_default();
+        let rel2 = rel.clone();
+        let next_view = file.view()?.clone();
+        Some(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1()
+                .text_size(px(12.0))
+                .bg(hsla_alpha(ui.danger, 0.15))
+                .text_color(hsla(ui.text))
+                .child(div().flex_1().child(if blocks.is_empty() { "No conflict markers left.".to_string() } else { format!("{} conflict(s). At the cursor, take:", blocks.len()) }))
+                .when(!blocks.is_empty(), |d| {
+                    d.child(btn("take-ours", "Ours").on_click(cx.listener(move |this, _, _, cx| t0(this, 0, cx))))
+                        .child(btn("take-theirs", "Theirs").on_click(cx.listener(move |this, _, _, cx| t1(this, 1, cx))))
+                        .child(btn("take-both", "Both").on_click(cx.listener(move |this, _, _, cx| t2(this, 2, cx))))
+                        .child(btn("next-conflict", "Next").on_click(cx.listener(move |this, _, _, cx| {
+                            let blocks = this.conflicts_in(&next_view, cx);
+                            next_view.update(cx, |v, cx| {
+                                let line = v.buffer.line_of(v.buffer.selection().head);
+                                if let Some(&(s, _, _)) = blocks.iter().find(|(s, _, _)| *s > line).or(blocks.first()) {
+                                    v.go_to(s, 0, cx);
+                                }
+                            });
+                        })))
+                })
+                .child(btn("ask-ai-conflict", "Ask AI").on_click(cx.listener(move |this, _, _, cx| {
+                    let text = format!("Resolve the merge conflicts in {rel}: keep what both sides meant, remove the conflict markers, and tell me what you chose.");
+                    let bench = this.bench;
+                    if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+                        let sent = state.update(cx, |s, cx| s.send_to_ai(bench, &path, &text, cx));
+                        if !sent {
+                            this.notice = Some("This bench has no AI tab yet: use Ask AI above to open one.".into());
+                        }
+                    }
+                })))
+                .child(btn("mark-resolved", "Mark Resolved").text_color(hsla(ui.ink(accent))).on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(i) = this.active {
+                        this.save(i, cx);
+                    }
+                    let p = vec![rel2.clone()];
+                    this.git_op("Marking resolved…", move |r| r.stage(&p).map(|_| String::new()), cx);
+                })))
+                .into_any_element(),
+        )
+    }
+}
+
+fn g_path(git: &Option<GitState>, rel: &str) -> PathBuf {
+    git.as_ref().map(|g| g.repo.root.join(rel)).unwrap_or_default()
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Section {
+    Conflict,
+    Staged,
+    Unstaged,
+}
+
+#[derive(Clone, Copy)]
+enum HunkAction {
+    Stage,
+    Unstage,
+    Discard,
+}
+
+fn short_ago(secs: u64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let d = now.saturating_sub(secs);
+    match d {
+        0..3600 => format!("{} min", d / 60),
+        3600..86400 => format!("{} h", d / 3600),
+        86400..2_592_000 => format!("{} d", d / 86400),
+        _ => format!("{} mo", d / 2_592_000),
+    }
+}

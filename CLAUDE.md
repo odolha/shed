@@ -69,6 +69,8 @@ Crates (`crates/`), lowest first:
   tree-sitter colouring, search in files.
 - `shed-ai`: Claude Code conversations from its stream-json events and session
   files; the keeper runs `claude` per AI tab (`shed-keeper/src/server/ai.rs`).
+- `shed-git`: Git through the `git` program (status, diffs, hunk patches,
+  commits, branches, log); the UI is `shed-app/src/project_git.rs`.
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.
 - `shed-app`: `shed` binary: GPUI windows and the CLI.
 

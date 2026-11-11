@@ -5686,6 +5686,7 @@ dependencies = [
  "shed-ai",
  "shed-desktop",
  "shed-emu",
+ "shed-git",
  "shed-keeper",
  "shed-logbook",
  "shed-model",
@@ -5718,6 +5719,14 @@ dependencies = [
  "base64 0.22.1",
  "insta",
  "shed-model",
+]
+
+[[package]]
+name = "shed-git"
+version = "0.1.0"
+dependencies = [
+ "similar",
+ "tempfile",
 ]
 
 [[package]]

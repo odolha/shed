@@ -19,6 +19,7 @@ shed-save.workspace = true
 shed-text.workspace = true
 shed-project.workspace = true
 shed-ai.workspace = true
+shed-git.workspace = true
 base64.workspace = true
 # Must match the version gpui-ce uses, for window icons.
 image = { version = "0.25", default-features = false }

@@ -1,0 +1,11 @@
+[package]
+name = "shed-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+similar.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
