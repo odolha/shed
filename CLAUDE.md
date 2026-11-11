@@ -101,7 +101,8 @@ produces replay on attach); each window runs its own emulator per visible pane
 - `shed_window.rs` hosts `pegboard.rs` (the overview: bench rows, tab cards,
   menus, drag and drop, inline editors). `bench_window.rs`: a bench's window (tab
   bar, splits). `setup_panel.rs`: startup/teardown/aliases drawer.
-  `logbook_view.rs`: Ctrl+R history. `menu.rs`: shared context menus and tooltips.
+  `logbook_view.rs`: Ctrl+R history. `project_view.rs`: a project tab (a
+  folder's header and file tree; tabs have a `TabKind`, project tabs no panes). `menu.rs`: shared context menus and tooltips.
   `line_editor.rs`: the single-line text field. `actions.rs`: keybindings.
   `window_place.rs`: windows reopen at their last size, position and state.
 - `theme.rs`: `UiColors` (chrome colours from the theme's `[ui]` section, with

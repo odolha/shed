@@ -250,7 +250,33 @@ impl Pegboard {
     fn close_tab(&mut self, tab: TabId, window: &mut Window, cx: &mut Context<Self>) {
         let Some((key, t)) = self.find_tab(tab, cx) else { return };
         let conn = self.state.read(cx).conn.clone();
-        crate::state::close_tab(&conn, tab, &t.display_title(), key.to_ref(), window, cx);
+        crate::state::close_tab(&conn, &t, key.to_ref(), window, cx);
+    }
+
+    /// Asks for a folder and adds it to a bench as a project tab.
+    fn new_project_tab(&mut self, key: &BenchKey, cx: &mut Context<Self>) {
+        let picked = crate::state::pick_folder(cx);
+        let key = key.clone();
+        cx.spawn(async move |this, cx| {
+            let picked = picked.await;
+            this.update(cx, |this, cx| match picked {
+                Ok(Some(root)) => {
+                    let msg = match key {
+                        BenchKey::Running(bench) => ClientMsg::NewProjectTab { bench, root },
+                        BenchKey::Closed(name) => ClientMsg::EditSaved { name, edit: SavedEdit::NewProjectTab { root } },
+                    };
+                    this.send(msg, cx);
+                    this.refresh(cx);
+                }
+                Ok(None) => {}
+                Err(e) => this.state.update(cx, |state, cx| {
+                    state.notice = Some(format!("No folder picker: {e}. Use “Open Folder as Project” in a terminal's menu, or `shed project`."));
+                    cx.notify();
+                }),
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn new_tab(&mut self, key: &BenchKey, cx: &mut Context<Self>) {
@@ -495,6 +521,8 @@ impl Pegboard {
         entries.push(menu_item(open_label, move |this, _, cx| this.open(&e, None, cx)).icon(open_icon));
         let k = key.clone();
         entries.push(menu_item("New Tab", move |this, _, cx| this.new_tab(&k, cx)).icon("tab-new"));
+        let k = key.clone();
+        entries.push(menu_item("New Project Tab…", move |this, _, cx| this.new_project_tab(&k, cx)).icon("project"));
         entries.push(MenuEntry::Separator);
         let (k, name) = (key.clone(), bench.name.clone());
         entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::BenchName(k.clone()), name.clone(), window, cx)).icon("pencil"));
@@ -556,7 +584,9 @@ impl Pegboard {
         let bench = entry.bench.id;
         let title = tab.display_title();
         entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::TabName(tab_id), title.clone(), window, cx)).icon("pencil"));
-        entries.push(menu_item("Setup…", move |this, window, cx| this.open_setup(bench, tab_id, window, cx)).icon("rack"));
+        if tab.project_info().is_none() {
+            entries.push(menu_item("Setup…", move |this, window, cx| this.open_setup(bench, tab_id, window, cx)).icon("rack"));
+        }
         entries.push(menu_item("Add Tag…", move |this, window, cx| this.start_edit(Edit::AddTag(tab_id), String::new(), window, cx)).icon("tag"));
         for tag in &tab.tags {
             let (label, tint) = (tag.label.clone(), tag.tint_tab);
@@ -880,7 +910,11 @@ impl Pegboard {
         let tab_id = tab.id;
         let card_key = entry.key();
 
+        let project = tab.project_info().map(|p| p.root.clone());
         let mut head = div().flex().items_center().gap_1p5().min_w_0();
+        if project.is_some() {
+            head = head.child(svg().path(icon("project")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
+        }
         if waiting {
             head = head.child(svg().path(icon("tool-waiting")).size(px(12.0)).flex_none().text_color(hsla(accent)));
         } else if tool.is_some() {
@@ -940,9 +974,21 @@ impl Pegboard {
         // A closed bench's screen is a memory: dimmer than live ones. (By
         // colour: `opacity` draws through a window-sized layer, per card.)
         let color = if running { hsla(ui.text_dim) } else { hsla_alpha(ui.text_dim, 0.55) };
-        let preview = div().h(px(PREVIEW_LINES as f32 * 11.0)).overflow_hidden().child(preview_text(lines, mono, color));
+        let preview = div().h(px(PREVIEW_LINES as f32 * 11.0)).overflow_hidden();
+        // A project has no screen: its folder stands in.
+        let preview = match &project {
+            Some(_) => preview
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(svg().path(icon("project")).size(px(36.0)).text_color(hsla_alpha(ui.ink(accent), if running { 0.5 } else { 0.3 }))),
+            None => preview.child(preview_text(lines, mono, color)),
+        };
 
-        let mut foot = vec![pane.map(|p| home_relative(&p.cwd)).unwrap_or_default()];
+        let mut foot = match &project {
+            Some(root) => vec![home_relative(root), "project".into()],
+            None => vec![pane.map(|p| home_relative(&p.cwd)).unwrap_or_default()],
+        };
         if let Some(t) = &tool {
             foot.push(t.clone());
         }

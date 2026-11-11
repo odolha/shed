@@ -358,3 +358,54 @@ fn the_bench_order_is_kept() {
     assert_eq!(got, order);
     assert!(std::fs::read_to_string(dir.path().join("order.toml")).unwrap().contains(&order[0].to_string()));
 }
+
+#[test]
+fn project_tabs_live_without_panes() {
+    let dir = tempfile::tempdir().unwrap();
+    let code = dir.path().join("code");
+    std::fs::create_dir_all(&code).unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let project_tab = |t: &Shed, bench: BenchId| t.bench(bench).and_then(|b| b.tabs.iter().find(|t| t.project_info().is_some()).cloned());
+
+    let bench = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("code".into()), cwd: None });
+    let tree = tree_until(&mut c, "bench", |t| t.bench(bench).is_some());
+    let shell = tree.bench(bench).unwrap().tabs[0].id;
+    c.msg(ClientMsg::NewProjectTab { bench, root: dir.path().join("missing") });
+    c.until("refused", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Error(_))).then_some(()));
+    c.msg(ClientMsg::NewProjectTab { bench, root: code.clone() });
+    let tree = tree_until(&mut c, "project tab", |t| project_tab(t, bench).is_some());
+    let project = project_tab(&tree, bench).unwrap();
+    assert_eq!(project.project_info().unwrap().root, code);
+    assert_eq!(project.display_title(), "code");
+    assert_eq!(tree.bench(bench).unwrap().active_tab, project.id);
+
+    // The bench outlives its last shell while a project tab holds it.
+    c.msg(ClientMsg::CloseTab { tab: shell });
+    let tree = tree_until(&mut c, "shell gone", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 1));
+    assert_eq!(tree.bench(bench).unwrap().tabs[0].id, project.id);
+
+    // Saved and loaded with it.
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed", |t| t.bench(bench).is_none());
+    let saved = std::fs::read_to_string(dir.path().join("benches/code.toml")).unwrap();
+    assert!(saved.contains("[tabs.project]"), "{saved}");
+    c.msg(ClientMsg::EditSaved { name: "code".into(), edit: shed_proto::SavedEdit::NewProjectTab { root: code.clone() } });
+    c.until("added", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Done(_)) => Some(()),
+        Frame::Keeper(KeeperMsg::Error(e)) => panic!("{e}"),
+        _ => None,
+    });
+    show_and_attach(&mut c, ShowTarget::Load { name: "code".into() });
+    let tree = tree_until(&mut c, "loaded", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 2));
+    let tabs = &tree.bench(bench).unwrap().tabs;
+    assert_eq!(tabs[0].id, project.id);
+    assert!(tabs.iter().all(|t| t.panes.is_empty() && t.project_info().is_some()));
+
+    // Closing a project tab takes it out at once, and the last one its bench.
+    let (a, b) = (tabs[0].id, tabs[1].id);
+    c.msg(ClientMsg::CloseTab { tab: a });
+    tree_until(&mut c, "one left", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 1));
+    c.msg(ClientMsg::CloseTab { tab: b });
+    tree_until(&mut c, "bench gone", |t| t.bench(bench).is_none());
+}

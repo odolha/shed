@@ -12,6 +12,7 @@ mod logbook_view;
 mod macos;
 mod menu;
 mod pegboard;
+mod project_view;
 mod prompt;
 #[cfg(target_os = "linux")]
 mod selection;
@@ -91,6 +92,14 @@ enum Command {
     },
     /// List benches: open, hidden and closed.
     List,
+    /// Open a folder as a project tab in this bench (run inside Shed). The
+    /// folder defaults to the Git repository you are in, else this folder.
+    Project {
+        dir: Option<std::path::PathBuf>,
+        /// Into this bench instead (by name).
+        #[arg(long)]
+        bench: Option<String>,
+    },
     /// Tag the current tab (run inside Shed).
     Tag {
         #[command(subcommand)]
@@ -289,6 +298,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Alias { action: Some(AliasAction::Rm { name, level }) }) => setup_cli::change_alias(&name, None, level.level()),
         Some(Command::Status) => status(),
         Some(Command::Tag { action }) => tag(action),
+        Some(Command::Project { dir, bench }) => project(dir, bench),
         Some(Command::Stop) => stop(),
         Some(Command::DebugType { text }) => debug_type(&text),
         Some(Command::Init { shell }) => match shell.as_str() {
@@ -569,6 +579,38 @@ fn debug_type(text: &str) -> anyhow::Result<()> {
     conn.send(Frame::Input { pane, bytes: text.replace("\\r", "\r").replace("\\e", "\x1b").into_bytes() });
     // Give the writer thread a moment to flush before exiting.
     std::thread::sleep(Duration::from_millis(100));
+    Ok(())
+}
+
+fn project(dir: Option<std::path::PathBuf>, bench: Option<String>) -> anyhow::Result<()> {
+    let here = std::env::current_dir()?;
+    let root = match dir {
+        Some(d) => std::fs::canonicalize(here.join(d))?,
+        None => project_view::project_root(&here),
+    };
+    if !root.is_dir() {
+        bail!("{} is not a folder", root.display());
+    }
+    let tree = request(ClientMsg::Status, |m| match m {
+        KeeperMsg::Status(s) => Some(s.tree),
+        _ => None,
+    })?;
+    let bench = match bench {
+        Some(name) => tree.benches.iter().find(|b| b.name == name).map(|b| b.id).ok_or_else(|| anyhow::anyhow!("no running bench named {name:?}"))?,
+        None => {
+            let Some(id) = std::env::var("SHED_BENCH").ok().and_then(|b| b.parse().ok()).map(shed_model::BenchId) else {
+                bail!("not inside a Shed tab ($SHED_BENCH is not set); name a bench with --bench");
+            };
+            // The tab may have moved to another bench since its shell started.
+            let tab = std::env::var("SHED_TAB").ok().and_then(|t| t.parse().ok()).map(shed_model::TabId);
+            tab.and_then(|t| tree.bench_of_tab(t)).unwrap_or(id)
+        }
+    };
+    let done = request(ClientMsg::NewProjectTab { bench, root }, |m| match m {
+        KeeperMsg::Done(text) => Some(text),
+        _ => None,
+    })?;
+    println!("{done}");
     Ok(())
 }
 

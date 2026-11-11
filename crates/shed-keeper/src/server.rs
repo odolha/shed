@@ -427,10 +427,11 @@ impl Keeper {
                     }
                 }
             }
-            // Tag rules, over each tab's tools and directories.
+            // Tag rules, over each tab's tools and directories (a project tab's folder).
             let State { tree, config, .. } = &mut *st;
             for tab in tree.benches.iter_mut().flat_map(|b| &mut b.tabs) {
-                let tags = config.auto_tags(tab.panes.iter().map(|p| (p.tool.as_ref(), p.cwd.as_path())));
+                let root = tab.project_info().map(|p| (None, p.root.as_path()));
+                let tags = config.auto_tags(tab.panes.iter().map(|p| (p.tool.as_ref(), p.cwd.as_path())).chain(root));
                 if tab.auto_tags != tags {
                     tab.auto_tags = tags;
                     changed = true;
@@ -639,11 +640,33 @@ impl Keeper {
             }
             ClientMsg::ClosePane { pane } => self.lock().hang_up(&[pane]),
             ClientMsg::CloseTab { tab } => {
-                let st = self.lock();
-                if let Some(t) = st.tree.tab(tab) {
-                    let panes: Vec<PaneId> = t.panes.iter().map(|p| p.id).collect();
+                let mut st = self.lock();
+                let Some(t) = st.tree.tab(tab) else { return };
+                let panes: Vec<PaneId> = t.panes.iter().map(|p| p.id).collect();
+                // A tab with panes leaves as they exit; one without goes now.
+                if panes.is_empty() {
+                    close_paneless_tab(&mut st, tab);
+                } else {
                     st.hang_up(&panes);
                 }
+            }
+            ClientMsg::NewProjectTab { bench, root } => {
+                let mut st = self.lock();
+                let Some(b) = st.tree.bench_mut(bench) else { return };
+                let root = shed_save::expand_home(&root.to_string_lossy());
+                if !root.is_dir() {
+                    st.send(client, KeeperMsg::Error(format!("{} is not a folder", root.display())));
+                    return;
+                }
+                let done = format!("opened {} as a project tab", shed_save::home_relative(&root));
+                let tab = Tab::project(root);
+                let (id, index) = (tab.id, b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1));
+                b.tabs.insert(index, tab);
+                b.active_tab = id;
+                st.broadcast_tree();
+                st.send(client, KeeperMsg::Done(done));
+                drop(st);
+                self.save_soon.notify_one();
             }
             ClientMsg::CloseBench { bench } => {
                 tokio::spawn(self.clone().close_bench(bench));
@@ -1156,6 +1179,14 @@ impl Keeper {
                 saved.add_tab();
                 format!("added a tab to {name}")
             }
+            SavedEdit::NewProjectTab { root } => {
+                let root = shed_save::expand_home(&root.to_string_lossy());
+                if !root.is_dir() {
+                    return Err(format!("{} is not a folder", root.display()));
+                }
+                saved.add_project_tab(&root);
+                format!("added a project tab to {name}")
+            }
             SavedEdit::RemoveTab { tab } => {
                 saved.remove_tab(tab)?;
                 format!("removed a tab from {name}")
@@ -1413,6 +1444,10 @@ impl Keeper {
                 into.insert_tab(moved, index);
                 store.save(&into, &kept).map_err(|e| format!("cannot save {b:?}: {e}"))?;
                 let panes: Vec<PaneId> = st.tree.tab(tab).map(|t| t.panes.iter().map(|p| p.id).collect()).unwrap_or_default();
+                // Nothing to stop in a tab without panes: it just goes.
+                if panes.is_empty() {
+                    close_paneless_tab(&mut st, tab);
+                }
                 drop(st);
                 tokio::spawn(self.clone().stop_panes(panes));
                 format!("moved a tab to {b}")
@@ -2285,6 +2320,18 @@ fn apply_theme(st: &mut State) {
     let palette = st.palette.clone();
     for rt in st.panes.values_mut() {
         rt.emu.set_palette(palette.clone());
+    }
+}
+
+/// Takes a tab without panes (a project tab) out of the tree, and its bench
+/// with it if it was the last.
+fn close_paneless_tab(st: &mut State, tab: TabId) {
+    let Some(bench) = st.tree.bench_of_tab(tab) else { return };
+    if st.tree.close_paneless_tab(tab).is_some() {
+        if st.tree.bench(bench).is_none() {
+            st.shown.remove(&bench);
+        }
+        st.broadcast_tree();
     }
 }
 

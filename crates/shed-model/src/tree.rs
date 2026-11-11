@@ -62,7 +62,8 @@ impl Shed {
     /// Finds the bench and tab that hold `pane`.
     pub fn locate_pane(&self, pane: PaneId) -> Option<(BenchId, TabId)> {
         self.benches.iter().find_map(|b| {
-            b.tabs.iter().find(|t| t.layout.contains(pane)).map(|t| (b.id, t.id))
+            // A project tab's layout names a pane that does not exist.
+            b.tabs.iter().find(|t| t.kind == TabKind::Terminal && t.layout.contains(pane)).map(|t| (b.id, t.id))
         })
     }
 
@@ -125,6 +126,17 @@ impl Shed {
         target.active_tab = tab;
         self.drop_empty_benches();
         true
+    }
+
+    /// Removes a tab that has no panes (a project tab); a bench left without
+    /// tabs is removed. Tabs with panes leave as their panes exit.
+    pub fn close_paneless_tab(&mut self, tab: TabId) -> Option<Tab> {
+        if self.tab(tab).is_none_or(|t| !t.panes.is_empty()) {
+            return None;
+        }
+        let taken = self.take_tab(tab);
+        self.drop_empty_benches();
+        taken
     }
 
     /// Makes `pane` the active pane of its tab, and that tab active in its bench.
@@ -204,6 +216,23 @@ pub struct Tab {
     pub aliases: Aliases,
     /// Points added to the configured font size in this tab's panes.
     pub zoom: f32,
+    /// What the tab is: terminals, or a project's code.
+    pub kind: TabKind,
+}
+
+/// What a tab holds. Only terminal tabs have panes; the others show
+/// something of their own in the tab's whole area.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum TabKind {
+    #[default]
+    Terminal,
+    Project(Project),
+}
+
+/// A folder of code, shown in a project tab.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub root: PathBuf,
 }
 
 impl Tab {
@@ -211,6 +240,7 @@ impl Tab {
     pub fn with_pane(pane: Pane) -> Self {
         Self {
             id: TabId::new(),
+            kind: TabKind::Terminal,
             name: None,
             tags: Vec::new(),
             auto_tags: Vec::new(),
@@ -223,6 +253,33 @@ impl Tab {
         }
     }
 
+    /// A project tab for the folder `root`. It has no panes; its layout and
+    /// active pane name a pane that does not exist.
+    pub fn project(root: PathBuf) -> Self {
+        let none = PaneId::new();
+        Self {
+            id: TabId::new(),
+            kind: TabKind::Project(Project { root }),
+            name: None,
+            tags: Vec::new(),
+            auto_tags: Vec::new(),
+            private: false,
+            layout: PaneNode::Leaf(none),
+            active_pane: none,
+            panes: Vec::new(),
+            aliases: Aliases::new(),
+            zoom: 0.0,
+        }
+    }
+
+    /// The project this tab shows, if it is a project tab.
+    pub fn project_info(&self) -> Option<&Project> {
+        match &self.kind {
+            TabKind::Project(p) => Some(p),
+            TabKind::Terminal => None,
+        }
+    }
+
     pub fn pane(&self, id: PaneId) -> Option<&Pane> {
         self.panes.iter().find(|p| p.id == id)
     }
@@ -232,10 +289,13 @@ impl Tab {
     }
 
     /// What the tab bar shows: the user's name, else the active pane's title,
-    /// else its tool, else its directory.
+    /// else its tool, else its directory. A project tab: its folder's name.
     pub fn display_title(&self) -> String {
         if let Some(name) = &self.name {
             return name.clone();
+        }
+        if let Some(project) = self.project_info() {
+            return folder_name(&project.root);
         }
         let Some(pane) = self.active() else { return "shell".into() };
         if let Some(title) = pane.title.as_deref().filter(|t| !t.trim().is_empty()) {
@@ -244,10 +304,7 @@ impl Tab {
         if let Some(tool) = &pane.tool {
             return tool.display();
         }
-        pane.cwd
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| pane.cwd.display().to_string())
+        folder_name(&pane.cwd)
     }
 
     /// Every tag on the tab: the user's, then the rules'.
@@ -264,6 +321,11 @@ impl Tab {
         self.panes.push(pane);
         true
     }
+}
+
+/// A folder's last component, or the whole path for `/`.
+fn folder_name(dir: &std::path::Path) -> String {
+    dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string())
 }
 
 /// A short coloured label on a tab.
@@ -605,6 +667,22 @@ mod tests {
         let pid = p.id;
         let mut shed = Shed { benches: vec![bench(vec![Tab::with_pane(p)])], ..Default::default() };
         assert!(shed.remove_pane(pid).is_some());
+        assert!(shed.benches.is_empty());
+    }
+
+    #[test]
+    fn project_tabs_keep_their_bench_without_panes() {
+        let p = pane();
+        let pid = p.id;
+        let project = Tab::project("/srv/web".into());
+        let tab = project.id;
+        let mut shed = Shed { benches: vec![bench(vec![Tab::with_pane(p), project])], ..Default::default() };
+        assert!(shed.remove_pane(pid).is_some());
+        assert_eq!(shed.benches[0].tabs.len(), 1);
+        assert_eq!(shed.benches[0].active_tab, tab);
+        assert_eq!(shed.locate_pane(shed.benches[0].tabs[0].active_pane), None);
+        assert_eq!(shed.benches[0].tabs[0].display_title(), "web");
+        assert!(shed.close_paneless_tab(tab).is_some());
         assert!(shed.benches.is_empty());
     }
 

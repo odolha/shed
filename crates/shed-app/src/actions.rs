@@ -15,6 +15,7 @@ actions!(
         ScrollPageUp,
         ScrollPageDown,
         NewTab,
+        NewProjectTab,
         CloseTab,
         ClosePane,
         NextTab,
@@ -181,6 +182,7 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         // Only at a shell prompt: in vim and other programs the key is theirs.
         "logbook" => KeyBinding::new(key, OpenLogbook, Some("Terminal && at_prompt")),
         "new_tab" => KeyBinding::new(key, NewTab, w),
+        "new_project_tab" => KeyBinding::new(key, NewProjectTab, w),
         "close_tab" => KeyBinding::new(key, CloseTab, w),
         "close_pane" => KeyBinding::new(key, ClosePane, w),
         "next_tab" => KeyBinding::new(key, NextTab, w),

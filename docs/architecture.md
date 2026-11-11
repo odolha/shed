@@ -143,11 +143,28 @@ Each entry records the command, folder, exit status, start and duration, and the
 pane, tab and bench it ran in, so the three scopes (tab, bench, everything) are only
 filters on one table. Commands from private tabs are kept with the tab only.
 
+## Tab kinds
+
+A tab has a kind (`TabKind`). A **terminal** tab holds panes, each a PTY in the
+keeper. A **project** tab holds a folder (`Project { root }`) and no panes: its
+layout and active pane name a pane that does not exist, and `locate_pane` skips
+it. The keeper keeps it in the tree and saves it; closing it (`CloseTab`) takes it
+out at once, since nothing in it has to stop. A bench leaves the tree when its
+last tab does, so a bench whose shells have all exited stays while it has a
+project tab.
+
+What a project tab shows lives in the window process: `ProjectView`
+(`project_view.rs`), one per project tab of an open bench, made and dropped with
+them by `AppState`. It reads the folder from the disk as the user opens folders in
+its tree. In a bench window, keyboard focus goes to the active tab's active pane,
+or to the project view (`state::Focus`).
+
 ## Saving and loading benches
 
 A bench is saved as `~/.local/share/shed/benches/<name>.toml`, plain TOML meant to be
 readable and editable: name, colour, badge, folder, aliases, and per tab its name,
-tags, layout and panes. A layout is written as text, like
+tags, layout and panes, or for a project tab its folder (`[tabs.project]`,
+`root = "~/code/web"`). A layout is written as text, like
 `right 0.6 (0) (down 0.5 (1) (2))`. Per pane: its folder, what was running, and its
 startup and teardown. Each pane's scrollback goes beside it, as zstd-compressed text.
 

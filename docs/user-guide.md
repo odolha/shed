@@ -7,6 +7,7 @@ what you see is what Shed shows.
 - [The idea](#the-idea)
 - [The Shed window](#the-shed-window)
 - [A bench's window](#a-benchs-window)
+- [Project tabs](#project-tabs)
 - [Opening, hiding, closing](#opening-hiding-closing)
 - [Setup: startup, teardown and aliases](#setup-startup-teardown-and-aliases)
 - [History and the logbook](#history-and-the-logbook)
@@ -128,6 +129,30 @@ the focused pane, when a tab is split.
 
 A new tab or pane opens in the folder of the one you were in. (Set
 `new_pane_dir = "bench"` to use the bench's folder instead.)
+
+## Project tabs
+
+A **project tab** holds a folder of code instead of terminals. It is marked with a
+folder icon in the bench's colour, in the tab bar and on its card in Shed, and it
+is saved and loaded with the bench like any other tab.
+
+To open one:
+
+- right-click the **new tab** button, or the bench's name, and choose **New Project
+  Tab…**, then pick the folder;
+- right-click a terminal and choose **Open Folder as Project**: the Git repository
+  the terminal is in, or its folder;
+- run `shed project` in a terminal of the bench (the same), or `shed project DIR`;
+- in Shed, **New Project Tab…** in a bench's menu, running or closed.
+
+The tab shows the folder's files as a tree on the left: click a folder (or press
+Right and Left) to open and close it, arrows to move. Right-click a file or folder
+to open a terminal there, show it in the file manager, or copy its path. Above
+the tree, **Terminal** opens a terminal tab in the project's folder, **File
+Manager** opens the folder, and **Refresh** reads the tree again.
+
+Closing a project tab asks first, as for any tab, and leaves its files alone. A
+bench whose last terminal has exited stays open while it has a project tab.
 
 ## Opening, hiding, closing
 
@@ -379,6 +404,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed delete NAME` | Deletes a bench |
 | `shed setup [--edit]` | Shows (or edits) this tab's startup and teardown |
 | `shed alias [add NAME CMD \| rm NAME] [--bench\|--global\|--shell]` | Lists or changes aliases |
+| `shed project [DIR] [--bench NAME]` | Opens a folder (by default the Git repository you are in) as a project tab |
 | `shed tag add LABEL [--color C] [--tint]` | Tags this tab |
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |

@@ -22,7 +22,7 @@ use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
 use crate::menu::{self, Menu, MenuEntry, MenuHost, danger, more};
 use crate::setup_panel::{PanelEvent, SetupPanel};
-use crate::state::AppState;
+use crate::state::{AppState, Focus};
 use crate::theme::{UiColors, hsla, hsla_alpha};
 use crate::window_place::{PlaceTracker, Placed};
 
@@ -37,6 +37,8 @@ enum EditTarget {
     Badge,
     /// A colour of one's own: `#rrggbb` or a colour's name.
     Color,
+    /// A folder to open as a project tab, typed where there is no picker.
+    ProjectFolder,
 }
 
 impl EditTarget {
@@ -47,6 +49,7 @@ impl EditTarget {
             EditTarget::AddTag(_) => "Adding a tag",
             EditTarget::Badge => "Setting the badge",
             EditTarget::Color => "Choosing a colour (#rrggbb or a name)",
+            EditTarget::ProjectFolder => "Opening a folder as a project tab",
         }
     }
 }
@@ -100,9 +103,9 @@ pub struct BenchWindow {
     bench: BenchId,
     state: Entity<AppState>,
     ui: UiColors,
-    /// The pane last given keyboard focus, so focus follows the keeper's
+    /// What was last given keyboard focus, so focus follows the keeper's
     /// active pane without fighting the user's clicks.
-    focused: Option<PaneId>,
+    focused: Option<Focus>,
     title: String,
     editing: Option<(EditTarget, Entity<LineEditor>, Subscription)>,
     menu: Option<Menu<Self>>,
@@ -167,7 +170,7 @@ impl BenchWindow {
     /// Follows the tree: window title, and keyboard focus on the active pane.
     /// The caller passes what it needs from the app state, which may be
     /// mid-update and so cannot be read here.
-    pub fn sync(&mut self, title: String, active: Option<(PaneId, FocusHandle)>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn sync(&mut self, title: String, active: Option<(Focus, FocusHandle)>, window: &mut Window, cx: &mut Context<Self>) {
         if title != self.title {
             window.set_window_title(&title);
             self.title = title;
@@ -184,13 +187,9 @@ impl BenchWindow {
 
     /// Re-applies focus after an overlay (a text field, a menu) closes.
     fn refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let state = self.state.read(cx);
-        let Some(pane) = state.tree.bench(self.bench).and_then(|b| b.active_tab()).map(|t| t.active_pane) else { return };
-        if let Some(view) = state.panes.get(&pane) {
-            let handle = view.read(cx).focus_handle().clone();
-            window.focus(&handle, cx);
-        }
-        self.focused = Some(pane);
+        let Some((focus, handle)) = self.state.read(cx).active_focus(self.bench, cx) else { return };
+        window.focus(&handle, cx);
+        self.focused = Some(focus);
         cx.notify();
     }
 
@@ -252,9 +251,35 @@ impl BenchWindow {
 
     /// Closes a tab, after asking.
     fn close_tab(&mut self, tab: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(title) = self.tab(tab, cx).map(|t| t.display_title()) else { return };
+        let Some(tab) = self.tab(tab, cx).cloned() else { return };
         let conn = self.state.read(cx).conn.clone();
-        crate::state::close_tab(&conn, tab, &title, BenchRef::Running(self.bench), window, cx);
+        crate::state::close_tab(&conn, &tab, BenchRef::Running(self.bench), window, cx);
+    }
+
+    /// Asks for a folder and opens it as a project tab; where the desktop
+    /// has no folder picker, the folder is typed instead.
+    fn new_project_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = crate::state::pick_folder(cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let picked = picked.await;
+            this.update_in(cx, |this, window, cx| match picked {
+                Ok(Some(root)) => this.send(ClientMsg::NewProjectTab { bench: this.bench, root }, cx),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("no folder picker: {e}");
+                    this.start_edit(EditTarget::ProjectFolder, window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the project a pane is in (its Git repository, else its folder).
+    fn open_pane_project(&mut self, pane: PaneId, cx: &mut Context<Self>) {
+        let Some(cwd) = self.state.read(cx).tree.pane(pane).map(|p| p.cwd.clone()) else { return };
+        let root = crate::project_view::project_root(&cwd);
+        self.send(ClientMsg::NewProjectTab { bench: self.bench, root }, cx);
     }
 
     /// Closes a pane; a tab's only pane takes the tab along, so that asks first.
@@ -336,6 +361,7 @@ impl BenchWindow {
             EditTarget::AddTag(_) => Some(String::new()),
             EditTarget::Badge => self.bench(cx).map(|b| b.badge.clone().unwrap_or_default()),
             EditTarget::Color => self.bench(cx).map(|b| format!("#{:06X}", b.color.accent().to_hex())),
+            EditTarget::ProjectFolder => self.bench(cx).map(|b| shed_save::home_relative(&b.cwd)),
         };
         let Some(current) = current else { return };
         let editor = cx.new(|cx| LineEditor::selected(current, cx).submit_on_blur(window, cx).without_hint());
@@ -359,6 +385,7 @@ impl BenchWindow {
                 Some(color) => ClientMsg::SetBenchColor { bench: self.bench, color },
                 None => return,
             },
+            EditTarget::ProjectFolder => ClientMsg::NewProjectTab { bench: self.bench, root: text.trim().into() },
             EditTarget::Badge => {
                 let badge: String = text.chars().filter(|c| !c.is_whitespace()).take(2).collect();
                 ClientMsg::SetBadge { bench: self.bench, badge: (!badge.is_empty()).then_some(badge) }
@@ -377,14 +404,26 @@ impl BenchWindow {
         let mut entries = vec![
             item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)).icon("pencil"),
             item("Add Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)).icon("tag"),
-            item("Setup…", move |this, window, cx| {
-                this.send(ClientMsg::FocusTab { tab: tab_id }, cx);
-                if this.setup.is_none() {
-                    this.toggle_setup(window, cx);
-                }
-            })
-            .icon("rack"),
         ];
+        match tab.project_info() {
+            Some(project) => {
+                let (root, path) = (project.root.clone(), project.root.display().to_string());
+                entries.push(
+                    item("Open Terminal Here", move |this, _, cx| this.send(ClientMsg::NewTab { bench: this.bench, cwd: Some(root.clone()) }, cx))
+                        .icon("terminal"),
+                );
+                entries.push(item("Copy Path", move |_, _, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.clone()))));
+            }
+            None => entries.push(
+                item("Setup…", move |this, window, cx| {
+                    this.send(ClientMsg::FocusTab { tab: tab_id }, cx);
+                    if this.setup.is_none() {
+                        this.toggle_setup(window, cx);
+                    }
+                })
+                .icon("rack"),
+            ),
+        }
         for tag in &tab.tags {
             let label = tag.label.clone();
             let tint = tag.tint_tab;
@@ -463,6 +502,7 @@ impl BenchWindow {
             MenuEntry::Separator,
             item("Split Right", move |this, _, cx| this.split_pane(pane, SplitDir::Right, cx)).icon("split-right"),
             item("Split Down", move |this, _, cx| this.split_pane(pane, SplitDir::Down, cx)).icon("split-down"),
+            item("Open Folder as Project", move |this, _, cx| this.open_pane_project(pane, cx)).icon("project"),
             MenuEntry::Separator,
             danger("Close Pane", move |this: &mut Self, window, cx| this.close_pane(pane, window, cx)).icon("close"),
         ]);
@@ -472,6 +512,8 @@ impl BenchWindow {
     fn bench_menu(&self, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let current = self.bench(cx).map(|b| b.color);
         let mut entries = vec![
+            item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
+            MenuEntry::Separator,
             item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)).icon("pencil"),
             item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
             MenuEntry::Separator,
@@ -563,6 +605,9 @@ impl BenchWindow {
             } else if tab.panes.iter().any(|p| p.tool.is_some()) {
                 el = el.child(svg().path(icon("tool")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
             }
+            if tab.project_info().is_some() {
+                el = el.child(svg().path(icon("project")).size(px(14.0)).flex_none().text_color(hsla(ui.ink(accent))));
+            }
             if tab.private {
                 el = el.child(svg().path(icon("private")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
             }
@@ -596,7 +641,15 @@ impl BenchWindow {
                 .px_2()
                 .cursor_pointer()
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .tooltip(menu::tooltip("New tab (right-click for a project tab)"))
                 .on_click(cx.listener(|this, _, _, cx| this.new_tab(cx)))
+                .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    let entries = vec![
+                        item("New Terminal Tab", |this, _, cx| this.new_tab(cx)).icon("terminal"),
+                        item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
+                    ];
+                    this.open_menu(e.position, entries, cx);
+                }))
                 .child(svg().path(icon("tab-new")).size(px(16.0)).text_color(hsla(ui.text_dim))),
         )
         .child(
@@ -650,7 +703,7 @@ impl BenchWindow {
     }
 
     fn render_bench_label(&self, bench: &Bench, cx: &mut Context<Self>) -> AnyElement {
-        let editor = [EditTarget::BenchName, EditTarget::Badge, EditTarget::Color].into_iter().find_map(|t| self.editor_for(t));
+        let editor = [EditTarget::BenchName, EditTarget::Badge, EditTarget::Color, EditTarget::ProjectFolder].into_iter().find_map(|t| self.editor_for(t));
         if let Some(editor) = editor {
             return div().flex().items_center().px_2().child(editor).into_any_element();
         }
@@ -799,6 +852,10 @@ impl Render for BenchWindow {
         };
         let accent = bench.color.accent();
         let content = match bench.active_tab() {
+            Some(tab) if tab.project_info().is_some() => match self.state.read(cx).projects.get(&tab.id) {
+                Some(view) => div().size_full().child(view.clone()).into_any_element(),
+                None => div().into_any_element(),
+            },
             Some(tab) => self.render_node(&tab.layout, Vec::new(), tab, accent, cx),
             None => div().into_any_element(),
         };
@@ -829,10 +886,14 @@ impl Render for BenchWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
-                if let Some(pane) = this.active_tab(cx).map(|t| t.active_pane) {
-                    this.close_pane(pane, window, cx);
+                // In a tab without panes, closing "the pane" closes the tab.
+                match this.active_tab(cx).map(|t| (t.id, t.active_pane, t.panes.is_empty())) {
+                    Some((tab, _, true)) => this.close_tab(tab, window, cx),
+                    Some((_, pane, false)) => this.close_pane(pane, window, cx),
+                    None => {}
                 }
             }))
+            .on_action(cx.listener(|this, _: &NewProjectTab, window, cx| this.new_project_tab(window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
             .on_action(cx.listener(|this, _: &PrevTab, _, cx| this.cycle_tab(-1, cx)))
             .on_action(cx.listener(|this, a: &ActivateTab, _, cx| {

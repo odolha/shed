@@ -43,7 +43,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use shed_model::config::RackConfig;
-use shed_model::{Aliases, Bench, BenchColor, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId, Tag, WindowPlace, paths, slug, tag_color};
+use shed_model::{Aliases, Bench, BenchColor, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId, TabKind, Tag, WindowPlace, paths, slug, tag_color};
 
 pub use layout::{format_layout, parse_layout};
 
@@ -82,7 +82,8 @@ pub struct SavedTab {
     #[serde(default, skip_serializing_if = "is_false")]
     pub private: bool,
     /// The split tree, with panes numbered in the order of `panes`:
-    /// `0`, or `right 0.6 (0) (down 0.5 (1) (2))`.
+    /// `0`, or `right 0.6 (0) (down 0.5 (1) (2))`. Empty in a project tab.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub layout: String,
     #[serde(default)]
     pub active_pane: usize,
@@ -91,7 +92,17 @@ pub struct SavedTab {
     /// Font size points over the configured size (the tab's zoom).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub zoom: f32,
+    /// What a project tab shows; a terminal tab has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<SavedProject>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub panes: Vec<SavedPane>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedProject {
+    /// The project's folder, `~/`-relative when under home.
+    pub root: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -186,6 +197,8 @@ impl SavedBench {
                         ready_when: p.setup.ready_when.clone(),
                     })
                     .collect();
+                let project = tab.project_info().map(|p| SavedProject { root: home_relative(&p.root) });
+                let layout = if project.is_some() { String::new() } else { format_layout(&tab.layout, &order) };
                 SavedTab {
                     id: tab.id,
                     name: tab.name.clone(),
@@ -195,10 +208,11 @@ impl SavedBench {
                         .map(|t| SavedTag { label: t.label.clone(), color: format!("#{:06X}", t.color.to_hex()), tint: t.tint_tab })
                         .collect(),
                     private: tab.private,
-                    layout: format_layout(&tab.layout, &order),
+                    layout,
                     active_pane: order.iter().position(|id| *id == tab.active_pane).unwrap_or(0),
                     aliases: tab.aliases.clone(),
                     zoom: tab.zoom,
+                    project,
                     panes,
                 }
             })
@@ -225,6 +239,22 @@ impl SavedBench {
         let mut panes_out = Vec::new();
         let mut tabs = Vec::new();
         for (ti, st) in self.tabs.iter().enumerate() {
+            let tags = st
+                .tags
+                .iter()
+                .map(|t| Tag { label: t.label.clone(), color: tag_color(&t.color).unwrap_or(Rgb::hex(0x8A93A3)), tint_tab: t.tint })
+                .collect();
+            if let Some(project) = &st.project {
+                let mut tab = Tab::project(expand_home(&project.root));
+                tab.id = st.id;
+                tab.name = st.name.clone();
+                tab.tags = tags;
+                tab.private = st.private;
+                tab.aliases = st.aliases.clone();
+                tab.zoom = st.zoom;
+                tabs.push(tab);
+                continue;
+            }
             if st.panes.is_empty() {
                 continue;
             }
@@ -251,16 +281,9 @@ impl SavedBench {
             panes_out.extend(st.panes.iter().map(|sp| (sp.id, sp.clone())));
             tabs.push(Tab {
                 id: st.id,
+                kind: TabKind::Terminal,
                 name: st.name.clone(),
-                tags: st
-                    .tags
-                    .iter()
-                    .map(|t| Tag {
-                        label: t.label.clone(),
-                        color: tag_color(&t.color).unwrap_or(Rgb::hex(0x8A93A3)),
-                        tint_tab: t.tint,
-                    })
-                    .collect(),
+                tags,
                 auto_tags: Vec::new(),
                 private: st.private,
                 active_pane: ids.get(st.active_pane).copied().unwrap_or(ids[0]),
@@ -271,7 +294,7 @@ impl SavedBench {
             });
         }
         if tabs.is_empty() {
-            return Err("it has no panes".into());
+            return Err("it has no tabs".into());
         }
         let active_tab = tabs.get(self.active_tab).map_or(tabs[0].id, |t| t.id);
         let bench = Bench {
@@ -322,6 +345,7 @@ impl SavedBench {
             active_pane: 0,
             aliases: Aliases::new(),
             zoom: 0.0,
+            project: None,
             panes: vec![SavedPane {
                 id: PaneId::new(),
                 cwd: self.cwd.clone(),
@@ -335,6 +359,24 @@ impl SavedBench {
                 after: Vec::new(),
                 ready_when: None,
             }],
+        });
+        id
+    }
+
+    /// Adds a project tab for the folder `root`.
+    pub fn add_project_tab(&mut self, root: &Path) -> TabId {
+        let id = TabId::new();
+        self.tabs.push(SavedTab {
+            id,
+            name: None,
+            tags: Vec::new(),
+            private: false,
+            layout: String::new(),
+            active_pane: 0,
+            aliases: Aliases::new(),
+            zoom: 0.0,
+            project: Some(SavedProject { root: home_relative(root) }),
+            panes: Vec::new(),
         });
         id
     }
@@ -759,6 +801,8 @@ mod tests {
         };
         tab.tags.push(Tag { label: "dev".into(), color: tag_color("green").unwrap(), tint_tab: false });
         let second = Tab::with_pane(Pane::new(PaneId::new(), "/tmp".into()));
+        let mut project = Tab::project(home.join("code/api"));
+        project.name = Some("api code".into());
         Bench {
             id: BenchId::new(),
             name: "backend".into(),
@@ -766,7 +810,7 @@ mod tests {
             badge: Some("B".into()),
             cwd: home.join("code"),
             active_tab: second.id,
-            tabs: vec![tab, second],
+            tabs: vec![tab, second, project],
             aliases: [("up".to_string(), "docker compose up -d".to_string())].into(),
             closing: false,
             launcher: "backend".into(),
@@ -785,9 +829,13 @@ mod tests {
         assert!(text.contains("cwd = \"~/code/api\""));
         assert!(text.contains("teardown = [\"docker compose down\"]"), "{text}");
         assert!(text.contains("[aliases]") && text.contains("[tabs.aliases]"), "{text}");
+        assert!(text.contains("[tabs.project]\nroot = \"~/code/api\""), "{text}");
 
         let (loaded, panes) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
-        assert_eq!(loaded.tabs.len(), 2);
+        assert_eq!(loaded.tabs.len(), 3);
+        assert_eq!(loaded.tabs[2].kind, bench.tabs[2].kind);
+        assert!(loaded.tabs[2].panes.is_empty());
+        assert_eq!(loaded.tabs[2].display_title(), "api code");
         assert_eq!(loaded.active_tab, bench.active_tab);
         assert_eq!(loaded.tabs[0].layout, bench.tabs[0].layout);
         assert_eq!(panes[0].1.tool.as_deref(), Some("nvim src/main.rs"));
@@ -848,14 +896,18 @@ mod tests {
     #[test]
     fn closed_benches_change_tab_by_tab() {
         let mut saved = SavedBench::from_bench(&sample(), |_| PaneExtras::default());
-        let (first, second) = (saved.tabs[0].id, saved.tabs[1].id);
+        let (first, second, project) = (saved.tabs[0].id, saved.tabs[1].id, saved.tabs[2].id);
         let added = saved.add_tab();
-        assert_eq!(saved.tabs.len(), 3);
-        assert_eq!(saved.tabs[2].panes[0].cwd, saved.cwd);
+        assert_eq!(saved.tabs.len(), 4);
+        assert_eq!(saved.tabs[3].panes[0].cwd, saved.cwd);
         assert!(saved.move_tab(added, 0));
-        assert_eq!(saved.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [added, first, second]);
+        assert_eq!(saved.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [added, first, second, project]);
         saved.remove_tab(first).unwrap();
         saved.remove_tab(second).unwrap();
+        saved.remove_tab(project).unwrap();
+        let code = saved.add_project_tab(Path::new("/srv/code"));
+        assert_eq!(saved.to_bench().unwrap().0.tabs[1].project_info().map(|p| p.root.clone()), Some("/srv/code".into()));
+        saved.remove_tab(code).unwrap();
         assert!(saved.remove_tab(added).is_err(), "the last tab stays");
         let pane = saved.tabs[0].panes[0].id;
         let setup = PaneSetup {
@@ -879,6 +931,7 @@ mod tests {
         let tab = other.take_tab(moving).unwrap();
         saved.insert_tab(tab, 0);
         assert_eq!(saved.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [moving, added]);
+        other.take_tab(other.tabs[1].id).unwrap();
         assert!(other.take_tab(other.tabs[0].id).is_err(), "the last tab stays");
     }
 
@@ -938,11 +991,16 @@ mod tests {
             id = "8f6d7861-0000-4000-8000-000000000003"
             cwd = "/tmp"
             tool = "npm run dev"
+
+            [[tabs]]
+            id = "8f6d7861-0000-4000-8000-000000000004"
+            project = { root = "/tmp" }
         "##;
         let (bench, panes) = SavedBench::from_toml(text).unwrap().to_bench().unwrap();
         assert_eq!(bench.color, BenchColor::Custom(Rgb::hex(0x123456)));
         assert_eq!(panes[0].1.cols, 80);
         assert_eq!(bench.tabs[0].panes.len(), 1);
+        assert_eq!(bench.tabs[1].display_title(), "tmp");
     }
 
     #[test]

@@ -4,16 +4,17 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use gpui::{AppContext, AsyncApp, Context, Entity, TitlebarOptions, WindowHandle, WindowOptions, px, size};
+use gpui::{AppContext, AsyncApp, Context, Entity, FocusHandle, TitlebarOptions, WindowHandle, WindowOptions, px, size};
 use shed_model::config::{Config, FileWatch};
 use shed_desktop::{BenchIdentity, Desktop};
-use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed, TabId};
+use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed, Tab, TabId};
 use shed_proto::{BenchRef, ClientMsg, Frame, KeeperMsg};
 use tracing::{error, warn};
 
 use crate::bench_window::BenchWindow;
 use crate::keeper_conn::KeeperConn;
 use crate::pegboard::PegboardData;
+use crate::project_view::ProjectView;
 use crate::shed_window::ShedWindow;
 use crate::terminal_view::TerminalView;
 use crate::settings::Settings;
@@ -32,6 +33,8 @@ pub struct AppState {
     pub tree: Shed,
     pub settings: Settings,
     pub panes: HashMap<PaneId, Entity<TerminalView>>,
+    /// The view of every project tab of an open bench.
+    pub projects: HashMap<TabId, Entity<ProjectView>>,
     /// Per open bench, the tabs shown most recently, newest first.
     recent_tabs: HashMap<BenchId, Vec<TabId>>,
     windows: HashMap<BenchId, WindowHandle<BenchWindow>>,
@@ -76,6 +79,7 @@ impl AppState {
             tree: Shed::default(),
             settings,
             panes: HashMap::new(),
+            projects: HashMap::new(),
             recent_tabs: HashMap::new(),
             windows: HashMap::new(),
             shed_window: None,
@@ -214,12 +218,56 @@ impl AppState {
             }
         }
 
+        self.sync_projects(cx);
         self.sync_identities(cx);
         let benches: Vec<BenchId> = self.windows.keys().copied().collect();
         for bench in benches {
             self.sync_window(bench, cx);
         }
         cx.notify();
+    }
+
+    /// A view for every project tab of an open bench (or one being opened),
+    /// following its folder; none for anything else. They are cheap: a
+    /// folder listing, read again when a bench opens.
+    fn sync_projects(&mut self, cx: &mut Context<Self>) {
+        let open: HashSet<BenchId> = self.windows.keys().chain(&self.opening).copied().collect();
+        let wanted: Vec<(BenchId, TabId, std::path::PathBuf, shed_model::Rgb)> = self
+            .tree
+            .benches
+            .iter()
+            .filter(|b| open.contains(&b.id))
+            .flat_map(|b| b.tabs.iter().filter_map(|t| Some((b.id, t.id, t.project_info()?.root.clone(), b.color.accent()))))
+            .collect();
+        self.projects.retain(|id, _| wanted.iter().any(|w| w.1 == *id));
+        for (bench, tab, root, accent) in wanted {
+            match self.projects.get(&tab) {
+                Some(view) => view.update(cx, |v, cx| {
+                    if (v.bench, &v.root, v.accent) != (bench, &root, accent) {
+                        (v.bench, v.accent) = (bench, accent);
+                        v.set_root(root);
+                        cx.notify();
+                    }
+                }),
+                None => {
+                    let conn = self.conn.clone();
+                    let view = cx.new(|cx| ProjectView::new(bench, root, accent, conn, cx));
+                    self.projects.insert(tab, view);
+                }
+            }
+        }
+    }
+
+    /// What should have the keyboard in a bench's window: its active tab's
+    /// active pane, or the tab itself when it has no panes.
+    pub fn active_focus(&self, bench: BenchId, cx: &gpui::App) -> Option<(Focus, FocusHandle)> {
+        let tab = self.tree.bench(bench)?.active_tab()?;
+        if tab.project_info().is_some() {
+            let view = self.projects.get(&tab.id)?;
+            return Some((Focus::Tab(tab.id), view.read(cx).focus_handle().clone()));
+        }
+        let view = self.panes.get(&tab.active_pane)?;
+        Some((Focus::Pane(tab.active_pane), view.read(cx).focus_handle().clone()))
     }
 
     /// Keeps every bench's desktop entry, icon and window app ID current.
@@ -268,9 +316,7 @@ impl AppState {
         let Some(handle) = self.windows.get(&bench).copied() else { return };
         let Some(b) = self.tree.bench(bench) else { return };
         let title = window_title(&b.name);
-        let active = b
-            .active_tab()
-            .and_then(|t| self.panes.get(&t.active_pane).map(|v| (t.active_pane, v.read(cx).focus_handle().clone())));
+        let active = self.active_focus(bench, cx);
         handle.update(cx, |bw, window, cx| bw.sync(title, active, window, cx)).ok();
     }
 
@@ -364,6 +410,7 @@ impl AppState {
                 self.panes.insert(id, view);
             }
         }
+        self.sync_projects(cx);
         let bench = self.tree.bench(bench_id).unwrap();
         let bounds = open_bounds(bench.window, size(px(960.0), px(640.0)), cx);
         let tracker = PlaceTracker::new(Some(bench_id), self.conn.clone(), bounds, bench.window);
@@ -479,6 +526,11 @@ impl AppState {
             self.conn.send_msg(ClientMsg::Detach { bench });
         }
         self.recent_tabs.remove(&bench);
+        if let Some(b) = self.tree.bench(bench) {
+            for tab in &b.tabs {
+                self.projects.remove(&tab.id);
+            }
+        }
         let shown = self.shown_panes();
         self.panes.retain(|id, _| shown.contains(id));
         release_freed_memory();
@@ -583,22 +635,29 @@ pub fn move_tab(conn: &KeeperConn, tab: TabId, title: &str, from: BenchRef, to: 
     conn.send_msg(ClientMsg::Pegboard);
 }
 
-/// Closes tab `tab` (titled `title`) of a bench, after asking: a slip of the
-/// hand would otherwise take along whatever runs in it.
-pub fn close_tab(conn: &KeeperConn, tab: TabId, title: &str, bench: BenchRef, window: &mut gpui::Window, cx: &mut gpui::App) {
+/// Closes `tab` of a bench, after asking: a slip of the hand would
+/// otherwise take along whatever runs in it.
+pub fn close_tab(conn: &KeeperConn, tab: &Tab, bench: BenchRef, window: &mut gpui::Window, cx: &mut gpui::App) {
+    let (title, id) = (tab.display_title(), tab.id);
     let (message, detail, button, msg) = match bench {
+        BenchRef::Running(_) if tab.project_info().is_some() => (
+            format!("Close the project tab “{title}”?"),
+            "Its files stay where they are; open the folder again to bring it back.",
+            "Close Tab",
+            ClientMsg::CloseTab { tab: id },
+        ),
         BenchRef::Running(_) => (
             format!("Close the tab “{title}”?"),
             "The programs running in it stop and its teardown commands run.",
             "Close Tab",
-            ClientMsg::CloseTab { tab },
+            ClientMsg::CloseTab { tab: id },
         ),
         // A closed bench's tab has nothing running: it just goes.
         BenchRef::Saved(name) => (
             format!("Remove the tab “{title}”?"),
             "It is taken out of the saved bench, with its startup and teardown commands.",
             "Remove Tab",
-            ClientMsg::EditSaved { name, edit: shed_proto::SavedEdit::RemoveTab { tab } },
+            ClientMsg::EditSaved { name, edit: shed_proto::SavedEdit::RemoveTab { tab: id } },
         ),
     };
     let answer = window.prompt(gpui::PromptLevel::Warning, &message, Some(detail), &[button, "Cancel"], cx);
@@ -610,6 +669,27 @@ pub fn close_tab(conn: &KeeperConn, tab: TabId, title: &str, bench: BenchRef, wi
         }
     })
     .detach();
+}
+
+/// What has the keyboard in a bench window: a pane, or a tab without panes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Focus {
+    Pane(PaneId),
+    Tab(TabId),
+}
+
+/// The desktop's folder picker, for a project tab's folder: the folder
+/// chosen, `None` if cancelled, or why there is no picker.
+pub fn pick_folder(cx: &gpui::App) -> impl std::future::Future<Output = Result<Option<std::path::PathBuf>, String>> + use<> {
+    let options = gpui::PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Open Project".into()) };
+    let answer = cx.prompt_for_paths(options);
+    async move {
+        match answer.await {
+            Ok(Ok(paths)) => Ok(paths.and_then(|p| p.into_iter().next())),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => Ok(None),
+        }
+    }
 }
 
 pub fn window_title(bench: &str) -> String {

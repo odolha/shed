@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -109,6 +109,8 @@ pub enum ClientMsg {
     /// Sets (or, with no value, removes) one of the shell's own aliases, in
     /// the file its startup files source.
     SetShellAlias { name: String, value: Option<String> },
+    /// Adds a project tab for the folder `root` after the bench's active tab.
+    NewProjectTab { bench: BenchId, root: PathBuf },
 }
 
 /// What can change in a closed bench without opening it.
@@ -127,6 +129,8 @@ pub enum SavedEdit {
     PaneSetup { pane: PaneId, setup: PaneSetup },
     /// The bench's aliases (`tab: None`) or a tab's.
     Aliases { tab: Option<TabId>, aliases: Aliases },
+    /// Adds a project tab for the folder `root`.
+    NewProjectTab { root: PathBuf },
 }
 
 /// A bench, running or closed.
