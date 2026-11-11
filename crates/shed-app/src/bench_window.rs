@@ -39,6 +39,8 @@ enum EditTarget {
     Color,
     /// A folder to open as a project tab, typed where there is no picker.
     ProjectFolder,
+    /// A server to open a remote tab on (`host` or `user@host`).
+    RemoteHost,
 }
 
 impl EditTarget {
@@ -50,6 +52,7 @@ impl EditTarget {
             EditTarget::Badge => "Setting the badge",
             EditTarget::Color => "Choosing a colour (#rrggbb or a name)",
             EditTarget::ProjectFolder => "Opening a folder as a project tab",
+            EditTarget::RemoteHost => "Opening a remote tab: host, or user@host, as ssh takes it",
         }
     }
 }
@@ -301,6 +304,19 @@ impl BenchWindow {
         entries
     }
 
+    /// Servers for a new remote tab: those in `~/.ssh/config`, or one to type.
+    fn remote_host_menu() -> Vec<MenuEntry<Self>> {
+        let mut entries: Vec<MenuEntry<Self>> = crate::remote::known_hosts()
+            .into_iter()
+            .map(|host| {
+                let h = host.clone();
+                item(host, move |this, _, cx| this.send(ClientMsg::NewRemoteTab { bench: this.bench, host: h.clone() }, cx)).icon("server")
+            })
+            .collect();
+        entries.push(item("Other Host…", |this, window, cx| this.start_edit(EditTarget::RemoteHost, window, cx)));
+        entries
+    }
+
     /// Opens the project a pane is in (its Git repository, else its folder).
     fn open_pane_project(&mut self, pane: PaneId, cx: &mut Context<Self>) {
         let Some(cwd) = self.state.read(cx).tree.pane(pane).map(|p| p.cwd.clone()) else { return };
@@ -388,6 +404,7 @@ impl BenchWindow {
             EditTarget::Badge => self.bench(cx).map(|b| b.badge.clone().unwrap_or_default()),
             EditTarget::Color => self.bench(cx).map(|b| format!("#{:06X}", b.color.accent().to_hex())),
             EditTarget::ProjectFolder => self.bench(cx).map(|b| shed_save::home_relative(&b.cwd)),
+            EditTarget::RemoteHost => Some(String::new()),
         };
         let Some(current) = current else { return };
         let editor = cx.new(|cx| LineEditor::selected(current, cx).submit_on_blur(window, cx).without_hint());
@@ -412,6 +429,8 @@ impl BenchWindow {
                 None => return,
             },
             EditTarget::ProjectFolder => ClientMsg::NewProjectTab { bench: self.bench, root: text.trim().into() },
+            EditTarget::RemoteHost if text.trim().is_empty() => return,
+            EditTarget::RemoteHost => ClientMsg::NewRemoteTab { bench: self.bench, host: text.trim().to_string() },
             EditTarget::Badge => {
                 let badge: String = text.chars().filter(|c| !c.is_whitespace()).take(2).collect();
                 ClientMsg::SetBadge { bench: self.bench, badge: (!badge.is_empty()).then_some(badge) }
@@ -541,6 +560,7 @@ impl BenchWindow {
         let mut entries = vec![
             item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
             more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(cx)).icon("ai"),
+            more("New Remote Tab", |_: &mut Self, _| Self::remote_host_menu()).icon("server"),
             MenuEntry::Separator,
             item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)).icon("pencil"),
             item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
@@ -636,6 +656,9 @@ impl BenchWindow {
             if tab.project_info().is_some() {
                 el = el.child(svg().path(icon("project")).size(px(14.0)).flex_none().text_color(hsla(ui.ink(accent))));
             }
+            if tab.remote_info().is_some() {
+                el = el.child(svg().path(icon("server")).size(px(14.0)).flex_none().text_color(hsla(ui.ink(accent))));
+            }
             if let Some(ai) = tab.ai_info() {
                 let glyph = if ai.activity == shed_model::AiActivity::Waiting { "tool-waiting" } else { "ai" };
                 let color = if ai.activity == shed_model::AiActivity::Idle { ui.text_dim } else { ui.ink(accent) };
@@ -681,6 +704,7 @@ impl BenchWindow {
                         item("New Terminal Tab", |this, _, cx| this.new_tab(cx)).icon("terminal"),
                         item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
                         more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(cx)).icon("ai"),
+                        more("New Remote Tab", |_: &mut Self, _| Self::remote_host_menu()).icon("server"),
                     ];
                     this.open_menu(e.position, entries, cx);
                 }))
@@ -737,7 +761,7 @@ impl BenchWindow {
     }
 
     fn render_bench_label(&self, bench: &Bench, cx: &mut Context<Self>) -> AnyElement {
-        let editor = [EditTarget::BenchName, EditTarget::Badge, EditTarget::Color, EditTarget::ProjectFolder].into_iter().find_map(|t| self.editor_for(t));
+        let editor = [EditTarget::BenchName, EditTarget::Badge, EditTarget::Color, EditTarget::ProjectFolder, EditTarget::RemoteHost].into_iter().find_map(|t| self.editor_for(t));
         if let Some(editor) = editor {
             return div().flex().items_center().px_2().child(editor).into_any_element();
         }

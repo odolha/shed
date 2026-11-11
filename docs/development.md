@@ -94,6 +94,21 @@ compiler, so it checks and lints but cannot link. To run it, use a Mac, or the
 CI: `.github/workflows/ci.yml` builds, lints and tests on Linux and macOS, and
 uploads `Shed.app` (zipped) from the macOS run.
 
+## Remote tabs
+
+`shed remote connect` copies the `shedd` beside `shed` to servers, preferring
+`shedd-<arch>-static` if it is there. A static build runs on any Linux:
+
+```sh
+rustup target add x86_64-unknown-linux-musl
+cargo build --release -p shed-keeper --target x86_64-unknown-linux-musl
+cp target/x86_64-unknown-linux-musl/release/shedd target/release/shedd-x86_64-static
+```
+
+`SHED_SSH` stands a program in for ssh (tests run the "server" side locally with
+it) and `SHED_REMOTE_SHEDD` chooses the binary to copy.
+`crates/shed-keeper/tests/attach.rs` drives `shedd attach` against an in-process keeper.
+
 ## Packages
 
 - `packaging/deb/build.sh` builds the Debian package into `target/debian/`.

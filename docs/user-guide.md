@@ -9,6 +9,7 @@ what you see is what Shed shows.
 - [A bench's window](#a-benchs-window)
 - [Project tabs](#project-tabs)
 - [AI tabs](#ai-tabs)
+- [Remote tabs](#remote-tabs)
 - [Opening, hiding, closing](#opening-hiding-closing)
 - [Setup: startup, teardown and aliases](#setup-startup-teardown-and-aliases)
 - [History and the logbook](#history-and-the-logbook)
@@ -287,6 +288,38 @@ Claude Code runs in the keeper, like a terminal's programs: hiding the bench or
 closing its window does not stop it. Closing the tab or the bench does; the
 session stays, and opens again with the tab.
 
+## Remote tabs
+
+A **remote tab** is a shell on a server that keeps running when the bench closes,
+and comes back, screen and scrollback and all, when it opens again. It is marked
+with a server icon.
+
+Open one with **New Remote Tab** in the new-tab button's menu or the bench's menu:
+pick a host from your `~/.ssh/config`, or **Other Host…** and type it as ssh takes
+it (`user@host`). Or run `shed remote new HOST` in a terminal of the bench.
+
+The first time, Shed copies its keeper (`shedd`) to `~/.local/bin` on the server
+over ssh (again only when Shed changes); nothing else is installed and no root is
+needed. The server's keeper holds the shell; the tab shows it over ssh. So:
+
+- **Closing or hiding the bench** keeps the shell and whatever runs in it. Opening
+  the bench joins it again.
+- **A dropped connection** (network, sleep) is joined again after a few seconds,
+  until the shell ends or you press Ctrl+C.
+- **A server restart** stops the shell, but its keeper saved it: the next time the
+  tab connects, a new shell starts in the same folder, under the old scrollback.
+- **Closing the tab** ends the shell on the server too (it asks first).
+
+Passwords and 2FA prompts appear in the tab, since ssh runs there; the steps share
+one connection, so you are asked once. Commands typed in a remote tab are in its
+history (Ctrl+R) like any tab's.
+
+Servers must run Linux. The `shedd` copied is the one beside `shed`, which needs
+a C library at least as new as this machine's (and the same architecture); for
+older servers, other architectures, or when Shed runs on a Mac, put a static
+build beside `shed` as `shedd-x86_64-static` or `shedd-aarch64-static` (see
+[Development](development.md#remote-tabs)) and Shed copies that instead.
+
 ## Opening, hiding, closing
 
 **Hiding** a bench closes its window and nothing else. Its programs keep running,
@@ -540,6 +573,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed project [DIR] [--bench NAME]` | Opens a folder (by default the Git repository you are in) as a project tab |
 | `shed ai [DIR] [--bench NAME]` | Opens an AI tab working in a folder (by default the Git repository you are in) |
 | `shed browser setup` | Registers Shed's browser extension, so links bring their open tab forward |
+| `shed remote new HOST [--bench NAME]` | Opens a remote tab: a shell on HOST that outlives the bench |
 | `shed tag add LABEL [--color C] [--tint]` | Tags this tab |
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |

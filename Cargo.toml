@@ -32,7 +32,7 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal", "process"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "io-std", "sync", "time", "macros", "signal", "process"] }
 nix = { version = "0.31", features = ["term", "process", "signal", "fs", "ioctl", "user", "hostname"] }
 libc = "0.2"
 clap = { version = "4", features = ["derive"] }

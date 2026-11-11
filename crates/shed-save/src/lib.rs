@@ -98,6 +98,9 @@ pub struct SavedTab {
     /// What an AI tab shows; others have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai: Option<SavedAi>,
+    /// The server a remote tab's shell is on; its panes are saved as usual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<shed_model::RemoteTab>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub panes: Vec<SavedPane>,
 }
@@ -284,6 +287,7 @@ impl SavedBench {
                     zoom: tab.zoom,
                     project,
                     ai,
+                    remote: tab.remote_info().cloned(),
                     panes,
                 }
             })
@@ -357,7 +361,7 @@ impl SavedBench {
             panes_out.extend(st.panes.iter().map(|sp| (sp.id, sp.clone())));
             tabs.push(Tab {
                 id: st.id,
-                kind: TabKind::Terminal,
+                kind: st.remote.clone().map_or(TabKind::Terminal, TabKind::Remote),
                 name: st.name.clone(),
                 tags,
                 auto_tags: Vec::new(),
@@ -423,6 +427,7 @@ impl SavedBench {
             zoom: 0.0,
             project: None,
             ai: None,
+            remote: None,
             panes: vec![SavedPane {
                 id: PaneId::new(),
                 cwd: self.cwd.clone(),
@@ -454,6 +459,7 @@ impl SavedBench {
             zoom: 0.0,
             project: Some(SavedProject { root: home_relative(root), open: Vec::new(), active: None, exclude: Vec::new(), links: Vec::new() }),
             ai: None,
+            remote: None,
             panes: Vec::new(),
         });
         id

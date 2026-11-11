@@ -1,0 +1,229 @@
+//! `shedd attach ID`: the server end of a remote tab.
+//!
+//! A remote tab's local pane runs `ssh -t host shedd attach ID`. On the
+//! server this finds (or starts) the keeper there, finds the bench kept for
+//! `ID` (running, saved after a restart, or new), and joins its one pane to
+//! the terminal ssh gave it: what the pane shows comes out, what is typed
+//! goes in. Only terminal bytes cross ssh, so the two ends never have to be
+//! the same version of Shed. Closing the local bench just ends ssh, and the
+//! shell stays; the next attach shows it again, scrollback and all.
+
+use std::os::fd::AsRawFd;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use shed_model::{BenchId, PaneId, Shed};
+use shed_proto::{ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, PROTOCOL_VERSION, ShowTarget};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
+
+/// Typed into the pane by the local keeper when the remote tab is closed:
+/// the remote shell is closed too.
+pub const CLOSE_REQUEST: &[u8] = b"\x1b]7777;shed;remote-close\x07";
+
+/// Exit codes: the shell ended (or was closed); this end let go; the shell
+/// was lost with its keeper (the server stopping), to be joined again.
+pub const EXIT_ENDED: i32 = 0;
+pub const EXIT_DETACHED: i32 = 2;
+pub const EXIT_LOST: i32 = 3;
+
+struct Conn {
+    stream: UnixStream,
+    decoder: FrameDecoder,
+    buf: Vec<u8>,
+}
+
+impl Conn {
+    async fn send(&mut self, frame: Frame) -> std::io::Result<()> {
+        self.stream.write_all(&frame.encode()).await
+    }
+
+    async fn next(&mut self) -> anyhow::Result<Frame> {
+        loop {
+            if let Some(frame) = self.decoder.next_frame()? {
+                return Ok(frame);
+            }
+            let n = self.stream.read(&mut self.buf).await?;
+            if n == 0 {
+                anyhow::bail!("the keeper went away");
+            }
+            self.decoder.push(&self.buf[..n]);
+        }
+    }
+
+    async fn tree(&mut self) -> anyhow::Result<(Shed, Vec<String>)> {
+        self.send(Frame::Client(ClientMsg::Status)).await?;
+        loop {
+            if let Frame::Keeper(KeeperMsg::Status(s)) = self.next().await? {
+                return Ok((s.tree, s.stored));
+            }
+        }
+    }
+}
+
+/// Connects to the keeper, starting one (detached, so it outlives this
+/// connection) if none runs.
+async fn connect() -> anyhow::Result<UnixStream> {
+    let socket = shed_model::paths::socket_path();
+    if let Ok(s) = UnixStream::connect(&socket).await {
+        return Ok(s);
+    }
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    use std::os::unix::process::CommandExt;
+    // SAFETY: setsid only detaches the child from this session.
+    unsafe {
+        cmd.pre_exec(|| {
+            nix::unistd::setsid().map_err(std::io::Error::from)?;
+            Ok(())
+        });
+    }
+    cmd.spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(s) = UnixStream::connect(&socket).await {
+            return Ok(s);
+        }
+        if Instant::now() > deadline {
+            anyhow::bail!("the keeper did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn terminal_size() -> (u16, u16) {
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: TIOCGWINSZ fills the struct for a terminal; on error it is left zeroed.
+    let ok = unsafe { libc::ioctl(std::io::stdin().as_raw_fd(), libc::TIOCGWINSZ, &mut ws) } == 0;
+    if ok && ws.ws_col > 0 && ws.ws_row > 0 { (ws.ws_col, ws.ws_row) } else { (80, 24) }
+}
+
+/// Puts the terminal in raw mode (keys pass through as bytes, Ctrl+C
+/// included) until dropped.
+struct Raw(Option<nix::sys::termios::Termios>);
+
+impl Raw {
+    fn new() -> Self {
+        use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
+        let stdin = std::io::stdin();
+        let Ok(saved) = tcgetattr(&stdin) else { return Raw(None) };
+        let mut raw = saved.clone();
+        cfmakeraw(&mut raw);
+        let _ = tcsetattr(&stdin, SetArg::TCSANOW, &raw);
+        Raw(Some(saved))
+    }
+}
+
+impl Drop for Raw {
+    fn drop(&mut self) {
+        if let Some(saved) = &self.0 {
+            let _ = nix::sys::termios::tcsetattr(std::io::stdin(), nix::sys::termios::SetArg::TCSANOW, saved);
+        }
+    }
+}
+
+/// Runs the attach; returns the exit code.
+pub async fn attach(id: &str, cwd: Option<PathBuf>) -> anyhow::Result<i32> {
+    let stream = connect().await?;
+    let mut conn = Conn { stream, decoder: FrameDecoder::default(), buf: vec![0u8; 64 * 1024] };
+    conn.send(Frame::Client(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Cli })).await?;
+    // A newer shedd (Shed was updated) meeting an older keeper still holding
+    // the shells: the keeper's own program does the attaching. Its file may
+    // have been replaced; /proc still has the one it runs.
+    loop {
+        if let Frame::Keeper(KeeperMsg::Welcome { version, keeper_pid }) = conn.next().await? {
+            if version != PROTOCOL_VERSION {
+                use std::os::unix::process::CommandExt;
+                let mut cmd = std::process::Command::new(format!("/proc/{keeper_pid}/exe"));
+                cmd.arg("attach").arg(id);
+                if let Some(cwd) = &cwd {
+                    cmd.arg("--cwd").arg(cwd);
+                }
+                return Err(anyhow::anyhow!("cannot run the keeper's shedd: {}", cmd.exec()));
+            }
+            break;
+        }
+    }
+
+    // The bench kept for this tab: running, saved, or new.
+    let name = format!("remote-{id}");
+    let find = |tree: &Shed| tree.benches.iter().find(|b| b.name == name).map(|b| (b.id, b.tabs.first().map(|t| t.active_pane)));
+    let (tree, stored) = conn.tree().await?;
+    let mut found = find(&tree);
+    if found.is_none() {
+        let target = if stored.contains(&name) {
+            ShowTarget::Load { name: name.clone() }
+        } else {
+            let cwd = cwd.filter(|d| d.is_dir());
+            ShowTarget::NewBench { name: Some(name.clone()), cwd }
+        };
+        conn.send(Frame::Client(ClientMsg::Show(target))).await?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while found.is_none() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            found = find(&conn.tree().await?.0);
+        }
+    }
+    let Some((bench, Some(pane))) = found else { anyhow::bail!("cannot open the remote shell") };
+
+    // Its size first, so the replay fits this terminal.
+    let resize = |pane: PaneId| {
+        let (cols, rows) = terminal_size();
+        Frame::Client(ClientMsg::Resize { pane, cols, rows, cell_width: 0, cell_height: 0 })
+    };
+    conn.send(resize(pane)).await?;
+    conn.send(Frame::Client(ClientMsg::Attach { bench: Some(bench) })).await?;
+    let _raw = Raw::new();
+    relay(conn, bench, &name, pane, resize).await
+}
+
+async fn relay(mut conn: Conn, bench: BenchId, name: &str, pane: PaneId, resize: impl Fn(PaneId) -> Frame) -> anyhow::Result<i32> {
+    let mut stdout = tokio::io::stdout();
+    let mut stdin = tokio::io::stdin();
+    let mut winch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
+    let mut input = vec![0u8; 16 * 1024];
+    loop {
+        tokio::select! {
+            frame = conn.next() => match frame? {
+                Frame::Keeper(KeeperMsg::Replay { pane: p, bytes, .. }) if p == pane => {
+                    // A full reset first: the local pane has shown other things.
+                    stdout.write_all(b"\x1bc").await?;
+                    stdout.write_all(&bytes).await?;
+                    stdout.flush().await?;
+                }
+                Frame::Output { pane: p, bytes } if p == pane => {
+                    stdout.write_all(&bytes).await?;
+                    stdout.flush().await?;
+                }
+                // Exited by itself (or closed from the tab): ended. Killed by
+                // a signal otherwise: its keeper is stopping, as at a reboot.
+                Frame::Keeper(KeeperMsg::PaneExited { pane: p, code }) if p == pane => {
+                    return Ok(if code.is_some() { EXIT_ENDED } else { EXIT_LOST });
+                }
+                _ => {}
+            },
+            n = stdin.read(&mut input) => {
+                let n = n?;
+                if n == 0 {
+                    let _ = conn.send(Frame::Client(ClientMsg::Detach { bench })).await;
+                    return Ok(EXIT_DETACHED);
+                }
+                let bytes = &input[..n];
+                if let Some(at) = bytes.windows(CLOSE_REQUEST.len()).position(|w| w == CLOSE_REQUEST) {
+                    // The local tab closed: the remote shell goes too, and its
+                    // saved copy (nothing will ask for it again).
+                    if at > 0 {
+                        conn.send(Frame::Input { pane, bytes: bytes[..at].to_vec() }).await?;
+                    }
+                    conn.send(Frame::Client(ClientMsg::DeleteBench { name: name.to_string() })).await?;
+                    // Done: the bench goes before its shell exits, so no exit comes to wait for.
+                    let _ = bench;
+                    return Ok(EXIT_ENDED);
+                }
+                conn.send(Frame::Input { pane, bytes: bytes.to_vec() }).await?;
+            }
+            _ = winch.recv() => conn.send(resize(pane)).await?,
+        }
+    }
+}

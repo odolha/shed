@@ -919,6 +919,9 @@ impl Pegboard {
         if ai.is_some() {
             head = head.child(svg().path(icon("ai")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
         }
+        if tab.remote_info().is_some() {
+            head = head.child(svg().path(icon("server")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
+        }
         if waiting {
             head = head.child(svg().path(icon("tool-waiting")).size(px(12.0)).flex_none().text_color(hsla(accent)));
         } else if tool.is_some() {

@@ -22,10 +22,37 @@ struct Args {
     /// Shell for new panes (default: $SHELL).
     #[arg(long)]
     shell: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Cmd>,
+}
+
+#[derive(clap::Subcommand)]
+enum Cmd {
+    /// The server end of a remote tab: joins this terminal to the shell kept
+    /// for ID, starting the keeper and the shell if needed.
+    Attach {
+        id: String,
+        /// Where a new shell starts.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if let Some(Cmd::Attach { id, cwd }) = args.command {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let code = match rt.block_on(shed_keeper::attach::attach(&id, cwd)) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("shedd attach: {e}\r");
+                shed_keeper::attach::EXIT_LOST
+            }
+        };
+        // Exiting now: the runtime would wait on its stdin reader forever.
+        std::process::exit(code);
+    }
     init_logging(args.foreground)?;
 
     let runtime_dir = paths::runtime_dir();

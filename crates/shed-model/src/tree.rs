@@ -63,7 +63,7 @@ impl Shed {
     pub fn locate_pane(&self, pane: PaneId) -> Option<(BenchId, TabId)> {
         self.benches.iter().find_map(|b| {
             // A project tab's layout names a pane that does not exist.
-            b.tabs.iter().find(|t| t.kind == TabKind::Terminal && t.layout.contains(pane)).map(|t| (b.id, t.id))
+            b.tabs.iter().find(|t| t.has_panes() && t.layout.contains(pane)).map(|t| (b.id, t.id))
         })
     }
 
@@ -228,6 +228,18 @@ pub enum TabKind {
     Terminal,
     Project(Project),
     Ai(AiTab),
+    /// A shell on a server: a terminal tab whose pane joins the shell the
+    /// server's keeper holds for `id`, over ssh, and joins it again when the
+    /// bench opens.
+    Remote(RemoteTab),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteTab {
+    /// As ssh takes it: a host from `~/.ssh/config`, or `user@host`.
+    pub host: String,
+    /// What the server's keeper knows the shell by.
+    pub id: String,
 }
 
 /// A Claude Code conversation, shown in an AI tab. The keeper runs it.
@@ -327,6 +339,18 @@ impl Tab {
     pub fn project_info(&self) -> Option<&Project> {
         match &self.kind {
             TabKind::Project(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Terminal and remote tabs hold panes; the others show something of their own.
+    pub fn has_panes(&self) -> bool {
+        matches!(self.kind, TabKind::Terminal | TabKind::Remote(_))
+    }
+
+    pub fn remote_info(&self) -> Option<&RemoteTab> {
+        match &self.kind {
+            TabKind::Remote(r) => Some(r),
             _ => None,
         }
     }

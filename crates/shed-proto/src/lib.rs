@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -133,6 +133,8 @@ pub enum ClientMsg {
     /// Starts an AI tab's Claude Code ahead of its first prompt (the user
     /// is typing), so its commands and models are known.
     AiStart { tab: TabId },
+    /// Opens a remote tab: a shell on `host` that outlives the bench.
+    NewRemoteTab { bench: BenchId, host: String },
 }
 
 /// A picture sent with a prompt.

@@ -657,13 +657,29 @@ impl Keeper {
                 let mut st = self.lock();
                 let Some(t) = st.tree.tab(tab) else { return };
                 let panes: Vec<PaneId> = t.panes.iter().map(|p| p.id).collect();
+                let remote = t.remote_info().is_some();
                 // A tab with panes leaves as they exit; one without goes now.
                 if panes.is_empty() {
                     close_paneless_tab(&mut st, tab);
+                } else if remote {
+                    // Closing a remote tab closes the shell on the server too:
+                    // its end of the connection is asked, then the connection ends.
+                    for pane in &panes {
+                        if let Some(rt) = st.panes.get(pane) {
+                            let _ = rt.input.send(crate::attach::CLOSE_REQUEST.to_vec());
+                        }
+                    }
+                    drop(st);
+                    let keeper = self.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                        keeper.lock().hang_up(&panes);
+                    });
                 } else {
                     st.hang_up(&panes);
                 }
             }
+            ClientMsg::NewRemoteTab { bench, host } => self.new_remote_tab(client, bench, host),
             ClientMsg::NewCommandTab { bench, cwd, command } => {
                 let mut st = self.lock();
                 let Some(b) = st.tree.bench(bench) else { return };
@@ -1757,6 +1773,12 @@ impl Keeper {
         let (mut prompts, running, teardown, hooked) = {
             let st = self.lock();
             let Some(rt) = st.panes.get(&pane) else { return };
+            // A remote tab's shell is on the server and outlives the bench:
+            // its connection just ends with the hangup (no Ctrl+C, which would
+            // reach the server's foreground program).
+            if st.tree.locate_pane(pane).and_then(|(_, t)| st.tree.tab(t)).is_some_and(|t| t.remote_info().is_some()) {
+                return;
+            }
             let tree_pane = st.tree.pane(pane);
             let running = rt.running.is_some() || tree_pane.is_some_and(|p| p.tool.is_some());
             let teardown = tree_pane.map(|p| p.setup.teardown.clone()).unwrap_or_default();
@@ -1919,6 +1941,46 @@ impl Keeper {
         }
         info!("saved; stopping");
         self.hang_up_all();
+    }
+
+    /// A remote tab: a pane running `shed remote connect HOST ID`, again
+    /// each time the bench loads, which joins the shell the server keeps.
+    fn new_remote_tab(self: &Arc<Self>, client: ClientId, bench: BenchId, host: String) {
+        let host = host.trim().to_string();
+        let mut st = self.lock();
+        let Some(b) = st.tree.bench(bench) else { return };
+        if host.is_empty() || host.contains(char::is_whitespace) || host.starts_with('-') {
+            st.send(client, KeeperMsg::Error(format!("{host:?} is not a host to connect to")));
+            return;
+        }
+        let Some(shed) = self.cfg.shed_bin.clone() else {
+            st.send(client, KeeperMsg::Error("the shed program was not found next to shedd".into()));
+            return;
+        };
+        let (cwd, index) = (b.cwd.clone(), b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1));
+        let tab_id = TabId::new();
+        let id = tab_id.to_string();
+        let command = format!("'{}' remote connect '{host}' {id}", shed.display());
+        let mut spec = PaneSpec::fresh(cwd);
+        spec.after_prompt.push_back((command.clone(), true));
+        match self.spawn_pane_spec(&mut st, bench, tab_id, spec) {
+            Ok(mut pane) => {
+                // Run again whenever the bench loads: that reconnects.
+                pane.setup.startup = vec![command];
+                let mut tab = Tab::with_pane(pane);
+                tab.id = tab_id;
+                tab.kind = TabKind::Remote(shed_model::RemoteTab { host, id });
+                let b = st.tree.bench_mut(bench).unwrap();
+                b.tabs.insert(index, tab);
+                b.active_tab = tab_id;
+                self.sync_alias_files(&mut st);
+                st.broadcast_tree();
+                st.send(client, KeeperMsg::Done("opened a remote tab".into()));
+                drop(st);
+                self.save_soon.notify_one();
+            }
+            Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
+        }
     }
 
     fn new_bench(

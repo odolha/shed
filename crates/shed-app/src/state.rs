@@ -763,6 +763,12 @@ pub fn move_tab(conn: &KeeperConn, tab: TabId, title: &str, from: BenchRef, to: 
 pub fn close_tab(conn: &KeeperConn, tab: &Tab, bench: BenchRef, window: &mut gpui::Window, cx: &mut gpui::App) {
     let (title, id) = (tab.display_title(), tab.id);
     let (message, detail, button, msg) = match bench {
+        BenchRef::Running(_) if tab.remote_info().is_some() => (
+            format!("Close the remote tab “{title}”?"),
+            "The shell on the server ends too, and what runs in it. (Closing the bench instead keeps it running there.)",
+            "Close Tab",
+            ClientMsg::CloseTab { tab: id },
+        ),
         BenchRef::Running(_) if tab.ai_info().is_some() => (
             format!("Close the AI tab “{title}”?"),
             "Claude Code stops if it is working. The session is kept: open it again from a new AI tab.",

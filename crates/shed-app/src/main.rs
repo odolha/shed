@@ -16,6 +16,7 @@ mod menu;
 mod pegboard;
 mod project_view;
 mod prompt;
+mod remote;
 #[cfg(target_os = "linux")]
 mod selection;
 mod settings;
@@ -61,6 +62,20 @@ enum TagAction {
         label: String,
     },
     List,
+}
+
+#[derive(Subcommand)]
+enum RemoteAction {
+    /// Opens a remote tab in this bench (run inside Shed): a shell on HOST
+    /// (as ssh takes it) that keeps running when the bench closes.
+    New {
+        host: String,
+        #[arg(long)]
+        bench: Option<String>,
+    },
+    /// What a remote tab runs: joins the shell kept for ID on HOST.
+    #[command(hide = true)]
+    Connect { host: String, id: String },
 }
 
 #[derive(Subcommand)]
@@ -121,6 +136,11 @@ enum Command {
         /// Into this bench instead (by name).
         #[arg(long)]
         bench: Option<String>,
+    },
+    /// Shells on servers that outlive the bench.
+    Remote {
+        #[command(subcommand)]
+        action: RemoteAction,
     },
     /// Lets Shed bring forward a browser tab already showing a project's link.
     Browser {
@@ -343,6 +363,8 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Status) => status(),
         Some(Command::Tag { action }) => tag(action),
         Some(Command::BrowserHost { .. }) => Ok(browser::host()?),
+        Some(Command::Remote { action: RemoteAction::Connect { host, id } }) => remote::connect(&host, &id),
+        Some(Command::Remote { action: RemoteAction::New { host, bench } }) => remote_new(host, bench),
         Some(Command::Browser { action: BrowserAction::Setup { profile } }) => {
             let browsers = browser::install(&profile)?;
             if browsers.is_empty() {
@@ -699,6 +721,29 @@ fn debug_ai(text: String, model: Option<String>, answer: Option<String>) -> anyh
     }
     conn.send_msg(ClientMsg::AiSend { tab, text, images: Vec::new() });
     std::thread::sleep(Duration::from_millis(200));
+    Ok(())
+}
+
+fn remote_new(host: String, bench: Option<String>) -> anyhow::Result<()> {
+    let tree = request(ClientMsg::Status, |m| match m {
+        KeeperMsg::Status(s) => Some(s.tree),
+        _ => None,
+    })?;
+    let bench = match bench {
+        Some(name) => tree.benches.iter().find(|b| b.name == name).map(|b| b.id).ok_or_else(|| anyhow::anyhow!("no running bench named {name:?}"))?,
+        None => {
+            let Some(id) = std::env::var("SHED_BENCH").ok().and_then(|b| b.parse().ok()).map(shed_model::BenchId) else {
+                bail!("not inside a Shed tab ($SHED_BENCH is not set); name a bench with --bench");
+            };
+            let tab = std::env::var("SHED_TAB").ok().and_then(|t| t.parse().ok()).map(shed_model::TabId);
+            tab.and_then(|t| tree.bench_of_tab(t)).unwrap_or(id)
+        }
+    };
+    let done = request(ClientMsg::NewRemoteTab { bench, host }, |m| match m {
+        KeeperMsg::Done(text) => Some(text),
+        _ => None,
+    })?;
+    println!("{done}");
     Ok(())
 }
 

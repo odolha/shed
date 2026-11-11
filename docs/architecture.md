@@ -210,6 +210,32 @@ switches made outside Shed show) and after every action; a fetch runs every
 drawn as a `uniform_list` of rows: hunk headers with their actions, lines with
 both numbers, or old and new side by side.
 
+## Remote tabs
+
+A remote tab (`TabKind::Remote { host, id }`) is a terminal tab whose pane runs
+`shed remote connect HOST ID`, again whenever the bench loads (the pane's startup).
+That makes sure the server has this build of `shedd` (`uname -m` and an id file
+checked over ssh; the binary sent through ssh's stdin when they differ), then runs
+`ssh -t HOST ~/.local/bin/shedd attach ID` in a loop (ssh's `ControlMaster`
+shares one login between the steps).
+
+On the server, `shedd attach` (`shed-keeper/src/attach.rs`) connects to the keeper
+there (starting one, detached, if none runs), finds the bench `remote-ID`
+(running, saved, or new), sizes its pane to the terminal, attaches, and relays:
+the replay (after a full reset) and output to stdout, stdin to the pane, window
+size changes to `Resize`. The terminal is put in raw mode. Only terminal bytes
+cross ssh, so local and server Shed need not be the same version. A newer
+`shedd` that finds an older keeper still holding the shells re-runs itself as
+that keeper's program (`/proc/PID/exe attach ID`).
+
+Exit codes tell the loop what happened: 0, the shell ended (or the tab closed);
+2, this end let go; 3, the shell was lost with its keeper (a reboot), so the loop
+joins again, and the server's keeper brings the saved bench back. Closing the
+bench locally sends no Ctrl+C to a remote pane (it would reach the server's
+program): the hangup ends ssh and the shell stays. Closing the tab first writes
+a close request (an OSC 7777 sequence) into the pane, which the attach turns into
+deleting the server's bench.
+
 ## Links and the browser
 
 A project tab's links (`Project.links`) open through Shed's browser extension

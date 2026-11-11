@@ -1,6 +1,7 @@
 //! The keeper (`shedd`): owns every PTY so that closing a window kills nothing.
 
 mod ask;
+pub mod attach;
 mod procinfo;
 pub mod pty;
 mod server;
