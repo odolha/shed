@@ -109,7 +109,6 @@ enum TabChange {
     Rename(Option<String>),
     Tags(Vec<shed_model::Tag>),
     Private(bool),
-    Close,
 }
 
 /// What the inline text field is editing.
@@ -233,7 +232,6 @@ impl Pegboard {
                 TabChange::Rename(name) => ClientMsg::RenameTab { tab, name },
                 TabChange::Tags(tags) => ClientMsg::SetTags { tab, tags },
                 TabChange::Private(private) => ClientMsg::SetPrivate { tab, private },
-                TabChange::Close => ClientMsg::CloseTab { tab },
             },
             BenchKey::Closed(name) => ClientMsg::EditSaved {
                 name,
@@ -241,12 +239,18 @@ impl Pegboard {
                     TabChange::Rename(name) => SavedEdit::RenameTab { tab, name },
                     TabChange::Tags(tags) => SavedEdit::TabTags { tab, tags },
                     TabChange::Private(private) => SavedEdit::TabPrivate { tab, private },
-                    TabChange::Close => SavedEdit::RemoveTab { tab },
                 },
             },
         };
         self.send(msg, cx);
         self.refresh(cx);
+    }
+
+    /// Closes a running bench's tab, or removes a closed one's, after asking.
+    fn close_tab(&mut self, tab: TabId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((key, t)) = self.find_tab(tab, cx) else { return };
+        let conn = self.state.read(cx).conn.clone();
+        crate::state::close_tab(&conn, tab, &t.display_title(), key.to_ref(), window, cx);
     }
 
     fn new_tab(&mut self, key: &BenchKey, cx: &mut Context<Self>) {
@@ -585,9 +589,8 @@ impl Pegboard {
         );
         entries.push(more("Move to Bench", move |this: &mut Self, cx| this.move_menu(tab_id, cx)).icon("bench"));
         entries.push(MenuEntry::Separator);
-        // A closed bench's tab has nothing running: it just goes.
-        let close = if entry.status == Status::Closed { "Remove Tab" } else { "Close Tab" };
-        entries.push(danger(close, move |this: &mut Self, _, cx| this.change_tab(tab_id, TabChange::Close, cx)).icon("close"));
+        let close = if entry.status == Status::Closed { "Remove Tab…" } else { "Close Tab…" };
+        entries.push(danger(close, move |this: &mut Self, window, cx| this.close_tab(tab_id, window, cx)).icon("close"));
         entries
     }
 
@@ -934,25 +937,6 @@ impl Pegboard {
         if let Some(editor) = self.editor_for(&Edit::AddTag(tab_id)) {
             head = head.child(div().w(px(90.0)).child(editor));
         }
-        {
-            head = head.child(
-                div()
-                    .id(SharedString::from(format!("close-tab-{tab_id}")))
-                    .flex_none()
-                    .p_0p5()
-                    .rounded_sm()
-                    .invisible()
-                    .group_hover("card", |s| s.visible())
-                    .hover(|s| s.bg(hsla(ui.divider)))
-                    .tooltip(menu::tooltip(if running { "Close tab" } else { "Remove tab" }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.change_tab(tab_id, TabChange::Close, cx);
-                    }))
-                    .child(svg().path(icon("close")).size(px(11.0)).text_color(hsla(ui.text_dim))),
-            );
-        }
-
         // A closed bench's screen is a memory: dimmer than live ones. (By
         // colour: `opacity` draws through a window-sized layer, per card.)
         let color = if running { hsla(ui.text_dim) } else { hsla_alpha(ui.text_dim, 0.55) };
@@ -990,6 +974,7 @@ impl Pegboard {
                 this.move_tab(d.tab, &card_key, index, window, cx);
             }))
             .on_click(cx.listener(move |this, _, _, cx| this.open(&e, Some(tab_id), cx)))
+            .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| this.close_tab(tab_id, window, cx)))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                 let entries = this.tab_menu(&e2, &tab_for_menu);
                 this.open_menu(ev.position, entries, cx);

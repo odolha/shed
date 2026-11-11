@@ -13,6 +13,8 @@ mod macos;
 mod menu;
 mod pegboard;
 mod prompt;
+#[cfg(target_os = "linux")]
+mod selection;
 mod settings;
 mod setup_cli;
 mod setup_panel;
@@ -355,6 +357,8 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
     app.on_reopen(macos::reopen);
     app.run(move |cx: &mut App| {
         prompt::install(cx);
+        #[cfg(target_os = "linux")]
+        selection::watch();
         // `theme = "auto"` follows the desktop, which can change while Shed runs.
         let dark = theme::is_dark(cx.window_appearance());
         let settings = settings::Settings::load(&settings::Settings { dark, ..Default::default() });

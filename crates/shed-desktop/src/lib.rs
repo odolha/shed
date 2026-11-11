@@ -121,7 +121,7 @@ impl Desktop {
         let entry = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
-             Name={name} — Shed\n\
+             Name=Shed — {name}\n\
              Comment=Shed bench “{name}”\n\
              Exec={exe} load {key}\n\
              Icon={icon}\n\
@@ -250,7 +250,7 @@ mod tests {
         // Renamed: the same entry, so a pinned launcher still finds it, now loading the new name.
         desktop.install(&BenchIdentity { name: "shop", ..bench }).unwrap();
         let entry = std::fs::read_to_string(desktop.entry_path("web-site")).unwrap();
-        assert!(entry.contains("Name=shop — Shed\n") && entry.contains(" load web-site\n"), "{entry}");
+        assert!(entry.contains("Name=Shed — shop\n") && entry.contains(" load web-site\n"), "{entry}");
         assert!(entry.contains("StartupWMClass=dev.shed.bench.web-site\n"));
 
         desktop.remove("web-site");

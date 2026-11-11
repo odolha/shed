@@ -75,8 +75,8 @@ show, dimmed, what was on screen when they were saved.
 **Tabs** (the cards):
 
 - Click a card to go to that tab, opening the bench if needed.
-- Double-click its title (or its pencil) to rename it; the **×** in its corner
-  closes it.
+- Double-click its title (or its pencil) to rename it. Middle-click, or **Close
+  Tab…** in its right-click menu, closes it, after asking.
 - **New tab** at the end of a bench's cards adds one.
 - Drag a card onto another card to put it there, or onto another bench to move it
   there; **Move to Bench** in its menu does the same. Between running benches a
@@ -112,9 +112,11 @@ as it opens and closes; benches never moved come after the others, by name.
 The coloured stripe and the tab bar carry the bench's colour; so does the border of
 the focused pane, when a tab is split.
 
-- **Tabs**: click to switch, double-click to rename, middle-click or **×** to close,
-  drag to reorder. A small icon on a tab shows that a program is running in it, or
-  that a command is [waiting for Enter](#opening-hiding-closing).
+- **Tabs**: click to switch, double-click to rename, drag to reorder. Middle-click
+  or **Close Tab…** in the right-click menu closes one, after asking, so a slip
+  does not stop what runs in it; closing a tab's only pane (Ctrl+Shift+W) asks
+  the same. A small icon on a tab shows that a program is running in it, or that a
+  command is [waiting for Enter](#opening-hiding-closing).
 - **New tab**: the button after the last tab, or Ctrl+Shift+T.
 - **Splits**: Ctrl+Shift+E splits right, Ctrl+Shift+O splits down; drag the line
   between panes to resize; Alt+arrows move between panes.
@@ -278,7 +280,10 @@ an ordinary shell line again (in bash, a redirection).
   ![Finding in the scrollback](images/find.png)
 
 - **Selecting** text copies it to the primary selection; middle-click pastes it.
-  Ctrl+Shift+C and Ctrl+Shift+V copy and paste with the clipboard. In programs that
+  Ctrl+Shift+C and Ctrl+Shift+V copy and paste with the clipboard. On X11,
+  middle-click pastes whichever is newer: text copied in another program after
+  your last selection (a page's copy button, say) is pasted rather than the
+  older selection. In programs that
   use the mouse (vim, htop), hold Shift to select.
 - **Ctrl+click** opens a link, or a file path (relative to the pane's folder).
 - **Zoom**: Ctrl+= and Ctrl+-, Ctrl+0 to reset.

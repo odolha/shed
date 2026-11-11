@@ -250,6 +250,22 @@ impl BenchWindow {
         }
     }
 
+    /// Closes a tab, after asking.
+    fn close_tab(&mut self, tab: TabId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = self.tab(tab, cx).map(|t| t.display_title()) else { return };
+        let conn = self.state.read(cx).conn.clone();
+        crate::state::close_tab(&conn, tab, &title, BenchRef::Running(self.bench), window, cx);
+    }
+
+    /// Closes a pane; a tab's only pane takes the tab along, so that asks first.
+    fn close_pane(&mut self, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.bench(cx).and_then(|b| b.tabs.iter().find(|t| t.panes.iter().any(|p| p.id == pane)));
+        match tab {
+            Some(tab) if tab.panes.len() == 1 => self.close_tab(tab.id, window, cx),
+            _ => self.send(ClientMsg::ClosePane { pane }, cx),
+        }
+    }
+
     fn close_bench(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(bench) = self.bench(cx) else { return };
         let message = format!("Close the bench “{}”?", bench.name);
@@ -284,6 +300,9 @@ impl BenchWindow {
         }
         let message = format!("Close the bench “{}”?", bench.name);
         self.place.record(window);
+        // Asked from the taskbar, the window may be minimized or behind others,
+        // and the question is drawn inside it.
+        window.activate();
         let answer = window.prompt(
             PromptLevel::Warning,
             &message,
@@ -409,7 +428,7 @@ impl BenchWindow {
         }
         entries.push(more("Move to Bench", move |this: &mut Self, cx| this.move_menu(tab_id, cx)).icon("bench"));
         entries.push(MenuEntry::Separator);
-        entries.push(danger("Close Tab", move |this: &mut Self, _, cx| this.send(ClientMsg::CloseTab { tab: tab_id }, cx)).icon("close"));
+        entries.push(danger("Close Tab…", move |this: &mut Self, window, cx| this.close_tab(tab_id, window, cx)).icon("close"));
         entries
     }
 
@@ -445,7 +464,7 @@ impl BenchWindow {
             item("Split Right", move |this, _, cx| this.split_pane(pane, SplitDir::Right, cx)).icon("split-right"),
             item("Split Down", move |this, _, cx| this.split_pane(pane, SplitDir::Down, cx)).icon("split-down"),
             MenuEntry::Separator,
-            danger("Close Pane", move |this: &mut Self, _, cx| this.send(ClientMsg::ClosePane { pane }, cx)).icon("close"),
+            danger("Close Pane", move |this: &mut Self, window, cx| this.close_pane(pane, window, cx)).icon("close"),
         ]);
         entries
     }
@@ -504,8 +523,7 @@ impl BenchWindow {
                 .items_center()
                 .gap_1p5()
                 .h_full()
-                .pl_3()
-                .pr_1()
+                .px_3()
                 .max_w(px(260.0))
                 .border_r_1()
                 .border_color(hsla(ui.divider))
@@ -517,8 +535,8 @@ impl BenchWindow {
                         this.send(ClientMsg::FocusTab { tab: tab_id }, cx);
                     }
                 }))
-                .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, _, cx| {
-                    this.send(ClientMsg::CloseTab { tab: tab_id }, cx);
+                .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| {
+                    this.close_tab(tab_id, window, cx);
                 }))
                 .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                     let entries = this.tab_menu(tab_id, cx);
@@ -567,21 +585,6 @@ impl BenchWindow {
             if let Some(editor) = self.editor_for(EditTarget::AddTag(tab_id)) {
                 el = el.child(editor);
             }
-            el = el.child(
-                div()
-                    .id(("close-tab", i))
-                    .flex_none()
-                    .p_0p5()
-                    .rounded_sm()
-                    .invisible()
-                    .group_hover("tab", |s| s.visible())
-                    .hover(|s| s.bg(hsla(ui.divider)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.send(ClientMsg::CloseTab { tab: tab_id }, cx);
-                    }))
-                    .child(svg().path(icon("close")).size(px(12.0)).text_color(hsla(ui.text_dim))),
-            );
             bar = bar.child(el);
         }
 
@@ -820,14 +823,14 @@ impl Render for BenchWindow {
             .on_mouse_move(cx.listener(Self::on_drag_move))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = None))
             .on_action(cx.listener(|this, _: &NewTab, _, cx| this.new_tab(cx)))
-            .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if let Some(tab) = this.active_tab(cx).map(|t| t.id) {
-                    this.send(ClientMsg::CloseTab { tab }, cx);
+                    this.close_tab(tab, window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &ClosePane, _, cx| {
+            .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 if let Some(pane) = this.active_tab(cx).map(|t| t.active_pane) {
-                    this.send(ClientMsg::ClosePane { pane }, cx);
+                    this.close_pane(pane, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))

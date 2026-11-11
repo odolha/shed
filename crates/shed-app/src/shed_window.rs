@@ -73,6 +73,8 @@ impl ShedWindow {
             return;
         }
         let benches = if running == 1 { "its running bench".to_string() } else { format!("its {running} running benches") };
+        // Asked from the taskbar, the window may be minimized or behind others.
+        window.activate();
         let answer = window.prompt(
             PromptLevel::Warning,
             &format!("Close Shed and {benches}?"),

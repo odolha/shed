@@ -70,7 +70,7 @@ impl Render for ShedPrompt {
         let ui = &self.ui;
         let danger = ui.danger;
         let buttons = self.actions.iter().enumerate().map(|(i, label)| {
-            let destructive = label.starts_with("Delete") || label.starts_with("Close");
+            let destructive = ["Delete", "Close", "Remove"].iter().any(|word| label.starts_with(word));
             let color = if destructive { danger } else { ui.text };
             div()
                 .id(i)

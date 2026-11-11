@@ -479,9 +479,13 @@ impl TerminalView {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+        if let Some(text) = self.clipboard_text(cx) {
             self.paste_text(&text, cx);
         }
+    }
+
+    fn clipboard_text(&self, cx: &mut Context<Self>) -> Option<String> {
+        cx.read_from_clipboard().and_then(|item| item.text()).filter(|t| !t.is_empty())
     }
 
     fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -605,12 +609,18 @@ impl TerminalView {
                 self.dirty = true;
                 cx.notify();
             }
-            // X11 and Wayland convention: middle-click pastes the primary selection.
+            // X11 and Wayland convention: middle-click pastes the primary selection
+            // (the text selected last). Text copied since, somewhere that put it
+            // on the clipboard only, is what the user means instead.
             #[cfg(target_os = "linux")]
             Button::Middle => {
-                if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
-                    self.emu.scroll_to_bottom();
-                    self.send(keys::encode_paste(&text, self.emu.modes()));
+                let primary = cx.read_from_primary().and_then(|item| item.text()).filter(|t| !t.is_empty());
+                let text = match crate::selection::newest() {
+                    Some(crate::selection::Kind::Clipboard) => self.clipboard_text(cx).or(primary),
+                    _ => primary.or_else(|| self.clipboard_text(cx)),
+                };
+                if let Some(text) = text {
+                    self.paste_text(&text, cx);
                 }
             }
             _ => {}

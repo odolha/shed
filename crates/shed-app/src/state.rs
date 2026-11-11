@@ -583,8 +583,37 @@ pub fn move_tab(conn: &KeeperConn, tab: TabId, title: &str, from: BenchRef, to: 
     conn.send_msg(ClientMsg::Pegboard);
 }
 
+/// Closes tab `tab` (titled `title`) of a bench, after asking: a slip of the
+/// hand would otherwise take along whatever runs in it.
+pub fn close_tab(conn: &KeeperConn, tab: TabId, title: &str, bench: BenchRef, window: &mut gpui::Window, cx: &mut gpui::App) {
+    let (message, detail, button, msg) = match bench {
+        BenchRef::Running(_) => (
+            format!("Close the tab “{title}”?"),
+            "The programs running in it stop and its teardown commands run.",
+            "Close Tab",
+            ClientMsg::CloseTab { tab },
+        ),
+        // A closed bench's tab has nothing running: it just goes.
+        BenchRef::Saved(name) => (
+            format!("Remove the tab “{title}”?"),
+            "It is taken out of the saved bench, with its startup and teardown commands.",
+            "Remove Tab",
+            ClientMsg::EditSaved { name, edit: shed_proto::SavedEdit::RemoveTab { tab } },
+        ),
+    };
+    let answer = window.prompt(gpui::PromptLevel::Warning, &message, Some(detail), &[button, "Cancel"], cx);
+    let conn = conn.clone();
+    cx.spawn(async move |_| {
+        if let Ok(0) = answer.await {
+            conn.send_msg(msg);
+            conn.send_msg(ClientMsg::Pegboard);
+        }
+    })
+    .detach();
+}
+
 pub fn window_title(bench: &str) -> String {
-    format!("{bench} — Shed")
+    format!("Shed — {bench}")
 }
 
 /// The bench icon as a window icon (X11 `_NET_WM_ICON`, Wayland `xdg-toplevel-icon`).

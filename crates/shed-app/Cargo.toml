@@ -32,9 +32,10 @@ tracing-subscriber.workspace = true
 
 raw-window-handle = "0.6"
 
-# Changing an open window's icon on X11, which GPUI only sets at opening.
+# Changing an open window's icon on X11, which GPUI only sets at opening, and
+# hearing which selection changed last (XFixes), for middle-click.
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb = "0.13"
+x11rb = { version = "0.13", features = ["xfixes"] }
 
 [dev-dependencies]
 shed-keeper.workspace = true
