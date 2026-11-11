@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, Focusable, KeyDownEvent, MouseButton, MouseDownEvent,
-    PromptLevel, SharedString, Subscription, Window, div, prelude::*, px, svg,
+    AnyElement, ClickEvent, Context, Entity, Focusable, Hsla, KeyDownEvent, MouseButton, MouseDownEvent,
+    PromptLevel, SharedString, Subscription, TextAlign, TextRun, Window, canvas, div, point, prelude::*, px, svg,
 };
 use shed_model::{Bench, BenchColor, BenchId, PaneId, Rgb, Tab, TabId};
 use shed_proto::{BenchRef, ClientMsg, PegboardInfo, SavedEdit, ShowTarget};
@@ -949,19 +949,10 @@ impl Pegboard {
             );
         }
 
-        let preview = div()
-            .h(px(12.0 * 11.0))
-            .overflow_hidden()
-            .flex()
-            .flex_col()
-            .justify_end()
-            .font_family(mono)
-            .text_size(px(9.0))
-            .line_height(px(11.0))
-            // A closed bench's screen is a memory: dimmer than live ones. (By
-            // colour: `opacity` draws through a window-sized layer, per card.)
-            .text_color(if running { hsla(ui.text_dim) } else { hsla_alpha(ui.text_dim, 0.55) })
-            .children(lines.into_iter().map(|l| div().whitespace_nowrap().overflow_hidden().child(if l.is_empty() { " ".to_string() } else { l })));
+        // A closed bench's screen is a memory: dimmer than live ones. (By
+        // colour: `opacity` draws through a window-sized layer, per card.)
+        let color = if running { hsla(ui.text_dim) } else { hsla_alpha(ui.text_dim, 0.55) };
+        let preview = div().h(px(PREVIEW_LINES as f32 * 11.0)).overflow_hidden().child(preview_text(lines, mono, color));
 
         let mut foot = vec![pane.map(|p| home_relative(&p.cwd)).unwrap_or_default()];
         if let Some(t) = &tool {
@@ -1004,6 +995,38 @@ impl Pegboard {
             .child(div().truncate().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(foot.join(" · ")))
             .into_any_element()
     }
+}
+
+const PREVIEW_LINES: usize = 12;
+
+/// A card's last lines of screen, bottom-aligned. Painted line by line rather
+/// than as an element per line: every hover lays out the whole Shed window,
+/// and a dozen text elements per card made that the bulk of a frame.
+fn preview_text(lines: Vec<String>, family: SharedString, color: Hsla) -> impl IntoElement {
+    let font = gpui::font(family);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let line_height = px(11.0);
+            let shown = &lines[lines.len().saturating_sub(PREVIEW_LINES)..];
+            let top = bounds.bottom() - line_height * shown.len() as f32;
+            for (i, text) in shown.iter().enumerate().filter(|(_, t)| !t.is_empty()) {
+                let run = TextRun {
+                    len: text.len(),
+                    font: font.clone(),
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                    letter_spacing: None,
+                };
+                let line = window.text_system().shape_line(SharedString::from(text.clone()), px(9.0), &[run]);
+                let origin = point(bounds.left(), top + line_height * i as f32);
+                let _ = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
+            }
+        },
+    )
+    .size_full()
 }
 
 impl MenuHost for Pegboard {

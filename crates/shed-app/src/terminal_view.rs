@@ -243,12 +243,18 @@ impl TerminalView {
 
     /// Rebuilds the screen from the keeper's replay of this pane. The grid
     /// takes the keeper's size; the next layout resizes it to fit the window.
-    pub fn restore(&mut self, cols: u16, rows: u16, bytes: &[u8], cx: &mut Context<Self>) {
+    /// `at_prompt` stands in for the prompt marks, which came before the replay.
+    pub fn restore(&mut self, cols: u16, rows: u16, bytes: &[u8], at_prompt: bool, cx: &mut Context<Self>) {
+        let started = Instant::now();
         let size = self.emu.size();
         let size = GridSize::new(cols, rows).with_cell(size.cell_width, size.cell_height);
         self.emu = AlacrittyEmulator::new(size, self.palette.clone());
         self.marks = MarkScanner::new();
+        self.at_prompt = at_prompt;
         self.feed(bytes, cx);
+        if perf::enabled() {
+            eprintln!("perf: replay of {} KB in {} µs", bytes.len() / 1024, started.elapsed().as_micros());
+        }
     }
 
     /// Output from the keeper.

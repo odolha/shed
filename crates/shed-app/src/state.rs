@@ -22,11 +22,18 @@ use crate::window_place::{PlaceTracker, Placed, open_bounds};
 /// How long the receive loop may run before letting a frame be drawn.
 const FRAME_BUDGET: Duration = Duration::from_millis(8);
 
+/// Tabs per open bench whose panes keep a view (and its scrollback) in this
+/// process: the one shown and the last ones shown before it. Others get a
+/// view, filled by a replay from the keeper, when they are shown again.
+const KEPT_TABS: usize = 3;
+
 pub struct AppState {
     pub conn: KeeperConn,
     pub tree: Shed,
     pub settings: Settings,
     pub panes: HashMap<PaneId, Entity<TerminalView>>,
+    /// Per open bench, the tabs shown most recently, newest first.
+    recent_tabs: HashMap<BenchId, Vec<TabId>>,
     windows: HashMap<BenchId, WindowHandle<BenchWindow>>,
     /// The Shed window, once open.
     shed_window: Option<WindowHandle<ShedWindow>>,
@@ -69,6 +76,7 @@ impl AppState {
             tree: Shed::default(),
             settings,
             panes: HashMap::new(),
+            recent_tabs: HashMap::new(),
             windows: HashMap::new(),
             shed_window: None,
             notice: None,
@@ -125,7 +133,9 @@ impl AppState {
             Frame::Keeper(KeeperMsg::Attached { bench }) => self.open_bench_window(bench, cx),
             Frame::Keeper(KeeperMsg::Replay { pane, cols, rows, bytes }) => {
                 if let Some(view) = self.panes.get(&pane) {
-                    view.update(cx, |view, cx| view.restore(cols, rows, &bytes, cx));
+                    // The marks that said so were before the replay.
+                    let at_prompt = self.tree.locate_pane(pane).and_then(|(_, tab)| self.tree.tab(tab)).and_then(|t| t.panes.iter().find(|p| p.id == pane)).is_some_and(|p| p.tool.is_none());
+                    view.update(cx, |view, cx| view.restore(cols, rows, &bytes, at_prompt, cx));
                 }
             }
             Frame::Keeper(KeeperMsg::Error(e)) => {
@@ -160,13 +170,23 @@ impl AppState {
             }
         }
 
-        // A view for every pane of every open bench; none for anything else.
+        // A view for every pane of the recent tabs of every open bench; none
+        // for anything else.
+        self.note_shown_tabs();
         let shown = self.shown_panes();
+        let before = self.panes.len();
         self.panes.retain(|id, _| shown.contains(id));
+        if self.panes.len() < before {
+            release_freed_memory();
+        }
         for id in shown {
             if !self.panes.contains_key(&id) {
                 let view = self.new_view(id, cx);
                 self.panes.insert(id, view);
+                // A bench being opened gets its replays with `Attached`.
+                if self.tree.locate_pane(id).is_some_and(|(bench, _)| self.windows.contains_key(&bench)) {
+                    self.conn.send_msg(ClientMsg::Replay { pane: id });
+                }
             }
         }
 
@@ -329,12 +349,15 @@ impl AppState {
             handle.update(cx, |_, window, _| window.activate()).ok();
             return;
         }
-        let Some(bench) = self.tree.bench(bench_id) else { return };
+        if self.tree.bench(bench_id).is_none() {
+            return;
+        }
         if !self.opening.insert(bench_id) {
             return;
         }
         // Views first, so the replays that follow `Attached` find them.
-        let ids: Vec<PaneId> = bench.tabs.iter().flat_map(|t| &t.panes).map(|p| p.id).collect();
+        self.note_shown_tabs();
+        let ids: Vec<PaneId> = self.shown_panes().into_iter().filter(|id| self.tree.locate_pane(*id).is_some_and(|(b, _)| b == bench_id)).collect();
         for id in ids {
             if !self.panes.contains_key(&id) {
                 let view = self.new_view(id, cx);
@@ -455,19 +478,36 @@ impl AppState {
         if self.windows.remove(&bench).is_some() {
             self.conn.send_msg(ClientMsg::Detach { bench });
         }
+        self.recent_tabs.remove(&bench);
         let shown = self.shown_panes();
         self.panes.retain(|id, _| shown.contains(id));
+        release_freed_memory();
     }
 
-    /// The panes of benches with a window, or one being opened: a window
-    /// opens a moment after its bench attaches, and the replays that arrive
-    /// meanwhile must find their views.
+    /// Puts each open bench's active tab first in its recent tabs.
+    fn note_shown_tabs(&mut self) {
+        let open: Vec<BenchId> = self.windows.keys().chain(&self.opening).copied().collect();
+        self.recent_tabs.retain(|b, _| open.contains(b));
+        for bench in open {
+            let Some(b) = self.tree.bench(bench) else { continue };
+            let recent = self.recent_tabs.entry(bench).or_default();
+            recent.retain(|t| b.tabs.iter().any(|tab| tab.id == *t));
+            if let Some(active) = b.active_tab().map(|t| t.id) {
+                recent.retain(|t| *t != active);
+                recent.insert(0, active);
+            }
+            recent.truncate(KEPT_TABS);
+        }
+    }
+
+    /// The panes of the recent tabs of benches with a window, or one being
+    /// opened: a window opens a moment after its bench attaches, and the
+    /// replays that arrive meanwhile must find their views.
     fn shown_panes(&self) -> HashSet<PaneId> {
-        self.windows
-            .keys()
-            .chain(&self.opening)
-            .filter_map(|b| self.tree.bench(*b))
-            .flat_map(|b| &b.tabs)
+        self.recent_tabs
+            .values()
+            .flatten()
+            .filter_map(|t| self.tree.tab(*t))
             .flat_map(|t| &t.panes)
             .map(|p| p.id)
             .collect()
@@ -591,4 +631,14 @@ fn rasterize(svg: &str) -> Option<std::sync::Arc<image::RgbaImage>> {
     const SIZE: u32 = 128;
     let rgba = shed_desktop::icon_rgba(svg, SIZE)?;
     image::RgbaImage::from_raw(SIZE, SIZE, rgba).map(std::sync::Arc::new)
+}
+
+/// Hands memory freed by dropped views back to the system. A view's
+/// scrollback is many small rows, which glibc otherwise keeps for reuse.
+fn release_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only returns free heap pages to the kernel.
+    unsafe {
+        libc::malloc_trim(0);
+    }
 }

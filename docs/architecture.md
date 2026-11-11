@@ -83,7 +83,12 @@ output, which lets it:
   arriving next, completes it in the window too.
 
 The window process runs its own emulator per pane, fed by the replay and then the
-live output, and draws from it. Keys are encoded there, the xterm way or with the
+live output, and draws from it. It keeps one only for the panes of each open
+bench's three most recently shown tabs (the scrollback would otherwise sit in both
+processes for every tab); a tab shown again after that asks the keeper for a
+replay of its panes (`ClientMsg::Replay`). Whether such a pane is at its prompt
+then comes from the tree (no foreground tool), as the prompt marks were before
+the replay. Keys are encoded there, the xterm way or with the
 kitty keyboard protocol when a program asks for it (presses, repeats, releases,
 and modifier keys on their own), and sent to the keeper as input.
 
@@ -241,8 +246,10 @@ and draws border-only boxes (cards, a focused pane's frame) as four edge strips,
 which with the vendored `gpui_ce_render` (quads rasterized only inside their clip)
 cost their border rather than their area. Shed never uses GPUI's `opacity`, which
 draws through a window-sized layer. GPUI redraws a whole window whenever something
-under the pointer changes its hover style, so the Shed window's frames are kept
-to a few milliseconds. The vendored `gpui_ce_linux` fixes key releases lost on X11, and window placement
+under the pointer changes its hover style, and renders again the view that holds
+it and every view above it (other views are kept), so the Shed window's frames are
+kept to a few milliseconds: the pegboard's card previews are painted line by line
+rather than as an element per line. The vendored `gpui_ce_linux` fixes key releases lost on X11, and window placement
 there (see above); it also stops an idle window's frame timer, which upstream ran
 at the display's refresh rate for as long as the window was visible.
 The patches are described in `SHED_PATCHES.md` in their folders.
