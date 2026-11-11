@@ -289,24 +289,36 @@ impl Repo {
         Ok(files)
     }
 
-    /// Who last changed each line of a file: per line, short hash, author and time.
-    pub fn blame(&self, path: &str) -> Result<Vec<(String, String, u64)>> {
+    /// Who last changed each line of a file, as it is in the working folder.
+    pub fn blame(&self, path: &str) -> Result<Vec<BlameLine>> {
         let out = self.run(&["blame", "--line-porcelain", "--", path])?;
         let mut lines = Vec::new();
-        let (mut hash, mut author, mut time) = (String::new(), String::new(), 0);
+        let mut cur = BlameLine::default();
         for l in out.lines() {
             if let Some(rest) = l.strip_prefix("author ") {
-                author = rest.to_string();
+                cur.author = rest.to_string();
             } else if let Some(rest) = l.strip_prefix("author-time ") {
-                time = rest.parse().unwrap_or(0);
+                cur.time = rest.parse().unwrap_or(0);
+            } else if let Some(rest) = l.strip_prefix("summary ") {
+                cur.summary = rest.to_string();
             } else if l.starts_with('\t') {
-                lines.push((hash.chars().take(8).collect(), author.clone(), time));
+                lines.push(cur.clone());
             } else if l.len() >= 40 && l.as_bytes()[..40].iter().all(u8::is_ascii_hexdigit) {
-                hash = l[..40].to_string();
+                cur.hash = l[..8].to_string();
             }
         }
         Ok(lines)
     }
+}
+
+/// A line's last change.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BlameLine {
+    /// Short; all zeros for a change not committed yet.
+    pub hash: String,
+    pub author: String,
+    pub time: u64,
+    pub summary: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

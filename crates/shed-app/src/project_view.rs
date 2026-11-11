@@ -195,6 +195,11 @@ pub struct ProjectView {
     new_link: Option<(Entity<LineEditor>, Subscription)>,
     /// Links opened without the browser extension, once said.
     told_about_extension: bool,
+    /// The status bar shows who last changed the cursor's line.
+    blame_on: bool,
+    /// Blame for a file, while it matches the file shown.
+    blame: Option<(PathBuf, Vec<shed_git::BlameLine>)>,
+    blame_task: Option<(PathBuf, Task<()>)>,
 }
 
 impl ProjectView {
@@ -231,6 +236,9 @@ impl ProjectView {
             links: project.links.clone(),
             new_link: None,
             told_about_extension: false,
+            blame_on: false,
+            blame: None,
+            blame_task: None,
         };
         view.rebuild();
         view.start_walk(cx);
@@ -700,6 +708,7 @@ impl ProjectView {
                 file.restored = false;
                 remove_recovery(&file.path);
                 self.notice = None;
+                self.blame = None;
             }
             Err(e) => self.notice = Some(format!("Cannot save {}: {e}", file.name())),
         }
@@ -1579,13 +1588,49 @@ impl ProjectView {
         Some(bar.into_any_element())
     }
 
-    fn render_status(&self, ui: &UiColors, cx: &gpui::App) -> Option<impl IntoElement> {
+    /// Reads blame for the shown file, off the UI thread, unless it is had or coming.
+    fn load_blame(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(git) = &self.git else { return };
+        if self.blame.as_ref().is_some_and(|(p, _)| *p == path) || self.blame_task.as_ref().is_some_and(|(p, _)| *p == path) {
+            return;
+        }
+        let Ok(rel) = path.strip_prefix(&git.repo.root) else { return };
+        let (repo, rel, p) = (git.repo.clone(), rel.display().to_string(), path.clone());
+        let task = cx.spawn(async move |this, cx| {
+            let lines = cx.background_executor().spawn(async move { repo.blame(&rel).unwrap_or_default() }).await;
+            this.update(cx, |this, cx| {
+                this.blame = Some((p, lines));
+                this.blame_task = None;
+                cx.notify();
+            })
+            .ok();
+        });
+        self.blame_task = Some((path, task));
+    }
+
+    fn render_status(&mut self, ui: &UiColors, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let file = self.open.get(self.active?)?;
         let rel = file.path.strip_prefix(&self.root).unwrap_or(&file.path).display().to_string();
         let mut parts = vec![rel];
+        let mut blame_text = None;
+        let path = file.path.clone();
         if let Some(view) = file.view() {
             let b = &view.read(cx).buffer;
             let (line, col) = b.line_col(b.selection().head);
+            if self.blame_on && !b.is_dirty() {
+                match &self.blame {
+                    Some((p, lines)) if *p == path => {
+                        blame_text = lines.get(line).map(|l| {
+                            if l.hash.chars().all(|c| c == '0') {
+                                "not committed yet".to_string()
+                            } else {
+                                format!("{} · {}, {} · {}", l.hash, l.author, crate::ai_view::ago(l.time), l.summary)
+                            }
+                        });
+                    }
+                    _ => blame_text = Some("…".into()),
+                }
+            }
             parts.push(format!("Ln {}, Col {}", line + 1, col + 1));
             if let Some(lang) = file.lang {
                 parts.push(lang.name.into());
@@ -1610,7 +1655,29 @@ impl ProjectView {
                 .bg(hsla(ui.background))
                 .border_t_1()
                 .border_color(hsla(ui.divider))
-                .child(div().truncate().child(parts.join("  ·  "))),
+                .child(div().flex_1().min_w_0().truncate().child(parts.join("  ·  ")))
+                .when_some(blame_text, |d, t| d.child(div().flex_none().max_w(px(520.0)).truncate().text_color(hsla(ui.text)).child(t)))
+                .when(self.git.is_some(), |d| {
+                    let on = self.blame_on;
+                    d.child(
+                        div()
+                            .id("blame-toggle")
+                            .flex_none()
+                            .ml_2()
+                            .px_1()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .when(on, |d| d.bg(hsla_alpha(self.accent, 0.25)).text_color(hsla(ui.text)))
+                            .hover(|s| s.bg(hsla(ui.tab_hover)))
+                            .tooltip(menu::tooltip("Blame: who last changed the cursor's line"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.blame_on = !this.blame_on;
+                                this.blame = None;
+                                cx.notify();
+                            }))
+                            .child("Blame"),
+                    )
+                }),
         )
     }
 
@@ -1803,6 +1870,11 @@ impl MenuHost for ProjectView {
 
 impl Render for ProjectView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.blame_on
+            && let Some(path) = self.active.and_then(|i| self.open.get(i)).filter(|f| f.view().is_some()).map(|f| f.path.clone())
+        {
+            self.load_blame(path, cx);
+        }
         if std::mem::take(&mut self.focus_editor) && self.quick.is_none() {
             let target = self.focus_target(cx);
             window.focus(&target, cx);

@@ -1377,7 +1377,7 @@ fn unix_now() -> u64 {
 }
 
 /// How long ago, shortly: `5 min ago`, `3 h ago`, `2 d ago`.
-fn ago(secs: u64) -> String {
+pub fn ago(secs: u64) -> String {
     let d = unix_now().saturating_sub(secs);
     match d {
         0..60 => "just now".into(),

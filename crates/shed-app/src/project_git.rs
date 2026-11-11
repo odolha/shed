@@ -575,6 +575,22 @@ impl ProjectView {
         cx.notify();
     }
 
+    /// The branch and how it stands, in a few words: for Shed's cards.
+    pub fn branch_label(&self) -> Option<String> {
+        let s = self.git.as_ref()?.status.as_ref()?;
+        let mut label = s.branch.head.clone().unwrap_or_else(|| s.branch.oid.clone());
+        if s.branch.ahead > 0 {
+            label.push_str(&format!(" ↑{}", s.branch.ahead));
+        }
+        if s.branch.behind > 0 {
+            label.push_str(&format!(" ↓{}", s.branch.behind));
+        }
+        if !s.entries.is_empty() {
+            label.push_str(&format!(" · {} changed", s.entries.len()));
+        }
+        Some(label)
+    }
+
     /// The branch, how it stands, and what changed: for the header.
     pub(super) fn render_branch_chip(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
         let git = self.git.as_ref()?;

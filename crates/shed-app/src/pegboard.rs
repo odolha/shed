@@ -994,7 +994,10 @@ impl Pegboard {
         };
 
         let mut foot = match (&project, &ai) {
-            (Some(root), _) => vec![home_relative(root), "project".into()],
+            (Some(root), _) => {
+                let branch = self.state.read(cx).projects.get(&tab.id).and_then(|v| v.read(cx).branch_label());
+                vec![home_relative(root), branch.unwrap_or_else(|| "project".into())]
+            }
             (None, Some(folder)) => vec![home_relative(folder), "Claude Code".into()],
             (None, None) => vec![pane.map(|p| home_relative(&p.cwd)).unwrap_or_default()],
         };

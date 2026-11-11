@@ -214,7 +214,9 @@ when it needs a password it cannot ask for, it says so.
 
 **History** lists commits, newest first, with their branches and tags; click one
 for its files, a file for what the commit changed in it. **History** in a file's
-menu (or a diff's bar) shows that file's commits.
+menu (or a diff's bar) shows that file's commits. **Blame**, at the right of the
+editor's status bar, shows who last changed the cursor's line, when, and in which
+commit. Shed's own cards for project tabs show the branch and how it stands.
 
 **Conflicts.** After a merge or rebase stops on conflicts, Changes says so, with
 **Continue** and **Abort**. Open a conflicted file: a bar takes **Ours**,
