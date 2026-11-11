@@ -158,8 +158,13 @@ impl AppState {
             Frame::Keeper(KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Done(_)) => {}
             Frame::Keeper(KeeperMsg::AiUpdate { tab, from, entries, status }) => {
                 let Some(view) = self.ai_views.get(&tab).cloned() else { return };
+                let before = view.read(cx).state();
                 view.update(cx, |v, cx| v.update(from as usize, entries, status, cx));
                 self.follow_edits(&view, cx);
+                let after = view.read(cx).state();
+                if before != after && (after == shed_ai::State::Waiting || (after == shed_ai::State::Idle && before == shed_ai::State::Working)) {
+                    self.tell_about_ai(tab, &view, after, cx);
+                }
             }
             Frame::Keeper(KeeperMsg::AiInfo { tab, commands, models }) => {
                 if let Some(view) = self.ai_views.get(&tab) {
@@ -335,6 +340,31 @@ impl AppState {
                 view.update(cx, |v, cx| v.show_quietly(path, cx));
             }
         }
+    }
+
+    /// A desktop notification that Claude finished or waits, unless its tab
+    /// is in view in the active window.
+    fn tell_about_ai(&mut self, tab: TabId, view: &Entity<AiView>, state: shed_ai::State, cx: &mut Context<Self>) {
+        let bench = view.read(cx).bench;
+        let in_view = self.tree.bench(bench).is_some_and(|b| b.active_tab == tab)
+            && self.windows.get(&bench).copied().is_some_and(|h| h.update(cx, |_, window, _| window.is_window_active()).unwrap_or(false));
+        if in_view {
+            return;
+        }
+        let bench_name = self.tree.bench(bench).map(|b| b.name.clone()).unwrap_or_default();
+        let title = view.read(cx).title();
+        let what = if state == shed_ai::State::Waiting { "Claude needs your answer" } else { "Claude finished" };
+        crate::notify::send(&format!("{what} · {bench_name}"), &title);
+    }
+
+    /// Shows a file's change in the bench's project tab that holds it.
+    pub fn review_in_project(&mut self, bench: BenchId, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        let Some(b) = self.tree.bench(bench) else { return };
+        let tab = b.tabs.iter().filter_map(|t| Some((t.id, &t.project_info()?.root))).filter(|(_, r)| path.starts_with(r)).max_by_key(|(_, r)| r.as_os_str().len()).map(|(id, _)| id);
+        let Some(tab) = tab else { return };
+        let Some(view) = self.projects.get(&tab).cloned() else { return };
+        self.conn.send_msg(ClientMsg::FocusTab { tab });
+        view.update(cx, |v, cx| v.review(path, cx));
     }
 
     /// Goes to the bench's AI tab for `folder`, or opens one.

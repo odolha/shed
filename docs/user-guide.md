@@ -278,7 +278,14 @@ terminal of the bench.
   prompt) interrupts.
 - **Below the prompt**: the model and its effort, the mode (**Ask Before Edits**,
   **Accept Edits**, **Plan Only**), and the eye, which makes files Claude edits
-  open in their project tab as it goes.
+  open in their project tab as it goes. The **⋯** menu finds text in the
+  conversation (also Ctrl+F), inserts a file's text into the prompt (for long
+  prompts kept on disk), and saves the prompt or the whole conversation as a file.
+- **After a turn**, the files it changed are listed above the prompt: click one to
+  see its diff in its project tab, ready to stage or throw away. When Claude keeps
+  a task list, it shows there too.
+- **Notifications**: when Claude finishes or needs your answer while you are not
+  looking at its tab, the desktop says so.
 - **Above**: the session's title, your usage limits for the 5-hour window and the
   week (with when they reset), what the session has cost, and how full its
   context is. **Also works in** lists the bench's other projects: click one to

@@ -549,6 +549,15 @@ impl ProjectView {
         cx.stop_propagation();
     }
 
+    /// Shows what changed in a file: its diff where Git can say, else the file.
+    pub fn review(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let rel = self.git.as_ref().and_then(|g| path.strip_prefix(&g.repo.root).ok().map(|r| r.display().to_string()));
+        match rel {
+            Some(rel) => self.open_diff(rel, DiffSource::Unstaged, cx),
+            None => self.open_path(path, None, cx),
+        }
+    }
+
     /// Opens a file, or shows it if open, without taking the keyboard: for
     /// following what the AI edits.
     pub fn show_quietly(&mut self, path: PathBuf, cx: &mut Context<Self>) {

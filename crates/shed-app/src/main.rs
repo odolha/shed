@@ -13,6 +13,7 @@ mod logbook_view;
 #[cfg(target_os = "macos")]
 mod macos;
 mod menu;
+mod notify;
 mod pegboard;
 mod project_view;
 mod prompt;

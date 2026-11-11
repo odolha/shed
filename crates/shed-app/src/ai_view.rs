@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, ClipboardEntry, ClipboardItem, Context, Entity, ExternalPaths, FocusHandle, FollowMode,
+    AnyElement, ClipboardEntry, ClipboardItem, Context, Entity, ExternalPaths, FocusHandle, Focusable, FollowMode,
     FontWeight, HighlightStyle, KeyDownEvent, ListAlignment, ListState, MouseButton, MouseDownEvent, SharedString,
     StyledText, Subscription, Task, UniformListScrollHandle, Window, div, list, prelude::*, px, svg, uniform_list,
 };
@@ -77,6 +77,10 @@ pub struct AiView {
     ticker: Option<Task<()>>,
     /// Claude Code was asked to start ahead of the first prompt.
     warming: bool,
+    /// Find in the conversation (Ctrl+F): the field, and the entry shown.
+    find: Option<(Entity<LineEditor>, Option<usize>, Subscription)>,
+    /// The task list is opened.
+    tasks_open: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -136,10 +140,21 @@ impl AiView {
             focus: cx.focus_handle(),
             ticker: None,
             warming: false,
+            find: None,
+            tasks_open: false,
             _subs: subs,
         };
         view.load_sessions(cx);
         view
+    }
+
+    pub fn state(&self) -> AiState {
+        self.status.state
+    }
+
+    /// The session's title, for notifications.
+    pub fn title(&self) -> String {
+        self.ai.session.as_ref().and_then(|id| self.sessions.iter().find(|s| &s.id == id)).map(|s| s.title.clone()).unwrap_or_else(|| "Claude".into())
     }
 
     pub fn focus_target(&self, cx: &gpui::App) -> FocusHandle {
@@ -188,6 +203,130 @@ impl AiView {
         self.commands = commands;
         self.models = models;
         cx.notify();
+    }
+
+    /// The files the last turn changed (for review), newest last, once each.
+    fn turn_changes(&self) -> Vec<String> {
+        let start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap_or(0);
+        let mut files: Vec<String> = Vec::new();
+        for e in &self.entries[start..] {
+            if let Entry::Tool(t) = e
+                && t.diff.is_some()
+                && t.result.is_some()
+                && !t.error
+                && let Some(f) = &t.file
+            {
+                files.retain(|x| x != f);
+                files.push(f.clone());
+            }
+        }
+        files
+    }
+
+    /// The latest task list Claude keeps (its todo tool), if any.
+    fn tasks(&self) -> Option<String> {
+        self.entries.iter().rev().find_map(|e| match e {
+            Entry::Tool(t) if t.name == "TodoWrite" => Some(t.detail.clone()),
+            _ => None,
+        })
+    }
+
+    /// Opens a changed file's diff in its project tab (or the file, outside Git).
+    fn review(&self, file: String, cx: &mut Context<Self>) {
+        let bench = self.bench;
+        if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+            state.update(cx, |s, cx| s.review_in_project(bench, PathBuf::from(file), cx));
+        }
+    }
+
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint());
+        window.focus(&editor.read(cx).focus_handle(cx), cx);
+        let sub = cx.observe(&editor, |this, _, cx| {
+            if let Some(f) = &mut this.find {
+                f.1 = None;
+            }
+            this.find_step(false, cx);
+        });
+        self.find = Some((editor, None, sub));
+        cx.notify();
+    }
+
+    fn entry_text(e: &Entry) -> String {
+        match e {
+            Entry::User { text, .. } | Entry::Assistant { text } | Entry::Thinking { text } | Entry::Notice { text, .. } => text.clone(),
+            Entry::Tool(t) => format!("{} {} {}", t.summary, t.detail, t.result.clone().unwrap_or_default()),
+            Entry::Permission(p) => format!("{} {}", p.summary, p.detail),
+        }
+    }
+
+    /// Goes to the next (or previous) entry containing what is typed.
+    fn find_step(&mut self, back: bool, cx: &mut Context<Self>) {
+        let Some((editor, at, _)) = &self.find else { return };
+        let query = editor.read(cx).text().to_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        let n = self.entries.len();
+        let start = at.map_or(if back { n } else { 0 }, |a| if back { a } else { a + 1 });
+        let hits: Vec<usize> = (0..n).filter(|i| Self::entry_text(&self.entries[*i]).to_lowercase().contains(&query)).collect();
+        let next = if back { hits.iter().rev().find(|i| **i < start).or(hits.last()) } else { hits.iter().find(|i| **i >= start).or(hits.first()) };
+        if let Some(&i) = next {
+            if let Some(f) = &mut self.find {
+                f.1 = Some(i);
+            }
+            self.list.scroll_to_reveal_item(i);
+        }
+        cx.notify();
+    }
+
+    fn find_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.find = None;
+                let target = self.focus_target(cx);
+                window.focus(&target, cx);
+                cx.notify();
+            }
+            "enter" => self.find_step(event.keystroke.modifiers.shift, cx),
+            _ => return,
+        }
+        cx.stop_propagation();
+    }
+
+    /// Writes text to a file the user names.
+    fn save_as(&self, name: &str, text: String, cx: &mut Context<Self>) {
+        let answer = cx.prompt_for_new_path(&self.ai.folder, Some(name));
+        cx.spawn(async move |_, _| {
+            if let Ok(Ok(Some(path))) = answer.await {
+                let _ = std::fs::write(path, text);
+            }
+        })
+        .detach();
+    }
+
+    /// Puts a file's text into the prompt, for a long prompt kept on disk.
+    fn insert_file(&mut self, cx: &mut Context<Self>) {
+        let answer = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Insert".into()) });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = answer.await
+                && let Some(text) = paths.first().and_then(|p| std::fs::read_to_string(p).ok())
+            {
+                this.update(cx, |this, cx| this.insert(&text, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    fn more_menu(&self, cx: &gpui::App) -> Vec<MenuEntry<Self>> {
+        let conversation = self.transcript_markdown();
+        let prompt = self.prompt.read(cx).buffer.text();
+        vec![
+            menu::item("Find in the Conversation…", |this: &mut Self, window, cx| this.open_find(window, cx)).icon("search"),
+            menu::item("Insert a File's Text…", |this: &mut Self, _, cx| this.insert_file(cx)).icon("file"),
+            menu::item("Save the Prompt…", move |this: &mut Self, _, cx| this.save_as("prompt.md", prompt.clone(), cx)),
+            menu::item("Save the Conversation…", move |this: &mut Self, _, cx| this.save_as("conversation.md", conversation.clone(), cx)),
+        ]
     }
 
     /// The entries a window should follow: edits that finished, with files.
@@ -303,7 +442,7 @@ impl AiView {
     }
 
     /// Keys at the prompt before it sees them: completion, history, pasted pictures.
-    fn prompt_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn prompt_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
         let sec = ks.modifiers.secondary();
         if let Some(c) = &mut self.completion {
@@ -323,6 +462,7 @@ impl AiView {
         }
         match ks.key.as_str() {
             "escape" if self.status.state != AiState::Idle => self.stop(),
+            "f" if sec => self.open_find(window, cx),
             "up" | "down" if sec => {
                 let prompts: Vec<&String> = self.entries.iter().filter_map(|e| if let Entry::User { text, .. } = e { Some(text) } else { None }).collect();
                 if prompts.is_empty() {
@@ -607,11 +747,13 @@ impl AiView {
                 .child(text)
                 .into_any_element(),
         };
+        let found = self.find.as_ref().is_some_and(|f| f.1 == Some(i));
         div()
             .id(("entry", i))
             .px_4()
             .py_1()
             .w_full()
+            .when(found, |d| d.border_l_2().border_color(hsla(ui.ink(self.accent))).bg(hsla_alpha(self.accent, 0.08)))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                 let entries = this.entry_menu(i);
                 this.open_menu(e.position, entries, cx);
@@ -800,6 +942,19 @@ impl AiView {
             })))
             .child(
                 div()
+                    .id("ai-more")
+                    .p_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                        let entries = this.more_menu(cx);
+                        this.open_menu(e.position, entries, cx);
+                    }))
+                    .child(svg().path(icon("more")).size(px(14.0)).text_color(hsla(ui.text_dim))),
+            )
+            .child(
+                div()
                     .id("ai-follow")
                     .p_1()
                     .rounded_sm()
@@ -864,6 +1019,80 @@ impl AiView {
                         .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(description))
                 })),
         )
+    }
+}
+
+impl AiView {
+    /// Above the prompt: find, the task list, and the files the last turn changed.
+    fn render_extras(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let accent = self.accent;
+        let mut out = div().flex().flex_col().gap_1().mx_3().text_size(px(12.0));
+        let mut any = false;
+        if let Some((editor, at, _)) = &self.find {
+            any = true;
+            let status = match at {
+                Some(i) => format!("entry {}", i + 1),
+                None => "Enter finds the next".into(),
+            };
+            out = out.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .capture_key_down(cx.listener(Self::find_key))
+                    .child(div().text_color(hsla(ui.text_dim)).child("Find:"))
+                    .child(div().w(px(280.0)).child(editor.clone()))
+                    .child(div().text_color(hsla(ui.text_dim)).child(status)),
+            );
+        }
+        if let Some(tasks) = self.tasks() {
+            any = true;
+            let lines: Vec<String> = tasks.lines().map(String::from).collect();
+            let done = lines.iter().filter(|l| l.starts_with('☑')).count();
+            let current = lines.iter().find(|l| l.starts_with('▶')).cloned().unwrap_or_default();
+            out = out.child(
+                div()
+                    .id("ai-tasks")
+                    .flex()
+                    .flex_col()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(hsla(ui.divider))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.tasks_open = !this.tasks_open;
+                        cx.notify();
+                    }))
+                    .child(div().text_color(hsla(ui.text_dim)).child(format!("Tasks {done}/{} {}", lines.len(), current)))
+                    .when(self.tasks_open, |d| d.children(lines.into_iter().map(|l| div().text_color(hsla(ui.text)).child(l)))),
+            );
+        }
+        let changed = if self.status.state == AiState::Idle { self.turn_changes() } else { Vec::new() };
+        if !changed.is_empty() {
+            any = true;
+            let mut row = div().flex().flex_wrap().items_center().gap_1().child(div().text_color(hsla(ui.text_dim)).child("Changed, to review:"));
+            for (n, file) in changed.into_iter().enumerate() {
+                let name = std::path::Path::new(&file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                row = row.child(
+                    div()
+                        .id(("changed", n))
+                        .px_1p5()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(hsla_alpha(accent, 0.5))
+                        .text_color(hsla(ui.ink(accent)))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hsla_alpha(accent, 0.15)))
+                        .tooltip(menu::tooltip("Show the change in its project tab"))
+                        .on_click(cx.listener(move |this, _, _, cx| this.review(file.clone(), cx)))
+                        .child(name),
+                );
+            }
+            out = out.child(row);
+        }
+        any.then(|| out.into_any_element())
     }
 }
 
@@ -954,6 +1183,7 @@ impl Render for AiView {
                     } else {
                         transcript.into_any_element()
                     })
+                    .children(self.render_extras(&ui, cx))
                     .children(self.render_completion(&ui, cx))
                     .when(images > 0, |d| {
                         d.child(
