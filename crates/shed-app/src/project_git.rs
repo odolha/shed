@@ -1224,6 +1224,7 @@ impl ProjectView {
                         }
                     }
                 })))
+                .child(btn("three-ways", if self.merge_sides.as_ref().is_some_and(|(p, _, _)| *p == file.path) { "One Way" } else { "Three Ways" }).on_click(cx.listener(move |this, _, _, cx| this.toggle_three_ways(cx))))
                 .child(btn("mark-resolved", "Mark Resolved").text_color(hsla(ui.ink(accent))).on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(i) = this.active {
                         this.save(i, cx);
@@ -1233,6 +1234,76 @@ impl ProjectView {
                 })))
                 .into_any_element(),
         )
+    }
+}
+
+impl ProjectView {
+    /// Shows our version and theirs beside the conflicted file, or stops.
+    fn toggle_three_ways(&mut self, cx: &mut Context<Self>) {
+        let Some(file) = self.active.and_then(|i| self.open.get(i)) else { return };
+        if self.merge_sides.as_ref().is_some_and(|(p, _, _)| *p == file.path) {
+            self.merge_sides = None;
+            return cx.notify();
+        }
+        let Some(git) = &self.git else { return };
+        let Ok(rel) = file.path.strip_prefix(&git.repo.root) else { return };
+        let rel = rel.display().to_string();
+        // Index stages: 2 is ours, 3 theirs, during a merge or rebase.
+        let (ours, theirs) = (git.repo.show(":2", &rel), git.repo.show(":3", &rel));
+        let options = TextOptions { read_only: true, line_numbers: true, comment: file.lang.and_then(|l| l.comment), ..Default::default() };
+        let settings = self.settings.clone();
+        let o = options.clone();
+        let ours = cx.new(|cx| TextView::new(&ours, o, &settings, cx));
+        let theirs = cx.new(|cx| TextView::new(&theirs, options, &settings, cx));
+        self.merge_sides = Some((file.path.clone(), ours.clone(), theirs.clone()));
+        let lang = file.lang;
+        for view in [ours, theirs] {
+            self.highlight_view(lang, view, cx);
+        }
+        cx.notify();
+    }
+
+    /// Colours a read-only view once.
+    fn highlight_view(&self, lang: Option<&'static shed_project::Lang>, view: Entity<TextView>, cx: &mut Context<Self>) {
+        let Some(lang) = lang else { return };
+        let text = view.read(cx).buffer.rope().to_string();
+        let palette = self.settings.palette.clone();
+        cx.spawn(async move |_, cx| {
+            let spans = cx
+                .background_executor()
+                .spawn(async move {
+                    let spans = shed_project::highlight(lang, &text)?;
+                    Some(std::sync::Arc::new(spans.into_iter().map(|l| l.into_iter().map(|(r, s)| (r, super::syntax_color(s, &palette))).collect()).collect::<Vec<_>>()))
+                })
+                .await;
+            if let Some(spans) = spans {
+                view.update(cx, |v, cx| v.set_highlights(Some(spans), cx));
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn render_three_ways(&self, ours: &Entity<TextView>, result: &Entity<TextView>, theirs: &Entity<TextView>, ui: &UiColors) -> AnyElement {
+        let column = |title: &'static str, view: &Entity<TextView>| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .flex()
+                .flex_col()
+                .child(div().flex_none().px_2().py_0p5().text_size(px(11.0)).text_color(hsla(ui.text_dim)).border_b_1().border_color(hsla(ui.divider)).child(title))
+                .child(div().flex_1().min_h_0().child(view.clone()))
+        };
+        let line = || div().flex_none().w(px(1.0)).h_full().bg(hsla(ui.divider));
+        div()
+            .size_full()
+            .flex()
+            .child(column("Ours (what you had)", ours))
+            .child(line())
+            .child(column("Result (edit and save)", result))
+            .child(line())
+            .child(column("Theirs (coming in)", theirs))
+            .into_any_element()
     }
 }
 

@@ -9,8 +9,8 @@ design choices and their reasons, and the order of work.
 Status: agreed 2026-11-11 (see [Decisions](#decisions)). The order may change;
 all of it is wanted in the end. Done: steps 1–9 and 11 (tab kinds, text core,
 files and editor, search, AI tabs, Git core, links with the extension, remote
-tabs, reviewing a turn's changes and notifications) and most of 10 (branches,
-history, conflicts by marker; a three-pane merge view remains).
+tabs, reviewing a turn's changes and notifications) and 10 (branches, history,
+blame, conflicts by marker and three ways). See the end for what is still open.
 
 ## The picture
 
@@ -315,6 +315,16 @@ work together, M several, L a week or more).
 | 11 | AI: review a turn's changes; notifications | M | 6, 7 |
 
 Remote tabs (9) and links (8) depend on little else and can move earlier.
+
+## Still open
+
+- A merge view that lines up the three versions and moves single changes across
+  with arrows (now: the three versions side by side, whole, and per-conflict
+  Ours / Theirs / Both).
+- Blame in the editor's gutter (now: for the cursor's line, in the status bar).
+- The AI tab's prompt folding large pastes into a chip, and a prompt library.
+- Screenshots of the new tabs in the user guide.
+- A static `shedd` build for servers with an older C library (see Development).
 
 ## Decisions
 

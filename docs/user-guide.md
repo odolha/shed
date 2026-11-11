@@ -222,6 +222,8 @@ commit. Shed's own cards for project tabs show the branch and how it stands.
 **Continue** and **Abort**. Open a conflicted file: a bar takes **Ours**,
 **Theirs** or **Both** for the conflict at the cursor, goes to the **Next**, asks
 the AI tab to resolve it (**Ask AI**), and **Mark Resolved** saves and stages it.
+**Three Ways** shows our version and theirs, whole, on either side of the file
+you are resolving (which you edit and save as usual).
 The − and + beside a conflicted file take our or their whole version.
 
 **Links.** A project's web apps (local, staging, production) sit as buttons in

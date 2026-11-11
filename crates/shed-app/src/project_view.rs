@@ -200,6 +200,8 @@ pub struct ProjectView {
     /// Blame for a file, while it matches the file shown.
     blame: Option<(PathBuf, Vec<shed_git::BlameLine>)>,
     blame_task: Option<(PathBuf, Task<()>)>,
+    /// A conflicted file shown three ways: our version and theirs beside it.
+    merge_sides: Option<(PathBuf, Entity<TextView>, Entity<TextView>)>,
 }
 
 impl ProjectView {
@@ -239,6 +241,7 @@ impl ProjectView {
             blame_on: false,
             blame: None,
             blame_task: None,
+            merge_sides: None,
         };
         view.rebuild();
         view.start_walk(cx);
@@ -1700,7 +1703,10 @@ impl ProjectView {
             return empty("Open a file from the tree, or by name with Ctrl+P".into());
         };
         match &file.content {
-            Content::Text(view) => view.clone().into_any_element(),
+            Content::Text(view) => match &self.merge_sides {
+                Some((path, ours, theirs)) if *path == file.path => self.render_three_ways(ours, view, theirs, ui),
+                _ => view.clone().into_any_element(),
+            },
             Content::Diff(_) => self.render_diff(self.active.unwrap_or(0), ui, cx),
             Content::Image => div().size_full().p_4().flex().items_center().justify_center().child(img(file.path.clone()).max_w_full().max_h_full()).into_any_element(),
             Content::Binary => empty(format!("{} is not text", file.name())),
