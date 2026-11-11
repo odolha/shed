@@ -6,6 +6,10 @@ license.workspace = true
 
 [dependencies]
 ignore.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
+regex.workspace = true
 notify.workspace = true
 nucleo-matcher.workspace = true
 tree-sitter.workspace = true

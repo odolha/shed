@@ -111,6 +111,8 @@ pub struct TextView {
     scroll_x: Pixels,
     /// Bring the cursor into view at the next layout.
     autoscroll: bool,
+    /// Put the cursor's row in the middle of the view at the next layout.
+    center: bool,
     highlights: Option<Arc<Vec<LineSpans>>>,
     /// Lines changed on disk, marked for a moment.
     flashes: Vec<(Range<usize>, Instant)>,
@@ -143,6 +145,7 @@ impl TextView {
             scroll_y: px(0.0),
             scroll_x: px(0.0),
             autoscroll: false,
+            center: false,
             highlights: None,
             flashes: Vec::new(),
             find: None,
@@ -206,12 +209,7 @@ impl TextView {
     pub fn go_to(&mut self, line: usize, col: usize, cx: &mut Context<Self>) {
         let pos = self.buffer.pos(line, col);
         self.buffer.set_cursor(pos, false);
-        if let Some(g) = self.geometry.get() {
-            let row = self.row_of(pos).0;
-            let half = (g.bounds.size.height / 2.0).max(px(0.0));
-            self.scroll_y = (g.m.line * row as f32 - half).max(px(0.0));
-        }
-        self.autoscroll = true;
+        self.center = true;
         cx.notify();
     }
 
@@ -426,7 +424,7 @@ impl TextView {
                     self.edited(cx);
                 }
             }
-            "f" if sec => self.open_find(false, window, cx),
+            "f" if sec && !shift => self.open_find(false, window, cx),
             "h" | "r" if sec && editable && !self.options.submit_on_enter => self.open_find(true, window, cx),
             "g" if sec && self.options.auto_height.is_none() => self.open_goto(window, cx),
             "s" if sec => cx.emit(TextEvent::Save),
@@ -687,7 +685,10 @@ impl TextView {
         let sel = self.buffer.selection();
         let (cursor_row, crow) = self.row_of(sel.head);
         let cursor_x = m.cell * self.row_x(crow, self.buffer.line_col(sel.head).1) as f32;
-        if std::mem::take(&mut self.autoscroll) {
+        if std::mem::take(&mut self.center) {
+            self.scroll_y = (m.line * cursor_row as f32 - text_h / 2.0).max(px(0.0));
+            self.autoscroll = false;
+        } else if std::mem::take(&mut self.autoscroll) {
             let margin = if self.options.auto_height.is_some() { px(0.0) } else { m.line * 2.0 };
             let top = m.line * cursor_row as f32;
             if top - margin < self.scroll_y {

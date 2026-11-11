@@ -6,14 +6,16 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
     ClipboardItem, Context, Entity, FocusHandle, Focusable, HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent,
-    PromptLevel, ScrollStrategy, SharedString, StyledText, Subscription, Task, UniformListScrollHandle, Window, div, img,
-    prelude::*, px, svg, uniform_list,
+    MouseMoveEvent, PromptLevel, ScrollStrategy, SharedString, StyledText, Subscription, Task, UniformListScrollHandle,
+    Window, div, img, prelude::*, px, svg, uniform_list,
 };
 use shed_model::{BenchId, Project, Rgb, TabId};
+use shed_project::search::{FileHits, Query};
 use shed_project::{Excluder, Lang, Style, Watch};
 use shed_proto::ClientMsg;
 
@@ -28,6 +30,8 @@ use crate::theme::{UiColors, current_ui, hsla, hsla_alpha};
 const ROW_HEIGHT: f32 = 24.0;
 const INDENT: f32 = 14.0;
 const TREE_WIDTH: f32 = 280.0;
+/// Search stops after this many matching lines.
+const SEARCH_LIMIT: usize = 5000;
 /// Files this big open as a note, not in the editor.
 const MAX_OPEN: u64 = 8 * 1024 * 1024;
 /// Files this big are not coloured.
@@ -89,6 +93,49 @@ impl OpenFile {
     }
 }
 
+/// What the left panel shows.
+#[derive(Clone, Copy, PartialEq)]
+enum Panel {
+    Files,
+    Search,
+}
+
+/// Search in files (Ctrl+Shift+F).
+struct SearchPanel {
+    query: Entity<LineEditor>,
+    replace: Entity<LineEditor>,
+    regex: bool,
+    case_sensitive: bool,
+    whole_word: bool,
+    /// Files with matches, by path.
+    results: Vec<FileHits>,
+    /// What the list shows: a file, or one of its hits.
+    rows: Vec<(usize, Option<usize>)>,
+    /// What `results` are for.
+    searched: Option<Query>,
+    cancel: Arc<AtomicBool>,
+    running: bool,
+    error: Option<String>,
+    task: Option<Task<()>>,
+    scroll: UniformListScrollHandle,
+    _subs: Vec<Subscription>,
+}
+
+impl SearchPanel {
+    fn query(&self, cx: &gpui::App) -> Query {
+        Query {
+            text: self.query.read(cx).text().to_string(),
+            regex: self.regex,
+            case_sensitive: self.case_sensitive,
+            whole_word: self.whole_word,
+        }
+    }
+
+    fn rebuild_rows(&mut self) {
+        self.rows = self.results.iter().enumerate().flat_map(|(f, r)| std::iter::once((f, None)).chain((0..r.hits.len()).map(move |h| (f, Some(h))))).collect();
+    }
+}
+
 /// Open by name (Ctrl+P).
 struct QuickOpen {
     editor: Entity<LineEditor>,
@@ -127,6 +174,11 @@ pub struct ProjectView {
     notice: Option<String>,
     /// Give the active editor the keyboard at the next render.
     focus_editor: bool,
+    panel: Panel,
+    search: Option<SearchPanel>,
+    tree_width: f32,
+    /// The left panel's edge being dragged: where the mouse and the width started.
+    resizing: Option<(f32, f32)>,
 }
 
 impl ProjectView {
@@ -155,6 +207,10 @@ impl ProjectView {
             menu: None,
             notice: None,
             focus_editor: false,
+            panel: Panel::Files,
+            search: None,
+            tree_width: TREE_WIDTH,
+            resizing: None,
         };
         view.rebuild();
         view.start_walk(cx);
@@ -448,6 +504,7 @@ impl ProjectView {
         let sec = ks.modifiers.secondary();
         match ks.key.as_str() {
             "p" if sec && !ks.modifiers.shift => self.open_quick(window, cx),
+            "f" if sec && ks.modifiers.shift => self.open_search(window, cx),
             "w" if sec && !ks.modifiers.shift => {
                 if let Some(i) = self.active {
                     self.close_file(i, window, cx);
@@ -720,6 +777,353 @@ impl ProjectView {
         self.exclude = exclude;
         self.publish();
         self.start_walk(cx);
+        cx.notify();
+    }
+
+    /// Shows the search panel with the keyboard in its field, seeded with
+    /// the editor's selection if there is one.
+    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self
+            .active
+            .and_then(|i| self.open.get(i))
+            .and_then(OpenFile::view)
+            .map(|v| v.read(cx).buffer.selected_text())
+            .filter(|t| !t.is_empty() && !t.contains('\n'));
+        if self.search.is_none() {
+            let query = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint());
+            let replace = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint());
+            let subs = vec![cx.observe(&query, |this, _, cx| this.schedule_search(cx))];
+            self.search = Some(SearchPanel {
+                query,
+                replace,
+                regex: false,
+                case_sensitive: false,
+                whole_word: false,
+                results: Vec::new(),
+                rows: Vec::new(),
+                searched: None,
+                cancel: Arc::default(),
+                running: false,
+                error: None,
+                task: None,
+                scroll: UniformListScrollHandle::new(),
+                _subs: subs,
+            });
+        }
+        let search = self.search.as_ref().unwrap();
+        if let Some(text) = selected {
+            search.query.update(cx, |q, cx| *q = LineEditor::selected(text, cx).without_hint());
+        }
+        window.focus(&search.query.read(cx).focus_handle(cx), cx);
+        self.panel = Panel::Search;
+        self.schedule_search(cx);
+        cx.notify();
+    }
+
+    /// Searches again for what the panel asks, a moment after typing pauses;
+    /// results arrive file by file.
+    fn schedule_search(&mut self, cx: &mut Context<Self>) {
+        let (root, files) = (self.root.clone(), self.files.clone());
+        let Some(search) = &mut self.search else { return };
+        let q = search.query(cx);
+        if search.searched.as_ref() == Some(&q) {
+            return;
+        }
+        search.cancel.store(true, Ordering::Relaxed);
+        let cancel = Arc::new(AtomicBool::new(false));
+        search.cancel = cancel.clone();
+        search.searched = Some(q.clone());
+        search.results.clear();
+        search.rows.clear();
+        search.error = shed_project::search::check(&q).err().filter(|_| !q.text.is_empty());
+        search.running = search.error.is_none() && !q.text.is_empty();
+        if !search.running {
+            cx.notify();
+            return;
+        }
+        search.task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            let (tx, rx) = async_channel::unbounded::<FileHits>();
+            let finished = cancel.clone();
+            cx.background_executor()
+                .spawn(async move {
+                    let _ = shed_project::search::search(&root, &files, &q, &finished, SEARCH_LIMIT, |f| {
+                        let _ = tx.send_blocking(f);
+                    });
+                })
+                .detach();
+            while let Ok(found) = rx.recv().await {
+                let alive = this.update(cx, |this, cx| {
+                    let Some(search) = &mut this.search else { return };
+                    if !Arc::ptr_eq(&search.cancel, &cancel) {
+                        return;
+                    }
+                    let at = search.results.partition_point(|r| r.path < found.path);
+                    search.results.insert(at, found);
+                    search.rebuild_rows();
+                    cx.notify();
+                });
+                if alive.is_err() {
+                    return;
+                }
+            }
+            this.update(cx, |this, cx| {
+                if let Some(search) = &mut this.search
+                    && Arc::ptr_eq(&search.cancel, &cancel)
+                {
+                    search.running = false;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn toggle_search_option(&mut self, which: u8, cx: &mut Context<Self>) {
+        if let Some(s) = &mut self.search {
+            match which {
+                0 => s.case_sensitive = !s.case_sensitive,
+                1 => s.whole_word = !s.whole_word,
+                _ => s.regex = !s.regex,
+            }
+        }
+        self.schedule_search(cx);
+    }
+
+    /// Opens a file at a hit, its match selected.
+    fn open_hit(&mut self, file: usize, hit: usize, cx: &mut Context<Self>) {
+        let Some(search) = &self.search else { return };
+        let Some(found) = search.results.get(file) else { return };
+        let Some(h) = found.hits.get(hit).cloned() else { return };
+        let path = self.root.join(&found.path);
+        self.open_path(path.clone(), None, cx);
+        let Some(view) = self.open.iter().find(|f| f.path == path).and_then(OpenFile::view).cloned() else { return };
+        view.update(cx, |v, cx| {
+            let line = v.buffer.line(h.line);
+            let at = |byte: usize| {
+                let mut b = (h.offset + byte).min(line.len());
+                while !line.is_char_boundary(b) {
+                    b -= 1;
+                }
+                line[..b].chars().count()
+            };
+            let start = v.buffer.line_start(h.line);
+            let r = h.ranges.first().cloned().unwrap_or(0..0);
+            v.go_to(h.line, at(r.start), cx);
+            v.select(start + at(r.start)..start + at(r.end), cx);
+        });
+    }
+
+    /// Replaces every match in every file found, after asking. Files open
+    /// with unsaved edits are left alone.
+    fn replace_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(search) = &self.search else { return };
+        let Some(q) = search.searched.clone() else { return };
+        let with = search.replace.read(cx).text().to_string();
+        let files: Vec<PathBuf> = search.results.iter().map(|r| self.root.join(&r.path)).collect();
+        let count: usize = search.results.iter().flat_map(|r| &r.hits).map(|h| h.ranges.len()).sum();
+        if files.is_empty() {
+            return;
+        }
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Replace {count} matches in {} files?", files.len()),
+            Some(&format!("“{}” becomes “{with}” in every file found. Files open here with unsaved changes are skipped.", q.text)),
+            &["Replace All", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                let mut skipped = Vec::new();
+                for path in &files {
+                    if let Some(i) = this.open.iter().position(|f| &f.path == path)
+                        && this.is_dirty(i, cx)
+                    {
+                        skipped.push(this.open[i].name());
+                        continue;
+                    }
+                    let Ok(text) = std::fs::read_to_string(path) else { continue };
+                    if let Ok((new, n)) = shed_project::search::replace(&text, &q, &with)
+                        && n > 0
+                    {
+                        let _ = std::fs::write(path, new);
+                    }
+                }
+                this.notice = (!skipped.is_empty()).then(|| format!("Not replaced in {} (unsaved changes)", skipped.join(", ")));
+                if let Some(s) = &mut this.search {
+                    s.searched = None;
+                }
+                this.schedule_search(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn render_search(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let search = self.search.as_ref()?;
+        let accent = self.accent;
+        let toggle = |id: &'static str, label: &'static str, on: bool, which: u8, tip: &'static str| {
+            div()
+                .id(id)
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_size(px(11.0))
+                .text_color(hsla(if on { ui.text } else { ui.text_dim }))
+                .when(on, |d| d.bg(hsla_alpha(accent, 0.3)))
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .tooltip(menu::tooltip(tip))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_search_option(which, cx)))
+                .child(label)
+        };
+        let matches: usize = search.results.iter().map(|r| r.hits.len()).sum();
+        let status = match (&search.error, search.running, matches) {
+            (Some(e), _, _) => e.lines().last().unwrap_or("").to_string(),
+            (None, true, 0) => "Searching…".into(),
+            (None, true, n) => format!("{n} lines so far…"),
+            (None, false, 0) if search.searched.as_ref().is_some_and(|q| !q.text.is_empty()) => "No matches".into(),
+            (None, false, 0) => String::new(),
+            (None, false, n) => format!("{n} lines in {} files{}", search.results.len(), if n >= SEARCH_LIMIT { " (stopped at the limit)" } else { "" }),
+        };
+        let list = uniform_list("search-results", search.rows.len(), cx.processor(|this, range, _, cx| this.render_hits(range, cx)))
+            .track_scroll(&search.scroll)
+            .flex_1()
+            .min_h_0();
+        Some(
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_2()
+                .text_size(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(div().flex_1().min_w_0().child(search.query.clone()))
+                        .child(toggle("s-case", "Aa", search.case_sensitive, 0, "Match case"))
+                        .child(toggle("s-word", "W", search.whole_word, 1, "Whole words"))
+                        .child(toggle("s-regex", ".*", search.regex, 2, "Regular expression")),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(div().flex_1().min_w_0().child(search.replace.clone()))
+                        .child(
+                            div()
+                                .id("replace-all")
+                                .px_1p5()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(hsla(ui.divider))
+                                .cursor_pointer()
+                                .text_size(px(11.0))
+                                .text_color(hsla(ui.text_dim))
+                                .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                                .on_click(cx.listener(|this, _, window, cx| this.replace_all(window, cx)))
+                                .child("Replace All…"),
+                        ),
+                )
+                .child(div().text_size(px(11.0)).text_color(hsla(if search.error.is_some() { ui.danger } else { ui.text_dim })).child(status))
+                .child(list)
+                .into_any_element(),
+        )
+    }
+
+    fn render_hits(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let ui = current_ui(cx);
+        let accent = self.accent;
+        let Some(search) = &self.search else { return Vec::new() };
+        range
+            .filter_map(|i| {
+                let (f, hit) = *search.rows.get(i)?;
+                let found = search.results.get(f)?;
+                let row = div().id(("hit", i)).h(px(ROW_HEIGHT)).flex().items_center().gap_1p5().px_1().rounded_sm().cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover)));
+                Some(match hit {
+                    None => {
+                        let name = found.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        let dir = found.path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+                        row.child(svg().path(icon("file")).size(px(13.0)).flex_none().text_color(hsla(ui.text_dim)))
+                            .child(div().flex_none().text_color(hsla(ui.text)).child(name))
+                            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(dir))
+                            .child(div().flex_none().text_color(hsla(ui.text_dim)).child(found.hits.len().to_string()))
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_hit(f, 0, cx)))
+                            .into_any_element()
+                    }
+                    Some(h) => {
+                        let hit = &found.hits[h];
+                        // Without the line's leading blanks.
+                        let lead = hit.text.len() - hit.text.trim_start().len();
+                        let text = hit.text[lead..].to_string();
+                        let highlights: Vec<_> = hit
+                            .ranges
+                            .iter()
+                            .filter(|r| r.start >= lead)
+                            .map(|r| (r.start - lead..r.end - lead, HighlightStyle { background_color: Some(hsla_alpha(accent, 0.35)), ..Default::default() }))
+                            .collect();
+                        row.pl(px(20.0))
+                            .child(div().flex_none().w(px(36.0)).text_color(hsla(ui.text_dim)).child((hit.line + 1).to_string()))
+                            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(StyledText::new(text).with_highlights(highlights)))
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_hit(f, h, cx)))
+                            .into_any_element()
+                    }
+                })
+            })
+            .collect()
+    }
+
+    fn render_panel_switch(&self, ui: &UiColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let accent = self.accent;
+        let tab = |id: &'static str, glyph: &'static str, label: &'static str, panel: Panel| {
+            let on = self.panel == panel;
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .h_full()
+                .cursor_pointer()
+                .text_size(px(12.0))
+                .text_color(hsla(if on { ui.text } else { ui.text_dim }))
+                .when(on, |d| d.border_b_2().border_color(hsla(accent)))
+                .hover(|s| s.text_color(hsla(ui.text)))
+                .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(ui.text_dim)))
+                .child(label)
+        };
+        div()
+            .flex()
+            .flex_none()
+            .h(px(28.0))
+            .border_b_1()
+            .border_color(hsla(ui.divider))
+            .child(tab("panel-files", "folder", "Files", Panel::Files).on_click(cx.listener(|this, _, _, cx| {
+                this.panel = Panel::Files;
+                cx.notify();
+            })))
+            .child(
+                tab("panel-search", "search", "Search", Panel::Search)
+                    .tooltip(menu::tooltip("Search in files (Ctrl+Shift+F)"))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
+            )
+    }
+
+    fn on_resize(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some((x0, w0)) = self.resizing else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.resizing = None;
+            return;
+        }
+        self.tree_width = (w0 + f32::from(event.position.x) - x0).clamp(160.0, 900.0);
         cx.notify();
     }
 
@@ -1205,6 +1609,8 @@ impl Render for ProjectView {
         div()
             .key_context("Project")
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_move(cx.listener(Self::on_resize))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.resizing = None))
             .relative()
             .size_full()
             .flex()
@@ -1218,15 +1624,33 @@ impl Render for ProjectView {
                     .flex()
                     .child(
                         div()
-                            .w(px(TREE_WIDTH))
+                            .w(px(self.tree_width))
                             .flex_none()
                             .h_full()
+                            .flex()
+                            .flex_col()
                             .bg(hsla(ui.background))
-                            .border_r_1()
-                            .border_color(hsla(ui.divider))
-                            .track_focus(&self.tree_focus)
-                            .on_key_down(cx.listener(Self::tree_key))
-                            .child(tree),
+                            .child(self.render_panel_switch(&ui, cx))
+                            .child(match (self.panel, self.render_search(&ui, cx)) {
+                                (Panel::Search, Some(search)) => div().flex_1().min_h_0().child(search),
+                                _ => div().flex_1().min_h_0().track_focus(&self.tree_focus).on_key_down(cx.listener(Self::tree_key)).child(tree),
+                            }),
+                    )
+                    .child(
+                        // The panel's edge: drag to resize.
+                        div()
+                            .id("panel-edge")
+                            .flex_none()
+                            .w(px(5.0))
+                            .h_full()
+                            .flex()
+                            .justify_center()
+                            .cursor_col_resize()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                                this.resizing = Some((f32::from(e.position.x), this.tree_width));
+                                cx.stop_propagation();
+                            }))
+                            .child(div().w(px(1.0)).h_full().bg(hsla(ui.divider))),
                     )
                     .child(editor),
             )

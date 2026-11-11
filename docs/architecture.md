@@ -165,7 +165,10 @@ The parts without UI are crates of their own:
   Git's ignore rules and the tab's excludes); a watch per folder (`notify`,
   inotify on Linux, non-recursive so ignored trees cost nothing), whose changes
   arrive in batches about 40 ms apart, new folders being watched as they appear;
-  ranking files by a typed name (`nucleo-matcher`); and colouring
+  ranking files by a typed name (`nucleo-matcher`); searching the file list
+  with ripgrep's engine (`grep-searcher`, `grep-regex`) on a thread per core,
+  each file's hits handed on as it is done, stopping at a limit or when
+  cancelled (no index: nothing can be out of date); and colouring
   (`tree-sitter-highlight` with compiled-in grammars, spans per line by byte
   range; Kotlin's query is Shed's own, in `queries/`).
 - `shed-text`: the text being edited: a rope (`ropey`), one selection, undo

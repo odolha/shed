@@ -126,8 +126,9 @@ impl LineEditor {
 }
 
 impl Render for LineEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ui = crate::theme::current_ui(cx);
+        let focused = self.focus.is_focused(window);
         let at = self.byte(self.cursor);
         let (before, after) = self.text.split_at(at);
         let selection = self.all_selected.then(|| div().rounded_sm().bg(crate::theme::hsla_alpha(ui.accent, 0.3)).child(self.text.clone()));
@@ -140,12 +141,12 @@ impl Render for LineEditor {
             .min_w(px(80.0))
             .bg(hsla(ui.background))
             .border_1()
-            .border_color(hsla(ui.accent))
+            .border_color(hsla(if focused { ui.accent } else { ui.divider }))
             .rounded_sm()
             .text_color(hsla(ui.text))
             .children(selection)
             .child(before)
-            .child(div().w(px(1.5)).h(px(14.0)).bg(hsla(ui.text)))
+            .when(focused, |d| d.child(div().w(px(1.5)).h(px(14.0)).bg(hsla(ui.text))))
             .child(after);
         div()
             .track_focus(&self.focus)

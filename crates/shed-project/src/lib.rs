@@ -5,6 +5,7 @@
 pub mod files;
 pub mod fuzzy;
 pub mod lang;
+pub mod search;
 pub mod watch;
 
 pub use files::{Excluder, walk};

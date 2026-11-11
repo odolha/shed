@@ -155,6 +155,14 @@ manager, or copies its path. Above the tree, **Terminal** opens a terminal tab i
 the project's folder, **File Manager** opens the folder, and **Refresh** reads
 everything again.
 
+**Search.** **Ctrl+Shift+F** (or **Search** above the tree) searches every file
+of the project as you type, with the editor's selection to start from. **Aa**
+matches case, **W** whole words, **.\*** takes a regular expression. Results come
+file by file; click a line to open the file there, the match selected. Type a
+replacement and **Replace All…** changes every match in every file found, after
+asking; files open with unsaved changes are skipped. Drag the panel's edge to
+make it wider.
+
 **Editing.** Open files are tabs above the editor; middle-click or **×** closes
 one (asking first if it has unsaved changes, marked with a dot). The editor
 colours Rust, JavaScript, TypeScript, HTML, CSS, Java, Kotlin, JSON, XML, YAML,
