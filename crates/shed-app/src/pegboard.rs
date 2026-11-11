@@ -24,10 +24,12 @@ use crate::state::AppState;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
 /// How often the previews refresh while the Shed window is active (so they
-/// look live); four times slower while it is not. The board redraws only
-/// when a preview changed.
+/// look live), and while it is only on screen. A window nobody can see asks
+/// for none: it refreshes when it shows again, and only checks now and then
+/// that it has not missed that. The board redraws only when a preview changed.
 const REFRESH: Duration = Duration::from_millis(250);
-const IDLE_REFRESH_TICKS: u32 = 4;
+const IDLE_REFRESH: Duration = Duration::from_secs(1);
+const HIDDEN_CHECK: Duration = Duration::from_secs(5);
 const CARD_WIDTH: f32 = 300.0;
 
 /// The keeper's last answer: stored benches and previews.
@@ -131,7 +133,6 @@ pub struct Pegboard {
     /// Position in the list of shown tabs.
     selected: usize,
     query: String,
-    ticks: u32,
     menu: Option<Menu<Self>>,
     editing: Option<(Edit, Entity<LineEditor>, Subscription)>,
     /// The Setup panel of one tab, over the right side.
@@ -163,25 +164,29 @@ impl Pegboard {
                 }
                 EditorEvent::Cancel => filter.update(cx, |f, cx| f.clear(cx)),
             }),
-            // Fresh previews the moment Shed comes to the front.
+            // Fresh previews the moment Shed comes to the front, or into view.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
+                    this.refresh(cx);
+                }
+            }),
+            cx.observe_window_visibility(window, |this, visibility, _, cx| {
+                if visibility.is_visible() {
                     this.refresh(cx);
                 }
             }),
         ];
         cx.spawn_in(window, async move |this, cx| {
             loop {
-                let asked = this.update_in(cx, |this, window, cx| {
-                    this.ticks += 1;
-                    if window.is_window_active() || this.ticks.is_multiple_of(IDLE_REFRESH_TICKS) {
-                        this.refresh(cx);
+                let next = this.update_in(cx, |this, window, cx| {
+                    if !window.is_visible() {
+                        return HIDDEN_CHECK;
                     }
+                    this.refresh(cx);
+                    if window.is_window_active() { REFRESH } else { IDLE_REFRESH }
                 });
-                if asked.is_err() {
-                    break;
-                }
-                cx.background_executor().timer(REFRESH).await;
+                let Ok(next) = next else { break };
+                cx.background_executor().timer(next).await;
             }
         })
         .detach();
@@ -190,7 +195,6 @@ impl Pegboard {
             filter,
             selected: 0,
             query: String::new(),
-            ticks: 0,
             menu: None,
             editing: None,
             setup: None,

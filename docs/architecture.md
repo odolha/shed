@@ -160,6 +160,11 @@ setup, aliases), which loads the file, applies it and saves it back, leaving the
 scrollback as it was. A running bench is changed in the tree instead, and the keeper
 refuses file edits to it.
 
+The Shed window asks the keeper for the closed benches and every card's preview
+(`Pegboard`) four times a second while it is the active window, once a second
+while it is only on screen, and not while nobody can see it: it asks again as it
+comes into view.
+
 Moving a tab where either bench is closed (`MoveTabAcross`) combines the two: from
 a closed bench into a running one, the keeper starts the tab's panes as loading
 would and takes the tab out of the file; from a running bench into a closed one,
