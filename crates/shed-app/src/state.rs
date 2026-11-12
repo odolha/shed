@@ -517,6 +517,16 @@ impl AppState {
         self.apply_settings(settings, cx);
     }
 
+    /// Switches the Shed window between cards and the compact list.
+    pub fn set_compact_pegboard(&mut self, compact: bool, cx: &mut Context<Self>) {
+        if let Err(e) = Config::set_compact_pegboard(&Config::path(), compact) {
+            warn!("cannot change the Shed window's view: {e}");
+            return;
+        }
+        let settings = Settings::load(&self.settings);
+        self.apply_settings(settings, cx);
+    }
+
     /// Switches between following the desktop and always light or dark.
     pub fn set_appearance(&mut self, appearance: shed_model::config::Appearance, cx: &mut Context<Self>) {
         if let Err(e) = self.settings.config.set_appearance(&Config::path(), appearance) {

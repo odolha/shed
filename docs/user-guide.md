@@ -61,6 +61,14 @@ a window"), grey **Closed** (with when it was saved). Each tab is a card with a 
 preview of its screen: running programs update as you watch, and closed benches
 show, dimmed, what was on screen when they were saved.
 
+**Compact view**: the two buttons left of the light/dark switch choose between
+the cards and a compact list, to see everything at a glance. There each bench
+is one line: its colour, a state dot (green open, amber hidden, hollow closed),
+its name (click to open, double-click to rename), its tabs as chips with their
+title, tags and the program running in them (or their folder), then **Open** or
+**Go to** and **⋯** for the rest. Chips work like cards: click, drag, middle-click,
+right-click. Shed remembers the choice (`compact_pegboard` in `shed.toml`).
+
 **Benches** (the row above the cards):
 
 - **Open** opens a closed or hidden bench in its window; **Go to** brings an open
@@ -655,6 +663,7 @@ emoji = "Noto Color Emoji"     # colour emoji ("Apple Color Emoji" on macOS)
 padding = 6                    # pixels between the window edge and the text
 new_pane_dir = "current"       # or "bench": where new tabs and panes open
 icon_badges = false            # draw each bench's badge on its taskbar icon
+compact_pegboard = false       # the Shed window as a compact list (its toolbar switches it)
 
 [shell]
 integration = true             # load Shed's bash or zsh integration into its shells

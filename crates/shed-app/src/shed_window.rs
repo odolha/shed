@@ -137,6 +137,33 @@ impl Render for ShedWindow {
                         this.state.update(cx, |state, cx| state.set_appearance(appearance, cx));
                     }))
             }));
+        // Cards with previews, or every bench on a line.
+        let compact = state.settings.config.window.compact_pegboard;
+        let views = [(false, "view-cards", "Cards with previews"), (true, "view-list", "Compact: a line per bench")];
+        let view_switch = div()
+            .flex()
+            .items_center()
+            .p_0p5()
+            .rounded_md()
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .children(views.map(|(value, glyph, tip)| {
+                let on = compact == value;
+                let tint = if on { ui.accent } else { ui.text_dim };
+                div()
+                    .id(SharedString::from(format!("view-{glyph}")))
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(hsla_alpha(ui.accent, 0.2)))
+                    .when(!on, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
+                    .tooltip(crate::menu::tooltip(tip))
+                    .child(svg().path(icon(glyph)).size(px(15.0)).text_color(hsla(tint)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.state.update(cx, |state, cx| state.set_compact_pegboard(value, cx));
+                    }))
+            }));
         let banner = self.quitting.then(|| {
             let text = if running == 0 {
                 "Closing Shed…".to_string()
@@ -206,6 +233,7 @@ impl Render for ShedWindow {
                     .child(svg().path(icon("shed")).size(px(18.0)).text_color(hsla(ui.accent)))
                     .child(div().text_size(px(16.0)).child("Shed"))
                     .child(div().flex_1())
+                    .child(view_switch)
                     .child(switch),
             )
             .children(banner)

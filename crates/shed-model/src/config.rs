@@ -125,11 +125,14 @@ pub struct WindowConfig {
     pub new_pane_dir: NewPaneDir,
     /// Draw each bench's badge (or its initials) on its taskbar icon.
     pub icon_badges: bool,
+    /// The Shed window lists each bench on one line, its tabs as chips,
+    /// without previews (switched from the window's toolbar).
+    pub compact_pegboard: bool,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
-        Self { padding: 6.0, new_pane_dir: NewPaneDir::Current, icon_badges: false }
+        Self { padding: 6.0, new_pane_dir: NewPaneDir::Current, icon_badges: false, compact_pegboard: false }
     }
 }
 
@@ -360,6 +363,21 @@ impl Config {
             Appearance::Dark => self.dark_name(),
         };
         doc["theme"] = toml_edit::value(theme);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Switches the Shed window between cards with previews and a compact
+    /// list, keeping the rest of the file as written.
+    pub fn set_compact_pegboard(path: &Path, compact: bool) -> Result<(), String> {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
+        if !doc.contains_table("window") {
+            doc["window"] = toml_edit::table();
+        }
+        doc["window"]["compact_pegboard"] = toml_edit::value(compact);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -668,6 +686,21 @@ mod tests {
         assert_eq!(fixed.appearance(), Some(Appearance::Light));
         let mine = Config { theme: Some("solarized".into()), ..Default::default() };
         assert_eq!(mine.appearance(), None);
+    }
+
+    #[test]
+    fn the_compact_view_is_remembered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shed.toml");
+        assert!(!Config::load_from(&path).unwrap_or_default().window.compact_pegboard);
+        Config::set_compact_pegboard(&path, true).unwrap();
+        assert!(Config::load_from(&path).unwrap().window.compact_pegboard);
+        std::fs::write(&path, "[window]\npadding = 9 # mine\n").unwrap();
+        Config::set_compact_pegboard(&path, true).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("padding = 9 # mine"), "{text}");
+        let config = Config::load_from(&path).unwrap();
+        assert!(config.window.compact_pegboard && config.window.padding == 9.0);
     }
 
     #[test]
