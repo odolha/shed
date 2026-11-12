@@ -458,7 +458,15 @@ impl TerminalView {
     fn open_logbook(&mut self, _: &OpenLogbook, window: &mut Window, cx: &mut Context<Self>) {
         let Some(here) = self.here else { return };
         let (ui, accent, mono) = (self.ui.clone(), self.accent, SharedString::from(self.font.family.clone()));
-        let search = cx.new(|cx| LogbookSearch::new(here, crate::logbook::path(), ui, accent, mono, cx));
+        // A remote tab's commands are kept on its server.
+        let remote = cx
+            .try_global::<crate::state::AppHandle>()
+            .and_then(|h| h.0.upgrade())
+            .and_then(|state| state.read(cx).tree.tab(here.tab).and_then(|t| t.remote_info()).map(|r| (r.host.clone(), r.id.clone())));
+        let search = match remote {
+            Some((host, shell)) => cx.new(|cx| LogbookSearch::remote(host, shell, ui, accent, mono, cx)),
+            None => cx.new(|cx| LogbookSearch::new(here, crate::logbook::path(), ui, accent, mono, cx)),
+        };
         window.focus(&search.read(cx).focus_handle(cx), cx);
         let sub = cx.subscribe_in(&search, window, |this, _, event: &SearchEvent, window, cx| {
             if let SearchEvent::Insert { command, run } = event {

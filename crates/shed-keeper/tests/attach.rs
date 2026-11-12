@@ -52,6 +52,7 @@ impl Attach {
         let mut child = Command::new(env!("CARGO_BIN_EXE_shedd"))
             .args(["attach", id])
             .env("SHED_RUNTIME_DIR", dir)
+            .env("XDG_DATA_HOME", dir.join("data"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -84,6 +85,17 @@ impl Attach {
                 Ok(bytes) => self.seen.push_str(&String::from_utf8_lossy(&bytes)),
                 Err(_) => panic!("{needle:?} did not come; output: {:?}", self.seen),
             }
+        }
+    }
+
+    fn ended(&mut self) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status.code().unwrap_or(-1);
+            }
+            assert!(Instant::now() < deadline, "attach did not end; output: {:?}", self.seen);
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -141,4 +153,54 @@ fn a_remote_shell_outlives_its_connection() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn list(dir: &Path) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_shedd"))
+        .arg("list")
+        .env("SHED_RUNTIME_DIR", dir)
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn two_pcs_share_a_remote_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    start_keeper(dir.path());
+    assert_eq!(list(dir.path()), "", "no shells yet");
+
+    let mut one = Attach::start(dir.path(), "shared-1");
+    one.write(b"echo ready-$((2*3))\n");
+    one.until("ready-6");
+    // Another PC joins the same shell: it sees what is there, and both see
+    // what either types.
+    let mut two = Attach::start(dir.path(), "shared-1");
+    two.until("ready-6");
+    two.write(b"echo from-two-$((3*3))\n");
+    two.until("from-two-9");
+    one.until("from-two-9");
+
+    // The list says where it is and how many PCs show it.
+    let listed = list(dir.path());
+    let fields: Vec<&str> = listed.trim_end_matches('\n').split('\t').collect();
+    assert_eq!(fields.len(), 7, "{listed:?}");
+    assert_eq!((fields[0], fields[1], fields[2]), ("shared-1", "running", "2"), "{listed:?}");
+    assert!(!fields[5].is_empty(), "its folder: {listed:?}");
+
+    // One PC letting go leaves it to the other.
+    assert_eq!(one.exit_code(), shed_keeper::attach::EXIT_DETACHED);
+    two.write(b"echo still-$((4*4))\n");
+    two.until("still-16");
+    assert!(list(dir.path()).contains("\trunning\t1\t"));
+
+    // Ending it from one PC ends it on every PC.
+    let mut three = Attach::start(dir.path(), "shared-1");
+    three.until("still-16");
+    three.write(shed_keeper::attach::CLOSE_REQUEST);
+    assert_eq!(three.ended(), shed_keeper::attach::EXIT_ENDED);
+    assert_eq!(two.ended(), shed_keeper::attach::EXIT_ENDED, "the other PC lets go when the shell ends");
+    assert_eq!(list(dir.path()), "");
 }

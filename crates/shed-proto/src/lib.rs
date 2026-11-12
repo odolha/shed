@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 23;
+pub const PROTOCOL_VERSION: u32 = 24;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -133,8 +133,12 @@ pub enum ClientMsg {
     /// Starts an AI tab's Claude Code ahead of its first prompt (the user
     /// is typing), so its commands and models are known.
     AiStart { tab: TabId },
-    /// Opens a remote tab: a shell on `host` that outlives the bench.
-    NewRemoteTab { bench: BenchId, host: String },
+    /// Opens a remote tab: a shell on `host` that outlives the bench; a new
+    /// one, or (`join`) the one the server keeps under that id.
+    NewRemoteTab { bench: BenchId, host: String, join: Option<String> },
+    /// Closes a remote tab and ends its shell on the server, for every PC.
+    /// (`CloseTab` only lets go of it here.)
+    EndRemoteTab { tab: TabId },
 }
 
 /// A picture sent with a prompt.
@@ -243,6 +247,8 @@ pub struct KeeperStatus {
     /// Saved benches that are not running.
     pub stored: Vec<String>,
     pub tree: Shed,
+    /// How many clients (windows, remote tabs' connections) show each bench.
+    pub attached: Vec<(BenchId, u32)>,
 }
 
 /// What the pegboard shows beyond the tree.

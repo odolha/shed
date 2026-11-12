@@ -118,7 +118,17 @@ pub struct BenchWindow {
     /// The Setup panel, while open.
     setup: Option<(Entity<SetupPanel>, Subscription)>,
     place: PlaceTracker,
+    /// The shells each server keeps, as last asked (for New Remote Tab).
+    remote_shells: HashMap<String, RemoteShells>,
+    /// The server whose shells the open menu lists.
+    remote_menu: Option<String>,
     _following: Subscription,
+}
+
+enum RemoteShells {
+    Looking(Vec<crate::remote::RemoteShell>),
+    Found(Vec<crate::remote::RemoteShell>),
+    Failed(String),
 }
 
 impl Placed for BenchWindow {
@@ -149,6 +159,8 @@ impl BenchWindow {
             drag: None,
             setup: None,
             place,
+            remote_shells: HashMap::new(),
+            remote_menu: None,
             _following: following,
         }
     }
@@ -305,15 +317,81 @@ impl BenchWindow {
     }
 
     /// Servers for a new remote tab: those in `~/.ssh/config`, or one to type.
-    fn remote_host_menu() -> Vec<MenuEntry<Self>> {
+    fn remote_host_menu(&mut self, _: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
         let mut entries: Vec<MenuEntry<Self>> = crate::remote::known_hosts()
             .into_iter()
-            .map(|host| {
-                let h = host.clone();
-                item(host, move |this, _, cx| this.send(ClientMsg::NewRemoteTab { bench: this.bench, host: h.clone() }, cx)).icon("server")
-            })
+            .map(|host| more(host.clone(), move |this: &mut Self, cx| this.remote_shell_menu(&host, cx)).icon("server"))
             .collect();
         entries.push(item("Other Host…", |this, window, cx| this.start_edit(EditTarget::RemoteHost, window, cx)));
+        entries
+    }
+
+    /// A server's menu: a new shell, or one it keeps already (from another
+    /// PC, or closed here), asked for over ssh while the menu is open.
+    fn remote_shell_menu(&mut self, host: &str, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+        self.remote_menu = Some(host.to_string());
+        let known = match self.remote_shells.remove(host) {
+            Some(RemoteShells::Found(list) | RemoteShells::Looking(list)) => list,
+            _ => Vec::new(),
+        };
+        self.remote_shells.insert(host.to_string(), RemoteShells::Looking(known));
+        let h = host.to_string();
+        cx.spawn(async move |this, cx| {
+            let asked = h.clone();
+            let found = cx.background_executor().spawn(async move { crate::remote::list_shells(&asked) }).await;
+            this.update(cx, |this, cx| {
+                let shells = match found {
+                    Ok(list) => RemoteShells::Found(list),
+                    Err(e) => RemoteShells::Failed(e.to_string()),
+                };
+                this.remote_shells.insert(h.clone(), shells);
+                if this.remote_menu.as_deref() == Some(h.as_str()) {
+                    let entries = this.remote_shell_entries(&h, cx);
+                    if let Some(menu) = &mut this.menu {
+                        menu.entries = entries;
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+        self.remote_shell_entries(host, cx)
+    }
+
+    fn remote_shell_entries(&self, host: &str, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
+        let h = host.to_string();
+        let mut entries = vec![
+            item("New Shell", move |this, _, cx| this.send(ClientMsg::NewRemoteTab { bench: this.bench, host: h.clone(), join: None }, cx)).icon("plus"),
+            MenuEntry::Separator,
+        ];
+        // Shells open on this PC already are not offered again.
+        let tree = &self.state.read(cx).tree;
+        let open_here = |id: &str| tree.benches.iter().flat_map(|b| &b.tabs).any(|t| t.remote_info().is_some_and(|r| r.host == host && r.id == id));
+        let note = |text: String| item(text, |_, _, _| {});
+        match self.remote_shells.get(host) {
+            Some(RemoteShells::Failed(e)) => entries.push(note(format!("Cannot list its shells: {e}"))),
+            Some(RemoteShells::Found(list) | RemoteShells::Looking(list)) => {
+                let looking = matches!(self.remote_shells.get(host), Some(RemoteShells::Looking(_)));
+                let mut any = false;
+                for shell in list.iter().filter(|s| !open_here(&s.id)) {
+                    any = true;
+                    let (h, id) = (host.to_string(), shell.id.clone());
+                    entries.push(
+                        item(crate::remote::describe(shell), move |this, _, cx| {
+                            this.send(ClientMsg::NewRemoteTab { bench: this.bench, host: h.clone(), join: Some(id.clone()) }, cx)
+                        })
+                        .icon("terminal"),
+                    );
+                }
+                if looking {
+                    entries.push(note("Looking for its shells…".into()));
+                } else if !any {
+                    entries.push(note("No other shells kept there".into()));
+                }
+            }
+            None => entries.push(note("Looking for its shells…".into())),
+        }
         entries
     }
 
@@ -430,7 +508,7 @@ impl BenchWindow {
             },
             EditTarget::ProjectFolder => ClientMsg::NewProjectTab { bench: self.bench, root: text.trim().into() },
             EditTarget::RemoteHost if text.trim().is_empty() => return,
-            EditTarget::RemoteHost => ClientMsg::NewRemoteTab { bench: self.bench, host: text.trim().to_string() },
+            EditTarget::RemoteHost => ClientMsg::NewRemoteTab { bench: self.bench, host: text.trim().to_string(), join: None },
             EditTarget::Badge => {
                 let badge: String = text.chars().filter(|c| !c.is_whitespace()).take(2).collect();
                 ClientMsg::SetBadge { bench: self.bench, badge: (!badge.is_empty()).then_some(badge) }
@@ -560,7 +638,7 @@ impl BenchWindow {
         let mut entries = vec![
             item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
             more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(cx)).icon("ai"),
-            more("New Remote Tab", |_: &mut Self, _| Self::remote_host_menu()).icon("server"),
+            more("New Remote Tab", |this: &mut Self, cx| this.remote_host_menu(cx)).icon("server"),
             MenuEntry::Separator,
             item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)).icon("pencil"),
             item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
@@ -704,7 +782,7 @@ impl BenchWindow {
                         item("New Terminal Tab", |this, _, cx| this.new_tab(cx)).icon("terminal"),
                         item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
                         more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(cx)).icon("ai"),
-                        more("New Remote Tab", |_: &mut Self, _| Self::remote_host_menu()).icon("server"),
+                        more("New Remote Tab", |this: &mut Self, cx| this.remote_host_menu(cx)).icon("server"),
                     ];
                     this.open_menu(e.position, entries, cx);
                 }))
@@ -891,6 +969,7 @@ impl MenuHost for BenchWindow {
     }
 
     fn menu_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remote_menu = None;
         // A choice may have opened a text field, which keeps the keyboard.
         if self.editing.is_none() {
             self.refocus(window, cx);

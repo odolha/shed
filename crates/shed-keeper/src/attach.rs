@@ -7,6 +7,11 @@
 //! goes in. Only terminal bytes cross ssh, so the two ends never have to be
 //! the same version of Shed. Closing the local bench just ends ssh, and the
 //! shell stays; the next attach shows it again, scrollback and all.
+//!
+//! Several PCs may attach to the same shell at once (each sees everything);
+//! the one typing sets its size. `shedd list` lists the shells kept here, so
+//! another PC can join one; `shedd logbook` sends a copy of the commands run
+//! here, for the remote tab's Ctrl+R.
 
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
@@ -62,11 +67,14 @@ impl Conn {
 }
 
 /// Connects to the keeper, starting one (detached, so it outlives this
-/// connection) if none runs.
-async fn connect() -> anyhow::Result<UnixStream> {
+/// connection) if none runs and `start` asks for it.
+async fn connect(start: bool) -> anyhow::Result<Option<UnixStream>> {
     let socket = shed_model::paths::socket_path();
     if let Ok(s) = UnixStream::connect(&socket).await {
-        return Ok(s);
+        return Ok(Some(s));
+    }
+    if !start {
+        return Ok(None);
     }
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);
@@ -83,7 +91,7 @@ async fn connect() -> anyhow::Result<UnixStream> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Ok(s) = UnixStream::connect(&socket).await {
-            return Ok(s);
+            return Ok(Some(s));
         }
         if Instant::now() > deadline {
             anyhow::bail!("the keeper did not start");
@@ -123,28 +131,104 @@ impl Drop for Raw {
     }
 }
 
-/// Runs the attach; returns the exit code.
-pub async fn attach(id: &str, cwd: Option<PathBuf>) -> anyhow::Result<i32> {
-    let stream = connect().await?;
+/// Says hello to the keeper (started if `start` and none runs). A newer
+/// shedd (Shed was updated) meeting an older keeper still holding the shells
+/// lets the keeper's own program do the work, run with `args`: its file may
+/// have been replaced, but /proc still has the one it runs. Keepers older
+/// than protocol `oldest` cannot do it.
+async fn open(start: bool, oldest: u32, args: &[&std::ffi::OsStr]) -> anyhow::Result<Option<Conn>> {
+    let Some(stream) = connect(start).await? else { return Ok(None) };
     let mut conn = Conn { stream, decoder: FrameDecoder::default(), buf: vec![0u8; 64 * 1024] };
     conn.send(Frame::Client(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Cli })).await?;
-    // A newer shedd (Shed was updated) meeting an older keeper still holding
-    // the shells: the keeper's own program does the attaching. Its file may
-    // have been replaced; /proc still has the one it runs.
     loop {
         if let Frame::Keeper(KeeperMsg::Welcome { version, keeper_pid }) = conn.next().await? {
             if version != PROTOCOL_VERSION {
-                use std::os::unix::process::CommandExt;
-                let mut cmd = std::process::Command::new(format!("/proc/{keeper_pid}/exe"));
-                cmd.arg("attach").arg(id);
-                if let Some(cwd) = &cwd {
-                    cmd.arg("--cwd").arg(cwd);
+                if version < oldest {
+                    anyhow::bail!("the Shed keeping the shells here is older; it can list them once it restarts");
                 }
-                return Err(anyhow::anyhow!("cannot run the keeper's shedd: {}", cmd.exec()));
+                use std::os::unix::process::CommandExt;
+                let err = std::process::Command::new(format!("/proc/{keeper_pid}/exe")).args(args).exec();
+                anyhow::bail!("cannot run the keeper's shedd: {err}");
             }
-            break;
+            return Ok(Some(conn));
         }
     }
+}
+
+/// `~/x` for paths in the home folder.
+fn tilde(path: &std::path::Path) -> String {
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) if path == home => "~".into(),
+        Some(home) => match path.strip_prefix(&home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => path.display().to_string(),
+        },
+        None => path.display().to_string(),
+    }
+}
+
+/// `shedd list`: the remote shells kept here, a line each, tab-separated:
+/// id, `running` or `saved`, how many attach to it now, its bench and tab
+/// ids (for the logbook), its folder, and the program in front (or empty).
+/// Stops nothing and starts nothing.
+pub async fn list() -> anyhow::Result<String> {
+    let store = shed_save::Store::default();
+    let mut lines = Vec::new();
+    let mut seen = Vec::new();
+    if let Some(mut conn) = open(false, 24, &["list".as_ref()]).await? {
+        conn.send(Frame::Client(ClientMsg::Status)).await?;
+        let status = loop {
+            if let Frame::Keeper(KeeperMsg::Status(s)) = conn.next().await? {
+                break s;
+            }
+        };
+        for b in &status.tree.benches {
+            let (Some(id), Some(tab)) = (b.name.strip_prefix("remote-"), b.tabs.first()) else { continue };
+            let Some(pane) = tab.panes.iter().find(|p| p.id == tab.active_pane).or(tab.panes.first()) else { continue };
+            // Each PC joined to it now is one `shedd attach` connection.
+            let attached = status.attached.iter().find(|(x, _)| *x == b.id).map_or(0, |(_, n)| *n);
+            let tool = pane.tool.as_ref().map(|t| t.display()).unwrap_or_default();
+            lines.push(format!("{id}\trunning\t{attached}\t{}\t{}\t{}\t{tool}", b.id, tab.id, tilde(&pane.cwd)));
+            seen.push(b.name.clone());
+        }
+    }
+    for info in store.list() {
+        let Some(id) = info.name.strip_prefix("remote-") else { continue };
+        if seen.contains(&info.name) {
+            continue;
+        }
+        let Ok(bench) = store.load(&info.name) else { continue };
+        let Some(tab) = bench.tabs.first() else { continue };
+        let cwd = tab.panes.first().map(|p| tilde(std::path::Path::new(&p.cwd))).unwrap_or_default();
+        lines.push(format!("{id}\tsaved\t0\t{}\t{}\t{cwd}\t", bench.id, tab.id));
+    }
+    Ok(lines.iter().map(|l| format!("{l}\n")).collect())
+}
+
+/// `shedd logbook`: a copy of this server's command history (an SQLite
+/// file), written to stdout; nothing when there is none.
+pub fn logbook() -> anyhow::Result<()> {
+    use std::io::Write;
+    let path = shed_logbook::default_path();
+    if !path.exists() {
+        return Ok(());
+    }
+    let book = shed_logbook::Logbook::open_readonly(&path)?;
+    let copy = shed_model::paths::state_dir().join(format!("logbook-copy-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&copy);
+    let bytes = book.copy_to(&copy).map_err(anyhow::Error::from).and_then(|()| Ok(std::fs::read(&copy)?));
+    let _ = std::fs::remove_file(&copy);
+    std::io::stdout().write_all(&bytes?)?;
+    Ok(())
+}
+
+/// Runs the attach; returns the exit code.
+pub async fn attach(id: &str, cwd: Option<PathBuf>) -> anyhow::Result<i32> {
+    let mut args: Vec<&std::ffi::OsStr> = vec!["attach".as_ref(), id.as_ref()];
+    if let Some(cwd) = &cwd {
+        args.extend(["--cwd".as_ref(), cwd.as_os_str()]);
+    }
+    let Some(mut conn) = open(true, 0, &args).await? else { anyhow::bail!("no keeper") };
 
     // The bench kept for this tab: running, saved, or new.
     let name = format!("remote-{id}");
@@ -183,6 +267,9 @@ async fn relay(mut conn: Conn, bench: BenchId, name: &str, pane: PaneId, resize:
     let mut stdin = tokio::io::stdin();
     let mut winch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
     let mut input = vec![0u8; 16 * 1024];
+    // Another PC attached to the same shell may have resized it: typing here
+    // gives it this terminal's size again (at most twice a second).
+    let mut sized = Instant::now();
     loop {
         tokio::select! {
             frame = conn.next() => match frame? {
@@ -221,9 +308,16 @@ async fn relay(mut conn: Conn, bench: BenchId, name: &str, pane: PaneId, resize:
                     let _ = bench;
                     return Ok(EXIT_ENDED);
                 }
+                if sized.elapsed() > Duration::from_millis(500) {
+                    conn.send(resize(pane)).await?;
+                    sized = Instant::now();
+                }
                 conn.send(Frame::Input { pane, bytes: bytes.to_vec() }).await?;
             }
-            _ = winch.recv() => conn.send(resize(pane)).await?,
+            _ = winch.recv() => {
+                conn.send(resize(pane)).await?;
+                sized = Instant::now();
+            }
         }
     }
 }

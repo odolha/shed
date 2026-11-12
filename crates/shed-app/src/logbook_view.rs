@@ -37,6 +37,10 @@ pub struct LogbookSearch {
     accent: Rgb,
     mono: SharedString,
     pending: Option<Task<()>>,
+    /// A remote tab's server, whose history this searches (a copy fetched
+    /// over ssh), and the fetch while it runs.
+    server: Option<String>,
+    fetching: Option<Task<()>>,
 }
 
 impl EventEmitter<SearchEvent> for LogbookSearch {}
@@ -63,8 +67,55 @@ impl LogbookSearch {
             accent,
             mono,
             pending: None,
+            server: None,
+            fetching: None,
         };
         this.refresh(cx);
+        this
+    }
+
+    /// Searches the history on a remote tab's server: what ran in that
+    /// shell, from any PC, and everything else run there. A copy fetched
+    /// earlier shows at once; the fresh one replaces it when it comes.
+    pub fn remote(host: String, shell: String, ui: UiColors, accent: Rgb, mono: SharedString, cx: &mut Context<Self>) -> Self {
+        let safe: String = host.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.@".contains(c) { c } else { '_' }).collect();
+        let path = shed_model::paths::runtime_dir().join(format!("logbook-{safe}.sqlite"));
+        // Until the server says which of its tabs this is, nothing is "this tab".
+        let unknown = Here { tab: shed_model::TabId::new(), bench: shed_model::BenchId::new() };
+        let mut this = Self::new(unknown, path.clone(), ui, accent, mono, cx);
+        this.server = Some(host.clone());
+        this.fetching = Some(cx.spawn(async move |this, cx| {
+            let fetched = cx
+                .background_spawn(async move {
+                    let shells = crate::remote::list_shells(&host)?;
+                    let here = shells.iter().find(|s| s.id == shell).and_then(|s| {
+                        Some(Here { tab: shed_model::TabId(s.tab.parse().ok()?), bench: shed_model::BenchId(s.bench.parse().ok()?) })
+                    });
+                    let any = crate::remote::fetch_logbook(&host, &path)?;
+                    anyhow::Ok((here, any))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.fetching = None;
+                match fetched {
+                    Ok((here, any)) => {
+                        if let Some(here) = here {
+                            this.here = here;
+                        }
+                        if !any {
+                            let _ = std::fs::remove_file(&this.path);
+                        }
+                        this.refresh(cx);
+                    }
+                    Err(e) => {
+                        this.results.clear();
+                        this.error = Some(format!("Cannot fetch the history: {e}"));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        }));
         this
     }
 
@@ -100,7 +151,13 @@ impl LogbookSearch {
                     }
                     Err(e) => {
                         this.results.clear();
-                        this.error = Some(if this.path.exists() { e.to_string() } else { "The logbook is empty.".into() });
+                        this.error = Some(if this.path.exists() {
+                            e.to_string()
+                        } else if this.fetching.is_some() {
+                            "Fetching the history…".into()
+                        } else {
+                            "The logbook is empty.".into()
+                        });
                     }
                 }
                 this.selected = 0;
@@ -193,7 +250,10 @@ impl Render for LogbookSearch {
             .justify_between()
             .text_size(px(12.0))
             .text_color(hsla(ui.text_dim))
-            .child(scopes)
+            .child(div().flex().gap_2().child(scopes).children(self.server.as_ref().map(|host| {
+                let text = if self.fetching.is_some() { format!("on {host} (fetching…)") } else { format!("on {host}") };
+                div().child(text)
+            })))
             .child("Tab scope · Enter insert · Alt+Enter run · Esc close");
 
         let at = self.byte(self.cursor);

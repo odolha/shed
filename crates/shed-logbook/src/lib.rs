@@ -170,6 +170,13 @@ impl Logbook {
         Ok(Logbook { conn })
     }
 
+    /// A consistent copy of the whole logbook, written to `path` (which must
+    /// not exist): for reading it elsewhere, as a remote tab does.
+    pub fn copy_to(&self, path: &Path) -> Result<(), Error> {
+        self.conn.execute("VACUUM INTO ?1", params![path.to_string_lossy()])?;
+        Ok(())
+    }
+
     pub fn insert(&self, e: &NewEntry) -> Result<i64, Error> {
         let tags = if e.tags.is_empty() { String::new() } else { format!(",{},", e.tags.join(",")) };
         self.conn.execute(
@@ -339,6 +346,19 @@ mod tests {
         assert_eq!((past_end.command.as_str(), past_end.pos), ("git push", 2));
         assert!(at("docker", 1).is_none());
         assert_eq!(at("", 1).unwrap().command, "ls");
+    }
+
+    #[test]
+    fn a_copy_reads_like_the_original() {
+        let f = fixture();
+        let (b, t) = (BenchId::new(), TabId::new());
+        f.book.insert(&entry("make deploy", t, b)).unwrap();
+        let copy = f.path.with_file_name("copy.sqlite");
+        f.book.copy_to(&copy).unwrap();
+        let read = Logbook::open_readonly(&copy).unwrap();
+        let found = read.search(Scope::Local, Context { tab: t, bench: b }, "deploy", None, 10).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].command, "make deploy");
     }
 
     #[test]

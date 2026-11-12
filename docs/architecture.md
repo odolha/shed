@@ -228,13 +228,32 @@ cross ssh, so local and server Shed need not be the same version. A newer
 `shedd` that finds an older keeper still holding the shells re-runs itself as
 that keeper's program (`/proc/PID/exe attach ID`).
 
-Exit codes tell the loop what happened: 0, the shell ended (or the tab closed);
-2, this end let go; 3, the shell was lost with its keeper (a reboot), so the loop
+Exit codes tell the loop what happened: 0, the shell ended (or was ended); 2,
+this end let go; 3, the shell was lost with its keeper (a reboot), so the loop
 joins again, and the server's keeper brings the saved bench back. Closing the
-bench locally sends no Ctrl+C to a remote pane (it would reach the server's
-program): the hangup ends ssh and the shell stays. Closing the tab first writes
-a close request (an OSC 7777 sequence) into the pane, which the attach turns into
-deleting the server's bench.
+bench or the tab (`CloseTab`) locally sends no Ctrl+C to a remote pane (it would
+reach the server's program): the hangup ends ssh and the shell stays.
+`EndRemoteTab` first writes a close request (an OSC 7777 sequence) into the pane,
+which the attach turns into deleting the server's bench; dropping a bench tells
+every `Cli` client attached to it that its panes exited, so the other PCs'
+attaches end too.
+
+The ID is the server's name for the shell (the tab id of the tab that made it),
+so any PC can join it: `NewRemoteTab { join: Some(ID) }` makes a local tab
+running `shed remote connect HOST ID` for that ID. Several attaches to one bench
+are just several clients; each sends its terminal size with input (at most every
+half second) and on SIGWINCH, so the last PC to type sets the size.
+`shedd list` prints the server's shells, one tab-separated line each (id,
+running/saved, attached clients from `KeeperStatus.attached`, server bench and
+tab ids, folder, foreground program); it reads saved `remote-*` benches from the
+store when no keeper runs, and starts nothing. The window asks for it over ssh
+with `BatchMode` (`remote::list_shells`), so it never prompts.
+
+A remote pane's commands are not written to the local logbook (the keeper skips
+remote tabs); the server's keeper logs them, as its shell has Shed's hooks. Ctrl+R
+in a remote tab runs `shedd logbook` (an SQLite `VACUUM INTO` copy to stdout)
+into `logbook-HOST.sqlite` in the runtime folder, and searches it with the
+server's bench and tab ids from `shedd list` as "here".
 
 ## Links and the browser
 

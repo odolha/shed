@@ -306,8 +306,9 @@ and comes back, screen and scrollback and all, when it opens again. It is marked
 with a server icon.
 
 Open one with **New Remote Tab** in the new-tab button's menu or the bench's menu:
-pick a host from your `~/.ssh/config`, or **Other Host…** and type it as ssh takes
-it (`user@host`). Or run `shed remote new HOST` in a terminal of the bench.
+pick a host from your `~/.ssh/config`, then **New Shell**, or **Other Host…** and
+type it as ssh takes it (`user@host`). Or run `shed remote new HOST` in a terminal
+of the bench.
 
 The first time, Shed copies its keeper (`shedd`) to `~/.local/bin` on the server
 over ssh (again only when Shed changes); nothing else is installed and no root is
@@ -319,11 +320,34 @@ needed. The server's keeper holds the shell; the tab shows it over ssh. So:
   until the shell ends or you press Ctrl+C.
 - **A server restart** stops the shell, but its keeper saved it: the next time the
   tab connects, a new shell starts in the same folder, under the old scrollback.
-- **Closing the tab** ends the shell on the server too (it asks first).
+- **Closing the tab** asks: **Close Here** (the default) only lets go of the shell,
+  which keeps running on the server; **End the Shell** stops it, and what runs in
+  it, for every PC.
+
+### The same shell from several PCs
+
+The shells live on the server, not in a bench, so any PC with Shed can join them,
+like tmux sessions. A host's entry under **New Remote Tab** lists the shells the
+server keeps besides **New Shell**: their folder, the program in front, and how
+many PCs show them now (or *saved*, after a server restart). Pick one and it opens
+as a tab of this bench, screen and scrollback and all; each PC keeps it in
+whichever bench and tab it likes. From a terminal: `shed remote list HOST`, then
+`shed remote new HOST --join ID`.
+
+Every PC joined to a shell sees everything in it, and any of them can type. The
+shell takes the size of the PC that typed last (or resized its window last).
+Listing asks the server over ssh without a password, so it needs a key, or a
+remote tab to that host already open on this PC (its connection is reused).
+
+### History
+
+Commands typed in a remote tab are kept on the server, in its own logbook,
+whichever PC typed them, and not in this PC's. Ctrl+R in a remote tab searches the
+server's history (a copy is fetched over ssh when it opens; *this tab* is the
+shell, *all* is everything run on that server through Shed).
 
 Passwords and 2FA prompts appear in the tab, since ssh runs there; the steps share
-one connection, so you are asked once. Commands typed in a remote tab are in its
-history (Ctrl+R) like any tab's.
+one connection, so you are asked once.
 
 Servers must run Linux. The `shedd` copied is the one beside `shed`, which needs
 a C library at least as new as this machine's (and the same architecture); for
@@ -592,7 +616,8 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed project [DIR] [--bench NAME]` | Opens a folder (by default the Git repository you are in) as a project tab |
 | `shed ai [DIR] [--bench NAME]` | Opens an AI tab working in a folder (by default the Git repository you are in) |
 | `shed browser setup` | Registers Shed's browser extension, so links bring their open tab forward |
-| `shed remote new HOST [--bench NAME]` | Opens a remote tab: a shell on HOST that outlives the bench |
+| `shed remote new HOST [--bench NAME] [--join ID]` | Opens a remote tab: a shell on HOST that outlives the bench, or joins one HOST keeps |
+| `shed remote list HOST` | Lists the shells HOST keeps (ID, folder, program, PCs showing it) |
 | `shed tag add LABEL [--color C] [--tint]` | Tags this tab |
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |

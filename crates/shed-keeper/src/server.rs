@@ -657,13 +657,21 @@ impl Keeper {
                 let mut st = self.lock();
                 let Some(t) = st.tree.tab(tab) else { return };
                 let panes: Vec<PaneId> = t.panes.iter().map(|p| p.id).collect();
-                let remote = t.remote_info().is_some();
                 // A tab with panes leaves as they exit; one without goes now.
+                // (A remote tab's shell stays on the server: this PC lets go.)
                 if panes.is_empty() {
                     close_paneless_tab(&mut st, tab);
-                } else if remote {
-                    // Closing a remote tab closes the shell on the server too:
-                    // its end of the connection is asked, then the connection ends.
+                } else {
+                    st.hang_up(&panes);
+                }
+            }
+            ClientMsg::EndRemoteTab { tab } => {
+                let st = self.lock();
+                let Some(t) = st.tree.tab(tab).filter(|t| t.remote_info().is_some()) else { return };
+                let panes: Vec<PaneId> = t.panes.iter().map(|p| p.id).collect();
+                {
+                    // The server's end of the connection is asked to end the
+                    // shell, then the connection ends.
                     for pane in &panes {
                         if let Some(rt) = st.panes.get(pane) {
                             let _ = rt.input.send(crate::attach::CLOSE_REQUEST.to_vec());
@@ -675,11 +683,9 @@ impl Keeper {
                         tokio::time::sleep(Duration::from_millis(1500)).await;
                         keeper.lock().hang_up(&panes);
                     });
-                } else {
-                    st.hang_up(&panes);
                 }
             }
-            ClientMsg::NewRemoteTab { bench, host } => self.new_remote_tab(client, bench, host),
+            ClientMsg::NewRemoteTab { bench, host, join } => self.new_remote_tab(client, bench, host, join),
             ClientMsg::NewCommandTab { bench, cwd, command } => {
                 let mut st = self.lock();
                 let Some(b) = st.tree.bench(bench) else { return };
@@ -992,6 +998,7 @@ impl Keeper {
                         .map(|s| s.list().into_iter().map(|b| b.name).filter(|n| !st.tree.benches.iter().any(|b| &b.name == n)).collect())
                         .unwrap_or_default(),
                     tree: st.tree.clone(),
+                    attached: st.tree.benches.iter().map(|b| (b.id, st.clients.values().filter(|c| c.attached.contains(&b.id)).count() as u32)).collect(),
                 };
                 st.send(client, KeeperMsg::Status(status));
             }
@@ -1108,6 +1115,16 @@ impl Keeper {
         let tabs: Vec<TabId> = st.tree.bench(bench).map(|b| b.tabs.iter().map(|t| t.id).collect()).unwrap_or_default();
         for tab in tabs {
             st.ai.remove(&tab);
+        }
+        // Its panes' exits will find no bench to report to: other programs
+        // showing them (remote tabs' `shedd attach`, from other PCs) hear now.
+        if let Some(b) = st.tree.bench(bench) {
+            for pane in b.tabs.iter().flat_map(|t| &t.panes) {
+                let frame: Arc<[u8]> = Frame::Keeper(KeeperMsg::PaneExited { pane: pane.id, code: Some(0) }).encode().into();
+                for c in st.clients.values().filter(|c| c.kind == ClientKind::Cli && c.attached.contains(&bench)) {
+                    let _ = c.tx.send(frame.clone());
+                }
+            }
         }
         st.tree.benches.retain(|b| b.id != bench);
         st.shown.remove(&bench);
@@ -1945,7 +1962,7 @@ impl Keeper {
 
     /// A remote tab: a pane running `shed remote connect HOST ID`, again
     /// each time the bench loads, which joins the shell the server keeps.
-    fn new_remote_tab(self: &Arc<Self>, client: ClientId, bench: BenchId, host: String) {
+    fn new_remote_tab(self: &Arc<Self>, client: ClientId, bench: BenchId, host: String, join: Option<String>) {
         let host = host.trim().to_string();
         let mut st = self.lock();
         let Some(b) = st.tree.bench(bench) else { return };
@@ -1959,7 +1976,16 @@ impl Keeper {
         };
         let (cwd, index) = (b.cwd.clone(), b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1));
         let tab_id = TabId::new();
-        let id = tab_id.to_string();
+        // Joining a shell the server keeps: its id, which is only letters,
+        // digits and dashes (it goes into a command line).
+        let id = match join {
+            Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') => id,
+            Some(id) => {
+                st.send(client, KeeperMsg::Error(format!("{id:?} is not a shell id")));
+                return;
+            }
+            None => tab_id.to_string(),
+        };
         let command = format!("'{}' remote connect '{host}' {id}", shed.display());
         let mut spec = PaneSpec::fresh(cwd);
         spec.after_prompt.push_back((command.clone(), true));
@@ -2275,6 +2301,10 @@ impl Keeper {
                 rt.last_finished = Some((run.command.clone(), Instant::now()));
                 let (Some(tx), Some((bench, tab_id))) = (&self.logbook, st.tree.locate_pane(pane)) else { return };
                 let Some(tab) = st.tree.tab(tab_id) else { return };
+                // A remote tab's commands are in the server's logbook.
+                if tab.remote_info().is_some() {
+                    return;
+                }
                 let entry = NewEntry {
                     command: run.command,
                     cwd: run.cwd,

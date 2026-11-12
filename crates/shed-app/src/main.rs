@@ -73,7 +73,13 @@ enum RemoteAction {
         host: String,
         #[arg(long)]
         bench: Option<String>,
+        /// Joins a shell HOST keeps already (an ID from `shed remote list`),
+        /// as another PC opened it, instead of starting one.
+        #[arg(long)]
+        join: Option<String>,
     },
+    /// Lists the shells HOST keeps, which `new --join` can join.
+    List { host: String },
     /// What a remote tab runs: joins the shell kept for ID on HOST.
     #[command(hide = true)]
     Connect { host: String, id: String },
@@ -365,7 +371,13 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Tag { action }) => tag(action),
         Some(Command::BrowserHost { .. }) => Ok(browser::host()?),
         Some(Command::Remote { action: RemoteAction::Connect { host, id } }) => remote::connect(&host, &id),
-        Some(Command::Remote { action: RemoteAction::New { host, bench } }) => remote_new(host, bench),
+        Some(Command::Remote { action: RemoteAction::New { host, bench, join } }) => remote_new(host, bench, join),
+        Some(Command::Remote { action: RemoteAction::List { host } }) => {
+            for shell in remote::list_shells(&host)? {
+                println!("{}  {}", shell.id, remote::describe(&shell));
+            }
+            Ok(())
+        }
         Some(Command::Browser { action: BrowserAction::Setup { profile } }) => {
             let browsers = browser::install(&profile)?;
             if browsers.is_empty() {
@@ -725,7 +737,7 @@ fn debug_ai(text: String, model: Option<String>, answer: Option<String>) -> anyh
     Ok(())
 }
 
-fn remote_new(host: String, bench: Option<String>) -> anyhow::Result<()> {
+fn remote_new(host: String, bench: Option<String>, join: Option<String>) -> anyhow::Result<()> {
     let tree = request(ClientMsg::Status, |m| match m {
         KeeperMsg::Status(s) => Some(s.tree),
         _ => None,
@@ -740,7 +752,7 @@ fn remote_new(host: String, bench: Option<String>) -> anyhow::Result<()> {
             tab.and_then(|t| tree.bench_of_tab(t)).unwrap_or(id)
         }
     };
-    let done = request(ClientMsg::NewRemoteTab { bench, host }, |m| match m {
+    let done = request(ClientMsg::NewRemoteTab { bench, host, join }, |m| match m {
         KeeperMsg::Done(text) => Some(text),
         _ => None,
     })?;

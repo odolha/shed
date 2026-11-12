@@ -37,10 +37,29 @@ enum Cmd {
         #[arg(long)]
         cwd: Option<PathBuf>,
     },
+    /// The remote shells kept here, for other PCs to join: a line each.
+    List,
+    /// A copy of the command history here (SQLite), to stdout.
+    Logbook,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    match args.command {
+        Some(Cmd::List) => {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            match rt.block_on(shed_keeper::attach::list()) {
+                Ok(text) => print!("{text}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        Some(Cmd::Logbook) => return shed_keeper::attach::logbook(),
+        _ => {}
+    }
     if let Some(Cmd::Attach { id, cwd }) = args.command {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
         let code = match rt.block_on(shed_keeper::attach::attach(&id, cwd)) {

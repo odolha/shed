@@ -792,13 +792,28 @@ pub fn move_tab(conn: &KeeperConn, tab: TabId, title: &str, from: BenchRef, to: 
 /// otherwise take along whatever runs in it.
 pub fn close_tab(conn: &KeeperConn, tab: &Tab, bench: BenchRef, window: &mut gpui::Window, cx: &mut gpui::App) {
     let (title, id) = (tab.display_title(), tab.id);
+    if let (BenchRef::Running(_), Some(remote)) = (&bench, tab.remote_info()) {
+        // The shell on the server may be open on other PCs too: closing here
+        // only lets go of it; ending it is the other choice.
+        let message = format!("Close the remote tab “{title}”?");
+        let detail = format!(
+            "Close Here keeps the shell running on {}, to join again from this PC or another (New Remote Tab). End the Shell stops it, and what runs in it, for every PC.",
+            remote.host
+        );
+        let answer = window.prompt(gpui::PromptLevel::Warning, &message, Some(&detail), &["Close Here", "End the Shell", "Cancel"], cx);
+        let conn = conn.clone();
+        cx.spawn(async move |_| {
+            match answer.await {
+                Ok(0) => conn.send_msg(ClientMsg::CloseTab { tab: id }),
+                Ok(1) => conn.send_msg(ClientMsg::EndRemoteTab { tab: id }),
+                _ => return,
+            }
+            conn.send_msg(ClientMsg::Pegboard);
+        })
+        .detach();
+        return;
+    }
     let (message, detail, button, msg) = match bench {
-        BenchRef::Running(_) if tab.remote_info().is_some() => (
-            format!("Close the remote tab “{title}”?"),
-            "The shell on the server ends too, and what runs in it. (Closing the bench instead keeps it running there.)",
-            "Close Tab",
-            ClientMsg::CloseTab { tab: id },
-        ),
         BenchRef::Running(_) if tab.ai_info().is_some() => (
             format!("Close the AI tab “{title}”?"),
             "Claude Code stops if it is working. The session is kept: open it again from a new AI tab.",
@@ -818,6 +833,12 @@ pub fn close_tab(conn: &KeeperConn, tab: &Tab, bench: BenchRef, window: &mut gpu
             ClientMsg::CloseTab { tab: id },
         ),
         // A closed bench's tab has nothing running: it just goes.
+        BenchRef::Saved(name) if tab.remote_info().is_some() => (
+            format!("Remove the remote tab “{title}”?"),
+            "It is taken out of the saved bench. Its shell keeps running on the server: join it again from New Remote Tab.",
+            "Remove Tab",
+            ClientMsg::EditSaved { name, edit: shed_proto::SavedEdit::RemoveTab { tab: id } },
+        ),
         BenchRef::Saved(name) => (
             format!("Remove the tab “{title}”?"),
             "It is taken out of the saved bench, with its startup and teardown commands.",

@@ -70,7 +70,8 @@ impl Render for ShedPrompt {
         let ui = &self.ui;
         let danger = ui.danger;
         let buttons = self.actions.iter().enumerate().map(|(i, label)| {
-            let destructive = ["Delete", "Close", "Remove"].iter().any(|word| label.starts_with(word));
+            // ("Close Here" only lets go of a remote shell, which keeps running.)
+            let destructive = ["Delete", "Close", "Remove", "End"].iter().any(|word| label.starts_with(word)) && label != "Close Here";
             let color = if destructive { danger } else { ui.text };
             div()
                 .id(i)

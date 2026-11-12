@@ -325,6 +325,7 @@ Remote tabs (9) and links (8) depend on little else and can move earlier.
 - The AI tab's prompt folding large pastes into a chip, and a prompt library.
 - Screenshots of the new tabs in the user guide.
 - A static `shedd` build for servers with an older C library (see Development).
+- A remote tab marked private still has its commands logged on the server.
 
 ## Decisions
 

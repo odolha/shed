@@ -136,3 +136,103 @@ pub fn known_hosts() -> Vec<String> {
     hosts.dedup();
     hosts
 }
+
+/// A shell the server keeps, as `shedd list` describes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteShell {
+    pub id: String,
+    /// Running now; else saved (the server restarted), started when joined.
+    pub running: bool,
+    /// How many PCs show it now.
+    pub attached: u32,
+    /// Its bench and tab on the server: the logbook knows it by them.
+    pub bench: String,
+    pub tab: String,
+    pub cwd: String,
+    /// The program in front, if not the shell.
+    pub tool: String,
+}
+
+fn parse_list(text: &str) -> Vec<RemoteShell> {
+    text.lines()
+        .filter_map(|line| {
+            let mut f = line.split('\t');
+            Some(RemoteShell {
+                id: f.next()?.to_string(),
+                running: f.next()? == "running",
+                attached: f.next()?.parse().ok()?,
+                bench: f.next()?.to_string(),
+                tab: f.next()?.to_string(),
+                cwd: f.next()?.to_string(),
+                tool: f.next().unwrap_or("").to_string(),
+            })
+        })
+        .collect()
+}
+
+/// ssh for a question asked from the window, not the pane: nothing can be
+/// typed, so it never waits for a password (an open remote tab's shared
+/// connection, or a key, lets it in).
+fn ssh_quiet(host: &str, command: &str) -> anyhow::Result<std::process::Output> {
+    let mut c = Command::new(ssh_program());
+    let control = std::env::temp_dir().join("shed-ssh-%C");
+    c.args(["-o", "ControlMaster=auto", "-o", &format!("ControlPath={}", control.display()), "-o", "ControlPersist=120"]);
+    c.args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]);
+    c.arg(host).arg(command);
+    let out = c.stdin(Stdio::null()).stderr(Stdio::piped()).output()?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("{}", err.lines().last().unwrap_or("ssh failed").trim());
+    }
+    Ok(out)
+}
+
+/// The shells `host` keeps (none when Shed was never there).
+pub fn list_shells(host: &str) -> anyhow::Result<Vec<RemoteShell>> {
+    let out = ssh_quiet(host, &format!("test -x {REMOTE_SHEDD} || exit 0; exec {REMOTE_SHEDD} list"))?;
+    Ok(parse_list(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Fetches `host`'s command history into `dest`; false when it has none.
+pub fn fetch_logbook(host: &str, dest: &std::path::Path) -> anyhow::Result<bool> {
+    let out = ssh_quiet(host, &format!("test -x {REMOTE_SHEDD} || exit 0; exec {REMOTE_SHEDD} logbook"))?;
+    if out.stdout.is_empty() {
+        return Ok(false);
+    }
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = dest.with_extension("part");
+    std::fs::write(&tmp, &out.stdout)?;
+    std::fs::rename(&tmp, dest)?;
+    Ok(true)
+}
+
+/// How a shell reads in a list: its folder, and what runs in it.
+pub fn describe(shell: &RemoteShell) -> String {
+    let mut text = shell.cwd.clone();
+    if !shell.tool.is_empty() {
+        text.push_str(&format!(" · {}", shell.tool));
+    }
+    match (shell.running, shell.attached) {
+        (false, _) => text.push_str(" (saved)"),
+        (true, 0) => {}
+        (true, 1) => text.push_str(" (open on 1 PC)"),
+        (true, n) => text.push_str(&format!(" (open on {n} PCs)")),
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lists_parse() {
+        let shells = parse_list("a-1\trunning\t2\tB\tT\t~/x\tvim a.rs\nb-2\tsaved\t0\tB2\tT2\t~\t\nbroken\n");
+        assert_eq!(shells.len(), 2);
+        assert!(shells[0].running && shells[0].attached == 2 && shells[0].tool == "vim a.rs");
+        assert_eq!(describe(&shells[0]), "~/x · vim a.rs (open on 2 PCs)");
+        assert_eq!(describe(&shells[1]), "~ (saved)");
+    }
+}
