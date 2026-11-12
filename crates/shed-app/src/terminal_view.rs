@@ -83,6 +83,8 @@ pub struct TerminalView {
     metrics: Option<(FontSettings, CellMetrics)>,
     snapshot: Snapshot,
     dirty: bool,
+    /// The scrollback's scrollbar.
+    bar: crate::scrollbar::State,
     focus: FocusHandle,
     /// The grid's top-left corner in window coordinates, written during prepaint.
     grid_origin: Rc<Cell<Point<Pixels>>>,
@@ -136,6 +138,7 @@ impl TerminalView {
             pane,
             conn,
             emu: AlacrittyEmulator::new(GridSize::new(80, 24), palette.clone()),
+            bar: Default::default(),
             palette,
             base_size: font.size,
             zoom: 0.0,
@@ -1062,6 +1065,35 @@ impl Render for TerminalView {
                 )
                 .size_full(),
             )
+            // The scrollback, in lines: shows while scrolled back or under
+            // the mouse, as the screen's right edge is the program's own.
+            .child({
+                let (read, write) = (cx.entity().downgrade(), cx.entity().downgrade());
+                let source = crate::scrollbar::Source::Custom {
+                    metrics: std::rc::Rc::new(move |cx: &gpui::App| {
+                        let v = read.upgrade()?;
+                        let v = v.read(cx);
+                        let history = v.emu.history_size() as f32;
+                        let back = v.emu.display_offset() as f32;
+                        Some(crate::scrollbar::Metrics { offset: history - back, max: history, viewport: v.emu.size().rows as f32 })
+                    }),
+                    set: std::rc::Rc::new(move |offset, _: &mut Window, cx: &mut gpui::App| {
+                        write
+                            .update(cx, |v, cx| {
+                                let history = v.emu.history_size() as i32;
+                                let target = (history - offset.round() as i32).clamp(0, history);
+                                let delta = target - v.emu.display_offset() as i32;
+                                if delta != 0 {
+                                    v.emu.scroll_display(delta);
+                                    v.dirty = true;
+                                    cx.notify();
+                                }
+                            })
+                            .ok();
+                    }),
+                };
+                crate::scrollbar::vertical(source, &self.bar, self.ui.text, true).absolute().top_0().right_0().bottom_0()
+            })
             .when_some(preedit, |el, (left, top, text)| {
                 el.child(
                     div()

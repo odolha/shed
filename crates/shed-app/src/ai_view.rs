@@ -86,6 +86,9 @@ pub struct AiView {
     sessions_task: Option<Task<()>>,
     filter: Entity<LineEditor>,
     sessions_scroll: UniformListScrollHandle,
+    /// The conversation's and the sessions' scrollbars.
+    conversation_bar: crate::scrollbar::State,
+    sessions_bar: crate::scrollbar::State,
     completion: Option<Completion>,
     /// Going back through earlier prompts with Ctrl+Up: how far back.
     history: Option<usize>,
@@ -194,7 +197,8 @@ impl AiView {
             }),
             cx.observe(&filter, |_, _, cx| cx.notify()),
         ];
-        let list = ListState::new(0, ListAlignment::Top, px(600.0));
+        // Every entry measured, so the scrollbar knows the whole length.
+        let list = ListState::new(0, ListAlignment::Top, px(600.0)).measure_all();
         list.set_follow_mode(FollowMode::Tail);
         conn.send_msg(ClientMsg::AiWatch { tab });
         let mut view = Self {
@@ -218,6 +222,8 @@ impl AiView {
             sessions_task: None,
             filter,
             sessions_scroll: UniformListScrollHandle::new(),
+            conversation_bar: Default::default(),
+            sessions_bar: Default::default(),
             completion: None,
             history: None,
             projects: Vec::new(),
@@ -1745,11 +1751,16 @@ impl Render for AiView {
         let limits = cx.try_global::<AiLimits>().map(|l| l.0).unwrap_or_default();
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
         let count = self.shown_sessions(cx).len();
-        let sessions = uniform_list("ai-sessions", count, cx.processor(|this, range, _, cx| this.render_sessions(range, cx)))
-            .track_scroll(&self.sessions_scroll)
+        let sessions = div()
+            .relative()
             .flex_1()
-            .min_h_0();
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(uniform_list("ai-sessions", count, cx.processor(|this, range, _, cx| this.render_sessions(range, cx))).track_scroll(&self.sessions_scroll).flex_1().min_h_0())
+            .child(crate::scrollbar::vertical(crate::scrollbar::Source::uniform(&self.sessions_scroll), &self.sessions_bar, ui.text, false).absolute().top_0().right_0().bottom_0());
         let transcript = div()
+            .relative()
             .flex_1()
             .min_h_0()
             .flex()
@@ -1760,7 +1771,9 @@ impl Render for AiView {
                     cx.notify();
                 }
             }))
-            .child(list(self.list.clone(), cx.processor(|this, i, _, cx| this.render_entry(i, cx))).flex_1().min_h_0().py_2());
+            .child(list(self.list.clone(), cx.processor(|this, i, _, cx| this.render_entry(i, cx))).flex_1().min_h_0().py_2())
+            // After the list: over it, and first to hear the mouse.
+            .child(crate::scrollbar::vertical(crate::scrollbar::Source::List(self.list.clone()), &self.conversation_bar, ui.text, false).absolute().top_0().right_0().bottom_0());
         let empty = self.entries.is_empty();
         let images = self.images.len();
         div()

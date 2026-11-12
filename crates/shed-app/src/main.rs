@@ -20,6 +20,7 @@ mod pegboard;
 mod project_view;
 mod prompt;
 mod remote;
+mod scrollbar;
 #[cfg(target_os = "linux")]
 mod selection;
 mod settings;

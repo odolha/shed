@@ -144,6 +144,9 @@ pub struct Pegboard {
     editing: Option<(Edit, Entity<LineEditor>, Subscription)>,
     /// The Setup panel of one tab, over the right side.
     setup: Option<(Entity<SetupPanel>, Subscription)>,
+    /// The list's scroll, and its scrollbar.
+    scroll: gpui::ScrollHandle,
+    scroll_bar: crate::scrollbar::State,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -207,6 +210,8 @@ impl Pegboard {
             menu: None,
             editing: None,
             setup: None,
+            scroll: gpui::ScrollHandle::new(),
+            scroll_bar: Default::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -1624,7 +1629,14 @@ impl Pegboard {
             .text_size(px(13.0))
             .on_key_down(cx.listener(Self::on_key))
             .child(search)
-            .child(div().id("pegboard-list").flex_1().min_h_0().overflow_y_scroll().child(list))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(div().id("pegboard-list").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(list))
+                    .child(crate::scrollbar::vertical(crate::scrollbar::Source::Handle(self.scroll.clone()), &self.scroll_bar, ui.text, false).absolute().top_0().right_0().bottom_0()),
+            )
             .when_some(setup, |el, panel| el.child(div().absolute().top_0().right_0().h_full().child(panel)))
             .children(menu)
             .into_any_element()

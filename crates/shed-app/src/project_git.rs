@@ -672,7 +672,7 @@ impl ProjectView {
                         this.open_menu(e.position, entries, cx);
                     })),
             );
-        let mut list = div().id("git-files").flex_1().min_h_0().overflow_y_scroll().flex().flex_col();
+        let mut list = div().id("git-files").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.bars.git_files_scroll).flex().flex_col();
         if let Some(op) = &s.operation {
             let op2 = op.clone();
             let op3 = op.clone();
@@ -755,7 +755,7 @@ impl ProjectView {
             })
             .when_some(git.busy.clone(), |d, b| d.child(div().text_color(hsla(ui.ink(accent))).child(b)))
             .when_some(git.error.clone(), |d, e| d.child(div().p_1().rounded_sm().bg(hsla_alpha(ui.danger, 0.15)).text_color(hsla(ui.text)).child(e)))
-            .child(list)
+            .child(crate::scrollbar::with_bar(list, crate::scrollbar::Source::Handle(self.bars.git_files_scroll.clone()), &self.bars.git_files, ui.text).flex_1())
             .child(div().rounded_md().border_1().border_color(hsla(ui.divider)).bg(hsla(ui.tab_active)).child(git.message.clone()))
             .child(
                 div()
@@ -901,6 +901,7 @@ impl ProjectView {
             .track_scroll(&git.history_scroll)
             .flex_1()
             .min_h_0();
+        let list = crate::scrollbar::with_bar(list, crate::scrollbar::Source::uniform(&git.history_scroll), &self.bars.history, ui.text).flex_1();
         div()
             .size_full()
             .flex()
@@ -1019,6 +1020,7 @@ impl ProjectView {
             .track_scroll(&d.scroll)
             .flex_1()
             .min_h_0();
+        let list = crate::scrollbar::with_bar(list, crate::scrollbar::Source::uniform(&d.scroll), &self.bars.diff, ui.text).flex_1();
         let _ = (source, accent);
         div()
             .size_full()

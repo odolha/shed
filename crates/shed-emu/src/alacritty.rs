@@ -269,6 +269,10 @@ impl Emulator for AlacrittyEmulator {
         self.term.grid().display_offset()
     }
 
+    fn history_size(&self) -> usize {
+        self.term.grid().history_size()
+    }
+
     fn tick(&mut self) -> Option<Instant> {
         let deadline = self.processor.sync_timeout().sync_timeout()?;
         if Instant::now() >= deadline {

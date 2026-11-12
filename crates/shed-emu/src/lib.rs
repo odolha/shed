@@ -127,6 +127,9 @@ pub trait Emulator: Send {
     /// How far the view is scrolled into scrollback, in lines.
     fn display_offset(&self) -> usize;
 
+    /// How many lines of scrollback there are above the screen.
+    fn history_size(&self) -> usize;
+
     /// Ends a synchronized update that has run past its deadline.
     /// Returns when it next needs to be called, if a sync update is pending.
     fn tick(&mut self) -> Option<std::time::Instant>;

@@ -109,6 +109,11 @@ pub struct TextView {
     focus: FocusHandle,
     scroll_y: Pixels,
     scroll_x: Pixels,
+    /// The furthest it scrolls and how much shows, at the last layout (for
+    /// the scrollbar).
+    scroll_max: Pixels,
+    view_height: Pixels,
+    bar: crate::scrollbar::State,
     /// Bring the cursor into view at the next layout.
     autoscroll: bool,
     /// Put the cursor's row in the middle of the view at the next layout.
@@ -144,6 +149,9 @@ impl TextView {
             focus: cx.focus_handle(),
             scroll_y: px(0.0),
             scroll_x: px(0.0),
+            scroll_max: px(0.0),
+            view_height: px(0.0),
+            bar: Default::default(),
             autoscroll: false,
             center: false,
             highlights: None,
@@ -707,6 +715,7 @@ impl TextView {
         let tail = if self.options.auto_height.is_some() { px(0.0) } else { text_h / 2.0 };
         let max_y = (m.line * count as f32 - text_h + tail).max(px(0.0));
         self.scroll_y = self.scroll_y.clamp(px(0.0), max_y);
+        (self.scroll_max, self.view_height) = (max_y, text_h);
         if self.options.wrap {
             self.scroll_x = px(0.0);
         }
@@ -963,6 +972,23 @@ impl Render for TextView {
         });
         let preedit = self.preedit.clone();
         let focus = self.focus.clone();
+        let (read, write) = (cx.entity().downgrade(), cx.entity().downgrade());
+        let source = crate::scrollbar::Source::Custom {
+            metrics: std::rc::Rc::new(move |cx: &gpui::App| {
+                let v = read.upgrade()?;
+                let v = v.read(cx);
+                Some(crate::scrollbar::Metrics { offset: f32::from(v.scroll_y), max: f32::from(v.scroll_max), viewport: f32::from(v.view_height) })
+            }),
+            set: std::rc::Rc::new(move |offset, _: &mut Window, cx: &mut gpui::App| {
+                write
+                    .update(cx, |v, cx| {
+                        v.scroll_y = px(offset);
+                        cx.notify();
+                    })
+                    .ok();
+            }),
+        };
+        let bar = crate::scrollbar::vertical(source, &self.bar, ui.text, false).absolute().top_0().right_0().bottom_0();
 
         div()
             .id("text-view")
@@ -996,6 +1022,7 @@ impl Render for TextView {
                 )
                 .size_full(),
             )
+            .child(bar)
             .children(find_bar)
             .children(goto_bar)
             .children(menu)

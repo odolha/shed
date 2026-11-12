@@ -556,6 +556,11 @@ an ordinary shell line again (in bash, a redirection).
   older selection. In programs that
   use the mouse (vim, htop), hold Shift to select.
 - **Ctrl+click** opens a link, or a file path (relative to the pane's folder).
+- **Scrollbars**: whatever scrolls has one on its right edge (the AI
+  conversation and sessions, the file tree, open files, Git lists and diffs,
+  search results, Shed's list): drag the thumb, or press the track to bring the
+  thumb there and drag on. A terminal's shows while it is scrolled back into its
+  history, or under the mouse at the right edge.
 - **Zoom**: Ctrl+= and Ctrl+-, Ctrl+0 to reset. Every kind of tab zooms: a
   project tab's code, file tree and lists, an AI tab's conversation and prompt.
   Each tab keeps its own zoom, also after the bench closes.

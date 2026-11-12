@@ -257,6 +257,16 @@ in a remote tab runs `shedd logbook` (an SQLite `VACUUM INTO` copy to stdout)
 into `logbook-HOST.sqlite` in the runtime folder, and searches it with the
 server's bench and tab ids from `shedd list` as "here".
 
+## Scrollbars
+
+GPUI draws none: `shed-app/src/scrollbar.rs` paints a thumb (one quad) over the
+right edge of what scrolls and listens to the mouse at the window, so a drag goes
+on outside it. A `scrollbar::Source` is a `ScrollHandle` (scrollable boxes and
+uniform lists), a `ListState` (the AI conversation, which measures every entry so
+the length is known), or custom metrics and a setter (the editor's own scroll; a
+terminal's scrollback in lines, from `Emulator::history_size` and
+`display_offset`).
+
 ## Links and the browser
 
 A bench's links (`Bench.links`, set with `SetBenchLinks` or `SavedEdit::Links`;

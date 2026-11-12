@@ -40,6 +40,17 @@ const SEARCH_LIMIT: usize = 5000;
 const MAX_OPEN: u64 = 8 * 1024 * 1024;
 /// Files this big are not coloured.
 const MAX_HIGHLIGHT: usize = 1024 * 1024;
+/// The project tab's scrollbars (their state across frames).
+#[derive(Default)]
+pub struct Bars {
+    pub tree: crate::scrollbar::State,
+    pub search: crate::scrollbar::State,
+    pub git_files: crate::scrollbar::State,
+    pub git_files_scroll: gpui::ScrollHandle,
+    pub history: crate::scrollbar::State,
+    pub diff: crate::scrollbar::State,
+}
+
 /// How long a changed file keeps its mark in the tree.
 const RECENT: Duration = Duration::from_secs(5 * 60);
 /// Colouring waits for typing to pause this long.
@@ -192,6 +203,8 @@ pub struct ProjectView {
     resizing: Option<(f32, f32)>,
     /// The repository the folder is in, if any, and its state.
     git: Option<GitState>,
+    /// The scrollbars of the tree and the lists.
+    bars: Bars,
     /// The field for a new link (the bench's), while open.
     new_link: Option<(Entity<LineEditor>, Subscription)>,
     /// The status bar shows who last changed the cursor's line.
@@ -237,6 +250,7 @@ impl ProjectView {
             resizing: None,
             git: None,
             new_link: None,
+            bars: Bars::default(),
             blame_on: false,
             blame: None,
             blame_task: None,
@@ -1076,6 +1090,7 @@ impl ProjectView {
             .track_scroll(&search.scroll)
             .flex_1()
             .min_h_0();
+        let list = crate::scrollbar::with_bar(list, crate::scrollbar::Source::uniform(&search.scroll), &self.bars.search, ui.text).flex_1();
         Some(
             div()
                 .size_full()
@@ -1831,8 +1846,10 @@ impl Render for ProjectView {
         let ui = current_ui(cx);
         let tree = uniform_list("project-tree", self.rows.len(), cx.processor(|this, range, _, cx| this.render_rows(range, cx)))
             .track_scroll(&self.scroll)
-            .size_full()
+            .flex_1()
+            .min_h_0()
             .py_1();
+        let tree = crate::scrollbar::with_bar(tree, crate::scrollbar::Source::uniform(&self.scroll), &self.bars.tree, ui.text).size_full();
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
         let notice = self.notice.clone().or_else(|| self.limited.then(|| "Not every folder can be watched (the system's limit): use Refresh to catch up.".to_string()));
         let editor = div()
