@@ -62,13 +62,16 @@ preview of its screen: running programs update as you watch, and closed benches
 show, dimmed, what was on screen when they were saved.
 
 **Compact view**: the two buttons left of the light/dark switch choose between
-the cards and a compact list, to see everything at a glance. There each bench
-is one line: its colour, a state dot (green open, amber hidden, hollow closed),
-its name (click to open, double-click to rename), its tabs as chips of one
-width, lined up in columns, with their title, tags and the program running in
-them (or their folder), cut short with "…" (hover for all of it), its links, then
-**Open** or **Go to** and **⋯** for the rest. Chips work like cards: click, drag, middle-click,
-right-click. Shed remembers the choice (`compact_pegboard` in `shed.toml`).
+the cards and a compact list, to see everything at a glance. Each bench is a
+header line (its colour dot, filled while it runs and a ring when closed; its
+name, click to open, double-click to rename; whether it is hidden or when it was
+saved; its links; **Open** or **Go to**; **⋯**) with its tabs below in even
+columns. Each tab has an icon for what it is (terminal, program running, project,
+AI, remote; the waiting icon when it waits for you), its title, its tags as small
+dots, and what runs in it or its folder, cut short with "…" (hover for all of it).
+A short bar in the bench's colour marks the tab the bench shows. Tabs work like
+cards: click, drag, middle-click, right-click; **New tab** shows when the mouse is
+over the bench. Shed remembers the choice (`compact_pegboard` in `shed.toml`).
 
 **Benches** (the row above the cards):
 

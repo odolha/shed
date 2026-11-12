@@ -32,7 +32,7 @@ const IDLE_REFRESH: Duration = Duration::from_secs(1);
 const HIDDEN_CHECK: Duration = Duration::from_secs(5);
 const CARD_WIDTH: f32 = 300.0;
 /// Every tab of the compact view is this wide, so they line up in columns.
-const CHIP_WIDTH: f32 = 220.0;
+const CHIP_WIDTH: f32 = 230.0;
 
 /// The keeper's last answer: stored benches and previews.
 pub struct PegboardData(pub PegboardInfo);
@@ -966,52 +966,44 @@ impl Pegboard {
             .into_any_element()
     }
 
-    /// The compact view of a bench: one line (wrapping when it has many
-    /// tabs) with its name and state, its tabs as chips, and how to open it.
+    /// The compact view of a bench: a header line (its colour, name, state,
+    /// links, Open) and its tabs below in even columns, each with an icon.
+    /// No borders: space and one colour (the bench's dot) carry the layout.
     fn render_bench_line(&self, entry: &Entry, first: usize, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
         let bench = &entry.bench;
         let accent = bench.color.accent();
         let id = bench.id;
         let key = entry.key();
-        let palette = &self.state.read(cx).settings.palette;
-        let (state_color, state_tip) = match entry.status {
-            Status::Open => (palette.ansi[2], "Open"),
-            Status::Hidden => (palette.ansi[3], "Hidden: running without a window"),
-            Status::Closed => (ui.text_dim, "Closed"),
-        };
-        let state_dot = div()
-            .id(SharedString::from(format!("state-{id}")))
-            .flex_none()
-            .size(px(8.0))
-            .rounded_full()
-            .tooltip(menu::tooltip(state_tip))
-            .when(entry.status == Status::Closed, |d| d.border_1().border_color(hsla(state_color)))
-            .when(entry.status != Status::Closed, |d| d.bg(hsla(state_color)));
+        let closed = entry.status == Status::Closed;
+        let group = SharedString::from(format!("bench-line-{id}"));
+
+        // The dot is the bench's colour (click to change it): filled while
+        // it runs, a ring when closed.
         let (k, current) = (key.clone(), bench.color);
         let dot = div()
             .id(SharedString::from(format!("color-{id}")))
+            .flex_none()
             .size(px(10.0))
             .rounded_full()
-            .flex_none()
             .cursor_pointer()
-            .bg(hsla(accent))
-            .hover(|s| s.border_2().border_color(hsla(ui.text_dim)))
+            .when(closed, |d| d.border_2().border_color(hsla(accent)))
+            .when(!closed, |d| d.bg(hsla(accent)))
+            .tooltip(menu::tooltip("Colour"))
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                 let entries = this.color_entries(&k, current);
                 this.open_menu(e.position, entries, cx);
             }));
         let name = match self.editor_for(&Edit::BenchName(key.clone())) {
-            Some(editor) => div().flex_1().min_w_0().child(editor).into_any_element(),
+            Some(editor) => div().w(px(240.0)).child(editor).into_any_element(),
             None => {
                 let (k, n, e) = (key.clone(), bench.name.clone(), entry.clone());
                 div()
                     .id(SharedString::from(format!("name-{id}")))
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(14.0))
-                    .text_color(hsla(if entry.status == Status::Closed { ui.text_dim } else { ui.text }))
+                    .flex_none()
+                    .text_size(px(15.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(hsla(if closed { ui.text_dim } else { ui.text }))
                     .cursor_pointer()
-                    .tooltip(menu::tooltip("Click to open · double-click to rename"))
                     .child(bench.name.clone())
                     .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
                         if ev.click_count() >= 2 {
@@ -1024,78 +1016,48 @@ impl Pegboard {
             }
         };
         let badge = match self.editor_for(&Edit::Badge(key.clone())).or_else(|| self.editor_for(&Edit::Color(key.clone()))) {
-            Some(editor) => Some(div().w(px(90.0)).child(editor).into_any_element()),
+            Some(editor) => Some(div().w(px(110.0)).child(editor).into_any_element()),
             None => bench.badge.clone().map(|badge| {
-                div().flex_none().px_1().rounded_sm().text_size(px(11.0)).bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))).child(badge).into_any_element()
+                div().flex_none().px_1().rounded_sm().text_size(px(11.0)).bg(hsla_alpha(accent, 0.2)).text_color(hsla(ui.ink(accent))).child(badge).into_any_element()
             }),
+        };
+        let state = match entry.status {
+            Status::Open => String::new(),
+            Status::Hidden => "running, no window".into(),
+            Status::Closed => format!("closed · saved {}", entry.saved.as_deref().map(short_time).unwrap_or_default()),
         };
         let grip = div()
             .id(SharedString::from(format!("grip-{id}")))
             .flex_none()
             .cursor_grab()
+            .invisible()
+            .group_hover(group.clone(), |s| s.visible())
             .tooltip(menu::tooltip("Drag to move the bench"))
             .child(svg().path(icon("grip")).size(px(12.0)).text_color(hsla(ui.text_dim)))
             .on_drag(DraggedBench { id, name: bench.name.clone() }, |d, _, _, cx| cx.new(|_| d.clone()));
-        let label = div()
-            .w(px(210.0))
-            .flex_none()
-            .h(px(26.0))
+
+        let mut header = div()
+            .h(px(28.0))
             .flex()
             .items_center()
-            .gap_1p5()
+            .gap_2()
             .child(grip)
             .child(dot)
-            .child(state_dot)
             .child(name)
-            .children(badge);
-
-        let mut chips = div().flex_1().min_w_0().flex().flex_wrap().gap_1p5();
-        for (i, tab_id) in entry.tabs.iter().enumerate() {
-            let Some(tab) = bench.tabs.iter().find(|t| t.id == *tab_id) else { continue };
-            let index = bench.tabs.iter().position(|t| t.id == *tab_id).unwrap_or(i);
-            chips = chips.child(self.render_chip(entry, tab, index, first + i, ui, cx));
-        }
-        if !bench.closing {
-            let k = key.clone();
-            let ink = ui.ink(accent);
-            chips = chips.child(
-                div()
-                    .id(SharedString::from(format!("new-tab-{id}")))
-                    .h(px(26.0))
-                    .px_1p5()
-                    .flex()
-                    .items_center()
-                    .rounded_md()
-                    .border_1()
-                    .border_dashed()
-                    .border_color(hsla(ui.divider))
-                    .cursor_pointer()
-                    .tooltip(menu::tooltip("New tab"))
-                    .hover(move |s| s.border_color(hsla(accent)).text_color(hsla(ink)))
-                    .child(svg().path(icon("tab-new")).size(px(13.0)).text_color(hsla(ui.text_dim)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.new_tab(&k, cx))),
-            );
-        }
-
-        // The bench's links follow its tabs.
-        chips = chips.child(self.render_links(entry, ui, cx).h(px(26.0)));
-        let mut actions = div().flex_none().w(px(112.0)).h(px(26.0)).flex().items_center().justify_end().gap_1();
+            .children(badge)
+            .when(!state.is_empty(), |d| d.child(div().flex_none().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(state)))
+            .child(div().flex_1())
+            .child(self.render_quiet_links(entry, ui, cx));
         if bench.closing {
-            actions = actions.child(div().text_size(px(12.0)).text_color(hsla(ui.ink(accent))).child("closing…"));
+            header = header.child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child("closing…"));
         } else {
             let (open_icon, open_label) = if entry.status == Status::Open { ("go", "Go to") } else { ("bench-load", "Open") };
             let e = entry.clone();
-            actions = actions.child(self.button(format!("open-{id}"), open_icon, open_label, accent, entry.status != Status::Open, cx, move |this, _, cx| this.open(&e, None, cx)));
+            header = header.child(self.quiet_button(format!("open-{id}"), open_icon, Some(open_label), ui, cx, move |this, _, cx| this.open(&e, None, cx)));
             let e = entry.clone();
-            actions = actions.child(
-                div()
-                    .id(SharedString::from(format!("more-{id}")))
-                    .p_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hsla(ui.tab_hover)))
-                    .tooltip(menu::tooltip("More: hide, close, delete, rename, colour"))
-                    .child(svg().path(icon("more")).size(px(14.0)).text_color(hsla(ui.text_dim)))
+            header = header.child(
+                self.quiet_button(format!("more-{id}"), "more", None, ui, cx, |_, _, _| {})
+                    .tooltip(menu::tooltip("More: hide, close, delete, rename, colour, links"))
                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                         let entries = this.bench_menu(&e);
                         this.open_menu(ev.position, entries, cx);
@@ -1103,62 +1065,215 @@ impl Pegboard {
             );
         }
 
+        // The tabs, in columns under the name.
+        let mut tabs = div().pl(px(30.0)).flex().flex_wrap().gap_x_1p5().gap_y_0p5();
+        for (i, tab_id) in entry.tabs.iter().enumerate() {
+            let Some(tab) = bench.tabs.iter().find(|t| t.id == *tab_id) else { continue };
+            let index = bench.tabs.iter().position(|t| t.id == *tab_id).unwrap_or(i);
+            tabs = tabs.child(self.render_chip(entry, tab, index, first + i, ui, cx));
+        }
+        if !bench.closing {
+            let k = key.clone();
+            tabs = tabs.child(
+                div()
+                    .id(SharedString::from(format!("new-tab-{id}")))
+                    .h(px(26.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_size(px(12.0))
+                    .text_color(hsla(ui.text_dim))
+                    .invisible()
+                    .group_hover(group.clone(), |s| s.visible())
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .child(svg().path(icon("tab-new")).size(px(13.0)).text_color(hsla(ui.text_dim)))
+                    .child("New tab")
+                    .on_click(cx.listener(move |this, _, _, cx| this.new_tab(&k, cx))),
+            );
+        }
+
         let e = entry.clone();
         let drop_key = key.clone();
         div()
             .id(SharedString::from(format!("bench-{id}")))
+            .group(group)
             .flex()
-            .items_start()
-            .gap_3()
+            .flex_col()
+            .gap_1()
             .px_2()
-            .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(hsla_alpha(ui.divider, 0.0))
-            .hover(|s| s.bg(hsla_alpha(ui.tab_hover, 0.5)))
+            .py_2()
+            .rounded_lg()
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                 let entries = this.bench_menu(&e);
                 this.open_menu(ev.position, entries, cx);
             }))
-            .drag_over::<DraggedTab>(move |s, _, _, _| s.border_color(hsla(accent)))
+            .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(hsla_alpha(accent, 0.08)))
             .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| this.move_tab(d.tab, &drop_key, usize::MAX, window, cx)))
-            .drag_over::<DraggedBench>(move |s, _, _, _| s.border_color(hsla(accent)))
+            .drag_over::<DraggedBench>(move |s, _, _, _| s.bg(hsla_alpha(accent, 0.08)))
             .on_drop(cx.listener(move |this, d: &DraggedBench, _, cx| this.move_bench(d.id, id, cx)))
-            .child(label)
-            .child(chips)
-            .child(actions)
+            .child(header)
+            .child(tabs)
             .into_any_element()
     }
 
-    /// A tab in the compact view: its icons, title and tags, then where it
-    /// is or what runs in it.
+    /// A small borderless button in the text's own colour.
+    #[allow(clippy::too_many_arguments)]
+    fn quiet_button(
+        &self,
+        id: String,
+        glyph: &'static str,
+        label: Option<&str>,
+        ui: &UiColors,
+        cx: &mut Context<Self>,
+        on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        let text = ui.text;
+        div()
+            .id(SharedString::from(id))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .px_1p5()
+            .py_0p5()
+            .rounded_md()
+            .text_size(px(12.0))
+            .cursor_pointer()
+            .text_color(hsla(ui.text_dim))
+            .hover(move |s| s.bg(hsla(ui.tab_hover)).text_color(hsla(text)))
+            .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(ui.text_dim)))
+            .children(label.map(str::to_string))
+            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
+    }
+
+    /// A bench's links on its header line: an icon and a name each, in the
+    /// text's colours; click opens, right-click for more.
+    fn render_quiet_links(&self, entry: &Entry, ui: &UiColors, cx: &mut Context<Self>) -> gpui::Div {
+        let key = entry.key();
+        let links = entry.bench.links.clone();
+        let id = entry.bench.id;
+        let text = ui.text;
+        let mut row = div().flex().flex_none().items_center().gap_1();
+        for (i, link) in entry.bench.links.iter().enumerate() {
+            if let Some(editor) = self.editor_for(&Edit::ChangeLink(key.clone(), i)) {
+                row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor));
+                continue;
+            }
+            let (url, links, k) = (link.url.clone(), links.clone(), key.clone());
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("link-{id}-{i}")))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
+                    .max_w(px(180.0))
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_size(px(12.0))
+                    .text_color(hsla(ui.text))
+                    .hover(move |s| s.bg(hsla(ui.tab_hover)).text_color(hsla(text)))
+                    .tooltip(menu::tooltip_text(link.url.clone()))
+                    .child(svg().path(icon("link")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)))
+                    .child(div().min_w_0().truncate().child(link.name.clone()))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        crate::links::open(url.clone(), false, cx)
+                    }))
+                    .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        let (k1, k2) = (k.clone(), k.clone());
+                        let initial = links.get(i).map(crate::links::unparse).unwrap_or_default();
+                        let entries = crate::links::menu(
+                            links.clone(),
+                            i,
+                            move |this: &mut Self, links, cx| this.set_links(&k1, links, cx),
+                            move |this: &mut Self, window, cx| this.start_edit(Edit::ChangeLink(k2.clone(), i), initial.clone(), window, cx),
+                        );
+                        this.open_menu(e.position, entries, cx);
+                    })),
+            );
+        }
+        if let Some(editor) = self.editor_for(&Edit::AddLink(key)) {
+            row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor));
+        }
+        row
+    }
+
+    /// A tab in the compact view: an icon for what it is (or what it is
+    /// doing), its title, tags as small dots, and what runs in it.
     #[allow(clippy::too_many_arguments)]
     fn render_chip(&self, entry: &Entry, tab: &Tab, index: usize, position: usize, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
         let bench = &entry.bench;
         let accent = bench.color.accent();
+        let running = entry.status != Status::Closed;
         let selected = position == self.selected;
-        let active = tab.id == bench.active_tab;
+        let active = tab.id == bench.active_tab && running;
         let tab_id = tab.id;
         let title = tab.display_title();
         let card_key = entry.key();
-        // The detail beside the title: the program in front, else the
-        // folder's last part (projects and AI tabs say theirs in the title).
         let pane = tab.active();
-        let detail = match pane.and_then(|p| p.tool.as_ref()) {
+        let tool = pane.and_then(|p| p.tool.as_ref());
+        let waiting = tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some());
+        // One icon: what the tab is, or that it waits or works.
+        let (glyph, tint) = if waiting {
+            ("tool-waiting", ui.ink(accent))
+        } else if let Some(ai) = tab.ai_info() {
+            match ai.activity {
+                shed_model::AiActivity::Waiting => ("tool-waiting", ui.ink(accent)),
+                shed_model::AiActivity::Working => ("ai", ui.ink(accent)),
+                shed_model::AiActivity::Idle => ("ai", ui.text_dim),
+            }
+        } else if tab.project_info().is_some() {
+            ("project", ui.text_dim)
+        } else if tab.remote_info().is_some() {
+            ("server", ui.text_dim)
+        } else if tool.is_some() {
+            ("tool", ui.text_dim)
+        } else {
+            ("terminal", ui.text_dim)
+        };
+        // Beside the title: the program in front, else the folder's last part.
+        let detail = match tool {
             Some(tool) => Some(tool.display()),
             None if tab.has_panes() => pane.and_then(|p| p.cwd.file_name()).map(|n| n.to_string_lossy().into_owned()).filter(|n| !title.contains(n.as_str())),
             None => None,
         };
-        let head = self.tab_head(tab, accent, ui, cx).flex_1().min_w_0().overflow_hidden();
         let full = match &detail {
             Some(d) => format!("{title} · {d}"),
             None => title.clone(),
         };
+        let title_el = match self.editor_for(&Edit::TabName(tab_id)) {
+            Some(editor) => div().flex_1().min_w_0().child(editor).into_any_element(),
+            None => {
+                let t = title.clone();
+                div()
+                    .id(SharedString::from(format!("title-{tab_id}")))
+                    .flex_shrink(1.0)
+                    .min_w_0()
+                    .truncate()
+                    .text_color(hsla(if running { ui.text } else { ui.text_dim }))
+                    .child(title.clone())
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if e.click_count() >= 2 {
+                            cx.stop_propagation();
+                            this.start_edit(Edit::TabName(tab_id), t.clone(), window, cx);
+                        }
+                    }))
+                    .into_any_element()
+            }
+        };
+        let tags = div().flex().flex_none().gap_0p5().children(tab.all_tags().map(|tag| div().size(px(6.0)).rounded_full().bg(hsla(tag.color))));
         let (e, e2) = (entry.clone(), entry.clone());
         let tab_for_menu = tab.clone();
-        let border = if selected { hsla(accent) } else if active { hsla_alpha(accent, 0.45) } else { hsla(ui.divider) };
         div()
             .id(SharedString::from(format!("tab-{tab_id}")))
+            .relative()
             .h(px(26.0))
             .w(px(CHIP_WIDTH))
             .flex_none()
@@ -1167,16 +1282,14 @@ impl Pegboard {
             .items_center()
             .gap_1p5()
             .px_2()
-            .tooltip(menu::tooltip_text(full))
             .rounded_md()
-            .border_1()
-            .border_color(border)
-            .when(active && entry.status != Status::Closed, |d| d.bg(hsla_alpha(accent, 0.08)))
-            .text_size(px(12.5))
+            .text_size(px(13.0))
             .cursor_pointer()
-            .hover(move |s| s.border_color(hsla(accent)))
+            .when(selected, |d| d.bg(hsla_alpha(accent, 0.14)))
+            .when(!selected, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
+            .tooltip(menu::tooltip_text(full))
             .on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
-            .drag_over::<DraggedTab>(move |s, _, _, _| s.border_l_4().border_color(hsla(accent)))
+            .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(hsla_alpha(accent, 0.14)))
             .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                 cx.stop_propagation();
                 this.move_tab(d.tab, &card_key, index, window, cx);
@@ -1188,8 +1301,14 @@ impl Pegboard {
                 let entries = this.tab_menu(&e2, &tab_for_menu);
                 this.open_menu(ev.position, entries, cx);
             }))
-            .child(head)
-            .children(detail.map(|d| div().flex_shrink_0().max_w(px(CHIP_WIDTH * 0.4)).truncate().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(d)))
+            // The tab the bench shows: a short bar in its colour.
+            .when(active, |d| d.child(div().absolute().left_0().top(px(6.0)).h(px(14.0)).w(px(2.0)).rounded_full().bg(hsla(accent))))
+            .child(svg().path(icon(glyph)).size(px(14.0)).flex_none().text_color(hsla(tint)))
+            .child(title_el)
+            .child(tags)
+            .when(tab.private, |d| d.child(svg().path(icon("private")).size(px(11.0)).flex_none().text_color(hsla(ui.text_dim))))
+            .child(div().flex_1())
+            .children(detail.map(|d| div().flex_shrink_0().max_w(px(CHIP_WIDTH * 0.4)).truncate().text_size(px(11.5)).text_color(hsla(ui.text_dim)).child(d)))
             .into_any_element()
     }
 
@@ -1463,7 +1582,7 @@ impl Pegboard {
             cx.try_global::<PegboardData>().map(|d| d.0.previews.iter().cloned().collect()).unwrap_or_default();
 
         let compact = self.state.read(cx).settings.config.window.compact_pegboard;
-        let mut list = div().flex().flex_col().when(compact, |d| d.gap_1()).when(!compact, |d| d.gap_3());
+        let mut list = div().flex().flex_col().when(compact, |d| d.gap_4()).when(!compact, |d| d.gap_3());
         let mut first = 0;
         for entry in &entries {
             list = list.child(if compact { self.render_bench_line(entry, first, &ui, cx) } else { self.render_bench(entry, first, &previews, &ui, cx) });
