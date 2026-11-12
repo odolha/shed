@@ -316,9 +316,15 @@ terminal of the bench.
   your say, a card shows what and how, with **Allow**, **Allow for This Session**
   and **Deny**; the tab's icon shows it is waiting. **Stop** (or Escape at the
   prompt) interrupts.
-- **Below the prompt**: the model and its effort, the mode (**Ask Before Edits**,
-  **Accept Edits**, **Plan Only**), and the eye, which makes files Claude edits
-  open in their project tab as it goes. The **⋯** menu finds text in the
+- **Below the prompt**: while Claude works, three dots take turns beside what it
+  is doing (the tool running, thinking, writing) and for how long. Then the model
+  (the default one by name: "Opus 5.5 (default)") and its effort, the mode, and
+  the eye, which makes files Claude edits open in their project tab as it goes.
+  The modes: **Ask Before Edits**; **Accept Edits** (file changes go through,
+  commands still ask); **Auto** (Claude Code's safety check approves routine
+  actions and stops risky ones); **Read Only (Plan)** (looks and plans, changes
+  nothing); and **Full Auto…** (everything without asking, shown in red; Shed
+  asks first). The **⋯** menu finds text in the
   conversation (also Ctrl+F), inserts a file's text into the prompt (for long
   prompts kept on disk), and saves the prompt or the whole conversation as a file.
 - **After a turn**, the files it changed are listed above the prompt: click one to

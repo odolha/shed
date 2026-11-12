@@ -35,6 +35,21 @@ const FOLD_LINES: usize = 12;
 /// Lines of a tool's output shown when it is opened.
 const RESULT_LINES: usize = 40;
 
+/// Claude Code's permission modes: its name, the menu's label, the chip's.
+const PERMISSION_MODES: &[(&str, &str, &str)] = &[
+    ("default", "Ask Before Edits", "Ask before edits"),
+    ("acceptEdits", "Accept Edits", "Accept edits"),
+    ("auto", "Auto: a Safety Check Decides", "Auto"),
+    ("plan", "Read Only (Plan)", "Read only"),
+    ("bypassPermissions", "Full Auto", "Full auto"),
+];
+
+/// The model Claude Code's "default" stands for: "Opus 5.5" from its
+/// description ("Opus 5.5 · Best for…").
+fn default_model_name(m: &Model) -> String {
+    m.description.split(" · ").next().filter(|s| !s.is_empty()).unwrap_or(&m.name).to_string()
+}
+
 /// The account's usage limits, for every AI tab to show.
 #[derive(Default)]
 pub struct AiLimits(pub Limits);
@@ -99,6 +114,8 @@ pub struct AiView {
     /// An earlier prompt being edited in the prompt field: sending goes
     /// back to it.
     editing: Option<usize>,
+    /// The working dots' step.
+    spin: usize,
     _subs: Vec<Subscription>,
 }
 
@@ -207,6 +224,7 @@ impl AiView {
             dragged: false,
             copied: None,
             editing: None,
+            spin: 0,
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -442,8 +460,12 @@ impl AiView {
         }
         self.ticker = Some(cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                cx.background_executor().timer(Duration::from_millis(350)).await;
+                let ticked = this.update(cx, |this, cx| {
+                    this.spin = this.spin.wrapping_add(1);
+                    cx.notify();
+                });
+                if ticked.is_err() {
                     break;
                 }
             }
@@ -668,6 +690,17 @@ impl AiView {
         entries.push(menu::item("Copy Message as Plain Text", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(plain.clone()))));
         entries.push(menu::item("Copy the Whole Conversation", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(all.clone(), &all))));
         entries
+    }
+
+    /// What Claude is doing now, in a few words: the tool running, or
+    /// thinking or writing.
+    fn activity(&self) -> String {
+        match self.entries.last() {
+            Some(Entry::Tool(t)) if t.result.is_none() => t.summary.clone(),
+            Some(Entry::Thinking { .. }) => "Thinking".into(),
+            Some(Entry::Assistant { .. }) => "Writing".into(),
+            _ => "Working".into(),
+        }
     }
 
     /// Puts an earlier prompt into the field to change it; sending it goes
@@ -1047,7 +1080,8 @@ impl AiView {
             .map(|m| {
                 let value = (m.value != "default").then(|| m.value.clone());
                 let check = if value == current { "  ✓" } else { "" };
-                menu::item(format!("{}{check}", m.name), move |this: &mut Self, _, _| {
+                let name = if m.value == "default" { format!("Default · {}", default_model_name(m)) } else { m.name.clone() };
+                menu::item(format!("{name}{check}"), move |this: &mut Self, _, _| {
                     let msg = this.settings_msg(|a| a.model = value.clone());
                     this.conn.send_msg(msg);
                 })
@@ -1071,17 +1105,50 @@ impl AiView {
         entries
     }
 
+    /// The model the tab uses, by name; the default one says which it is.
+    fn model_label(&self) -> String {
+        match &self.ai.model {
+            Some(m) => self.models.iter().find(|x| &x.value == m).map(|x| x.name.clone()).unwrap_or_else(|| m.clone()),
+            None => match self.models.iter().find(|x| x.value == "default") {
+                Some(d) => format!("{} (default)", default_model_name(d)),
+                None => self.status.model.clone().map(|m| format!("{m} (default)")).unwrap_or_else(|| "Default model".into()),
+            },
+        }
+    }
+
     fn mode_menu(&self) -> Vec<MenuEntry<Self>> {
-        [("default", "Ask Before Edits"), ("acceptEdits", "Accept Edits"), ("plan", "Plan Only")]
-            .into_iter()
-            .map(|(mode, label)| {
+        let mut entries: Vec<MenuEntry<Self>> = PERMISSION_MODES
+            .iter()
+            .filter(|(mode, _, _)| *mode != "bypassPermissions")
+            .map(|&(mode, label, _)| {
                 let check = if self.ai.mode == mode { "  ✓" } else { "" };
                 menu::item(format!("{label}{check}"), move |this: &mut Self, _, _| {
                     let msg = this.settings_msg(|a| a.mode = mode.into());
                     this.conn.send_msg(msg);
                 })
             })
-            .collect()
+            .collect();
+        // Everything without asking: asks first, in red.
+        let check = if self.ai.mode == "bypassPermissions" { "  ✓" } else { "" };
+        entries.push(MenuEntry::Separator);
+        entries.push(menu::danger(format!("Full Auto…{check}"), |this: &mut Self, window, cx| {
+            let answer = window.prompt(
+                gpui::PromptLevel::Warning,
+                "Let Claude do everything without asking?",
+                Some("Full Auto runs every command and changes every file Claude decides to, with no permission prompts, until you switch back. Use it where a mistake costs little (a sandbox, a throwaway branch)."),
+                &["Full Auto", "Cancel"],
+                cx,
+            );
+            let msg = this.settings_msg(|a| a.mode = "bypassPermissions".into());
+            let conn = this.conn.clone();
+            cx.spawn(async move |_, _| {
+                if let Ok(0) = answer.await {
+                    conn.send_msg(msg);
+                }
+            })
+            .detach();
+        }));
+        entries
     }
 
     fn render_entry(&mut self, i: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1426,9 +1493,17 @@ impl AiView {
         let working = self.status.state != AiState::Idle;
         let status = match self.status.state {
             AiState::Idle => String::new(),
-            AiState::Working => format!("Working… {}", self.status.since.map(secs_since).unwrap_or_default()),
+            AiState::Working => format!("{} · {}", self.activity(), self.status.since.map(secs_since).unwrap_or_default()),
             AiState::Waiting => "Waiting for your answer".into(),
         };
+        // Three dots taking turns while Claude works (stepped by the
+        // ticker, a few times a second: a frame redraws the whole window).
+        let loader = (self.status.state == AiState::Working).then(|| {
+            div().flex().flex_none().items_center().gap_1().children((0..3).map(|k| {
+                let on = self.spin % 3 == k;
+                div().size(px(6.0 * self.z())).rounded_full().bg(hsla_alpha(accent, if on { 1.0 } else { 0.3 }))
+            }))
+        });
         let chip = |id: &'static str, label: String| {
             div()
                 .id(id)
@@ -1439,19 +1514,8 @@ impl AiView {
                 .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
                 .child(label)
         };
-        let model = self
-            .ai
-            .model
-            .as_ref()
-            .and_then(|m| self.models.iter().find(|x| &x.value == m))
-            .map(|m| m.name.clone())
-            .or_else(|| self.ai.model.clone())
-            .unwrap_or_else(|| "Default model".into());
-        let mode = match self.ai.mode.as_str() {
-            "acceptEdits" => "Accept edits",
-            "plan" => "Plan only",
-            _ => "Ask before edits",
-        };
+        let model = self.model_label();
+        let mode = PERMISSION_MODES.iter().find(|(m, _, _)| *m == self.ai.mode).map_or("Ask before edits", |(_, _, chip)| chip);
         let (glyph, label, color) = if working { ("stop", "Stop", ui.danger) } else { ("send", "Send", accent) };
         div()
             .flex()
@@ -1461,13 +1525,14 @@ impl AiView {
             .px_3()
             .py_1()
             .text_size(px(12.0 * self.z()))
-            .child(div().flex_1().text_color(hsla(if self.status.state == AiState::Waiting { ui.ink(accent) } else { ui.text_dim })).child(status))
+            .children(loader)
+            .child(div().flex_1().min_w_0().truncate().text_color(hsla(if self.status.state == AiState::Idle { ui.text_dim } else { ui.ink(accent) })).child(status))
             .child(chip("ai-model", model).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 this.warm_up();
                 let entries = this.model_menu();
                 this.open_menu(e.position, entries, cx);
             })))
-            .child(chip("ai-mode", mode.into()).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+            .child(chip("ai-mode", mode.into()).when(self.ai.mode == "bypassPermissions", |d| d.text_color(hsla(ui.danger))).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 let entries = this.mode_menu();
                 this.open_menu(e.position, entries, cx);
             })))
@@ -1864,6 +1929,15 @@ fn secs_since(start: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_model_is_named() {
+        let m = Model { value: "default".into(), name: "Default (recommended)".into(), description: "Opus 5.5 · Best for everyday".into(), efforts: Vec::new() };
+        assert_eq!(default_model_name(&m), "Opus 5.5");
+        let bare = Model { description: String::new(), ..m };
+        assert_eq!(default_model_name(&bare), "Default (recommended)");
+        assert!(PERMISSION_MODES.iter().any(|(m, _, _)| *m == "auto") && PERMISSION_MODES.iter().any(|(m, _, _)| *m == "bypassPermissions"));
+    }
 
     #[test]
     fn words_and_times() {

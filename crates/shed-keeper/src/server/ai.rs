@@ -289,6 +289,9 @@ impl Keeper {
         let mut cmd = tokio::process::Command::new(claude_program());
         cmd.args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
         cmd.args(["--permission-prompt-tool", "stdio"]);
+        // Lets the tab switch to Full Auto (bypassPermissions) later; it
+        // does not turn it on.
+        cmd.arg("--allow-dangerously-skip-permissions");
         let resume_at = st.ai.get_mut(&tab).and_then(|rt| rt.resume_at.take());
         if let Some(s) = &ai.session {
             cmd.args(["--resume", s]);
