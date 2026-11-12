@@ -142,28 +142,18 @@ pub fn vertical_with_blocks(source: Source, state: &State, ui: &UiColors, quiet:
     let state = state.clone();
     let ui = ui.clone();
     let color = ui.text;
+    let (src, st, blocks) = (source.clone(), state.clone(), step.is_some());
     canvas(
-        |_, _, _| {},
-        move |bounds: Bounds<Pixels>, _, window: &mut Window, cx: &mut App| {
-            let Some(m) = source.metrics(cx).filter(|m| m.max > 0.5 && m.viewport > 0.0) else { return };
-            let track = f32::from(bounds.size.height);
-            let (top, len) = thumb(m, track);
-            let dragging = state.grab.get().is_some();
-            let at_end = m.offset >= m.max - 0.5;
-            let show = !quiet || dragging || state.hovered.get() || !at_end;
-            if show {
-                let strong = dragging || state.hovered.get();
-                let x = bounds.origin.x + px(if strong { 2.0 } else { 3.0 });
-                let w = bounds.size.width - px(if strong { 4.0 } else { 6.0 });
-                let thumb_bounds = Bounds::new(point(x, bounds.origin.y + px(top)), size(w, px(len)));
-                window.paint_quad(PaintQuad::new(thumb_bounds).corner_radii(w / 2.0).background(hsla_alpha(color, if strong { 0.55 } else { 0.3 })));
-            }
-
+        // Before painting: what shows, where, and the areas the mouse can
+        // press (a hand over the buttons, the arrow over the bar).
+        move |bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App| -> Option<Laid> {
+            let m = src.metrics(cx).filter(|m| m.max > 0.5 && m.viewport > 0.0)?;
+            let dragging = st.grab.get().is_some();
             // The wheel moved this content: the jump buttons come up.
-            let moved = state.last_offset.replace(Some(m.offset)).is_some_and(|o| (o - m.offset).abs() > 0.5);
+            let moved = st.last_offset.replace(Some(m.offset)).is_some_and(|o| (o - m.offset).abs() > 0.5);
             if moved && wheel_just_turned() && !dragging {
-                let fresh = state.jumps_until.get().is_none_or(|t| t <= Instant::now());
-                state.jumps_until.set(Some(Instant::now() + JUMPS_FOR));
+                let fresh = st.jumps_until.get().is_none_or(|t| t <= Instant::now());
+                st.jumps_until.set(Some(Instant::now() + JUMPS_FOR));
                 if fresh {
                     // Paint once more when they are due to go.
                     cx.spawn(async move |cx| {
@@ -173,13 +163,40 @@ pub fn vertical_with_blocks(source: Source, state: &State, ui: &UiColors, quiet:
                     .detach();
                 }
             }
+            let buttons = if st.jumps_until.get().is_some_and(|t| t > Instant::now()) {
+                jump_layout(m, bounds, blocks)
+                    .into_iter()
+                    .map(|(glyph, label, go, b)| (glyph, label, go, b, window.insert_hitbox(b, gpui::HitboxBehavior::BlockMouse)))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            // Normal: the wheel over the bar still scrolls what is under it.
+            let bar = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
+            Some(Laid { m, buttons, bar })
+        },
+        move |bounds: Bounds<Pixels>, laid: Option<Laid>, window: &mut Window, cx: &mut App| {
             window.on_mouse_event(|_: &ScrollWheelEvent, phase, _, _| {
                 if phase == DispatchPhase::Capture {
                     LAST_WHEEL.with(|w| w.set(Some(Instant::now())));
                 }
             });
-            if state.jumps_until.get().is_some_and(|t| t > Instant::now()) {
-                paint_jumps(&source, m, bounds, &ui, &state, step.as_ref(), window, cx);
+            let Some(Laid { m, buttons, bar }) = laid else { return };
+            let track = f32::from(bounds.size.height);
+            let (top, len) = thumb(m, track);
+            let dragging = state.grab.get().is_some();
+            let at_end = m.offset >= m.max - 0.5;
+            let show = !quiet || dragging || state.hovered.get() || !at_end;
+            if show {
+                window.set_cursor_style(gpui::CursorStyle::Arrow, &bar);
+                let strong = dragging || state.hovered.get();
+                let x = bounds.origin.x + px(if strong { 2.0 } else { 3.0 });
+                let w = bounds.size.width - px(if strong { 4.0 } else { 6.0 });
+                let thumb_bounds = Bounds::new(point(x, bounds.origin.y + px(top)), size(w, px(len)));
+                window.paint_quad(PaintQuad::new(thumb_bounds).corner_radii(w / 2.0).background(hsla_alpha(color, if strong { 0.55 } else { 0.3 })));
+            }
+            for (glyph, label, go, b, hitbox) in buttons {
+                paint_jump(&source, glyph, label, go, b, &hitbox, &ui, &state, step.as_ref(), window, cx);
             }
 
             let (s, st) = (source.clone(), state.clone());
@@ -236,22 +253,27 @@ pub fn vertical_with_blocks(source: Source, state: &State, ui: &UiColors, quiet:
     .w(px(WIDTH))
 }
 
-/// The Top and End buttons, left of the bar near its foot: each a small
-/// pill with an arrow and a word; pressing one goes there.
-#[allow(clippy::too_many_arguments)]
-fn paint_jumps(source: &Source, m: Metrics, bar: Bounds<Pixels>, ui: &UiColors, state: &State, step: Option<&Step>, window: &mut Window, cx: &mut App) {
-    let color = ui.text;
-    // What a button does: go to an offset, or a block up or down.
-    #[derive(Clone, Copy)]
-    enum Go {
-        To(f32),
-        Block(bool),
-    }
+/// What the scrollbar laid out before painting.
+struct Laid {
+    m: Metrics,
+    buttons: Vec<(&'static str, &'static str, Go, Bounds<Pixels>, gpui::Hitbox)>,
+    bar: gpui::Hitbox,
+}
+
+/// What a jump button does: go to an offset, or a block up or down.
+#[derive(Clone, Copy)]
+enum Go {
+    To(f32),
+    Block(bool),
+}
+
+/// The jump buttons that go somewhere, left of the bar near its foot.
+fn jump_layout(m: Metrics, bar: Bounds<Pixels>, blocks: bool) -> Vec<(&'static str, &'static str, Go, Bounds<Pixels>)> {
     let mut buttons: Vec<(&'static str, &'static str, Go)> = Vec::new();
     if m.offset > 1.0 {
         buttons.push(("arrow-up", "Top", Go::To(0.0)));
     }
-    if step.is_some() {
+    if blocks {
         if m.offset > 1.0 {
             buttons.push(("arrow-up", "Prev", Go::Block(true)));
         }
@@ -265,52 +287,78 @@ fn paint_jumps(source: &Source, m: Metrics, bar: Bounds<Pixels>, ui: &UiColors, 
     let (h, w, gap) = (px(24.0), px(62.0), px(6.0));
     let right = bar.origin.x - px(6.0);
     let mut y = bar.origin.y + bar.size.height - px(12.0) - h * buttons.len() as f32 - gap * (buttons.len().saturating_sub(1)) as f32;
-    let font = window.text_style().font();
-    for (glyph, label, go) in buttons {
-        let b = Bounds::new(point(right - w, y), size(w, h));
-        y += h + gap;
-        let ground = PaintQuad::new(b)
-            .corner_radii(h / 2.0)
-            .background(crate::theme::hsla(ui.tab_active))
-            .border_widths(px(1.0))
-            .border_color(crate::theme::hsla(ui.divider));
-        window.paint_quad(ground);
-        let icon_size = px(12.0);
-        let icon = Bounds::new(point(b.origin.x + px(9.0), b.origin.y + (h - icon_size) / 2.0), size(icon_size, icon_size));
-        let _ = window.paint_svg(icon, crate::assets::icon(glyph), None, TransformationMatrix::unit(), hsla_alpha(color, 0.9), cx);
-        let run = TextRun { len: label.len(), font: font.clone(), color: hsla_alpha(color, 0.9), background_color: None, underline: None, strikethrough: None, letter_spacing: None };
-        let line = window.text_system().shape_line(SharedString::from(label), px(12.0), &[run]);
-        let _ = line.paint(point(b.origin.x + px(25.0), b.origin.y + (h - px(16.0)) / 2.0), px(16.0), TextAlign::Left, None, window, cx);
+    buttons
+        .into_iter()
+        .map(|(glyph, label, go)| {
+            let b = Bounds::new(point(right - w, y), size(w, h));
+            y += h + gap;
+            (glyph, label, go, b)
+        })
+        .collect()
+}
 
-        let (s, st, step) = (source.clone(), state.clone(), step.cloned());
-        window.on_mouse_event(move |e: &MouseDownEvent, phase, window, cx| {
-            if phase != DispatchPhase::Bubble || e.button != MouseButton::Left || !b.contains(&e.position) {
-                return;
+/// A jump button: a small pill with an arrow and a word, a hand over it;
+/// pressing it goes there.
+#[allow(clippy::too_many_arguments)]
+fn paint_jump(
+    source: &Source,
+    glyph: &'static str,
+    label: &'static str,
+    go: Go,
+    b: Bounds<Pixels>,
+    hitbox: &gpui::Hitbox,
+    ui: &UiColors,
+    state: &State,
+    step: Option<&Step>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let color = ui.text;
+    let h = b.size.height;
+    let hovered = hitbox.is_hovered(window);
+    window.set_cursor_style(gpui::CursorStyle::PointingHand, hitbox);
+    let ground = PaintQuad::new(b)
+        .corner_radii(h / 2.0)
+        .background(crate::theme::hsla(if hovered { ui.tab_hover } else { ui.tab_active }))
+        .border_widths(px(1.0))
+        .border_color(crate::theme::hsla(ui.divider));
+    window.paint_quad(ground);
+    let icon_size = px(12.0);
+    let icon = Bounds::new(point(b.origin.x + px(9.0), b.origin.y + (h - icon_size) / 2.0), size(icon_size, icon_size));
+    let _ = window.paint_svg(icon, crate::assets::icon(glyph), None, TransformationMatrix::unit(), hsla_alpha(color, 0.9), cx);
+    let font = window.text_style().font();
+    let run = TextRun { len: label.len(), font, color: hsla_alpha(color, 0.9), background_color: None, underline: None, strikethrough: None, letter_spacing: None };
+    let line = window.text_system().shape_line(SharedString::from(label), px(12.0), &[run]);
+    let _ = line.paint(point(b.origin.x + px(25.0), b.origin.y + (h - px(16.0)) / 2.0), px(16.0), TextAlign::Left, None, window, cx);
+
+    let (s, st, step) = (source.clone(), state.clone(), step.cloned());
+    window.on_mouse_event(move |e: &MouseDownEvent, phase, window, cx| {
+        if phase != DispatchPhase::Bubble || e.button != MouseButton::Left || !b.contains(&e.position) {
+            return;
+        }
+        match go {
+            Go::To(to) => {
+                s.set(to, window, cx);
+                // Moved by the button, not the wheel: they need not come back.
+                st.last_offset.set(Some(to));
+                st.jumps_until.set(None);
             }
-            match go {
-                Go::To(to) => {
-                    s.set(to, window, cx);
-                    // Moved by the button, not the wheel: they need not come back.
-                    st.last_offset.set(Some(to));
-                    st.jumps_until.set(None);
+            // Block by block: the buttons stay for the next press.
+            Go::Block(up) => {
+                if let Some(step) = &step {
+                    step(up, window, cx);
                 }
-                // Block by block: the buttons stay for the next press.
-                Go::Block(up) => {
-                    if let Some(step) = &step {
-                        step(up, window, cx);
-                    }
-                    st.jumps_until.set(Some(Instant::now() + JUMPS_FOR));
-                    cx.spawn(async move |cx| {
-                        cx.background_executor().timer(JUMPS_FOR + Duration::from_millis(50)).await;
-                        cx.update(|cx| cx.refresh_windows());
-                    })
-                    .detach();
-                }
+                st.jumps_until.set(Some(Instant::now() + JUMPS_FOR));
+                cx.spawn(async move |cx| {
+                    cx.background_executor().timer(JUMPS_FOR + Duration::from_millis(50)).await;
+                    cx.update(|cx| cx.refresh_windows());
+                })
+                .detach();
             }
-            cx.stop_propagation();
-            window.refresh();
-        });
-    }
+        }
+        cx.stop_propagation();
+        window.refresh();
+    });
 }
 
 /// `content` (which fills its height) with a scrollbar over its right

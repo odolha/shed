@@ -829,6 +829,7 @@ impl ProjectView {
                 .rounded_sm()
                 .invisible()
                 .group_hover("git-row", |s| s.visible())
+                .cursor_pointer()
                 .hover(|s| s.bg(hsla(ui.divider)))
                 .tooltip(menu::tooltip(tip))
                 .child(svg().path(icon(glyph)).size(px(12.0)).text_color(hsla(ui.text_dim)))

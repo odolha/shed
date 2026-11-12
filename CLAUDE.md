@@ -146,6 +146,8 @@ timer parks), wired in through
 - **UI**: actions get icon + text where there is room; icon-only is for mode
   toggles (with a tooltip). Shed's accent is coral, kept distinct from `danger` red;
   destructive actions use `danger` and ask first (with "…" in the label).
+  Everything clickable shows the pointing hand (`.cursor_pointer()`; painted
+  controls set it on a hitbox, as `scrollbar.rs` does).
 - **Docs**: a visible change updates `docs/user-guide.md` (and screenshots); a
   change in how things work updates `docs/architecture.md`; build/test changes
   update `docs/development.md`. Same commit as the code.

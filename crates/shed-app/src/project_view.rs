@@ -1497,6 +1497,7 @@ impl ProjectView {
                     .items_center()
                     .justify_center()
                     .rounded_sm()
+                    .cursor_pointer()
                     .hover(|s| s.bg(hsla(ui.divider)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
