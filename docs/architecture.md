@@ -220,7 +220,9 @@ checked over ssh; the binary sent through ssh's stdin when they differ), then ru
 shares one login between the steps).
 
 On the server, `shedd attach` (`shed-keeper/src/attach.rs`) connects to the keeper
-there (starting one, detached, if none runs), finds the bench `remote-ID`
+there (starting one, detached, if none runs: without the PC's `LANG`/`LC_*`
+that ssh forwarded when the server lacks those locales, so its shells don't warn),
+finds the bench `remote-ID`
 (running, saved, or new), sizes its pane to the terminal, attaches, and relays:
 the replay (after a full reset) and output to stdout, stdin to the pane, window
 size changes to `Resize`. The terminal is put in raw mode. Only terminal bytes

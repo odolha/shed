@@ -79,6 +79,19 @@ async fn connect(start: bool) -> anyhow::Result<Option<UnixStream>> {
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    // ssh brings the PC's locale (`SendEnv LANG LC_*`); the keeper's shells
+    // keep only what this server has.
+    let vars: Vec<(String, String)> = std::env::vars().collect();
+    let default_lang = std::fs::read_to_string("/etc/default/locale").ok().and_then(|t| {
+        t.lines().find_map(|l| l.trim().strip_prefix("LANG=").map(|v| v.trim_matches('"').to_string()))
+    });
+    let (remove, lang) = server_locale(&vars, locale_exists, default_lang);
+    for key in remove {
+        cmd.env_remove(key);
+    }
+    if let Some(lang) = lang {
+        cmd.env("LANG", lang);
+    }
     use std::os::unix::process::CommandExt;
     // SAFETY: setsid only detaches the child from this session.
     unsafe {
@@ -98,6 +111,32 @@ async fn connect(start: bool) -> anyhow::Result<Option<UnixStream>> {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// Whether this machine has the locale `name`.
+fn locale_exists(name: &str) -> bool {
+    let Ok(c) = std::ffi::CString::new(name) else { return false };
+    // SAFETY: newlocale reads the name and returns a new locale or null; the
+    // locale is freed right away.
+    unsafe {
+        let loc = libc::newlocale(libc::LC_ALL_MASK, c.as_ptr(), std::ptr::null_mut());
+        if loc.is_null() {
+            return false;
+        }
+        libc::freelocale(loc);
+    }
+    true
+}
+
+/// Of the locale variables in `vars`, those this server lacks (to remove),
+/// and the `LANG` to set when its own is missing or lacking: the server's
+/// default if it has it, else `C.UTF-8`.
+fn server_locale(vars: &[(String, String)], exists: impl Fn(&str) -> bool, default_lang: Option<String>) -> (Vec<String>, Option<String>) {
+    let locale_var = |k: &str| k == "LANG" || k == "LC_ALL" || k.starts_with("LC_");
+    let remove: Vec<String> = vars.iter().filter(|(k, v)| locale_var(k) && !v.is_empty() && !exists(v)).map(|(k, _)| k.clone()).collect();
+    let has_lang = vars.iter().any(|(k, _)| k == "LANG") && !remove.iter().any(|k| k == "LANG");
+    let lang = (!has_lang).then(|| default_lang.filter(|l| exists(l)).unwrap_or_else(|| "C.UTF-8".into()));
+    (remove, lang)
 }
 
 fn terminal_size() -> (u16, u16) {
@@ -319,5 +358,27 @@ async fn relay(mut conn: Conn, bench: BenchId, name: &str, pane: PaneId, resize:
                 sized = Instant::now();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pcs_locale_is_kept_only_where_the_server_has_it() {
+        let vars: Vec<(String, String)> = [("LANG", "en_GB.UTF-8"), ("LC_TIME", "ro_RO.UTF-8"), ("LC_PAPER", "en_GB.UTF-8"), ("HOME", "/x")]
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .into();
+        let has = |l: &str| l != "ro_RO.UTF-8";
+        assert_eq!(server_locale(&vars, has, None), (vec!["LC_TIME".to_string()], None));
+        // A LANG the server lacks: its own default instead.
+        let only_c = |l: &str| l.starts_with("C") || l == "en_US.UTF-8";
+        let (remove, lang) = server_locale(&vars, only_c, Some("en_US.UTF-8".into()));
+        assert_eq!(remove, ["LANG", "LC_TIME", "LC_PAPER"]);
+        assert_eq!(lang.as_deref(), Some("en_US.UTF-8"));
+        assert_eq!(server_locale(&[], only_c, None).1.as_deref(), Some("C.UTF-8"));
+        assert!(locale_exists("C"));
+        assert!(!locale_exists("xx_NOWHERE.UTF-8"));
     }
 }
