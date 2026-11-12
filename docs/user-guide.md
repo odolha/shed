@@ -559,7 +559,9 @@ an ordinary shell line again (in bash, a redirection).
 - **Scrollbars**: whatever scrolls has one on its right edge (the AI
   conversation and sessions, the file tree, open files, Git lists and diffs,
   search results, Shed's list): drag the thumb, or press the track to bring the
-  thumb there and drag on. A terminal's shows while it is scrolled back into its
+  thumb there and drag on. Turning the wheel brings up **Top** and **End**
+  buttons near the bottom right for a few seconds (only those that go
+  somewhere); in an AI tab, **End** also follows the conversation again. A terminal's shows while it is scrolled back into its
   history, or under the mouse at the right edge.
 - **Zoom**: Ctrl+= and Ctrl+-, Ctrl+0 to reset. Every kind of tab zooms: a
   project tab's code, file tree and lists, an AI tab's conversation and prompt.

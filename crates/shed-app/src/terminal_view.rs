@@ -1092,7 +1092,7 @@ impl Render for TerminalView {
                             .ok();
                     }),
                 };
-                crate::scrollbar::vertical(source, &self.bar, self.ui.text, true).absolute().top_0().right_0().bottom_0()
+                crate::scrollbar::vertical(source, &self.bar, &self.ui, true).absolute().top_0().right_0().bottom_0()
             })
             .when_some(preedit, |el, (left, top, text)| {
                 el.child(

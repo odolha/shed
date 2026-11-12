@@ -1758,7 +1758,7 @@ impl Render for AiView {
             .flex()
             .flex_col()
             .child(uniform_list("ai-sessions", count, cx.processor(|this, range, _, cx| this.render_sessions(range, cx))).track_scroll(&self.sessions_scroll).flex_1().min_h_0())
-            .child(crate::scrollbar::vertical(crate::scrollbar::Source::uniform(&self.sessions_scroll), &self.sessions_bar, ui.text, false).absolute().top_0().right_0().bottom_0());
+            .child(crate::scrollbar::vertical(crate::scrollbar::Source::uniform(&self.sessions_scroll), &self.sessions_bar, &ui, false).absolute().top_0().right_0().bottom_0());
         let transcript = div()
             .relative()
             .flex_1()
@@ -1773,7 +1773,7 @@ impl Render for AiView {
             }))
             .child(list(self.list.clone(), cx.processor(|this, i, _, cx| this.render_entry(i, cx))).flex_1().min_h_0().py_2())
             // After the list: over it, and first to hear the mouse.
-            .child(crate::scrollbar::vertical(crate::scrollbar::Source::List(self.list.clone()), &self.conversation_bar, ui.text, false).absolute().top_0().right_0().bottom_0());
+            .child(crate::scrollbar::vertical(crate::scrollbar::Source::List(self.list.clone()), &self.conversation_bar, &ui, false).absolute().top_0().right_0().bottom_0());
         let empty = self.entries.is_empty();
         let images = self.images.len();
         div()

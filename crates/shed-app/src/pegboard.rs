@@ -1635,7 +1635,7 @@ impl Pegboard {
                     .flex_1()
                     .min_h_0()
                     .child(div().id("pegboard-list").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(list))
-                    .child(crate::scrollbar::vertical(crate::scrollbar::Source::Handle(self.scroll.clone()), &self.scroll_bar, ui.text, false).absolute().top_0().right_0().bottom_0()),
+                    .child(crate::scrollbar::vertical(crate::scrollbar::Source::Handle(self.scroll.clone()), &self.scroll_bar, &ui, false).absolute().top_0().right_0().bottom_0()),
             )
             .when_some(setup, |el, panel| el.child(div().absolute().top_0().right_0().h_full().child(panel)))
             .children(menu)

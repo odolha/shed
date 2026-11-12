@@ -4,17 +4,21 @@
 //!
 //! It is painted directly (one small quad, two when hovered), and listens
 //! to the mouse at the window, so a drag goes on outside the bar.
+//!
+//! Scrolling with the wheel also brings up two small buttons above the
+//! bar's foot, **Top** and **End**, for a few seconds.
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, DispatchPhase, IntoElement, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PaintQuad, Pixels, ScrollHandle, Styled, UniformListScrollHandle, Window, canvas, point, px, size,
+    PaintQuad, Pixels, ScrollHandle, ScrollWheelEvent, SharedString, Styled, TextAlign, TextRun, TransformationMatrix,
+    UniformListScrollHandle, Window, canvas, point, px, size,
 };
-use shed_model::Rgb;
 
-use crate::theme::hsla_alpha;
+use crate::theme::{UiColors, hsla_alpha};
 
 /// How wide the bar is, and the thumb's shortest length.
 pub const WIDTH: f32 = 10.0;
@@ -89,6 +93,23 @@ pub struct State {
     /// While dragging: where in the thumb it was taken.
     grab: Rc<Cell<Option<f32>>>,
     hovered: Rc<Cell<bool>>,
+    /// The offset at the last paint, to see the wheel move this content.
+    last_offset: Rc<Cell<Option<f32>>>,
+    /// Until when the Top and End buttons show.
+    jumps_until: Rc<Cell<Option<Instant>>>,
+}
+
+/// How long the Top and End buttons stay after the wheel stops.
+const JUMPS_FOR: Duration = Duration::from_millis(2500);
+
+thread_local! {
+    /// When the wheel last turned anywhere: a bar whose content moved just
+    /// then was scrolled by it (not by new output or a following list).
+    static LAST_WHEEL: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+fn wheel_just_turned() -> bool {
+    LAST_WHEEL.with(|w| w.get().is_some_and(|t| t.elapsed() < Duration::from_millis(400)))
 }
 
 /// The thumb's place on a track `track` long: its top and length.
@@ -108,8 +129,10 @@ fn offset_for(m: Metrics, track: f32, len: f32, top: f32) -> f32 {
 /// what scrolls: `absolute().top_0().right_0().bottom_0()`). Shows only
 /// when there is something to scroll; with `quiet`, only while the mouse is
 /// over it, it is dragged or the content is not at its end (terminals).
-pub fn vertical(source: Source, state: &State, color: Rgb, quiet: bool) -> impl IntoElement + Styled {
+pub fn vertical(source: Source, state: &State, ui: &UiColors, quiet: bool) -> impl IntoElement + Styled {
     let state = state.clone();
+    let ui = ui.clone();
+    let color = ui.text;
     canvas(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window: &mut Window, cx: &mut App| {
@@ -127,6 +150,29 @@ pub fn vertical(source: Source, state: &State, color: Rgb, quiet: bool) -> impl 
                 window.paint_quad(PaintQuad::new(thumb_bounds).corner_radii(w / 2.0).background(hsla_alpha(color, if strong { 0.55 } else { 0.3 })));
             }
 
+            // The wheel moved this content: the jump buttons come up.
+            let moved = state.last_offset.replace(Some(m.offset)).is_some_and(|o| (o - m.offset).abs() > 0.5);
+            if moved && wheel_just_turned() && !dragging {
+                let fresh = state.jumps_until.get().is_none_or(|t| t <= Instant::now());
+                state.jumps_until.set(Some(Instant::now() + JUMPS_FOR));
+                if fresh {
+                    // Paint once more when they are due to go.
+                    cx.spawn(async move |cx| {
+                        cx.background_executor().timer(JUMPS_FOR + Duration::from_millis(50)).await;
+                        cx.update(|cx| cx.refresh_windows());
+                    })
+                    .detach();
+                }
+            }
+            window.on_mouse_event(|_: &ScrollWheelEvent, phase, _, _| {
+                if phase == DispatchPhase::Capture {
+                    LAST_WHEEL.with(|w| w.set(Some(Instant::now())));
+                }
+            });
+            if state.jumps_until.get().is_some_and(|t| t > Instant::now()) {
+                paint_jumps(&source, m, bounds, &ui, &state, window, cx);
+            }
+
             let (s, st) = (source.clone(), state.clone());
             window.on_mouse_event(move |e: &MouseDownEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || e.button != MouseButton::Left || !bounds.contains(&e.position) {
@@ -137,7 +183,9 @@ pub fn vertical(source: Source, state: &State, color: Rgb, quiet: bool) -> impl 
                 let grab = if y >= top && y <= top + len {
                     y - top
                 } else {
-                    s.set(offset_for(m, track, len, y - len / 2.0), window, cx);
+                    let to = offset_for(m, track, len, y - len / 2.0);
+                    s.set(to, window, cx);
+                    st.last_offset.set(Some(to));
                     len / 2.0
                 };
                 st.grab.set(Some(grab));
@@ -153,7 +201,9 @@ pub fn vertical(source: Source, state: &State, color: Rgb, quiet: bool) -> impl 
                 match st.grab.get() {
                     Some(grab) if e.pressed_button == Some(MouseButton::Left) => {
                         let y = f32::from(e.position.y - bounds.origin.y);
-                        s.set(offset_for(m, track, len, y - grab), window, cx);
+                        let to = offset_for(m, track, len, y - grab);
+                        s.set(to, window, cx);
+                        st.last_offset.set(Some(to));
                         cx.stop_propagation();
                         window.refresh();
                     }
@@ -177,9 +227,54 @@ pub fn vertical(source: Source, state: &State, color: Rgb, quiet: bool) -> impl 
     .w(px(WIDTH))
 }
 
+/// The Top and End buttons, left of the bar near its foot: each a small
+/// pill with an arrow and a word; pressing one goes there.
+fn paint_jumps(source: &Source, m: Metrics, bar: Bounds<Pixels>, ui: &UiColors, state: &State, window: &mut Window, cx: &mut App) {
+    let color = ui.text;
+    let mut buttons: Vec<(&'static str, &'static str, f32)> = Vec::new();
+    if m.offset > 1.0 {
+        buttons.push(("arrow-up", "Top", 0.0));
+    }
+    if m.offset < m.max - 1.0 {
+        buttons.push(("arrow-down", "End", m.max));
+    }
+    let (h, w, gap) = (px(24.0), px(62.0), px(6.0));
+    let right = bar.origin.x - px(6.0);
+    let mut y = bar.origin.y + bar.size.height - px(12.0) - h * buttons.len() as f32 - gap * (buttons.len().saturating_sub(1)) as f32;
+    let font = window.text_style().font();
+    for (glyph, label, to) in buttons {
+        let b = Bounds::new(point(right - w, y), size(w, h));
+        y += h + gap;
+        let ground = PaintQuad::new(b)
+            .corner_radii(h / 2.0)
+            .background(crate::theme::hsla(ui.tab_active))
+            .border_widths(px(1.0))
+            .border_color(crate::theme::hsla(ui.divider));
+        window.paint_quad(ground);
+        let icon_size = px(12.0);
+        let icon = Bounds::new(point(b.origin.x + px(9.0), b.origin.y + (h - icon_size) / 2.0), size(icon_size, icon_size));
+        let _ = window.paint_svg(icon, crate::assets::icon(glyph), None, TransformationMatrix::unit(), hsla_alpha(color, 0.9), cx);
+        let run = TextRun { len: label.len(), font: font.clone(), color: hsla_alpha(color, 0.9), background_color: None, underline: None, strikethrough: None, letter_spacing: None };
+        let line = window.text_system().shape_line(SharedString::from(label), px(12.0), &[run]);
+        let _ = line.paint(point(b.origin.x + px(25.0), b.origin.y + (h - px(16.0)) / 2.0), px(16.0), TextAlign::Left, None, window, cx);
+
+        let (s, st) = (source.clone(), state.clone());
+        window.on_mouse_event(move |e: &MouseDownEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble && e.button == MouseButton::Left && b.contains(&e.position) {
+                s.set(to, window, cx);
+                // Moved by the button, not the wheel: they need not come back.
+                st.last_offset.set(Some(to));
+                st.jumps_until.set(None);
+                cx.stop_propagation();
+                window.refresh();
+            }
+        });
+    }
+}
+
 /// `content` (which fills its height) with a scrollbar over its right
 /// edge; size the box returned as `content` was sized.
-pub fn with_bar(content: impl IntoElement, source: Source, state: &State, color: Rgb) -> gpui::Div {
+pub fn with_bar(content: impl IntoElement, source: Source, state: &State, ui: &UiColors) -> gpui::Div {
     use gpui::ParentElement;
     gpui::div()
         .relative()
@@ -187,7 +282,7 @@ pub fn with_bar(content: impl IntoElement, source: Source, state: &State, color:
         .flex()
         .flex_col()
         .child(content)
-        .child(vertical(source, state, color, false).absolute().top_0().right_0().bottom_0())
+        .child(vertical(source, state, ui, false).absolute().top_0().right_0().bottom_0())
 }
 
 #[cfg(test)]
@@ -203,7 +298,7 @@ mod tests {
     impl Render for Rows {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let rows = list(self.list.clone(), |i, _, _| div().h(px(20.0)).child(format!("row {i}")).into_any_element()).flex_1();
-            div().w(px(300.0)).h(px(200.0)).flex().flex_col().child(with_bar(rows, Source::List(self.list.clone()), &self.bar, Rgb::hex(0xffffff)).size_full())
+            div().w(px(300.0)).h(px(200.0)).flex().flex_col().child(with_bar(rows, Source::List(self.list.clone()), &self.bar, &UiColors::default()).size_full())
         }
     }
 
@@ -217,7 +312,7 @@ mod tests {
             let rows = gpui::uniform_list("rows", 100, |range, _, _| range.map(|i| div().h(px(20.0)).child(format!("row {i}")).into_any_element()).collect())
                 .track_scroll(&self.scroll)
                 .flex_1();
-            div().w(px(300.0)).h(px(200.0)).flex().flex_col().child(with_bar(rows, Source::uniform(&self.scroll), &self.bar, Rgb::hex(0xffffff)).size_full())
+            div().w(px(300.0)).h(px(200.0)).flex().flex_col().child(with_bar(rows, Source::uniform(&self.scroll), &self.bar, &UiColors::default()).size_full())
         }
     }
 
@@ -234,6 +329,24 @@ mod tests {
         cx.run_until_parked();
         assert!((700.0..1100.0).contains(&at(cx)), "{}", at(cx));
         cx.simulate_mouse_up(point(x, px(100.0)), MouseButton::Left, Modifiers::none());
+    }
+
+    /// Turning the wheel brings up Top and End; End goes to the end.
+    #[gpui::test]
+    fn the_wheel_brings_up_top_and_end(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| Rows { list: ListState::new(100, ListAlignment::Top, px(100.0)).measure_all(), bar: State::default() });
+        cx.run_until_parked();
+        let at = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |v, _| -f32::from(v.list.scroll_px_offset_for_scrollbar().y));
+        cx.simulate_event(ScrollWheelEvent { position: point(px(100.0), px(100.0)), delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-300.0))), ..Default::default() });
+        cx.run_until_parked();
+        let scrolled = at(cx);
+        assert!(scrolled > 100.0 && scrolled < 1700.0, "{scrolled}");
+        assert!(view.read_with(cx, |v, _| v.bar.jumps_until.get().is_some()), "the buttons are up");
+        // End: the lower button, left of the bar near its foot.
+        cx.simulate_mouse_down(point(px(250.0), px(176.0)), MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        assert!(at(cx) > 1790.0, "{}", at(cx));
+        assert!(view.read_with(cx, |v, _| v.bar.jumps_until.get().is_none()), "they go once used");
     }
 
     /// Pressing the track and dragging the thumb scroll a list, with the

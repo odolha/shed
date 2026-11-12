@@ -1090,7 +1090,7 @@ impl ProjectView {
             .track_scroll(&search.scroll)
             .flex_1()
             .min_h_0();
-        let list = crate::scrollbar::with_bar(list, crate::scrollbar::Source::uniform(&search.scroll), &self.bars.search, ui.text).flex_1();
+        let list = crate::scrollbar::with_bar(list, crate::scrollbar::Source::uniform(&search.scroll), &self.bars.search, ui).flex_1();
         Some(
             div()
                 .size_full()
@@ -1849,7 +1849,7 @@ impl Render for ProjectView {
             .flex_1()
             .min_h_0()
             .py_1();
-        let tree = crate::scrollbar::with_bar(tree, crate::scrollbar::Source::uniform(&self.scroll), &self.bars.tree, ui.text).size_full();
+        let tree = crate::scrollbar::with_bar(tree, crate::scrollbar::Source::uniform(&self.scroll), &self.bars.tree, &ui).size_full();
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
         let notice = self.notice.clone().or_else(|| self.limited.then(|| "Not every folder can be watched (the system's limit): use Refresh to catch up.".to_string()));
         let editor = div()

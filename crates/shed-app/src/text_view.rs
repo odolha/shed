@@ -988,7 +988,7 @@ impl Render for TextView {
                     .ok();
             }),
         };
-        let bar = crate::scrollbar::vertical(source, &self.bar, ui.text, false).absolute().top_0().right_0().bottom_0();
+        let bar = crate::scrollbar::vertical(source, &self.bar, &ui, false).absolute().top_0().right_0().bottom_0();
 
         div()
             .id("text-view")
