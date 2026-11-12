@@ -1112,10 +1112,13 @@ impl Pegboard {
             .group(group)
             .flex()
             .flex_col()
-            .gap_1()
-            .px_2()
-            .py_2()
+            .gap_1p5()
+            .px_3()
+            .pt_1p5()
+            .pb_3()
             .rounded_lg()
+            .border_1()
+            .border_color(hsla(ui.divider))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                 let entries = this.bench_menu(&e);
                 this.open_menu(ev.position, entries, cx);
@@ -1297,8 +1300,9 @@ impl Pegboard {
             .rounded_md()
             .text_size(px(13.0))
             .cursor_pointer()
-            .when(selected, |d| d.bg(hsla_alpha(accent, 0.14)))
-            .when(!selected, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
+            // A light ground of their own, so tabs stand out from the bench.
+            .when(selected, |d| d.bg(hsla_alpha(accent, 0.18)))
+            .when(!selected, |d| d.bg(hsla_alpha(ui.text, 0.06)).hover(|s| s.bg(hsla_alpha(ui.text, 0.11))))
             .tooltip(menu::tooltip_text(full))
             .on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
             .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(hsla_alpha(accent, 0.14)))
@@ -1594,7 +1598,7 @@ impl Pegboard {
             cx.try_global::<PegboardData>().map(|d| d.0.previews.iter().cloned().collect()).unwrap_or_default();
 
         let compact = self.state.read(cx).settings.config.window.compact_pegboard;
-        let mut list = div().flex().flex_col().when(compact, |d| d.gap_4()).when(!compact, |d| d.gap_3());
+        let mut list = div().flex().flex_col().gap_3();
         let mut first = 0;
         for entry in &entries {
             list = list.child(if compact { self.render_bench_line(entry, first, &ui, cx) } else { self.render_bench(entry, first, &previews, &ui, cx) });

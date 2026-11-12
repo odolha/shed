@@ -63,10 +63,10 @@ show, dimmed, what was on screen when they were saved.
 
 **Compact view**: the two buttons left of the light/dark switch choose between
 the cards and a compact list, to see everything at a glance. Each bench is a
-header line (its colour dot, filled while it runs and a ring when closed; its
+framed box with a header line (its colour dot, filled while it runs and a ring when closed; its
 name, click to open, double-click to rename; whether it is hidden or when it was
 saved; its links; **Open** or **Go to**; **⋯**) with its tabs below in even
-columns. Each tab has an icon for what it is (terminal, program running, project,
+columns, each on a light ground of its own. Each tab has an icon for what it is (terminal, program running, project,
 AI, remote; the waiting icon when it waits for you), its title, its tags as small
 dots, and what runs in it or its folder, cut short with "…" (hover for all of it).
 A short bar in the bench's colour marks the tab the bench shows. Tabs work like
