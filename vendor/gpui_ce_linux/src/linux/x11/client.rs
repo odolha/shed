@@ -1916,13 +1916,21 @@ impl X11Client {
 
     pub(crate) fn write_to_clipboard(&self, item: gpui::ClipboardItem) {
         let mut state = self.0.borrow_mut();
-        state
-            .clipboard
-            .set_text(
+        // Shed patch: a copy carrying HTML offers it beside the text.
+        let written = match crate::linux::shed_html(&item) {
+            Some(html) => state.clipboard.set_text_and_html(
+                item.text().unwrap_or_default(),
+                html,
+                clipboard::ClipboardKind::Clipboard,
+                clipboard::WaitConfig::None,
+            ),
+            None => state.clipboard.set_text(
                 std::borrow::Cow::Owned(item.text().unwrap_or_default()),
                 clipboard::ClipboardKind::Clipboard,
                 clipboard::WaitConfig::None,
-            )
+            ),
+        };
+        written
             .context("X11: Failed to write to clipboard (clipboard)")
             .log_with_level(log::Level::Debug);
         state.clipboard_item.replace(item);

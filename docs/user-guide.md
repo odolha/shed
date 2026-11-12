@@ -273,9 +273,17 @@ terminal of the bench.
   paths in. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
   its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu
   sends a file or folder.
-- **The conversation** streams in: answers in Markdown, each tool Claude uses on
+- **The conversation** streams in: answers drawn from their Markdown (headings,
+  lists, tables, links, code blocks coloured by language), each tool Claude uses on
   one line (click it for the command, the change as a diff, and what came back),
-  thinking folded away. Right-click to copy an answer or the whole conversation.
+  thinking folded away.
+- **Copying**: drag over the text to select it (double-click a word, triple-click
+  a paragraph, Shift+click to extend), then Ctrl+C. Each answer has a **Copy**
+  button when the mouse is over it, and each code block one above it (the code
+  only). Copies paste formatted where formatting is kept (mail, documents, chat;
+  on Linux) and as text elsewhere; an answer's **Copy** gives its Markdown as the
+  text. Right-click for **Copy as Markdown**, **Copy Message as Plain Text** and
+  **Copy the Whole Conversation**. Clicking a link opens it.
 - **Permission**: when Claude wants to change a file or run a command that needs
   your say, a card shows what and how, with **Allow**, **Allow for This Session**
   and **Deny**; the tab's icon shows it is waiting. **Stop** (or Escape at the

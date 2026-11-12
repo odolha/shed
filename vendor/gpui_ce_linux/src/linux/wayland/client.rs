@@ -1520,6 +1520,10 @@ impl WaylandConnection {
             for mime_type in TEXT_MIME_TYPES {
                 data_source.offer(mime_type.to_string());
             }
+            // Shed patch: a copy carrying HTML offers it too.
+            if state.clipboard.has_html() {
+                data_source.offer("text/html".to_string());
+            }
             data_source.offer(state.clipboard.self_mime());
             data_device.set_selection(Some(&data_source), serial.as_raw());
         }

@@ -28,6 +28,18 @@ use std::rc::Rc;
 
 use gpui::WindowingModes;
 
+/// Shed patch: what a copy carrying formatted text offers as `text/html`. Shed
+/// puts it in the string's metadata, after this prefix.
+pub const SHED_HTML_PREFIX: &str = "shed-html:";
+
+#[allow(dead_code)]
+pub(crate) fn shed_html(item: &gpui::ClipboardItem) -> Option<String> {
+    item.entries().iter().find_map(|e| match e {
+        gpui::ClipboardEntry::String(s) => s.metadata.as_deref()?.strip_prefix(SHED_HTML_PREFIX).map(str::to_string),
+        _ => None,
+    })
+}
+
 /// Returns the default platform implementation for the current OS.
 ///
 /// A windowed platform connects to the display server the process environment names, or starts

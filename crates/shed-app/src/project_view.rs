@@ -1774,7 +1774,7 @@ impl ProjectView {
 
 /// The colour of a kind of code, from the terminal palette, so it suits
 /// the theme, light or dark.
-fn syntax_color(style: Style, p: &shed_emu::Palette) -> Rgb {
+pub fn syntax_color(style: Style, p: &shed_emu::Palette) -> Rgb {
     match style {
         Style::Keyword => p.ansi[5],
         Style::String => p.ansi[2],

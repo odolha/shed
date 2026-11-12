@@ -11,6 +11,7 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 shed-model = { path = "crates/shed-model" }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 shed-proto = { path = "crates/shed-proto" }
 shed-emu = { path = "crates/shed-emu" }
 shed-keeper = { path = "crates/shed-keeper" }

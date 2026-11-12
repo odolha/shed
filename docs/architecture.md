@@ -292,6 +292,14 @@ Claude Code's suggested rules for "for this session"); Stop is a `control_reques
 effort start a new one at the next prompt. `rate_limit_event`s carry the usage
 limits (`AiLimits`).
 
+The window draws an answer from `shed_ai::markdown` (pulldown-cmark turned
+into blocks of text with styled ranges), as pieces of selectable text
+(`shed-app/src/ai_text.rs`); code blocks are coloured by `shed-project`'s
+highlighter. A selection runs from (entry, piece, byte) to another; each piece's
+`StyledText` layout maps the mouse to a byte. A copy puts plain text on the
+clipboard and the same as HTML (`markdown::to_html`) in the string's metadata
+behind `shed-html:`, which the patched Linux clipboard offers as `text/html`.
+
 Sessions are read from Claude Code's own files
 (`~/.claude/projects/<folder>/<id>.jsonl`), by the window to list them (titles from
 its `ai-title` records) and by the keeper to show a session again. `shed-ai` has

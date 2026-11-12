@@ -193,6 +193,27 @@ pub fn detect(path: &Path) -> Option<&'static Lang> {
     })
 }
 
+/// The language a code block names (```rust, ```py, ```sh…).
+pub fn by_name(name: &str) -> Option<&'static Lang> {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    let alias = match lower.as_str() {
+        "rust" => "rs",
+        "javascript" | "node" => "js",
+        "typescript" => "ts",
+        "python" | "python3" => "py",
+        "shell" | "console" | "shellsession" => "sh",
+        "kotlin" => "kt",
+        "golang" => "go",
+        "c++" => "cpp",
+        "markdown" => "md",
+        other => other,
+    };
+    detect(Path::new(&format!("x.{alias}")))
+}
+
 fn by_injection_name(name: &str) -> Option<&'static Lang> {
     Some(match name {
         "javascript" | "js" => &JAVASCRIPT,

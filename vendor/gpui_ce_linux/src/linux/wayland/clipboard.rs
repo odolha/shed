@@ -174,7 +174,19 @@ impl Clipboard {
         self.self_mime.clone()
     }
 
-    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
+    /// Shed patch: whether the clipboard's contents carry HTML.
+    pub fn has_html(&self) -> bool {
+        self.contents.as_ref().and_then(crate::linux::shed_html).is_some()
+    }
+
+    pub fn send(&self, mime_type: String, fd: OwnedFd) {
+        // Shed patch: HTML when that is what is asked for.
+        if mime_type == "text/html"
+            && let Some(html) = self.contents.as_ref().and_then(crate::linux::shed_html)
+        {
+            self.send_bytes(fd, html.into_bytes());
+            return;
+        }
         if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
             self.send_bytes(fd, text.as_bytes().to_owned());
         }

@@ -9,5 +9,5 @@ pub mod search;
 pub mod watch;
 
 pub use files::{Excluder, walk};
-pub use lang::{Lang, Spans, Style, detect, highlight};
+pub use lang::{Lang, Spans, Style, by_name, detect, highlight};
 pub use watch::Watch;

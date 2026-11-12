@@ -1,6 +1,7 @@
 //! `shed`: the bench windows, plus the CLI.
 
 mod actions;
+mod ai_text;
 mod ai_view;
 mod assets;
 mod browser;

@@ -77,7 +77,8 @@ x11rb::atom_manager! {
         TEXT,
         TEXT_MIME_UNKNOWN: b"text/plain",
 
-        // HTML: b"text/html",
+        // Shed patch: offered beside text when a copy carries HTML.
+        HTML: b"text/html",
         // URI_LIST: b"text/uri-list",
 
         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
@@ -718,7 +719,11 @@ impl Inner {
             log::trace!("Handling request for (probably) the clipboard contents.");
             let data = self.selection_of(selection).data.read();
             if let Some(data_list) = &*data {
-                success = match data_list.iter().find(|d| d.format == event.target) {
+                // Shed patch: the plain-text names listed in TARGETS are served
+                // from the UTF8_STRING data (upstream listed them but refused them).
+                let utf8_alias = [self.atoms.UTF8_MIME_0, self.atoms.UTF8_MIME_1, self.atoms.TEXT_MIME_UNKNOWN].contains(&event.target);
+                let wanted = if utf8_alias { self.atoms.UTF8_STRING } else { event.target };
+                success = match data_list.iter().find(|d| d.format == wanted) {
                     Some(data) => {
                         self.server
                             .conn
@@ -991,6 +996,16 @@ impl Clipboard {
             bytes: message.into_owned().into_bytes(),
             format: self.inner.atoms.UTF8_STRING,
         }];
+        self.inner.write(data, selection, wait)
+    }
+
+    /// Shed patch: text, with the same content as HTML for programs that
+    /// take formatted text.
+    pub(crate) fn set_text_and_html(&self, text: String, html: String, selection: ClipboardKind, wait: WaitConfig) -> Result<()> {
+        let data = vec![
+            ClipboardData { bytes: text.into_bytes(), format: self.inner.atoms.UTF8_STRING },
+            ClipboardData { bytes: html.into_bytes(), format: self.inner.atoms.HTML },
+        ];
         self.inner.write(data, selection, wait)
     }
 

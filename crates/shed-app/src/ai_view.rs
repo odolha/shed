@@ -3,20 +3,24 @@
 //! prompt. The keeper runs Claude Code; this view shows what it says and
 //! sends what the user types.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, ClipboardEntry, ClipboardItem, Context, Entity, ExternalPaths, FocusHandle, Focusable, FollowMode,
-    FontWeight, HighlightStyle, KeyDownEvent, ListAlignment, ListState, MouseButton, MouseDownEvent, SharedString,
-    StyledText, Subscription, Task, UniformListScrollHandle, Window, div, list, prelude::*, px, svg, uniform_list,
+    AnyElement, ClipboardEntry, ClipboardItem, Context, CursorStyle, Entity, ExternalPaths, FocusHandle, Focusable,
+    FollowMode, FontWeight, HighlightStyle, KeyDownEvent, ListAlignment, ListState, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, SharedString, StyledText, Subscription, Task, TextLayout, UniformListScrollHandle,
+    Window, div, list, prelude::*, px, relative, svg, uniform_list,
 };
 use shed_ai::{Command, Entry, Limits, Model, SessionInfo, State as AiState, Status};
 use shed_model::{AiTab, BenchId, Rgb, TabId};
 use shed_proto::{AiImage, ClientMsg};
 
+use crate::ai_text::{self, Copy, Kind, Piece, Point, Selection};
 use crate::assets::icon;
 use crate::keeper_conn::KeeperConn;
 use crate::line_editor::LineEditor;
@@ -81,7 +85,54 @@ pub struct AiView {
     find: Option<(Entity<LineEditor>, Option<usize>, Subscription)>,
     /// The task list is opened.
     tasks_open: bool,
+    /// Claude's answers as drawn, by entry (parsed again when they change).
+    parsed: HashMap<usize, Rc<Parsed>>,
+    /// Text selected in the conversation, and whether the mouse is selecting.
+    selection: Option<Selection>,
+    selecting: bool,
+    dragged: bool,
+    /// The copy button that says "Copied" for a moment.
+    copied: Option<(SharedString, Task<()>)>,
     _subs: Vec<Subscription>,
+}
+
+/// An entry's text as drawn: pieces of selectable text, and the colours of
+/// those that are code.
+struct Parsed {
+    source: String,
+    pieces: Vec<Piece>,
+    code: Vec<Option<CodeColors>>,
+}
+
+/// Byte ranges of a code block and their colours.
+type CodeColors = Vec<(Range<usize>, Rgb)>;
+
+impl Parsed {
+    fn plain(text: String) -> Self {
+        Parsed { source: String::new(), pieces: vec![Piece { kind: Kind::Para, text: shed_ai::markdown::Text::plain(text) }], code: vec![None] }
+    }
+}
+
+/// Code coloured as its language, ranges into the whole text.
+fn code_colors(lang: &str, code: &str, palette: &shed_emu::Palette) -> Option<CodeColors> {
+    if code.len() > 200_000 {
+        return None;
+    }
+    let spans = shed_project::highlight(shed_project::by_name(lang)?, code)?;
+    let starts = std::iter::once(0).chain(code.match_indices('\n').map(|(i, _)| i + 1));
+    Some(
+        spans
+            .into_iter()
+            .zip(starts)
+            .flat_map(|(line, start)| line.into_iter().map(move |(r, style)| (start + r.start..start + r.end, crate::project_view::syntax_color(style, palette))))
+            .collect(),
+    )
+}
+
+fn text_index(layout: &TextLayout, at: gpui::Point<gpui::Pixels>) -> usize {
+    match layout.index_for_position(at) {
+        Ok(i) | Err(i) => i,
+    }
 }
 
 impl AiView {
@@ -142,6 +193,11 @@ impl AiView {
             warming: false,
             find: None,
             tasks_open: false,
+            parsed: HashMap::new(),
+            selection: None,
+            selecting: false,
+            dragged: false,
+            copied: None,
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -163,6 +219,7 @@ impl AiView {
 
     pub fn apply_settings(&mut self, settings: &Settings, cx: &mut Context<Self>) {
         self.settings = settings.clone();
+        self.parsed.clear();
         self.prompt.update(cx, |p, cx| p.apply(settings, cx));
         cx.notify();
     }
@@ -184,6 +241,10 @@ impl AiView {
         let old_len = self.entries.len();
         self.entries.truncate(from);
         self.entries.extend(entries);
+        self.parsed.retain(|i, _| *i < from);
+        if self.selection.is_some_and(|s| s.ordered().1.entry >= from) {
+            self.selection = None;
+        }
         if from == 0 {
             self.expanded.clear();
             self.list.reset(self.entries.len());
@@ -546,10 +607,311 @@ impl AiView {
             None => String::new(),
         };
         let all = self.transcript_markdown();
-        vec![
-            menu::item("Copy", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))),
-            menu::item("Copy the Whole Conversation", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(all.clone()))),
-        ]
+        let mut entries = Vec::new();
+        if self.selection.is_some_and(|s| !s.is_empty()) {
+            entries.push(menu::item("Copy", |this: &mut Self, _, cx| this.copy_selection(cx)).icon("copy"));
+            entries.push(menu::item("Copy as Markdown", |this: &mut Self, _, cx| {
+                if let Some(copy) = this.selected_copy() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(copy.markdown));
+                }
+            }));
+            entries.push(MenuEntry::Separator);
+        }
+        let plain = if matches!(self.entries.get(i), Some(Entry::Assistant { .. })) { shed_ai::markdown::to_plain(&text) } else { text.clone() };
+        entries.push(menu::item("Copy Message", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(text.clone(), &text))).icon("copy"));
+        entries.push(menu::item("Copy Message as Plain Text", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(plain.clone()))));
+        entries.push(menu::item("Copy the Whole Conversation", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(all.clone(), &all))));
+        entries
+    }
+
+    /// An entry's selectable text, as drawn.
+    fn entry_pieces(&mut self, i: usize) -> Rc<Parsed> {
+        match self.entries.get(i) {
+            Some(Entry::Assistant { text }) => {
+                if let Some(p) = self.parsed.get(&i).filter(|p| p.source == *text) {
+                    return p.clone();
+                }
+                let pieces = ai_text::pieces(shed_ai::markdown::parse(text));
+                let palette = &self.settings.palette;
+                let code = pieces
+                    .iter()
+                    .map(|p| match &p.kind {
+                        Kind::Code { lang, .. } => code_colors(lang, &p.text.text, palette),
+                        _ => None,
+                    })
+                    .collect();
+                let parsed = Rc::new(Parsed { source: text.clone(), pieces, code });
+                self.parsed.insert(i, parsed.clone());
+                parsed
+            }
+            Some(Entry::User { text, .. }) => {
+                let lines: Vec<&str> = text.lines().collect();
+                let shown = if lines.len() > FOLD_LINES && !self.expanded.contains(&i) { lines[..FOLD_LINES].join("\n") } else { text.clone() };
+                Rc::new(Parsed::plain(shown))
+            }
+            Some(Entry::Thinking { text }) if self.expanded.contains(&i) => Rc::new(Parsed::plain(text.clone())),
+            _ => Rc::new(Parsed { source: String::new(), pieces: Vec::new(), code: Vec::new() }),
+        }
+    }
+
+    fn selected_copy(&mut self) -> Option<Copy> {
+        let sel = self.selection.filter(|s| !s.is_empty())?;
+        let (a, b) = sel.ordered();
+        let mut copy = Copy::default();
+        for i in a.entry..=b.entry {
+            let parsed = self.entry_pieces(i);
+            for (j, piece) in parsed.pieces.iter().enumerate() {
+                if let Some(range) = sel.range_in(i, j, piece.text.text.len()) {
+                    copy.add(piece, range);
+                }
+            }
+            copy.next_entry();
+        }
+        Some(copy)
+    }
+
+    /// Copies the selection: as text, and formatted for where that is kept.
+    fn copy_selection(&mut self, cx: &mut Context<Self>) {
+        if let Some(copy) = self.selected_copy() {
+            cx.write_to_clipboard(ai_text::formatted_item(copy.plain, &copy.markdown));
+        }
+    }
+
+    /// Keys anywhere in the tab, before the prompt: copying the selection.
+    fn selection_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let ks = &event.keystroke;
+        let Some(sel) = self.selection else { return };
+        match ks.key.as_str() {
+            "c" if ks.modifiers.secondary() && !sel.is_empty() && self.prompt.read(cx).buffer.selected_text().is_empty() => {
+                self.copy_selection(cx);
+                cx.stop_propagation();
+            }
+            "escape" => {
+                self.selection = None;
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    /// Shows "Copied" on the button `key` for a moment.
+    fn copied(&mut self, key: SharedString, cx: &mut Context<Self>) {
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(1500)).await;
+            this.update(cx, |this, cx| {
+                this.copied = None;
+                cx.notify();
+            })
+            .ok();
+        });
+        self.copied = Some((key, task));
+        cx.notify();
+    }
+
+    /// A small "Copy" button that copies `item`.
+    fn copy_button(&self, key: SharedString, item: ClipboardItem, ui: &UiColors, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let done = self.copied.as_ref().is_some_and(|(k, _)| *k == key);
+        div()
+            .id(key.clone())
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_1p5()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_size(px(11.0))
+            .text_color(hsla(ui.text_dim))
+            .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.write_to_clipboard(item.clone());
+                this.copied(key.clone(), cx);
+            }))
+            .child(svg().path(icon("copy")).size(px(12.0)).text_color(hsla(ui.text_dim)))
+            .child(if done { "Copied" } else { "Copy" })
+    }
+
+    /// A piece of text that can be selected with the mouse.
+    fn sel_text(&self, i: usize, j: usize, parsed: &Rc<Parsed>, styles: Vec<(Range<usize>, HighlightStyle)>, cx: &mut Context<Self>) -> gpui::Div {
+        let text = &parsed.pieces[j].text.text;
+        let selected = self.selection.and_then(|s| s.range_in(i, j, text.len()));
+        let sel_style = HighlightStyle { background_color: Some(hsla_alpha(self.accent, 0.35)), ..Default::default() };
+        let styled = StyledText::new(SharedString::from(text.clone())).with_highlights(ai_text::with_selection(styles, selected, sel_style));
+        let (down, moved, up) = (styled.layout().clone(), styled.layout().clone(), styled.layout().clone());
+        let (p1, p2) = (parsed.clone(), parsed.clone());
+        div()
+            .cursor(CursorStyle::IBeam)
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                let at = text_index(&down, e.position);
+                let point = |offset| Point { entry: i, piece: j, offset };
+                let text = &p1.pieces[j].text.text;
+                this.selection = Some(match e.click_count {
+                    2 => {
+                        let word = ai_text::word_at(text, at);
+                        Selection { anchor: point(word.start), head: point(word.end) }
+                    }
+                    n if n >= 3 => Selection { anchor: point(0), head: point(text.len()) },
+                    _ => match this.selection {
+                        Some(s) if e.modifiers.shift => Selection { anchor: s.anchor, head: point(at) },
+                        _ => Selection::at(point(at)),
+                    },
+                });
+                this.selecting = true;
+                this.dragged = e.click_count > 1;
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
+                if !this.selecting || e.pressed_button != Some(MouseButton::Left) || !moved.bounds().contains(&e.position) {
+                    return;
+                }
+                let head = Point { entry: i, piece: j, offset: text_index(&moved, e.position) };
+                if let Some(s) = &mut this.selection
+                    && s.head != head
+                {
+                    s.head = head;
+                    this.dragged = true;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(move |this, e: &MouseUpEvent, _, cx| {
+                // A click on a link opens it.
+                if !this.dragged
+                    && let Some(url) = ai_text::link_at(&p2.pieces[j].text, text_index(&up, e.position))
+                {
+                    cx.open_url(url);
+                }
+            }))
+            .child(styled)
+    }
+
+    /// The pieces of an entry, drawn: Markdown blocks, tables, code.
+    fn render_pieces(&mut self, i: usize, parsed: &Rc<Parsed>, ui: &UiColors, mono: &str, cx: &mut Context<Self>) -> gpui::Div {
+        let ink = ui.ink(self.accent);
+        let mut out = div().flex().flex_col().gap_2().line_height(relative(1.45)).text_color(hsla(ui.text));
+        let mut j = 0;
+        let n = parsed.pieces.len();
+        while j < n {
+            let piece = &parsed.pieces[j];
+            let styles = ai_text::highlights(&piece.text, ink, ui.divider);
+            match &piece.kind {
+                Kind::Para => {
+                    out = out.child(self.sel_text(i, j, parsed, styles, cx));
+                    j += 1;
+                }
+                Kind::Heading(level) => {
+                    let size = match level {
+                        1 => 18.0,
+                        2 => 16.0,
+                        3 => 14.5,
+                        _ => 13.5,
+                    };
+                    out = out.child(div().mt_1().text_size(px(size)).font_weight(FontWeight::BOLD).child(self.sel_text(i, j, parsed, styles, cx)));
+                    j += 1;
+                }
+                Kind::Quote => {
+                    out = out.child(div().pl_3().border_l_2().border_color(hsla(ui.divider)).text_color(hsla(ui.text_dim)).child(self.sel_text(i, j, parsed, styles, cx)));
+                    j += 1;
+                }
+                Kind::Rule => {
+                    out = out.child(div().my_1().h(px(1.0)).bg(hsla(ui.divider)));
+                    j += 1;
+                }
+                Kind::Item { .. } => {
+                    // A list: its items closer together than paragraphs.
+                    let mut items = div().flex().flex_col().gap_1();
+                    while let Some(Piece { kind: Kind::Item { depth, marker }, text }) = parsed.pieces.get(j) {
+                        let styles = ai_text::highlights(text, ink, ui.divider);
+                        let numbered = marker.ends_with('.');
+                        let bullet = div()
+                            .flex_none()
+                            .min_w(px(if numbered { 18.0 } else { 12.0 }))
+                            .text_color(hsla(if marker.starts_with('☑') { ink } else { ui.text_dim }))
+                            .child(marker.clone());
+                        items = items.child(div().flex().gap_1p5().pl(px(4.0 + *depth as f32 * 18.0)).child(bullet).child(div().flex_1().min_w_0().child(self.sel_text(i, j, parsed, styles, cx))));
+                        j += 1;
+                        // A code block inside an item stays in the list.
+                        while let Some(Piece { kind: Kind::Code { depth, .. }, .. }) = parsed.pieces.get(j) {
+                            let indent = 4.0 + *depth as f32 * 18.0;
+                            items = items.child(div().pl(px(indent)).child(self.render_code(i, j, parsed, ui, mono, cx)));
+                            j += 1;
+                        }
+                    }
+                    out = out.child(items);
+                }
+                Kind::Code { .. } => {
+                    out = out.child(self.render_code(i, j, parsed, ui, mono, cx));
+                    j += 1;
+                }
+                Kind::Cell { cols, .. } => {
+                    let cols = *cols;
+                    let mut table = div().flex().flex_col().rounded_sm().border_1().border_color(hsla(ui.divider)).text_size(px(12.5));
+                    let mut row_el: Option<(usize, gpui::Div)> = None;
+                    while let Some(Piece { kind: Kind::Cell { row, align, .. }, text }) = parsed.pieces.get(j) {
+                        let (row, align) = (*row, *align);
+                        if row_el.as_ref().is_none_or(|(r, _)| *r != row) {
+                            if let Some((_, el)) = row_el.take() {
+                                table = table.child(el);
+                            }
+                            let el = div().flex().when(row > 0, |d| d.border_t_1().border_color(hsla(ui.divider))).when(row == 0, |d| d.bg(hsla_alpha(ui.divider, 0.35)).font_weight(FontWeight::BOLD));
+                            row_el = Some((row, el));
+                        }
+                        let styles = ai_text::highlights(text, ink, ui.divider);
+                        let cell = div()
+                            .flex_1()
+                            .min_w_0()
+                            .px_2()
+                            .py_0p5()
+                            .flex()
+                            .when(align == shed_ai::markdown::Align::Right, |d| d.justify_end())
+                            .when(align == shed_ai::markdown::Align::Center, |d| d.justify_center())
+                            .child(self.sel_text(i, j, parsed, styles, cx));
+                        if let Some((_, el)) = row_el.take() {
+                            row_el = Some((row, el.child(cell)));
+                        }
+                        j += 1;
+                    }
+                    if let Some((_, el)) = row_el {
+                        table = table.child(el);
+                    }
+                    let _ = cols;
+                    out = out.child(table);
+                }
+            }
+        }
+        out
+    }
+
+    /// A code block: its language and a copy button above, the code coloured.
+    fn render_code(&mut self, i: usize, j: usize, parsed: &Rc<Parsed>, ui: &UiColors, mono: &str, cx: &mut Context<Self>) -> gpui::Div {
+        let piece = &parsed.pieces[j];
+        let lang = match &piece.kind {
+            Kind::Code { lang, .. } => lang.clone(),
+            _ => String::new(),
+        };
+        let styles: Vec<(Range<usize>, HighlightStyle)> = parsed.code.get(j).cloned().flatten().unwrap_or_default().into_iter().map(|(r, c)| (r, HighlightStyle::color(hsla(c)))).collect();
+        let copy = self.copy_button(format!("copy-code-{i}-{j}").into(), ClipboardItem::new_string(piece.text.text.clone()), ui, cx);
+        div()
+            .rounded_md()
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .bg(hsla_alpha(ui.background, 0.8))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pl_2()
+                    .pr_1()
+                    .py_0p5()
+                    .border_b_1()
+                    .border_color(hsla(ui.divider))
+                    .text_size(px(11.0))
+                    .text_color(hsla(ui.text_dim))
+                    .child(if lang.is_empty() { "code".to_string() } else { lang })
+                    .child(copy),
+            )
+            .child(div().px_2().py_1().font_family(mono.to_string()).text_size(px(12.0)).line_height(relative(1.35)).child(self.sel_text(i, j, parsed, styles, cx)))
     }
 
     fn transcript_markdown(&self) -> String {
@@ -626,8 +988,6 @@ impl AiView {
         let body = match entry {
             Entry::User { text, images } => {
                 let lines: Vec<&str> = text.lines().collect();
-                let folded = lines.len() > FOLD_LINES && !open;
-                let shown = if folded { lines[..FOLD_LINES].join("\n") } else { text.clone() };
                 div()
                     .id(("user", i))
                     .mt_2()
@@ -638,7 +998,10 @@ impl AiView {
                     .border_l_2()
                     .border_color(hsla(accent))
                     .text_color(hsla(ui.text))
-                    .child(div().whitespace_normal().child(shown))
+                    .child({
+                        let parsed = self.entry_pieces(i);
+                        self.sel_text(i, 0, &parsed, Vec::new(), cx)
+                    })
                     .when(images > 0, |d| d.child(div().mt_1().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(format!("{images} picture(s) attached"))))
                     .when(lines.len() > FOLD_LINES, |d| {
                         let label = if open { "Show less".to_string() } else { format!("Show all {} lines", lines.len()) };
@@ -646,7 +1009,18 @@ impl AiView {
                     })
                     .into_any_element()
             }
-            Entry::Assistant { text } => markdown(&text, &ui, &mono, accent).into_any_element(),
+            Entry::Assistant { text } => {
+                let parsed = self.entry_pieces(i);
+                let copy = self.copy_button(format!("copy-entry-{i}").into(), ai_text::formatted_item(text.clone(), &text), &ui, cx);
+                let group: SharedString = format!("answer-{i}").into();
+                div()
+                    .group(group.clone())
+                    .flex()
+                    .flex_col()
+                    .child(self.render_pieces(i, &parsed, &ui, &mono, cx))
+                    .child(div().flex().justify_end().invisible().group_hover(group, |s| s.visible()).child(copy))
+                    .into_any_element()
+            }
             Entry::Thinking { text } => div()
                 .id(("thinking", i))
                 .cursor_pointer()
@@ -654,7 +1028,11 @@ impl AiView {
                 .text_color(hsla(ui.text_dim))
                 .on_click(toggle)
                 .child(if open { "▾ Thinking" } else { "▸ Thinking" })
-                .when(open, |d| d.child(div().pl_3().whitespace_normal().child(text)))
+                .when(open, |d| {
+                    let _ = &text;
+                    let parsed = self.entry_pieces(i);
+                    d.child(div().pl_3().child(self.sel_text(i, 0, &parsed, Vec::new(), cx)))
+                })
                 .into_any_element(),
             Entry::Tool(t) => {
                 let (mark, color) = match (&t.result, t.error) {
@@ -1117,12 +1495,35 @@ impl Render for AiView {
             .track_scroll(&self.sessions_scroll)
             .flex_1()
             .min_h_0();
-        let transcript = list(self.list.clone(), cx.processor(|this, i, _, cx| this.render_entry(i, cx))).flex_1().min_h_0().py_2();
+        let transcript = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            // A click beside the text lets go of the selection.
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if this.selection.take().is_some() {
+                    cx.notify();
+                }
+            }))
+            .child(list(self.list.clone(), cx.processor(|this, i, _, cx| this.render_entry(i, cx))).flex_1().min_h_0().py_2());
         let empty = self.entries.is_empty();
         let images = self.images.len();
         div()
             .key_context("AiTab")
             .track_focus(&self.focus)
+            .capture_key_down(cx.listener(Self::selection_key))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if std::mem::take(&mut this.selecting) && this.dragged {
+                    // X11 convention: selecting copies to the primary selection.
+                    #[cfg(target_os = "linux")]
+                    if let Some(copy) = this.selected_copy() {
+                        cx.write_to_primary(ClipboardItem::new_string(copy.plain));
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    let _ = &cx;
+                }
+            }))
             .relative()
             .size_full()
             .flex()
@@ -1220,115 +1621,6 @@ impl Render for AiView {
     }
 }
 
-/// Markdown, simply: headings, lists, code blocks and inline code, bold.
-fn markdown(text: &str, ui: &UiColors, mono: &str, accent: Rgb) -> impl IntoElement {
-    let mut out = div().flex().flex_col().gap_1p5().text_color(hsla(ui.text));
-    let mut para: Vec<String> = Vec::new();
-    let mut code: Option<Vec<String>> = None;
-    let flush = |para: &mut Vec<String>, out: gpui::Div| -> gpui::Div {
-        if para.is_empty() {
-            return out;
-        }
-        let text = para.join(" ");
-        para.clear();
-        out.child(inline(&text, ui, accent))
-    };
-    for line in text.lines() {
-        if let Some(block) = &mut code {
-            if line.trim_start().starts_with("```") {
-                out = out.child(pre(&block.join("\n"), ui, mono, None));
-                code = None;
-            } else {
-                block.push(line.to_string());
-            }
-            continue;
-        }
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") {
-            out = flush(&mut para, out);
-            code = Some(Vec::new());
-        } else if trimmed.is_empty() {
-            out = flush(&mut para, out);
-        } else if let Some(h) = trimmed.strip_prefix('#') {
-            out = flush(&mut para, out);
-            let h = h.trim_start_matches('#').trim();
-            out = out.child(div().mt_1().font_weight(FontWeight::BOLD).child(inline(h, ui, accent)));
-        } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) {
-            out = flush(&mut para, out);
-            let indent = (line.len() - trimmed.len()) as f32;
-            let (bullet, rest) = if let Some(r) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
-                ("•".to_string(), r)
-            } else {
-                let (n, r) = trimmed.split_once(". ").unwrap();
-                (format!("{n}."), r)
-            };
-            out = out.child(div().flex().gap_1p5().pl(px(4.0 + indent * 4.0)).child(div().flex_none().text_color(hsla(ui.text_dim)).child(bullet)).child(div().flex_1().child(inline(rest, ui, accent))));
-        } else if trimmed.starts_with('|') {
-            out = flush(&mut para, out);
-            out = out.child(div().font_family(mono.to_string()).text_size(px(12.0)).child(line.to_string()));
-        } else if trimmed.starts_with('>') {
-            out = flush(&mut para, out);
-            out = out.child(div().pl_2().border_l_2().border_color(hsla(ui.divider)).text_color(hsla(ui.text_dim)).child(inline(trimmed.trim_start_matches('>').trim(), ui, accent)));
-        } else {
-            para.push(trimmed.to_string());
-        }
-    }
-    if let Some(block) = code {
-        out = out.child(pre(&block.join("\n"), ui, mono, None));
-    }
-    flush(&mut para, out)
-}
-
-/// A line of Markdown text: `code` and **bold** marked.
-fn inline(text: &str, ui: &UiColors, accent: Rgb) -> StyledText {
-    let mut plain = String::with_capacity(text.len());
-    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        let tick = rest.find('`');
-        let star = rest.find("**");
-        match (tick, star) {
-            (Some(t), s) if s.is_none_or(|s| t < s) => {
-                plain.push_str(&rest[..t]);
-                let after = &rest[t + 1..];
-                match after.find('`') {
-                    Some(end) => {
-                        let start = plain.len();
-                        plain.push_str(&after[..end]);
-                        highlights.push((start..plain.len(), HighlightStyle { color: Some(hsla(ui.ink(accent))), background_color: Some(hsla_alpha(ui.divider, 0.6)), ..Default::default() }));
-                        rest = &after[end + 1..];
-                    }
-                    None => {
-                        plain.push('`');
-                        rest = after;
-                    }
-                }
-            }
-            (_, Some(s)) => {
-                plain.push_str(&rest[..s]);
-                let after = &rest[s + 2..];
-                match after.find("**") {
-                    Some(end) => {
-                        let start = plain.len();
-                        plain.push_str(&after[..end]);
-                        highlights.push((start..plain.len(), HighlightStyle { font_weight: Some(FontWeight::BOLD), ..Default::default() }));
-                        rest = &after[end + 2..];
-                    }
-                    None => {
-                        plain.push_str("**");
-                        rest = after;
-                    }
-                }
-            }
-            _ => {
-                plain.push_str(rest);
-                rest = "";
-            }
-        }
-    }
-    StyledText::new(SharedString::from(plain)).with_highlights(highlights)
-}
-
 /// Text as written, in the monospaced font, on a darker ground.
 fn pre(text: &str, ui: &UiColors, mono: &str, color: Option<Rgb>) -> impl IntoElement {
     div()
@@ -1408,10 +1700,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inline_marks_code_and_bold() {
-        let ui = UiColors::default();
-        let t = inline("run `cargo test` **now**", &ui, Rgb::hex(0xff8a57));
-        let _ = t;
+    fn words_and_times() {
         assert_eq!(lower_first("Edit x"), "edit x");
         assert!(ago(unix_now() - 120).starts_with("2 min"));
     }

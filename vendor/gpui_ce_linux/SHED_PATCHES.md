@@ -37,3 +37,13 @@ Changes marked `// Shed patch`, in `src/linux/x11/client.rs` and
   pings a calloop source that starts it again (the ping, because the waker can
   run while the client is borrowed). GPU recovery wakes it too. Wayland already
   worked this way.
+
+Clipboard (`src/linux.rs`, `src/linux/x11/clipboard.rs`, `src/linux/x11/client.rs`,
+`src/linux/wayland/client.rs`, `src/linux/wayland/clipboard.rs`):
+
+- **Copies can carry HTML.** A clipboard string whose metadata starts with
+  `shed-html:` is offered as `text/html` (the rest of the metadata) beside the
+  text, on X11 and Wayland, so formatted text pastes formatted.
+- **X11 serves the plain-text names it lists.** `TARGETS` listed
+  `text/plain;charset=utf-8` and friends, but a request for them was refused;
+  they are now answered from the `UTF8_STRING` data.
