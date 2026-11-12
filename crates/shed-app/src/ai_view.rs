@@ -899,7 +899,13 @@ impl AiView {
         let styled = StyledText::new(SharedString::from(text.clone())).with_highlights(ai_text::with_selection(styles, selected, sel_style));
         let (down, moved, up) = (styled.layout().clone(), styled.layout().clone(), styled.layout().clone());
         let (p1, p2, p3) = (parsed.clone(), parsed.clone(), parsed.clone());
+        // A flex box, not a block: a block lays its text out inline, as
+        // part of its own paragraph, and then the text's own layout (which
+        // maps the mouse to a character) is never filled in.
         div()
+            .flex()
+            .flex_col()
+            .min_w_0()
             .cursor(CursorStyle::IBeam)
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                 let text = &p1.pieces[j].text.text;
@@ -1946,6 +1952,32 @@ fn secs_since(start: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GPUI lays out text in a block as its paragraph, leaving the text's
+    /// own layout empty; in a flex box the text has one, and the mouse can
+    /// be mapped to a character (what selecting needs).
+    #[gpui::test]
+    fn selectable_text_can_be_hit(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let text = "hello world";
+        let in_flex = StyledText::new(text);
+        let in_block = StyledText::new(text);
+        let nested = StyledText::new(text);
+        let (flex_layout, block_layout, nested_layout) = (in_flex.layout().clone(), in_block.layout().clone(), nested.layout().clone());
+        cx.draw(gpui::point(px(0.0), px(0.0)), gpui::size(px(300.0), px(200.0)), move |_, _| {
+            div()
+                .flex()
+                .flex_col()
+                .child(div().flex().flex_col().min_w_0().child(in_flex))
+                .child(div().child(in_block))
+                // As in a message: a block around the flex box around the text.
+                .child(div().px_3().child(div().flex().flex_col().min_w_0().child(nested)))
+        });
+        assert!(text_index(&nested_layout, text, gpui::point(px(14.0), px(44.0))).is_some());
+        assert!(over_text(&flex_layout, gpui::point(px(2.0), px(2.0))));
+        assert!(text_index(&flex_layout, text, gpui::point(px(2.0), px(2.0))).is_some());
+        assert!(text_index(&block_layout, text, gpui::point(px(2.0), px(2.0))).is_none(), "GPUI changed: blocks fill the layout now");
+    }
 
     #[test]
     fn the_default_model_is_named() {

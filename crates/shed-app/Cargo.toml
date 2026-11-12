@@ -43,6 +43,7 @@ raw-window-handle = "0.6"
 x11rb = { version = "0.13", features = ["xfixes"] }
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 shed-keeper.workspace = true
 tokio.workspace = true
 tempfile.workspace = true
