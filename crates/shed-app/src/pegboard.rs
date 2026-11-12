@@ -31,6 +31,8 @@ const REFRESH: Duration = Duration::from_millis(250);
 const IDLE_REFRESH: Duration = Duration::from_secs(1);
 const HIDDEN_CHECK: Duration = Duration::from_secs(5);
 const CARD_WIDTH: f32 = 300.0;
+/// Every tab of the compact view is this wide, so they line up in columns.
+const CHIP_WIDTH: f32 = 220.0;
 
 /// The keeper's last answer: stored benches and previews.
 pub struct PegboardData(pub PegboardInfo);
@@ -1075,7 +1077,9 @@ impl Pegboard {
             );
         }
 
-        let mut actions = div().flex_none().h(px(26.0)).flex().items_center().gap_1().child(self.render_links(entry, ui, cx));
+        // The bench's links follow its tabs.
+        chips = chips.child(self.render_links(entry, ui, cx).h(px(26.0)));
+        let mut actions = div().flex_none().w(px(112.0)).h(px(26.0)).flex().items_center().justify_end().gap_1();
         if bench.closing {
             actions = actions.child(div().text_size(px(12.0)).text_color(hsla(ui.ink(accent))).child("closing…"));
         } else {
@@ -1145,18 +1149,25 @@ impl Pegboard {
             None if tab.has_panes() => pane.and_then(|p| p.cwd.file_name()).map(|n| n.to_string_lossy().into_owned()).filter(|n| !title.contains(n.as_str())),
             None => None,
         };
-        let head = self.tab_head(tab, accent, ui, cx).max_w(px(240.0));
+        let head = self.tab_head(tab, accent, ui, cx).flex_1().min_w_0().overflow_hidden();
+        let full = match &detail {
+            Some(d) => format!("{title} · {d}"),
+            None => title.clone(),
+        };
         let (e, e2) = (entry.clone(), entry.clone());
         let tab_for_menu = tab.clone();
         let border = if selected { hsla(accent) } else if active { hsla_alpha(accent, 0.45) } else { hsla(ui.divider) };
         div()
             .id(SharedString::from(format!("tab-{tab_id}")))
             .h(px(26.0))
-            .max_w(px(360.0))
+            .w(px(CHIP_WIDTH))
+            .flex_none()
+            .overflow_hidden()
             .flex()
             .items_center()
             .gap_1p5()
             .px_2()
+            .tooltip(menu::tooltip_text(full))
             .rounded_md()
             .border_1()
             .border_color(border)
@@ -1178,7 +1189,7 @@ impl Pegboard {
                 this.open_menu(ev.position, entries, cx);
             }))
             .child(head)
-            .children(detail.map(|d| div().flex_none().max_w(px(120.0)).truncate().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(d)))
+            .children(detail.map(|d| div().flex_shrink_0().max_w(px(CHIP_WIDTH * 0.4)).truncate().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(d)))
             .into_any_element()
     }
 

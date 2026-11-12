@@ -63,6 +63,12 @@ pub fn tooltip(text: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView 
     move |_, cx| cx.new(|_| Tooltip(text.into())).into()
 }
 
+/// A tooltip of text known only when drawing (a title cut short).
+pub fn tooltip_text(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    move |_, cx| cx.new(|_| Tooltip(text.clone())).into()
+}
+
 struct Tooltip(SharedString);
 
 impl Render for Tooltip {
