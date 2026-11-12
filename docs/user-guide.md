@@ -281,15 +281,21 @@ tab, or opens one), **New AI Tab** in the new-tab button's menu or the bench's
 menu (pick one of the bench's folders or another), or `shed ai [DIR]` in a
 terminal of the bench.
 
+- **Prompts**: the switch over the list on the left shows **Prompts (N)**
+  instead of sessions: one row per prompt of this session (its first line,
+  number and time), filtered by the field above it; a click scrolls the
+  conversation to it, and the prompt whose turn is in view is marked.
 - **Sessions** are on the left, newest first, with Claude Code's own titles (else
   the first prompt), when they were last used, the Git branch and how many
   prompts. Type to filter. Click one to show it and carry on with it; **New
   Session** starts afresh. Right-click a session to continue it in a terminal
   (`claude --resume`), in Claude Code's own interface. The quick commands that the
   `> request` prompt makes are not saved as sessions, so they do not crowd the list.
-- **The prompt** grows with what you type. Enter sends; Shift+Enter breaks the
-  line. Typing `/` lists Claude Code's commands and skills to complete (Tab or
-  Enter picks one). Ctrl+Up and Ctrl+Down go through earlier prompts. Paste a
+- **The prompt** grows with what you type. Enter breaks the line; **Ctrl+Enter**
+  (Cmd+Enter) or the send button sends. While Claude works, sending queues the
+  message instead: queued messages show above the prompt (each with **Remove**)
+  and go one by one as turns end. Typing `/` lists Claude Code's commands and
+  skills to complete (Tab or Enter picks one). Ctrl+Up and Ctrl+Down go through earlier prompts. Paste a
   screenshot with Ctrl+V and it goes with the prompt; drop files to put their
   paths in. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
   its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu
@@ -330,7 +336,9 @@ terminal of the bench.
   answered.
 - **Below the prompt**: while Claude works, three dots take turns beside what it
   is doing (the tool running, thinking, writing) and for how long. Then the model
-  (the default one by name: "Opus 5.5 (default)") and its effort, the mode, and
+  (the default one by name: "Opus 5.5 (default)"), its effort ("high effort";
+  click for the efforts the model offers), the mode (new AI tabs start in
+  **Auto**), and
   the eye, which makes files Claude edits open in their project tab as it goes.
   The modes: **Ask Before Edits**; **Accept Edits** (file changes go through,
   commands still ask); **Auto** (Claude Code's safety check approves routine
@@ -641,7 +649,7 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 In a **project tab**: Ctrl+P opens a file by name, Ctrl+Shift+F searches every
 file, Ctrl+Shift+A sends the selection (or the file) to the AI tab, Ctrl+W closes
 the file, and the editor's own keys are listed under [Project tabs](#project-tabs).
-In an **AI tab**: Enter sends, Shift+Enter breaks the line, Ctrl+Up and Ctrl+Down
+In an **AI tab**: Ctrl+Enter sends (or queues while Claude works), Enter breaks the line, Ctrl+Up and Ctrl+Down
 go through earlier prompts, Escape stops a turn, Ctrl+F finds in the conversation.
 `new_project_tab` can be bound to a key in `[keys]`. On macOS, Cmd takes Ctrl's
 place in these.

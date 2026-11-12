@@ -335,7 +335,8 @@ impl Tab {
     /// An AI tab for Claude Code working in `folder`.
     pub fn ai(folder: PathBuf) -> Self {
         let mut tab = Self::project(folder.clone());
-        tab.kind = TabKind::Ai(AiTab { folder, mode: "default".into(), ..Default::default() });
+        // Auto: Claude Code's safety check decides, so routine work does not wait.
+        tab.kind = TabKind::Ai(AiTab { folder, mode: "auto".into(), ..Default::default() });
         tab
     }
 

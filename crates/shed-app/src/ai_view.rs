@@ -148,6 +148,12 @@ pub struct AiView {
     spin: usize,
     /// Answers being chosen to Claude's questions, by request.
     asks: HashMap<String, Ask>,
+    /// Messages written while Claude works, sent one by one as turns end.
+    queue: Vec<(String, Vec<AiImage>)>,
+    /// The left side shows the folder's sessions, or this one's prompts.
+    show_prompts: bool,
+    prompts_scroll: UniformListScrollHandle,
+    prompts_bar: crate::scrollbar::State,
     _subs: Vec<Subscription>,
 }
 
@@ -205,8 +211,8 @@ impl AiView {
         let options = TextOptions {
             wrap: true,
             auto_height: Some((2, 14)),
-            submit_on_enter: true,
-            placeholder: Some("Ask Claude…  (Enter sends, Shift+Enter breaks the line, / for commands)".into()),
+            submit_on_enter: false,
+            placeholder: Some("Ask Claude…  (Ctrl+Enter sends, Enter breaks the line, / for commands)".into()),
             ..Default::default()
         };
         let prompt = cx.new(|cx| TextView::new("", options, &settings, cx));
@@ -271,6 +277,10 @@ impl AiView {
             editing: None,
             spin: 0,
             asks: HashMap::new(),
+            queue: Vec::new(),
+            show_prompts: false,
+            prompts_scroll: UniformListScrollHandle::new(),
+            prompts_bar: Default::default(),
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -364,6 +374,12 @@ impl AiView {
         self.status = status;
         if finished {
             self.load_sessions(cx);
+            // The next queued message goes now.
+            if !self.queue.is_empty() {
+                let (text, images) = self.queue.remove(0);
+                self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images });
+                self.list.scroll_to_end();
+            }
         }
         self.tick(cx);
         cx.notify();
@@ -561,11 +577,23 @@ impl AiView {
         if text.trim().is_empty() && self.images.is_empty() {
             return;
         }
+        let images = std::mem::take(&mut self.images);
         if self.status.state != AiState::Idle {
-            // One turn at a time: what is typed stays until this one ends.
+            // Claude is busy: the message waits its turn, and goes when the
+            // turn ends. (An earlier message is only edited when it is idle.)
+            if self.editing.is_some() {
+                self.images = images;
+                return;
+            }
+            self.queue.push((text, images));
+            self.prompt.update(cx, |p, cx| {
+                p.buffer.select_all();
+                p.buffer.insert("");
+                cx.notify();
+            });
+            cx.notify();
             return;
         }
-        let images = std::mem::take(&mut self.images);
         match self.editing.take() {
             Some(entry) => self.conn.send_msg(ClientMsg::AiEdit { tab: self.tab, entry: entry as u32, text, images }),
             None => self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images }),
@@ -631,6 +659,10 @@ impl AiView {
                     self.complete(i, cx);
                 }
                 "escape" => self.completion = None,
+                "enter" => {
+                    let i = c.items[c.selected];
+                    self.complete(i, cx);
+                }
                 _ => return,
             }
             cx.stop_propagation();
@@ -638,6 +670,8 @@ impl AiView {
             return;
         }
         match ks.key.as_str() {
+            // Enter breaks the line; Ctrl+Enter (Cmd+Enter) sends.
+            "enter" if sec => self.send(cx),
             "escape" if self.editing.is_some() => self.cancel_edit(cx),
             "escape" if self.status.state != AiState::Idle => self.stop(),
             "f" if sec => self.open_find(window, cx),
@@ -1728,6 +1762,61 @@ impl AiView {
             .collect()
     }
 
+    /// This session's prompts the filter lets through: (entry, number, text).
+    fn shown_prompts(&self, cx: &gpui::App) -> Vec<(usize, usize, String, u64)> {
+        let words: Vec<String> = self.filter.read(cx).text().split_whitespace().map(str::to_lowercase).collect();
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| if let Entry::User { text, at, .. } = e { Some((i, text.clone(), *at)) } else { None })
+            .enumerate()
+            .map(|(n, (i, text, at))| (i, n + 1, text, at))
+            .filter(|(_, _, text, _)| {
+                let lower = text.to_lowercase();
+                words.iter().all(|w| lower.contains(w))
+            })
+            .collect()
+    }
+
+    /// One row per prompt: its number, first line and time; a click scrolls
+    /// the conversation to it.
+    fn render_prompt_rows(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let ui = current_ui(cx);
+        let shown = self.shown_prompts(cx);
+        let z = self.z();
+        let top = self.list.logical_scroll_top().item_ix;
+        range
+            .filter_map(|n| {
+                let (entry, number, text, at) = shown.get(n)?.clone();
+                // The prompt whose turn is at the top of the conversation.
+                let next = self.entries[entry + 1..].iter().position(|e| matches!(e, Entry::User { .. })).map_or(self.entries.len(), |k| entry + 1 + k);
+                let here = (entry..next).contains(&top);
+                let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+                let when = if at > 0 { local_time(at) } else { String::new() };
+                Some(
+                    div()
+                        .id(("prompt-row", n))
+                        .h(px(40.0 * z))
+                        .px_2()
+                        .flex()
+                        .flex_col()
+                        .justify_center()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .when(here, |d| d.bg(hsla_alpha(self.accent, 0.16)))
+                        .hover(|s| s.bg(hsla(ui.tab_hover)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.list.scroll_to(gpui::ListOffset { item_ix: entry, offset_in_item: px(0.0) });
+                            cx.notify();
+                        }))
+                        .child(div().truncate().text_color(hsla(ui.text)).child(first))
+                        .child(div().truncate().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(if when.is_empty() { format!("#{number}") } else { format!("#{number} · {when}") }))
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+
     fn shown_sessions(&self, cx: &gpui::App) -> Vec<SessionInfo> {
         let words: Vec<String> = self.filter.read(cx).text().split_whitespace().map(str::to_lowercase).collect();
         self.sessions.iter().filter(|s| words.iter().all(|w| s.title.to_lowercase().contains(w))).cloned().collect()
@@ -1860,6 +1949,11 @@ impl AiView {
                 let entries = this.model_menu();
                 this.open_menu(e.position, entries, cx);
             })))
+            .child(chip("ai-effort", format!("{} effort", self.ai.effort.as_deref().unwrap_or("default"))).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                this.warm_up();
+                let entries = this.model_menu();
+                this.open_menu(e.position, entries, cx);
+            })))
             .child(chip("ai-mode", mode.into()).when(self.ai.mode == "bypassPermissions", |d| d.text_color(hsla(ui.danger))).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 let entries = this.mode_menu();
                 this.open_menu(e.position, entries, cx);
@@ -1952,6 +2046,41 @@ impl AiView {
         let accent = self.accent;
         let mut out = div().flex().flex_col().gap_1().mx_3().text_size(px(12.0 * self.z()));
         let mut any = false;
+        for (n, (text, images)) in self.queue.iter().enumerate() {
+            any = true;
+            let first = text.lines().next().unwrap_or("").to_string();
+            let more = if images.is_empty() { String::new() } else { format!(" (+{} picture(s))", images.len()) };
+            out = out.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(hsla_alpha(accent, 0.08))
+                    .child(svg().path(icon("send")).size(px(12.0)).flex_none().text_color(hsla(ui.ink(accent))))
+                    .child(div().flex_none().text_color(hsla(ui.text_dim)).child(if n == 0 { "Next:".to_string() } else { format!("Then ({}):", n + 1) }))
+                    .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(format!("{first}{more}")))
+                    .child(
+                        div()
+                            .id(("unqueue", n))
+                            .flex_none()
+                            .px_1()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .text_color(hsla(ui.text_dim))
+                            .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                            .child("Remove")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if n < this.queue.len() {
+                                    this.queue.remove(n);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
         if self.editing.is_some() {
             any = true;
             out = out.child(
@@ -2050,14 +2179,46 @@ impl Render for AiView {
         let limits = cx.try_global::<AiLimits>().map(|l| l.0).unwrap_or_default();
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
         let count = self.shown_sessions(cx).len();
-        let sessions = div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(uniform_list("ai-sessions", count, cx.processor(|this, range, _, cx| this.render_sessions(range, cx))).track_scroll(&self.sessions_scroll).flex_1().min_h_0())
-            .child(crate::scrollbar::vertical(crate::scrollbar::Source::uniform(&self.sessions_scroll), &self.sessions_bar, &ui, false).absolute().top_0().right_0().bottom_0());
+        let sessions = if self.show_prompts {
+            let shown = self.shown_prompts(cx).len();
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(uniform_list("ai-prompts", shown, cx.processor(|this, range, _, cx| this.render_prompt_rows(range, cx))).track_scroll(&self.prompts_scroll).flex_1().min_h_0())
+                .child(crate::scrollbar::vertical(crate::scrollbar::Source::uniform(&self.prompts_scroll), &self.prompts_bar, &ui, false).absolute().top_0().right_0().bottom_0())
+        } else {
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(uniform_list("ai-sessions", count, cx.processor(|this, range, _, cx| this.render_sessions(range, cx))).track_scroll(&self.sessions_scroll).flex_1().min_h_0())
+                .child(crate::scrollbar::vertical(crate::scrollbar::Source::uniform(&self.sessions_scroll), &self.sessions_bar, &ui, false).absolute().top_0().right_0().bottom_0())
+        };
+        // Sessions of the folder, or this session's prompts.
+        let prompt_count = self.entries.iter().filter(|e| matches!(e, Entry::User { .. })).count();
+        let switch = div().flex().p_0p5().gap_0p5().rounded_md().bg(hsla(ui.tab_active)).text_size(px(12.0 * self.z())).children([(false, "Sessions".to_string()), (true, format!("Prompts ({prompt_count})"))].map(|(prompts, label)| {
+            let on = self.show_prompts == prompts;
+            div()
+                .id(if prompts { "left-prompts" } else { "left-sessions" })
+                .flex_1()
+                .flex()
+                .justify_center()
+                .py_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .when(on, |d| d.bg(hsla_alpha(self.accent, 0.22)).text_color(hsla(ui.text)))
+                .when(!on, |d| d.text_color(hsla(ui.text_dim)).hover(|s| s.bg(hsla(ui.tab_hover))))
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.show_prompts = prompts;
+                    cx.notify();
+                }))
+        }));
         let transcript = div()
             .relative()
             .flex_1()
@@ -2132,6 +2293,7 @@ impl Render for AiView {
                             .child(svg().path(icon("ai")).size(px(14.0)).text_color(hsla(ui.ink(self.accent))))
                             .child("New Session"),
                     )
+                    .child(switch)
                     .child(div().text_size(px(12.0 * self.z())).child(self.filter.clone()))
                     .child(sessions),
             )
