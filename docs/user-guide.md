@@ -766,7 +766,9 @@ macOS uses the same folders under your home (`~/.config/shed/` and so on).
   old keeper is still running. Run `shed stop` (benches are saved first), or answer
   yes when `shed` offers to restart it.
 - **Something went wrong**: the keeper writes `~/.local/state/shed/shedd.log`;
-  `SHED_LOG=debug shed` logs more.
+  `SHED_LOG=debug shed` logs more. If Shed's windows close by themselves (a
+  crash), why is in `~/.local/state/shed/shed.log`, with where it happened; the
+  benches keep running, and `shed` opens them again.
 - **The keeper at login**: packages include a systemd user unit,
   `systemctl --user enable --now shedd.service`, so the first Shed window opens at
   once. Shells started this way inherit systemd's environment.

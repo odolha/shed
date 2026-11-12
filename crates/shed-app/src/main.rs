@@ -289,6 +289,7 @@ enum HookAction {
 fn main() -> anyhow::Result<()> {
     let filter = EnvFilter::try_from_env("SHED_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
+    log_panics();
 
     match Cli::parse().command {
         None => run_app(ShowTarget::Shed),
@@ -426,6 +427,26 @@ fn main() -> anyhow::Result<()> {
 
 /// Shows `target`. If a window process is already running, it shows it and
 /// this process exits; otherwise this process becomes the window process.
+/// A crash leaves its cause in `~/.local/state/shed/shed.log` (the window
+/// process has no terminal to print it to), then goes on as it would.
+fn log_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let path = shed_model::paths::state_dir().join("shed.log");
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            let thread = std::thread::current().name().unwrap_or("?").to_string();
+            let _ = writeln!(f, "--- shed {} panicked at {when} (unix time), thread {thread}: {info}", env!("CARGO_PKG_VERSION"));
+            let _ = writeln!(f, "{}", std::backtrace::Backtrace::force_capture());
+        }
+        previous(info);
+    }));
+}
+
 fn run_app(target: ShowTarget) -> anyhow::Result<()> {
     let (conn, rx) = keeper_conn::connect(ClientKind::Cli, true)?;
     conn.send_msg(ClientMsg::Status);

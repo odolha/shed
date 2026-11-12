@@ -152,10 +152,20 @@ fn code_colors(lang: &str, code: &str, palette: &shed_emu::Palette) -> Option<Co
     )
 }
 
-fn text_index(layout: &TextLayout, at: gpui::Point<gpui::Pixels>) -> usize {
-    match layout.index_for_position(at) {
+/// The byte of `text` under the mouse, on a character's edge; `None` when
+/// the text is not laid out (GPUI's text layout panics then, so it is asked
+/// carefully: a selection is not worth a crash).
+fn text_index(layout: &TextLayout, text: &str, at: gpui::Point<gpui::Pixels>) -> Option<usize> {
+    let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match layout.index_for_position(at) {
         Ok(i) | Err(i) => i,
-    }
+    }))
+    .ok()?;
+    Some(text.floor_char_boundary(found.min(text.len())))
+}
+
+/// Whether the mouse is over laid-out text (same care as `text_index`).
+fn over_text(layout: &TextLayout, at: gpui::Point<gpui::Pixels>) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| layout.bounds().contains(&at))).unwrap_or(false)
 }
 
 impl AiView {
@@ -879,17 +889,22 @@ impl AiView {
     /// A piece of text that can be selected with the mouse.
     fn sel_text(&self, i: usize, j: usize, parsed: &Rc<Parsed>, styles: Vec<(Range<usize>, HighlightStyle)>, cx: &mut Context<Self>) -> gpui::Div {
         let text = &parsed.pieces[j].text.text;
-        let selected = self.selection.and_then(|s| s.range_in(i, j, text.len()));
+        // On characters' edges, whatever the selection says.
+        let selected = self
+            .selection
+            .and_then(|s| s.range_in(i, j, text.len()))
+            .map(|r| text.floor_char_boundary(r.start)..text.floor_char_boundary(r.end))
+            .filter(|r| r.start < r.end);
         let sel_style = HighlightStyle { background_color: Some(hsla_alpha(self.accent, 0.35)), ..Default::default() };
         let styled = StyledText::new(SharedString::from(text.clone())).with_highlights(ai_text::with_selection(styles, selected, sel_style));
         let (down, moved, up) = (styled.layout().clone(), styled.layout().clone(), styled.layout().clone());
-        let (p1, p2) = (parsed.clone(), parsed.clone());
+        let (p1, p2, p3) = (parsed.clone(), parsed.clone(), parsed.clone());
         div()
             .cursor(CursorStyle::IBeam)
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                let at = text_index(&down, e.position);
-                let point = |offset| Point { entry: i, piece: j, offset };
                 let text = &p1.pieces[j].text.text;
+                let Some(at) = text_index(&down, text, e.position) else { return };
+                let point = |offset| Point { entry: i, piece: j, offset };
                 this.selection = Some(match e.click_count {
                     2 => {
                         let word = ai_text::word_at(text, at);
@@ -907,10 +922,11 @@ impl AiView {
                 cx.notify();
             }))
             .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
-                if !this.selecting || e.pressed_button != Some(MouseButton::Left) || !moved.bounds().contains(&e.position) {
+                if !this.selecting || e.pressed_button != Some(MouseButton::Left) || !over_text(&moved, e.position) {
                     return;
                 }
-                let head = Point { entry: i, piece: j, offset: text_index(&moved, e.position) };
+                let Some(offset) = text_index(&moved, &p3.pieces[j].text.text, e.position) else { return };
+                let head = Point { entry: i, piece: j, offset };
                 if let Some(s) = &mut this.selection
                     && s.head != head
                 {
@@ -922,7 +938,8 @@ impl AiView {
             .on_mouse_up(MouseButton::Left, cx.listener(move |this, e: &MouseUpEvent, _, cx| {
                 // A click on a link opens it.
                 if !this.dragged
-                    && let Some(url) = ai_text::link_at(&p2.pieces[j].text, text_index(&up, e.position))
+                    && let Some(at) = text_index(&up, &p2.pieces[j].text.text, e.position)
+                    && let Some(url) = ai_text::link_at(&p2.pieces[j].text, at)
                 {
                     cx.open_url(url);
                 }

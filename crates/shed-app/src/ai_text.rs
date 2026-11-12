@@ -159,7 +159,7 @@ pub fn with_selection(styles: Vec<(Range<usize>, HighlightStyle)>, selected: Opt
 /// The word around byte `at`.
 pub fn word_at(text: &str, at: usize) -> Range<usize> {
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
-    let at = at.min(text.len());
+    let at = text.floor_char_boundary(at.min(text.len()));
     let start = text[..at].char_indices().rev().take_while(|(_, c)| is_word(*c)).last().map_or(at, |(i, _)| i);
     let end = text[at..].char_indices().find(|(_, c)| !is_word(*c)).map_or(text.len(), |(i, _)| at + i);
     start..end
@@ -229,7 +229,9 @@ pub struct Copy {
 impl Copy {
     /// Adds `range` of `piece`.
     pub fn add(&mut self, piece: &Piece, range: Range<usize>) {
-        let slice = &piece.text.text[range.clone()];
+        let text = &piece.text.text;
+        let range = text.floor_char_boundary(range.start.min(text.len()))..text.floor_char_boundary(range.end.min(text.len()));
+        let slice = &text[range.clone()];
         let (plain_sep, md_sep) = match (&self.last, &piece.kind) {
             (None, _) => ("", ""),
             (Some(Kind::Item { .. }), Kind::Item { .. }) => ("\n", "\n"),
@@ -339,5 +341,7 @@ mod tests {
     fn words() {
         assert_eq!(word_at("let foo_bar = 1", 6), 4..11);
         assert_eq!(word_at("a b", 1), 0..1);
+        // Inside a character: its start.
+        assert_eq!(word_at("ăla bun", 1), 0..4);
     }
 }
