@@ -160,7 +160,10 @@ pub struct ProjectView {
     pub accent: Rgb,
     exclude: Vec<String>,
     conn: KeeperConn,
+    /// The settings with the tab's zoom in the font size (`base` without).
     settings: Settings,
+    base: Settings,
+    zoom: f32,
     rows: Vec<Row>,
     /// Open folders, kept as the tree is rebuilt.
     expanded: HashSet<PathBuf>,
@@ -209,7 +212,9 @@ impl ProjectView {
             accent,
             exclude: project.exclude.clone(),
             conn,
+            base: settings.clone(),
             settings,
+            zoom: 0.0,
             rows: Vec::new(),
             expanded: HashSet::new(),
             selected: None,
@@ -262,14 +267,35 @@ impl ProjectView {
 
     /// Takes new colours and font from a reloaded config.
     pub fn apply(&mut self, settings: &Settings, cx: &mut Context<Self>) {
-        self.settings = settings.clone();
+        self.base = settings.clone();
+        self.settings = settings.zoomed(self.zoom);
+        let settings = self.settings.clone();
         for i in 0..self.open.len() {
             if let Some(view) = self.open[i].view().cloned() {
-                view.update(cx, |v, cx| v.apply(settings, cx));
+                view.update(cx, |v, cx| v.apply(&settings, cx));
             }
             self.rehighlight(i, cx);
         }
+        if let Some((_, ours, theirs)) = self.merge_sides.clone() {
+            for view in [ours, theirs] {
+                view.update(cx, |v, cx| v.apply(&settings, cx));
+            }
+        }
         cx.notify();
+    }
+
+    /// The tab's zoom, in font points: the code, the tree and the lists.
+    pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        if zoom != self.zoom {
+            self.zoom = zoom;
+            let base = self.base.clone();
+            self.apply(&base, cx);
+        }
+    }
+
+    /// How much larger than usual the tab's text is drawn.
+    fn z(&self) -> f32 {
+        self.settings.font.size / self.base.font.size.max(1.0)
     }
 
     /// Follows the tab's project as the keeper has it: another folder, or
@@ -1029,7 +1055,7 @@ impl ProjectView {
                 .px_1()
                 .rounded_sm()
                 .cursor_pointer()
-                .text_size(px(11.0))
+                .text_size(px(11.0 * self.z()))
                 .text_color(hsla(if on { ui.text } else { ui.text_dim }))
                 .when(on, |d| d.bg(hsla_alpha(accent, 0.3)))
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
@@ -1057,7 +1083,7 @@ impl ProjectView {
                 .flex_col()
                 .gap_1()
                 .p_2()
-                .text_size(px(12.0))
+                .text_size(px(12.0 * self.z()))
                 .child(
                     div()
                         .flex()
@@ -1082,14 +1108,14 @@ impl ProjectView {
                                 .border_1()
                                 .border_color(hsla(ui.divider))
                                 .cursor_pointer()
-                                .text_size(px(11.0))
+                                .text_size(px(11.0 * self.z()))
                                 .text_color(hsla(ui.text_dim))
                                 .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
                                 .on_click(cx.listener(|this, _, window, cx| this.replace_all(window, cx)))
                                 .child("Replace All…"),
                         ),
                 )
-                .child(div().text_size(px(11.0)).text_color(hsla(if search.error.is_some() { ui.danger } else { ui.text_dim })).child(status))
+                .child(div().text_size(px(11.0 * self.z())).text_color(hsla(if search.error.is_some() { ui.danger } else { ui.text_dim })).child(status))
                 .child(list)
                 .into_any_element(),
         )
@@ -1103,7 +1129,7 @@ impl ProjectView {
             .filter_map(|i| {
                 let (f, hit) = *search.rows.get(i)?;
                 let found = search.results.get(f)?;
-                let row = div().id(("hit", i)).h(px(ROW_HEIGHT)).flex().items_center().gap_1p5().px_1().rounded_sm().cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover)));
+                let row = div().id(("hit", i)).h(px(ROW_HEIGHT * self.z())).flex().items_center().gap_1p5().px_1().rounded_sm().cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover)));
                 Some(match hit {
                     None => {
                         let name = found.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1149,7 +1175,7 @@ impl ProjectView {
                 .px_2()
                 .h_full()
                 .cursor_pointer()
-                .text_size(px(12.0))
+                .text_size(px(12.0 * self.z()))
                 .text_color(hsla(if on { ui.text } else { ui.text_dim }))
                 .when(on, |d| d.border_b_2().border_color(hsla(accent)))
                 .hover(|s| s.text_color(hsla(ui.text)))
@@ -1317,7 +1343,7 @@ impl ProjectView {
                 let color = if row.hidden { ui.text_dim } else { ui.text };
                 let mut el = div()
                     .id(i)
-                    .h(px(ROW_HEIGHT))
+                    .h(px(ROW_HEIGHT * self.z()))
                     .flex()
                     .items_center()
                     .gap_1p5()
@@ -1384,12 +1410,12 @@ impl ProjectView {
             .border_color(hsla(ui.divider))
             .bg(hsla(ui.background))
             .child(svg().path(icon("project")).size(px(16.0)).flex_none().text_color(hsla(ui.ink(self.accent))))
-            .child(div().flex_none().text_size(px(14.0)).text_color(hsla(ui.text)).child(name))
+            .child(div().flex_none().text_size(px(14.0 * self.z())).text_color(hsla(ui.text)).child(name))
             .children(self.render_branch_chip(ui, cx))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(shed_save::home_relative(&self.root)))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(12.0 * self.z())).text_color(hsla(ui.text_dim)).child(shed_save::home_relative(&self.root)))
             .when_some(self.new_link.as_ref().map(|(e, _)| e.clone()), |d, e| {
-                d.child(div().flex_none().w(px(320.0)).text_size(px(12.0)).child(e))
-                    .child(div().flex_none().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("name url"))
+                d.child(div().flex_none().w(px(320.0)).text_size(px(12.0 * self.z())).child(e))
+                    .child(div().flex_none().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child("name url"))
             })
             .child(button("project-open", "file", "Open File").tooltip(menu::tooltip("Open a file by name (Ctrl+P)")).on_click(cx.listener(|this, _, window, cx| this.open_quick(window, cx))))
             .child(button("project-ai", "ai", "Ask AI").tooltip(menu::tooltip("Go to the AI tab for this project, or open one")).on_click(cx.listener(|this, _, _, cx| {
@@ -1435,7 +1461,7 @@ impl ProjectView {
                 .border_r_1()
                 .border_color(hsla(ui.divider))
                 .cursor_pointer()
-                .text_size(px(12.0))
+                .text_size(px(12.0 * self.z()))
                 .text_color(hsla(if active { ui.text } else { ui.text_dim }))
                 .on_click(cx.listener(move |this, _, _, cx| this.activate(i, cx)))
                 .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| this.close_file(i, window, cx)))
@@ -1491,7 +1517,7 @@ impl ProjectView {
             .gap_2()
             .px_3()
             .py_1()
-            .text_size(px(12.0))
+            .text_size(px(12.0 * self.z()))
             .bg(hsla_alpha(color, 0.18))
             .text_color(hsla(ui.text))
             .child(div().flex_1().child(text));
@@ -1584,7 +1610,7 @@ impl ProjectView {
                 .px_3()
                 .flex()
                 .items_center()
-                .text_size(px(11.0))
+                .text_size(px(11.0 * self.z()))
                 .text_color(hsla(ui.text_dim))
                 .bg(hsla(ui.background))
                 .border_t_1()
@@ -1624,7 +1650,7 @@ impl ProjectView {
                 .items_center()
                 .justify_center()
                 .gap_2()
-                .text_size(px(13.0))
+                .text_size(px(13.0 * self.z()))
                 .text_color(hsla(ui.text_dim))
                 .child(svg().path(icon("file")).size(px(28.0)).text_color(hsla(ui.divider)))
                 .child(label)
@@ -1693,10 +1719,10 @@ impl ProjectView {
                         .bg(hsla(ui.tab_active))
                         .border_1()
                         .border_color(hsla(ui.divider))
-                        .text_size(px(13.0))
+                        .text_size(px(13.0 * self.z()))
                         .occlude()
                         .capture_key_down(cx.listener(Self::quick_key))
-                        .child(div().flex().items_center().gap_2().child(div().flex_1().child(quick.editor.clone())).child(div().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(format!("{count} files"))))
+                        .child(div().flex().items_center().gap_2().child(div().flex_1().child(quick.editor.clone())).child(div().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{count} files"))))
                         .children(rows),
                 ),
         )
@@ -1817,7 +1843,7 @@ impl Render for ProjectView {
             .flex_col()
             .when(!self.open.is_empty(), |d| d.child(self.render_strip(&ui, cx)))
             .children(self.render_bar(&ui, cx))
-            .when_some(notice, |d, n| d.child(div().flex_none().px_3().py_1().text_size(px(12.0)).bg(hsla_alpha(ui.danger, 0.15)).text_color(hsla(ui.text)).child(n)))
+            .when_some(notice, |d, n| d.child(div().flex_none().px_3().py_1().text_size(px(12.0 * self.z())).bg(hsla_alpha(ui.danger, 0.15)).text_color(hsla(ui.text)).child(n)))
             .child(div().flex_1().min_h_0().child(self.render_content(&ui, cx)))
             .children(self.render_status(&ui, cx));
         div()
@@ -1829,7 +1855,7 @@ impl Render for ProjectView {
             .size_full()
             .flex()
             .flex_col()
-            .text_size(px(13.0))
+            .text_size(px(13.0 * self.z()))
             .child(self.render_header(&ui, cx))
             .child(
                 div()

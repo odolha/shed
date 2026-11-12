@@ -30,6 +30,13 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// The same with the font `zoom` points larger (a tab's zoom).
+    pub fn zoomed(&self, zoom: f32) -> Settings {
+        let mut s = self.clone();
+        s.font.size = (s.font.size + zoom).clamp(6.0, 72.0);
+        s
+    }
+
     pub fn from_config(config: &Config, dark: bool) -> Self {
         let (theme, error) = config.theme(dark);
         Self {

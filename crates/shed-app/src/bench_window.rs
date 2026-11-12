@@ -648,6 +648,14 @@ impl BenchWindow {
         entries
     }
 
+    /// Zooms the shown tab by `delta` points (0 goes back to the usual size).
+    fn zoom_tab(&mut self, delta: f32, cx: &mut Context<Self>) {
+        let Some(tab) = self.bench(cx).and_then(|b| b.active_tab().cloned()) else { return };
+        let base = self.state.read(cx).settings.font.size;
+        let zoom = if delta == 0.0 { 0.0 } else { (base + tab.zoom + delta).clamp(6.0, 72.0) - base };
+        self.send(ClientMsg::SetZoom { tab: tab.id, zoom }, cx);
+    }
+
     fn bench_menu(&self, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let current = self.bench(cx).map(|b| b.color);
         let mut entries = vec![
@@ -1061,6 +1069,10 @@ impl Render for BenchWindow {
             .on_mouse_move(cx.listener(Self::on_drag_move))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = None))
             .on_action(cx.listener(|this, _: &NewTab, _, cx| this.new_tab(cx)))
+            // Terminals zoom themselves; project and AI tabs zoom here.
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_tab(1.0, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_tab(-1.0, cx)))
+            .on_action(cx.listener(|this, _: &ZoomReset, _, cx| this.zoom_tab(0.0, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if let Some(tab) = this.active_tab(cx).map(|t| t.id) {
                     this.close_tab(tab, window, cx);

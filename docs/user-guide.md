@@ -548,7 +548,9 @@ an ordinary shell line again (in bash, a redirection).
   older selection. In programs that
   use the mouse (vim, htop), hold Shift to select.
 - **Ctrl+click** opens a link, or a file path (relative to the pane's folder).
-- **Zoom**: Ctrl+= and Ctrl+-, Ctrl+0 to reset.
+- **Zoom**: Ctrl+= and Ctrl+-, Ctrl+0 to reset. Every kind of tab zooms: a
+  project tab's code, file tree and lists, an AI tab's conversation and prompt.
+  Each tab keeps its own zoom, also after the bench closes.
 
 ## Tags and private tabs
 
@@ -604,7 +606,7 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | Ctrl+R (at a prompt) | Search the logbook |
 | Up, Ctrl+Up, Ctrl+Shift+Up (at a prompt) | Walk tab / bench / all history |
 | Shift+PageUp / Shift+PageDown | Scroll a page |
-| Ctrl+= / Ctrl+- / Ctrl+0 | Zoom the tab in / out / reset (kept with the tab, and saved) |
+| Ctrl+= / Ctrl+- / Ctrl+0 | Zoom the tab in / out / reset, any kind of tab (kept with the tab, and saved) |
 
 In a **project tab**: Ctrl+P opens a file by name, Ctrl+Shift+F searches every
 file, Ctrl+Shift+A sends the selection (or the file) to the AI tab, Ctrl+W closes

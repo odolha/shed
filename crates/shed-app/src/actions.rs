@@ -173,9 +173,10 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         "none" => return Ok(None),
         "copy" => KeyBinding::new(key, Copy, t),
         "paste" => KeyBinding::new(key, Paste, t),
-        "zoom_in" => KeyBinding::new(key, ZoomIn, t),
-        "zoom_out" => KeyBinding::new(key, ZoomOut, t),
-        "zoom_reset" => KeyBinding::new(key, ZoomReset, t),
+        // Any tab: a terminal zooms itself; the bench window zooms the others.
+        "zoom_in" => KeyBinding::new(key, ZoomIn, w),
+        "zoom_out" => KeyBinding::new(key, ZoomOut, w),
+        "zoom_reset" => KeyBinding::new(key, ZoomReset, w),
         "scroll_page_up" => KeyBinding::new(key, ScrollPageUp, t),
         "scroll_page_down" => KeyBinding::new(key, ScrollPageDown, t),
         "search" => KeyBinding::new(key, SearchScrollback, t),

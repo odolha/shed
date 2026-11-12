@@ -54,7 +54,10 @@ pub struct AiView {
     pub ai: AiTab,
     pub accent: Rgb,
     conn: KeeperConn,
+    /// The settings with the tab's zoom in the font size (`base` without).
     settings: Settings,
+    base: Settings,
+    zoom: f32,
     entries: Vec<Entry>,
     status: Status,
     commands: Vec<Command>,
@@ -173,7 +176,9 @@ impl AiView {
             ai,
             accent,
             conn,
+            base: settings.clone(),
             settings,
+            zoom: 0.0,
             entries: Vec::new(),
             status: Status::default(),
             commands: Vec::new(),
@@ -221,10 +226,27 @@ impl AiView {
         self.prompt.read(cx).focus_handle().clone()
     }
 
+    /// The tab's zoom, in font points.
+    pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        if zoom != self.zoom {
+            self.zoom = zoom;
+            let base = self.base.clone();
+            self.apply_settings(&base, cx);
+        }
+    }
+
+    /// How much larger than usual the tab's text is drawn.
+    fn z(&self) -> f32 {
+        self.settings.font.size / self.base.font.size.max(1.0)
+    }
+
     pub fn apply_settings(&mut self, settings: &Settings, cx: &mut Context<Self>) {
-        self.settings = settings.clone();
+        self.base = settings.clone();
+        self.settings = settings.zoomed(self.zoom);
         self.parsed.clear();
-        self.prompt.update(cx, |p, cx| p.apply(settings, cx));
+        let zoomed = self.settings.clone();
+        self.prompt.update(cx, |p, cx| p.apply(&zoomed, cx));
+        self.list.remeasure();
         cx.notify();
     }
 
@@ -809,7 +831,7 @@ impl AiView {
             .px_1p5()
             .rounded_sm()
             .cursor_pointer()
-            .text_size(px(11.0))
+            .text_size(px(11.0 * self.z()))
             .text_color(hsla(ui.text_dim))
             .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -935,7 +957,7 @@ impl AiView {
                 }
                 Kind::Cell { cols, .. } => {
                     let cols = *cols;
-                    let mut table = div().flex().flex_col().rounded_sm().border_1().border_color(hsla(ui.divider)).text_size(px(12.5));
+                    let mut table = div().flex().flex_col().rounded_sm().border_1().border_color(hsla(ui.divider)).text_size(px(12.5 * self.z()));
                     let mut row_el: Option<(usize, gpui::Div)> = None;
                     while let Some(Piece { kind: Kind::Cell { row, align, .. }, text }) = parsed.pieces.get(j) {
                         let (row, align) = (*row, *align);
@@ -996,12 +1018,12 @@ impl AiView {
                     .py_0p5()
                     .border_b_1()
                     .border_color(hsla(ui.divider))
-                    .text_size(px(11.0))
+                    .text_size(px(11.0 * self.z()))
                     .text_color(hsla(ui.text_dim))
                     .child(if lang.is_empty() { "code".to_string() } else { lang })
                     .child(copy),
             )
-            .child(div().px_2().py_1().font_family(mono.to_string()).text_size(px(12.0)).line_height(relative(1.35)).child(self.sel_text(i, j, parsed, styles, cx)))
+            .child(div().px_2().py_1().font_family(mono.to_string()).text_size(px(12.0 * self.z())).line_height(relative(1.35)).child(self.sel_text(i, j, parsed, styles, cx)))
     }
 
     fn transcript_markdown(&self) -> String {
@@ -1089,7 +1111,7 @@ impl AiView {
                         .px_1p5()
                         .rounded_sm()
                         .cursor_pointer()
-                        .text_size(px(11.0))
+                        .text_size(px(11.0 * self.z()))
                         .text_color(hsla(ui.text_dim))
                         .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1122,10 +1144,10 @@ impl AiView {
                         let parsed = self.entry_pieces(i);
                         self.sel_text(i, 0, &parsed, Vec::new(), cx)
                     })
-                    .when(images > 0, |d| d.child(div().mt_1().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(format!("{images} picture(s) attached"))))
+                    .when(images > 0, |d| d.child(div().mt_1().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{images} picture(s) attached"))))
                     .when(lines.len() > FOLD_LINES, |d| {
                         let label = if open { "Show less".to_string() } else { format!("Show all {} lines", lines.len()) };
-                        d.child(div().id(("fold", i)).mt_1().cursor_pointer().text_size(px(11.0)).text_color(hsla(ui.ink(accent))).on_click(toggle).child(label))
+                        d.child(div().id(("fold", i)).mt_1().cursor_pointer().text_size(px(11.0 * self.z())).text_color(hsla(ui.ink(accent))).on_click(toggle).child(label))
                     })
                     .when(editing, |d| d.border_l_4()))
                     .child(actions)
@@ -1155,7 +1177,7 @@ impl AiView {
             Entry::Thinking { text } => div()
                 .id(("thinking", i))
                 .cursor_pointer()
-                .text_size(px(12.0))
+                .text_size(px(12.0 * self.z()))
                 .text_color(hsla(ui.text_dim))
                 .on_click(toggle)
                 .child(if open { "▾ Thinking" } else { "▸ Thinking" })
@@ -1171,7 +1193,7 @@ impl AiView {
                     (Some(_), false) => ("✓", ui.ink(accent)),
                     (Some(_), true) => ("✗", ui.danger),
                 };
-                let mut el = div().id(("tool", i)).flex().flex_col().text_size(px(12.0)).child(
+                let mut el = div().id(("tool", i)).flex().flex_col().text_size(px(12.0 * self.z())).child(
                     div()
                         .id(("tool-head", i))
                         .flex()
@@ -1186,10 +1208,10 @@ impl AiView {
                 );
                 if open {
                     if !t.detail.is_empty() {
-                        el = el.child(pre(&t.detail, &ui, &mono, None));
+                        el = el.child(pre(&t.detail, &ui, &mono, None, self.z()));
                     }
                     if let Some(diff) = &t.diff {
-                        el = el.child(diff_view(&diff.old, &diff.new, &ui, &mono));
+                        el = el.child(diff_view(&diff.old, &diff.new, &ui, &mono, self.z()));
                     }
                     if let Some(result) = &t.result {
                         let lines: Vec<&str> = result.lines().collect();
@@ -1197,7 +1219,7 @@ impl AiView {
                         if lines.len() > RESULT_LINES {
                             shown.push_str(&format!("\n… {} more lines", lines.len() - RESULT_LINES));
                         }
-                        el = el.child(pre(&shown, &ui, &mono, t.error.then_some(ui.danger)));
+                        el = el.child(pre(&shown, &ui, &mono, t.error.then_some(ui.danger), self.z()));
                     }
                 }
                 el.into_any_element()
@@ -1232,26 +1254,26 @@ impl AiView {
                     .border_color(hsla(if p.answer.is_none() { accent } else { ui.divider }))
                     .child(div().text_color(hsla(ui.text)).child(format!("Claude asks to {}", lower_first(&p.summary))));
                 if let Some(diff) = &p.diff {
-                    card = card.child(diff_view(&diff.old, &diff.new, &ui, &mono));
+                    card = card.child(diff_view(&diff.old, &diff.new, &ui, &mono, self.z()));
                 } else if !p.detail.is_empty() {
-                    card = card.child(pre(&p.detail, &ui, &mono, None));
+                    card = card.child(pre(&p.detail, &ui, &mono, None, self.z()));
                 }
                 card = match p.answer {
                     None => card.child(
                         div()
                             .flex()
                             .gap_2()
-                            .text_size(px(12.0))
+                            .text_size(px(12.0 * self.z()))
                             .child(answer("Allow", true, false, accent))
                             .child(answer("Allow for This Session", true, true, accent))
                             .child(answer("Deny", false, false, ui.danger)),
                     ),
-                    Some(allowed) => card.child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(if allowed { "Allowed" } else { "Denied" })),
+                    Some(allowed) => card.child(div().text_size(px(12.0 * self.z())).text_color(hsla(ui.text_dim)).child(if allowed { "Allowed" } else { "Denied" })),
                 };
                 card.into_any_element()
             }
             Entry::Notice { text, error } => div()
-                .text_size(px(11.0))
+                .text_size(px(11.0 * self.z()))
                 .text_color(hsla(if error { ui.danger } else { ui.text_dim }))
                 .child(text)
                 .into_any_element(),
@@ -1304,7 +1326,7 @@ impl AiView {
                             this.open_menu(e.position, entries, cx);
                         }))
                         .child(div().truncate().text_color(hsla(ui.text)).child(s.title.clone()))
-                        .child(div().truncate().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(meta.join(" · ")))
+                        .child(div().truncate().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(meta.join(" · ")))
                         .into_any_element(),
                 )
             })
@@ -1333,7 +1355,7 @@ impl AiView {
                 div().text_color(hsla(color)).child(format!("{label} {pct}% · resets {}", until(w.resets)))
             })
         };
-        let mut chips = div().flex().flex_wrap().items_center().gap_1().text_size(px(11.0));
+        let mut chips = div().flex().flex_wrap().items_center().gap_1().text_size(px(11.0 * self.z()));
         let others: Vec<PathBuf> = self.projects.iter().filter(|p| **p != self.ai.folder).cloned().collect();
         if !others.is_empty() {
             chips = chips.child(div().text_color(hsla(ui.text_dim)).child("Also works in:"));
@@ -1382,14 +1404,14 @@ impl AiView {
                     .items_center()
                     .gap_2()
                     .child(svg().path(icon("ai")).size(px(16.0)).flex_none().text_color(hsla(ui.ink(accent))))
-                    .child(div().flex_none().text_size(px(14.0)).text_color(hsla(ui.text)).child(title))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(format!("{folder} · {}", shed_save::home_relative(&self.ai.folder))))
+                    .child(div().flex_none().text_size(px(14.0 * self.z())).text_color(hsla(ui.text)).child(title))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{folder} · {}", shed_save::home_relative(&self.ai.folder))))
                     .child(
                         div()
                             .flex()
                             .flex_none()
                             .gap_3()
-                            .text_size(px(11.0))
+                            .text_size(px(11.0 * self.z()))
                             .children(window("5 h", limits.five_hour))
                             .children(window("week", limits.week))
                             .when(self.status.cost > 0.0, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("${:.2}", self.status.cost))))
@@ -1438,7 +1460,7 @@ impl AiView {
             .gap_2()
             .px_3()
             .py_1()
-            .text_size(px(12.0))
+            .text_size(px(12.0 * self.z()))
             .child(div().flex_1().text_color(hsla(if self.status.state == AiState::Waiting { ui.ink(accent) } else { ui.text_dim })).child(status))
             .child(chip("ai-model", model).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 this.warm_up();
@@ -1510,7 +1532,7 @@ impl AiView {
                 .bg(hsla(ui.tab_active))
                 .border_1()
                 .border_color(hsla(ui.divider))
-                .text_size(px(12.0))
+                .text_size(px(12.0 * self.z()))
                 .children(c.items.iter().enumerate().map(|(n, &i)| {
                     let cmd = &self.commands[i];
                     let description: String = cmd.description.chars().take(110).collect();
@@ -1535,7 +1557,7 @@ impl AiView {
     /// Above the prompt: find, the task list, and the files the last turn changed.
     fn render_extras(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
         let accent = self.accent;
-        let mut out = div().flex().flex_col().gap_1().mx_3().text_size(px(12.0));
+        let mut out = div().flex().flex_col().gap_1().mx_3().text_size(px(12.0 * self.z()));
         let mut any = false;
         if self.editing.is_some() {
             any = true;
@@ -1671,7 +1693,7 @@ impl Render for AiView {
             .relative()
             .size_full()
             .flex()
-            .text_size(px(13.0))
+            .text_size(px(13.0 * self.z()))
             .child(
                 div()
                     .w(px(SESSIONS_WIDTH))
@@ -1702,7 +1724,7 @@ impl Render for AiView {
                             .child(svg().path(icon("ai")).size(px(14.0)).text_color(hsla(ui.ink(self.accent))))
                             .child("New Session"),
                     )
-                    .child(div().text_size(px(12.0)).child(self.filter.clone()))
+                    .child(div().text_size(px(12.0 * self.z())).child(self.filter.clone()))
                     .child(sessions),
             )
             .child(
@@ -1738,7 +1760,7 @@ impl Render for AiView {
                                 .flex()
                                 .gap_2()
                                 .items_center()
-                                .text_size(px(11.0))
+                                .text_size(px(11.0 * self.z()))
                                 .text_color(hsla(ui.text_dim))
                                 .child(format!("{images} picture(s) will go with the prompt"))
                                 .child(div().id("drop-images").cursor_pointer().text_color(hsla(ui.ink(self.accent))).on_click(cx.listener(|this, _, _, cx| {
@@ -1766,7 +1788,7 @@ impl Render for AiView {
 }
 
 /// Text as written, in the monospaced font, on a darker ground.
-fn pre(text: &str, ui: &UiColors, mono: &str, color: Option<Rgb>) -> impl IntoElement {
+fn pre(text: &str, ui: &UiColors, mono: &str, color: Option<Rgb>, z: f32) -> impl IntoElement {
     div()
         .my_1()
         .px_2()
@@ -1776,13 +1798,13 @@ fn pre(text: &str, ui: &UiColors, mono: &str, color: Option<Rgb>) -> impl IntoEl
         .border_1()
         .border_color(hsla(ui.divider))
         .font_family(mono.to_string())
-        .text_size(px(12.0))
+        .text_size(px(12.0 * z))
         .text_color(hsla(color.unwrap_or(ui.text)))
         .children(text.lines().map(|l| div().min_h(px(16.0)).child(l.to_string())))
 }
 
 /// An edit: the lines taken out, then the lines put in.
-fn diff_view(old: &str, new: &str, ui: &UiColors, mono: &str) -> impl IntoElement {
+fn diff_view(old: &str, new: &str, ui: &UiColors, mono: &str, z: f32) -> impl IntoElement {
     let red = Rgb::hex(0xE5534B);
     let green = Rgb::hex(0x57AB5A);
     let lines = |text: &str, sign: &'static str, color: Rgb| {
@@ -1794,7 +1816,7 @@ fn diff_view(old: &str, new: &str, ui: &UiColors, mono: &str) -> impl IntoElemen
         .border_1()
         .border_color(hsla(ui.divider))
         .font_family(mono.to_string())
-        .text_size(px(12.0))
+        .text_size(px(12.0 * z))
         .text_color(hsla(ui.text))
         .children(lines(old, "-", red))
         .children(lines(new, "+", green))

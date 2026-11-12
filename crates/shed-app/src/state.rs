@@ -258,22 +258,27 @@ impl AppState {
     /// the tree, so unsaved edits survive hiding the bench.
     fn sync_projects(&mut self, cx: &mut Context<Self>) {
         let open: HashSet<BenchId> = self.windows.keys().chain(&self.opening).copied().collect();
-        let all: Vec<(BenchId, TabId, shed_model::Project, shed_model::Rgb)> = self
+        let all: Vec<(BenchId, TabId, shed_model::Project, shed_model::Rgb, f32)> = self
             .tree
             .benches
             .iter()
-            .flat_map(|b| b.tabs.iter().filter_map(|t| Some((b.id, t.id, t.project_info()?.clone(), b.color.accent()))))
+            .flat_map(|b| b.tabs.iter().filter_map(|t| Some((b.id, t.id, t.project_info()?.clone(), b.color.accent(), t.zoom))))
             .collect();
         self.projects.retain(|id, _| all.iter().any(|w| w.1 == *id));
-        for (bench, tab, project, accent) in all {
+        for (bench, tab, project, accent, zoom) in all {
             match self.projects.get(&tab) {
                 Some(view) => view.update(cx, |v, cx| {
                     (v.bench, v.accent) = (bench, accent);
                     v.set_project(&project, cx);
+                    v.set_zoom(zoom, cx);
                 }),
                 None if open.contains(&bench) => {
                     let (conn, settings) = (self.conn.clone(), self.settings.clone());
-                    let view = cx.new(|cx| ProjectView::new(bench, tab, &project, accent, conn, settings, cx));
+                    let view = cx.new(|cx| {
+                        let mut v = ProjectView::new(bench, tab, &project, accent, conn, settings, cx);
+                        v.set_zoom(zoom, cx);
+                        v
+                    });
                     self.projects.insert(tab, view);
                 }
                 None => {}
@@ -285,20 +290,21 @@ impl AppState {
     /// the tree, following its settings and the bench's project folders.
     fn sync_ai(&mut self, cx: &mut Context<Self>) {
         let open: HashSet<BenchId> = self.windows.keys().chain(&self.opening).copied().collect();
-        let all: Vec<(BenchId, TabId, shed_model::AiTab, shed_model::Rgb, Vec<std::path::PathBuf>)> = self
+        let all: Vec<(BenchId, TabId, shed_model::AiTab, shed_model::Rgb, Vec<std::path::PathBuf>, f32)> = self
             .tree
             .benches
             .iter()
             .flat_map(|b| {
                 let projects: Vec<std::path::PathBuf> = b.tabs.iter().filter_map(|t| Some(t.project_info()?.root.clone())).collect();
-                b.tabs.iter().filter_map(move |t| Some((b.id, t.id, t.ai_info()?.clone(), b.color.accent(), projects.clone())))
+                b.tabs.iter().filter_map(move |t| Some((b.id, t.id, t.ai_info()?.clone(), b.color.accent(), projects.clone(), t.zoom)))
             })
             .collect();
         self.ai_views.retain(|id, _| all.iter().any(|w| w.1 == *id));
-        for (bench, tab, ai, accent, projects) in all {
+        for (bench, tab, ai, accent, projects, zoom) in all {
             match self.ai_views.get(&tab) {
                 Some(view) => view.update(cx, |v, cx| {
                     (v.bench, v.accent) = (bench, accent);
+                    v.set_zoom(zoom, cx);
                     if v.projects != projects {
                         v.projects = projects;
                         cx.notify();
@@ -310,6 +316,7 @@ impl AppState {
                     let view = cx.new(|cx| {
                         let mut v = AiView::new(bench, tab, ai, accent, conn, settings, cx);
                         v.projects = projects;
+                        v.set_zoom(zoom, cx);
                         v
                     });
                     self.ai_views.insert(tab, view);

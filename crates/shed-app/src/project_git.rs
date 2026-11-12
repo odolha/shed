@@ -619,7 +619,7 @@ impl ProjectView {
                 .border_1()
                 .border_color(hsla(ui.divider))
                 .cursor_pointer()
-                .text_size(px(12.0))
+                .text_size(px(12.0 * self.z()))
                 .text_color(hsla(color))
                 .hover(|st| st.bg(hsla(ui.tab_hover)))
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
@@ -748,7 +748,7 @@ impl ProjectView {
             .flex_col()
             .gap_1()
             .p_2()
-            .text_size(px(12.0))
+            .text_size(px(12.0 * self.z()))
             .child(sync)
             .when_some(git.new_branch.as_ref().map(|(e, _)| e.clone()), |d, e| {
                 d.child(div().flex().items_center().gap_1().child(div().text_color(hsla(ui.text_dim)).child("New branch:")).child(div().flex_1().child(e)))
@@ -836,7 +836,7 @@ impl ProjectView {
         let mut row = div()
             .id(("git-row", id))
             .group("git-row")
-            .h(px(ROW_HEIGHT))
+            .h(px(ROW_HEIGHT * self.z()))
             .flex()
             .items_center()
             .gap_1p5()
@@ -907,7 +907,7 @@ impl ProjectView {
             .flex_col()
             .p_2()
             .gap_1()
-            .text_size(px(12.0))
+            .text_size(px(12.0 * self.z()))
             .child(
                 div()
                     .flex()
@@ -944,7 +944,7 @@ impl ProjectView {
                 let (i, file) = *rows.get(n)?;
                 let c = git.log.get(i)?;
                 let hash = c.hash.clone();
-                let row = div().id(("hist", n)).h(px(ROW_HEIGHT)).flex().items_center().gap_1p5().px_1().rounded_sm().cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover)));
+                let row = div().id(("hist", n)).h(px(ROW_HEIGHT * self.z())).flex().items_center().gap_1p5().px_1().rounded_sm().cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover)));
                 Some(match file {
                     None => {
                         let open = git.expanded.contains(&c.hash);
@@ -1001,7 +1001,7 @@ impl ProjectView {
             .gap_2()
             .px_3()
             .py_1()
-            .text_size(px(12.0))
+            .text_size(px(12.0 * self.z()))
             .border_b_1()
             .border_color(hsla(ui.divider))
             .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(format!("{what} · {path}")))
@@ -1064,7 +1064,7 @@ impl ProjectView {
         range
             .filter_map(|n| {
                 let row = d.rows.get(n)?;
-                let base = div().id(("drow", n)).h(px(DIFF_ROW)).w_full().flex().items_center().font_family(mono.clone()).text_size(px(12.0)).text_color(hsla(ui.text));
+                let base = div().id(("drow", n)).h(px(DIFF_ROW * self.z())).w_full().flex().items_center().font_family(mono.clone()).text_size(px(12.0 * self.z())).text_color(hsla(ui.text));
                 Some(match row {
                     DiffRow::Hunk(h) => {
                         let hunk = &d.hunks[*h];
@@ -1196,7 +1196,7 @@ impl ProjectView {
                 .gap_2()
                 .px_3()
                 .py_1()
-                .text_size(px(12.0))
+                .text_size(px(12.0 * self.z()))
                 .bg(hsla_alpha(ui.danger, 0.15))
                 .text_color(hsla(ui.text))
                 .child(div().flex_1().child(if blocks.is_empty() { "No conflict markers left.".to_string() } else { format!("{} conflict(s). At the cursor, take:", blocks.len()) }))
@@ -1291,7 +1291,7 @@ impl ProjectView {
                 .h_full()
                 .flex()
                 .flex_col()
-                .child(div().flex_none().px_2().py_0p5().text_size(px(11.0)).text_color(hsla(ui.text_dim)).border_b_1().border_color(hsla(ui.divider)).child(title))
+                .child(div().flex_none().px_2().py_0p5().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).border_b_1().border_color(hsla(ui.divider)).child(title))
                 .child(div().flex_1().min_h_0().child(view.clone()))
         };
         let line = || div().flex_none().w(px(1.0)).h_full().bg(hsla(ui.divider));
