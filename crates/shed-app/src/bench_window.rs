@@ -65,6 +65,30 @@ impl EditTarget {
     }
 }
 
+/// A tab's one icon, the same on its bench's tab bar and in Shed: what it
+/// is (terminal, program running, project, AI, remote), or that it waits
+/// for you or is working; and its colour.
+pub fn tab_icon(tab: &Tab, accent: Rgb, ui: &UiColors) -> (&'static str, Rgb) {
+    let waiting = tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some());
+    if waiting {
+        ("tool-waiting", ui.ink(accent))
+    } else if let Some(ai) = tab.ai_info() {
+        match ai.activity {
+            shed_model::AiActivity::Waiting => ("tool-waiting", ui.ink(accent)),
+            shed_model::AiActivity::Working => ("ai", ui.ink(accent)),
+            shed_model::AiActivity::Idle => ("ai", ui.text_dim),
+        }
+    } else if tab.project_info().is_some() {
+        ("project", ui.text_dim)
+    } else if tab.remote_info().is_some() {
+        ("server", ui.text_dim)
+    } else if tab.panes.iter().any(|p| p.tool.is_some()) {
+        ("tool", ui.text_dim)
+    } else {
+        ("terminal", ui.text_dim)
+    }
+}
+
 /// `tags` with the one `text` describes added: "prod", or "prod red".
 pub fn with_tag(tags: &[Tag], text: &str) -> Option<Vec<Tag>> {
     let mut words = text.split_whitespace();
@@ -758,23 +782,9 @@ impl BenchWindow {
                 // The active tab carries the bench colour along its top.
                 el = el.border_t_2().border_color(hsla(accent));
             }
-            if tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some()) {
-                // A loaded bench typed a command here; it waits for Enter.
-                el = el.child(svg().path(icon("tool-waiting")).size(px(12.0)).flex_none().text_color(hsla(accent)));
-            } else if tab.panes.iter().any(|p| p.tool.is_some()) {
-                el = el.child(svg().path(icon("tool")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
-            }
-            if tab.project_info().is_some() {
-                el = el.child(svg().path(icon("project")).size(px(14.0)).flex_none().text_color(hsla(ui.ink(accent))));
-            }
-            if tab.remote_info().is_some() {
-                el = el.child(svg().path(icon("server")).size(px(14.0)).flex_none().text_color(hsla(ui.ink(accent))));
-            }
-            if let Some(ai) = tab.ai_info() {
-                let glyph = if ai.activity == shed_model::AiActivity::Waiting { "tool-waiting" } else { "ai" };
-                let color = if ai.activity == shed_model::AiActivity::Idle { ui.text_dim } else { ui.ink(accent) };
-                el = el.child(svg().path(icon(glyph)).size(px(14.0)).flex_none().text_color(hsla(color)));
-            }
+            // One icon, as in Shed: what the tab is, or that it waits or works.
+            let (glyph, tint) = tab_icon(tab, accent, ui);
+            el = el.child(svg().path(icon(glyph)).size(px(14.0)).flex_none().text_color(hsla(tint)));
             if tab.private {
                 el = el.child(svg().path(icon("private")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
             }

@@ -130,8 +130,9 @@ the focused pane, when a tab is split.
 - **Tabs**: click to switch, double-click to rename, drag to reorder. Middle-click
   or **Close Tab…** in the right-click menu closes one, after asking, so a slip
   does not stop what runs in it; closing a tab's only pane (Ctrl+Shift+W) asks
-  the same. A small icon on a tab shows that a program is running in it, or that a
-  command is [waiting for Enter](#opening-hiding-closing).
+  the same. Each tab has one icon, the same as in Shed's compact view: what it is
+  (terminal, program running, project, AI, remote), or, in the bench's colour,
+  that it is working or that a command is [waiting for Enter](#opening-hiding-closing).
 - **New tab**: the button after the last tab, or Ctrl+Shift+T.
 - **Splits**: Ctrl+Shift+E splits right, Ctrl+Shift+O splits down; drag the line
   between panes to resize; Alt+arrows move between panes.

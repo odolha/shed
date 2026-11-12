@@ -1234,25 +1234,7 @@ impl Pegboard {
         let card_key = entry.key();
         let pane = tab.active();
         let tool = pane.and_then(|p| p.tool.as_ref());
-        let waiting = tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some());
-        // One icon: what the tab is, or that it waits or works.
-        let (glyph, tint) = if waiting {
-            ("tool-waiting", ui.ink(accent))
-        } else if let Some(ai) = tab.ai_info() {
-            match ai.activity {
-                shed_model::AiActivity::Waiting => ("tool-waiting", ui.ink(accent)),
-                shed_model::AiActivity::Working => ("ai", ui.ink(accent)),
-                shed_model::AiActivity::Idle => ("ai", ui.text_dim),
-            }
-        } else if tab.project_info().is_some() {
-            ("project", ui.text_dim)
-        } else if tab.remote_info().is_some() {
-            ("server", ui.text_dim)
-        } else if tool.is_some() {
-            ("tool", ui.text_dim)
-        } else {
-            ("terminal", ui.text_dim)
-        };
+        let (glyph, tint) = crate::bench_window::tab_icon(tab, accent, ui);
         // Beside the title: the program in front, else the folder's last part.
         let detail = match tool {
             Some(tool) => Some(tool.display()),
