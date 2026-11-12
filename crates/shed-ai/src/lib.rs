@@ -17,10 +17,12 @@ use serde::{Deserialize, Serialize};
 /// One item of a conversation, as shown.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Entry {
-    /// What the user asked; `images` pictures came with it.
-    User { text: String, images: u32 },
-    /// Claude's answer, in Markdown; grows while it streams.
-    Assistant { text: String },
+    /// What the user asked; `images` pictures came with it; when (Unix
+    /// seconds, 0 if not known).
+    User { text: String, images: u32, at: u64 },
+    /// Claude's answer, in Markdown; grows while it streams. `at`: when it
+    /// started.
+    Assistant { text: String, at: u64 },
     Thinking { text: String },
     Tool(Tool),
     /// Claude asks to use a tool; `answer` is the user's, once given.

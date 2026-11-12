@@ -417,6 +417,8 @@ impl Keeper {
         {
             rt.pending.insert(id.to_string(), req.clone());
         }
+        // Live events carry no time: they happened now.
+        rt.transcript.clock = now();
         if let Some(limits) = rt.transcript.apply(&v) {
             st.ai_limits = Some(limits);
             st.send_windows(KeeperMsg::AiLimits(limits));

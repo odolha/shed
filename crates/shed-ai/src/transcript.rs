@@ -34,6 +34,29 @@ pub struct Transcript {
     last_uuid: Option<String>,
     /// The id of the record being applied.
     applying_uuid: Option<String>,
+    /// The time now (Unix seconds), set by whoever feeds live events; a
+    /// saved session's records carry their own.
+    pub clock: u64,
+    /// The time of the record being applied, if it says.
+    applying_time: Option<u64>,
+}
+
+/// `2026-11-12T13:02:43.223Z` as Unix seconds.
+pub fn parse_timestamp(s: &str) -> Option<u64> {
+    let (date, time) = s.split_once('T')?;
+    let mut d = date.split('-').map(|x| x.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let mut t = time.trim_end_matches('Z').split(':');
+    let (h, min) = (t.next()?.parse::<i64>().ok()?, t.next()?.parse::<i64>().ok()?);
+    let sec = t.next()?.split('.').next()?.parse::<i64>().ok()?;
+    // Days from 1970-01-01 (Howard Hinnant's days_from_civil).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    u64::try_from(days * 86400 + h * 3600 + min * 60 + sec).ok()
 }
 
 /// Where a prompt (the `User` entry at `entry`) sits in Claude Code's
@@ -76,7 +99,7 @@ impl Transcript {
     /// What the user sends, as it goes out, with the message id it goes
     /// out with.
     pub fn user(&mut self, text: &str, images: u32, now: u64, uuid: Option<String>) {
-        let entry = self.push(Entry::User { text: text.to_string(), images });
+        let entry = self.push(Entry::User { text: text.to_string(), images, at: now });
         self.mark_prompt(entry, uuid);
         self.status.state = State::Working;
         self.status.since = Some(now);
@@ -113,6 +136,11 @@ impl Transcript {
 
     pub fn notice(&mut self, text: impl Into<String>, error: bool) {
         self.push(Entry::Notice { text: text.into(), error });
+    }
+
+    /// When the record being applied happened: its own time, else now.
+    fn now(&self) -> u64 {
+        self.applying_time.unwrap_or(self.clock)
     }
 
     /// Records the user's answers to Claude's questions.
@@ -163,6 +191,7 @@ impl Transcript {
             return None;
         }
         self.applying_uuid = m.get("uuid").and_then(Value::as_str).map(String::from);
+        self.applying_time = m.get("timestamp").and_then(Value::as_str).and_then(parse_timestamp);
         match kind {
             "stream_event" => self.stream(m.get("event")?),
             "assistant" => self.assistant(m.get("message")?),
@@ -191,7 +220,7 @@ impl Transcript {
             "content_block_start" => {
                 let index = e.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let entry = match e.get("content_block").and_then(|b| b.get("type")).and_then(Value::as_str) {
-                    Some("text") => Entry::Assistant { text: String::new() },
+                    Some("text") => Entry::Assistant { text: String::new(), at: self.now() },
                     Some("thinking") => Entry::Thinking { text: String::new() },
                     _ => return,
                 };
@@ -207,7 +236,7 @@ impl Transcript {
                 let delta = e.get("delta");
                 let piece = delta.and_then(|d| d.get("text").or_else(|| d.get("thinking"))).and_then(Value::as_str).unwrap_or("");
                 match &mut self.entries[i] {
-                    Entry::Assistant { text } | Entry::Thinking { text } => text.push_str(piece),
+                    Entry::Assistant { text, .. } | Entry::Thinking { text } => text.push_str(piece),
                     _ => return,
                 }
                 self.touch(i);
@@ -241,14 +270,15 @@ impl Transcript {
                     match streamed {
                         Some(i) => {
                             match &mut self.entries[i] {
-                                Entry::Assistant { text: t } | Entry::Thinking { text: t } => *t = text,
+                                Entry::Assistant { text: t, .. } | Entry::Thinking { text: t } => *t = text,
                                 _ => {}
                             }
                             self.touch(i);
                         }
                         None if text.trim().is_empty() => {}
                         None if kind == "text" => {
-                            self.push(Entry::Assistant { text });
+                            let at = self.now();
+                            self.push(Entry::Assistant { text, at });
                         }
                         None => {
                             self.push(Entry::Thinking { text });
@@ -306,12 +336,14 @@ impl Transcript {
         if let Some(rest) = text.strip_prefix("<command-name>") {
             let name = rest.split("</command-name>").next().unwrap_or("");
             let args = text.split("<command-args>").nth(1).and_then(|a| a.split("</command-args>").next()).unwrap_or("");
-            let entry = self.push(Entry::User { text: format!("{name} {args}").trim().to_string(), images });
+            let at = self.now();
+            let entry = self.push(Entry::User { text: format!("{name} {args}").trim().to_string(), images, at });
             let uuid = self.applying_uuid.clone();
             self.mark_prompt(entry, uuid);
             return;
         }
-        let entry = self.push(Entry::User { text: text.to_string(), images });
+        let at = self.now();
+        let entry = self.push(Entry::User { text: text.to_string(), images, at });
         let uuid = self.applying_uuid.clone();
         self.mark_prompt(entry, uuid);
     }
@@ -433,7 +465,7 @@ mod tests {
         assert!(edit.diff.is_some());
         let Entry::Tool(bash) = &t.entries[3] else { panic!() };
         assert_eq!((bash.summary.as_str(), bash.result.as_deref()), ("$ wc -l notes.txt", Some("3 notes.txt")));
-        assert_eq!(t.entries[4], Entry::Assistant { text: "`notes.txt` has 3 lines now.".into() });
+        assert!(matches!(&t.entries[4], Entry::Assistant { text, .. } if text == "`notes.txt` has 3 lines now."));
         assert_eq!(t.status.state, State::Idle);
         assert!(t.status.cost > 0.0 && t.status.context > 0);
         assert!(t.status.session.is_some());
@@ -443,6 +475,21 @@ mod tests {
         let request = p.request.clone();
         t.answer(&request, true);
         assert_eq!(t.take_changes(), Some(2));
+    }
+
+    #[test]
+    fn times_come_from_records_or_the_clock() {
+        use serde_json::json;
+        assert_eq!(parse_timestamp("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_timestamp("2026-11-12T13:02:43.223Z"), Some(1_794_488_563));
+        assert_eq!(parse_timestamp("2000-02-29T12:00:00Z"), Some(951_825_600));
+        assert_eq!(parse_timestamp("nonsense"), None);
+        let mut t = Transcript::new("/tmp");
+        t.apply(&json!({"type": "user", "uuid": "p1", "timestamp": "2026-11-12T13:00:00.000Z", "message": {"role": "user", "content": "hi"}}));
+        t.clock = 5;
+        t.apply(&json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [{"type": "text", "text": "hello"}]}}));
+        assert!(matches!(t.entries[0], Entry::User { at: 1_794_488_400, .. }));
+        assert!(matches!(t.entries[1], Entry::Assistant { at: 5, .. }), "live: the clock");
     }
 
     #[test]

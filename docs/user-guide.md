@@ -294,6 +294,9 @@ terminal of the bench.
   paths in. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
   its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu
   sends a file or folder.
+- **Times**: under each of your messages and over each response, in small text,
+  when it was written and how long ago (`14:32 · 5 min ago`; another day with the
+  date). Sessions opened again keep their times, from Claude Code's record.
 - **The conversation** streams in: answers drawn from their Markdown (headings,
   lists, tables, links, code blocks coloured by language), each tool Claude uses on
   one line (click it for the command, the change as a diff, and what came back),

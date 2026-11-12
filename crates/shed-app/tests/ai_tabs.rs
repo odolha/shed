@@ -102,7 +102,7 @@ for line in sys.stdin:
     assert!(limits, "the usage limits were passed on");
     assert!(matches!(&entries[0], Entry::User { text, .. } if text == "count the lines"), "{:?}", &entries[..entries.len().min(3)]);
     assert!(entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.name == "Edit")));
-    assert!(entries.iter().any(|e| matches!(e, Entry::Assistant { text } if text.contains("3 lines"))));
+    assert!(entries.iter().any(|e| matches!(e, Entry::Assistant { text, .. } if text.contains("3 lines"))));
     // The session is the tab's now, and it is idle again.
     let tree = tree_until(&mut c, "session kept", |t| {
         t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.session.is_some() && a.activity == AiActivity::Idle)

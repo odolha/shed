@@ -274,6 +274,21 @@ impl AiView {
             _subs: subs,
         };
         view.load_sessions(cx);
+        // "5 min ago" keeps up: a redraw a minute, when there is a conversation.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(60)).await;
+                let alive = this.update(cx, |this, cx| {
+                    if !this.entries.is_empty() {
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         view
     }
 
@@ -409,7 +424,7 @@ impl AiView {
 
     fn entry_text(e: &Entry) -> String {
         match e {
-            Entry::User { text, .. } | Entry::Assistant { text } | Entry::Thinking { text } | Entry::Notice { text, .. } => text.clone(),
+            Entry::User { text, .. } | Entry::Assistant { text, .. } | Entry::Thinking { text } | Entry::Notice { text, .. } => text.clone(),
             Entry::Tool(t) => format!("{} {} {}", t.summary, t.detail, t.result.clone().unwrap_or_default()),
             Entry::Permission(p) => format!("{} {}", p.summary, p.detail),
         }
@@ -704,7 +719,7 @@ impl AiView {
 
     fn entry_menu(&self, i: usize) -> Vec<MenuEntry<Self>> {
         let text = match self.entries.get(i) {
-            Some(Entry::User { text, .. } | Entry::Assistant { text } | Entry::Thinking { text } | Entry::Notice { text, .. }) => text.clone(),
+            Some(Entry::User { text, .. } | Entry::Assistant { text, .. } | Entry::Thinking { text } | Entry::Notice { text, .. }) => text.clone(),
             Some(Entry::Tool(t)) => format!("{}\n{}\n{}", t.summary, t.detail, t.result.clone().unwrap_or_default()),
             Some(Entry::Permission(p)) => format!("{}\n{}", p.summary, p.detail),
             None => String::new(),
@@ -1049,7 +1064,7 @@ impl AiView {
 
     /// Everything Claude said in a response, as Markdown.
     fn response_markdown(&self, range: std::ops::Range<usize>) -> String {
-        self.entries[range].iter().filter_map(|e| if let Entry::Assistant { text } = e { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n\n")
+        self.entries[range].iter().filter_map(|e| if let Entry::Assistant { text, .. } = e { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n\n")
     }
 
     fn cancel_edit(&mut self, cx: &mut Context<Self>) {
@@ -1066,7 +1081,7 @@ impl AiView {
     /// An entry's selectable text, as drawn.
     fn entry_pieces(&mut self, i: usize) -> Rc<Parsed> {
         match self.entries.get(i) {
-            Some(Entry::Assistant { text }) => {
+            Some(Entry::Assistant { text, .. }) => {
                 if let Some(p) = self.parsed.get(&i).filter(|p| p.source == *text) {
                     return p.clone();
                 }
@@ -1371,7 +1386,7 @@ impl AiView {
             .iter()
             .filter_map(|e| match e {
                 Entry::User { text, .. } => Some(format!("**You:**\n\n{text}")),
-                Entry::Assistant { text } => Some(text.clone()),
+                Entry::Assistant { text, .. } => Some(text.clone()),
                 Entry::Tool(t) => Some(format!("`{}`", t.summary)),
                 _ => None,
             })
@@ -1472,7 +1487,7 @@ impl AiView {
             cx.notify();
         });
         let body = match entry {
-            Entry::User { text, images } => {
+            Entry::User { text, images, at } => {
                 let lines: Vec<&str> = text.lines().collect();
                 let group: SharedString = format!("prompt-{i}").into();
                 let idle = self.status.state == AiState::Idle;
@@ -1494,6 +1509,7 @@ impl AiView {
                 };
                 let actions = div()
                     .flex()
+                    .flex_1()
                     .justify_end()
                     .gap_1()
                     .invisible()
@@ -1524,11 +1540,14 @@ impl AiView {
                         d.child(div().id(("fold", i)).mt_1().cursor_pointer().text_size(px(11.0 * self.z())).text_color(hsla(ui.ink(accent))).on_click(toggle).child(label))
                     })
                     .when(editing, |d| d.border_l_4()))
-                    .child(actions)
+                    .child(div().flex().items_center().gap_2().children(stamp(at, None, &ui, self.z())).child(actions))
                     .into_any_element()
             }
-            Entry::Assistant { text } => {
+            Entry::Assistant { text, at } => {
                 let parsed = self.entry_pieces(i);
+                // When the response began: over its first part.
+                let first = !self.entries[..i].iter().rev().take_while(|e| !matches!(e, Entry::User { .. })).any(|e| matches!(e, Entry::Assistant { .. }));
+                let when = if first { stamp(at, Some("Claude"), &ui, self.z()) } else { None };
                 // The last part of a response copies all of it.
                 let response = self.response_of(i);
                 let last = !self.entries[i + 1..response.end].iter().any(|e| matches!(e, Entry::Assistant { .. }));
@@ -1544,6 +1563,7 @@ impl AiView {
                     .group(group.clone())
                     .flex()
                     .flex_col()
+                    .children(when.map(|w| w.mb_1()))
                     .child(self.render_pieces(i, &parsed, &ui, &mono, cx))
                     .child(div().flex().justify_end().invisible().group_hover(group, |s| s.visible()).child(copy))
                     .into_any_element()
@@ -2233,6 +2253,36 @@ pub fn ago(secs: u64) -> String {
     }
 }
 
+/// A message's time in small text: `14:32 · 5 min ago` (another day:
+/// `12 Nov 14:32 · 2 d ago`), after `who` if given.
+fn stamp(at: u64, who: Option<&str>, ui: &UiColors, z: f32) -> Option<gpui::Div> {
+    if at == 0 {
+        return None;
+    }
+    let mut parts: Vec<String> = who.map(String::from).into_iter().collect();
+    parts.push(local_time(at));
+    parts.push(ago(at));
+    Some(div().flex_none().text_size(px(11.0 * z)).text_color(hsla_alpha(ui.text_dim, 0.85)).child(parts.join(" · ")))
+}
+
+/// A time as the clock here reads it: `14:32`, or `12 Nov 14:32` another day.
+fn local_time(secs: u64) -> String {
+    let local = |t: u64| {
+        let t = t as libc::time_t;
+        // SAFETY: localtime_r fills the struct from `t` and touches nothing else.
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::localtime_r(&t, &mut tm) };
+        tm
+    };
+    let (tm, today) = (local(secs), local(unix_now()));
+    let time = format!("{:02}:{:02}", tm.tm_hour, tm.tm_min);
+    if (tm.tm_year, tm.tm_yday) == (today.tm_year, today.tm_yday) {
+        return time;
+    }
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!("{} {} {time}", tm.tm_mday, MONTHS[tm.tm_mon.clamp(0, 11) as usize])
+}
+
 /// How long until: `in 2 h 10 min`.
 fn until(secs: u64) -> String {
     let d = secs.saturating_sub(unix_now());
@@ -2280,9 +2330,19 @@ mod tests {
     }
 
     #[test]
+    fn times_read_as_the_clock_here() {
+        let now = unix_now();
+        let t = local_time(now);
+        assert_eq!(t.len(), 5, "today: just the time, {t}");
+        assert!(local_time(now - 3 * 86400).contains(' '), "another day: with the date");
+        let ui = UiColors::default();
+        assert!(stamp(0, None, &ui, 1.0).is_none(), "no time known: nothing");
+    }
+
+    #[test]
     fn jumps_land_on_messages() {
-        let user = || Entry::User { text: "q".into(), images: 0 };
-        let said = || Entry::Assistant { text: "a".into() };
+        let user = || Entry::User { text: "q".into(), images: 0, at: 0 };
+        let said = || Entry::Assistant { text: "a".into(), at: 0 };
         let tool = || Entry::Tool(Default::default());
         // 0 you, 1 response (2, 3 more of it), 4 you, 5 response, 6 more.
         let e = vec![user(), said(), tool(), said(), user(), tool(), said()];
