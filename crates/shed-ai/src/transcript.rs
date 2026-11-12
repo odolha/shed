@@ -28,6 +28,23 @@ pub struct Transcript {
     /// Permission suggestions by request id, as Claude Code sent them, to
     /// send back for "always allow".
     pub suggestions: HashMap<String, Value>,
+    /// Each prompt's place in Claude Code's own record, to go back to it.
+    pub prompts: Vec<PromptMark>,
+    /// The id of the last message in Claude Code's record so far.
+    last_uuid: Option<String>,
+    /// The id of the record being applied.
+    applying_uuid: Option<String>,
+}
+
+/// Where a prompt (the `User` entry at `entry`) sits in Claude Code's
+/// record: its own message id, and the id of the last message before it
+/// (none for the first). Editing it goes back to `before` and sends anew;
+/// file changes since `uuid` can be undone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PromptMark {
+    pub entry: usize,
+    pub uuid: Option<String>,
+    pub before: Option<String>,
 }
 
 impl Transcript {
@@ -56,11 +73,42 @@ impl Transcript {
         self.changed_from = Some(0);
     }
 
-    /// What the user sends, as it goes out.
-    pub fn user(&mut self, text: &str, images: u32, now: u64) {
-        self.push(Entry::User { text: text.to_string(), images });
+    /// What the user sends, as it goes out, with the message id it goes
+    /// out with.
+    pub fn user(&mut self, text: &str, images: u32, now: u64, uuid: Option<String>) {
+        let entry = self.push(Entry::User { text: text.to_string(), images });
+        self.mark_prompt(entry, uuid);
         self.status.state = State::Working;
         self.status.since = Some(now);
+    }
+
+    fn mark_prompt(&mut self, entry: usize, uuid: Option<String>) {
+        self.prompts.push(PromptMark { entry, uuid: uuid.clone(), before: self.last_uuid.clone() });
+        if uuid.is_some() {
+            self.last_uuid = uuid;
+        }
+    }
+
+    /// The prompt at `entry`, if Claude Code's record can go back to it.
+    pub fn prompt_mark(&self, entry: usize) -> Option<&PromptMark> {
+        self.prompts.iter().find(|p| p.entry == entry && p.uuid.is_some())
+    }
+
+    /// Forgets the conversation from `entry` on (to send it again, changed).
+    pub fn truncate(&mut self, entry: usize) {
+        let entry = entry.min(self.entries.len());
+        if let Some(mark) = self.prompts.iter().find(|p| p.entry == entry) {
+            self.last_uuid = mark.before.clone();
+        }
+        self.entries.truncate(entry);
+        self.prompts.retain(|p| p.entry < entry);
+        self.tools.retain(|_, i| *i < entry);
+        self.streaming.clear();
+        self.streamed.clear();
+        self.stream_message = None;
+        self.status.state = State::Idle;
+        self.status.since = None;
+        self.touch(entry);
     }
 
     pub fn notice(&mut self, text: impl Into<String>, error: bool) {
@@ -104,6 +152,7 @@ impl Transcript {
         if m.get("isSidechain").and_then(Value::as_bool) == Some(true) || m.get("isMeta").and_then(Value::as_bool) == Some(true) {
             return None;
         }
+        self.applying_uuid = m.get("uuid").and_then(Value::as_str).map(String::from);
         match kind {
             "stream_event" => self.stream(m.get("event")?),
             "assistant" => self.assistant(m.get("message")?),
@@ -113,6 +162,12 @@ impl Transcript {
             "control_request" => self.control(m),
             "rate_limit_event" => return parse_limits(m),
             _ => {}
+        }
+        // Messages in Claude Code's record (not stream fragments or notes).
+        if matches!(kind, "assistant" | "user")
+            && let Some(uuid) = self.applying_uuid.take()
+        {
+            self.last_uuid = Some(uuid);
         }
         None
     }
@@ -241,10 +296,14 @@ impl Transcript {
         if let Some(rest) = text.strip_prefix("<command-name>") {
             let name = rest.split("</command-name>").next().unwrap_or("");
             let args = text.split("<command-args>").nth(1).and_then(|a| a.split("</command-args>").next()).unwrap_or("");
-            self.push(Entry::User { text: format!("{name} {args}").trim().to_string(), images });
+            let entry = self.push(Entry::User { text: format!("{name} {args}").trim().to_string(), images });
+            let uuid = self.applying_uuid.clone();
+            self.mark_prompt(entry, uuid);
             return;
         }
-        self.push(Entry::User { text: text.to_string(), images });
+        let entry = self.push(Entry::User { text: text.to_string(), images });
+        let uuid = self.applying_uuid.clone();
+        self.mark_prompt(entry, uuid);
     }
 
     fn tool_result(&mut self, b: &Value) {
@@ -373,6 +432,32 @@ mod tests {
         let request = p.request.clone();
         t.answer(&request, true);
         assert_eq!(t.take_changes(), Some(2));
+    }
+
+    #[test]
+    fn prompts_know_where_to_go_back_to() {
+        use serde_json::json;
+        let mut t = Transcript::new("/tmp");
+        t.user("first", 0, 0, Some("u1".into()));
+        t.apply(&json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [{"type": "text", "text": "one"}]}}));
+        t.apply(&json!({"type": "result", "subtype": "success", "uuid": "r1"}));
+        t.user("second", 0, 0, Some("u2".into()));
+        t.apply(&json!({"type": "assistant", "uuid": "a2", "message": {"id": "m2", "content": [{"type": "text", "text": "two"}]}}));
+        let second = t.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap();
+        assert_eq!(t.prompt_mark(0).unwrap().before, None);
+        let mark = t.prompt_mark(second).unwrap().clone();
+        assert_eq!((mark.uuid.as_deref(), mark.before.as_deref()), (Some("u2"), Some("a1")), "the result is not in the record");
+        t.truncate(second);
+        assert_eq!(t.entries.len(), second);
+        assert!(t.prompt_mark(second).is_none() && t.prompt_mark(0).is_some());
+        t.user("second, again", 0, 0, Some("u3".into()));
+        assert_eq!(t.prompt_mark(second).unwrap().before.as_deref(), Some("a1"));
+        // A saved session's prompts carry their ids too.
+        let mut saved = Transcript::new("/tmp");
+        saved.apply(&json!({"type": "user", "uuid": "p1", "message": {"role": "user", "content": "hello"}}));
+        saved.apply(&json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [{"type": "text", "text": "hi"}]}}));
+        saved.apply(&json!({"type": "user", "uuid": "p2", "message": {"role": "user", "content": "again"}}));
+        assert_eq!(saved.prompt_mark(2).unwrap(), &PromptMark { entry: 2, uuid: Some("p2".into()), before: Some("a1".into()) });
     }
 
     #[test]

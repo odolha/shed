@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 25;
+pub const PROTOCOL_VERSION: u32 = 26;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -141,6 +141,10 @@ pub enum ClientMsg {
     EndRemoteTab { tab: TabId },
     /// A bench's links, all of them.
     SetBenchLinks { bench: BenchId, links: Vec<shed_model::ProjectLink> },
+    /// Sends the AI tab's prompt at `entry` again, as `text`: the
+    /// conversation goes back to before it, and the files Claude changed
+    /// since are put back.
+    AiEdit { tab: TabId, entry: u32, text: String, images: Vec<AiImage> },
 }
 
 /// A picture sent with a prompt.

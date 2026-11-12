@@ -42,16 +42,23 @@ fn a_prompt_comes_back_as_a_conversation() {
         format!(
             r#"#!/usr/bin/env python3
 import json, sys
+log = open("{log}", "a")
+log.write("start " + " ".join(sys.argv[1:]) + "\n"); log.flush()
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("type") == "control_request" and m["request"]["subtype"] == "initialize":
         reply = {{"commands": [{{"name": "review", "description": "Review a change", "argumentHint": "[pr]"}}], "models": []}}
         print(json.dumps({{"type": "control_response", "response": {{"subtype": "success", "request_id": m["request_id"], "response": reply}}}}), flush=True)
+    elif m.get("type") == "control_request" and m["request"]["subtype"] == "rewind_files":
+        log.write("rewind " + m["request"]["user_message_id"] + "\n"); log.flush()
+        print(json.dumps({{"type": "control_response", "response": {{"subtype": "success", "request_id": m["request_id"], "response": {{"canRewind": True}}}}}}), flush=True)
     elif m.get("type") == "user":
+        log.write("user " + m.get("uuid", "") + "\n"); log.flush()
         for rec in open("{stream}"):
             if '"control_response"' not in rec:
                 print(rec.strip(), flush=True)
-"#
+"#,
+            log = dir.path().join("claude.log").display()
         ),
     )
     .unwrap();
@@ -101,6 +108,45 @@ for line in sys.stdin:
         t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.session.is_some() && a.activity == AiActivity::Idle)
     });
     assert!(tree.tab(tab).unwrap().ai_info().unwrap().session.is_some());
+
+    // A second prompt, then edited: the files go back to before it, and
+    // Claude Code starts again from the message before it, as a new session.
+    let dones = |entries: &[Entry]| entries.iter().filter(|e| matches!(e, Entry::Notice { text, .. } if text.starts_with("Done"))).count();
+    let follow = |c: &mut Client, entries: &mut Vec<Entry>, what: &str, done: &dyn Fn(&[Entry]) -> bool| {
+        c.until(what, |f, _| {
+            if let Frame::Keeper(KeeperMsg::AiUpdate { tab: t, from, entries: e, .. }) = f
+                && *t == tab
+            {
+                entries.truncate(*from as usize);
+                entries.extend(e.iter().cloned());
+            }
+            done(entries).then_some(())
+        })
+    };
+    c.msg(ClientMsg::AiSend { tab, text: "count again".into(), images: Vec::new() });
+    follow(&mut c, &mut entries, "the second answer", &|e| dones(e) == 2);
+    let second = entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap();
+    c.msg(ClientMsg::AiEdit { tab, entry: second as u32, text: "count once more".into(), images: Vec::new() });
+    follow(&mut c, &mut entries, "the edited answer", &|e| {
+        e.iter().any(|x| matches!(x, Entry::User { text, .. } if text == "count once more")) && dones(e) == 2
+    });
+    let prompts: Vec<&str> = entries.iter().filter_map(|e| if let Entry::User { text, .. } = e { Some(text.as_str()) } else { None }).collect();
+    assert_eq!(prompts, ["count the lines", "count once more"]);
+    assert!(entries.iter().any(|e| matches!(e, Entry::Notice { text, .. } if text.starts_with("Went back"))));
+    let log = std::fs::read_to_string(dir.path().join("claude.log")).unwrap();
+    let users: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("user ")).collect();
+    assert_eq!(users.len(), 3, "{log}");
+    assert!(log.contains(&format!("rewind {}", users[1])), "the second prompt's files go back: {log}");
+    let last_assistant = std::fs::read_to_string(stream)
+        .unwrap()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v["type"] == "assistant")
+        .filter_map(|v| v["uuid"].as_str().map(String::from))
+        .next_back()
+        .unwrap();
+    let last_start = log.lines().rfind(|l| l.starts_with("start ")).unwrap();
+    assert!(last_start.contains(&format!("--resume-session-at {last_assistant} --fork-session")), "{log}");
 
     // Closing the tab stops it.
     c.msg(ClientMsg::CloseTab { tab });

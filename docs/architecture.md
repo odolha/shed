@@ -293,6 +293,15 @@ Claude Code's suggested rules for "for this session"); Stop is a `control_reques
 effort start a new one at the next prompt. `rate_limit_event`s carry the usage
 limits (`AiLimits`).
 
+Each prompt goes out with a message id of Shed's own (`uuid`), which Claude
+Code keeps in its session file; the transcript also notes the id of the last
+message before each prompt (`PromptMark`). `AiEdit` (edit and send again) asks
+Claude Code to `rewind_files` to that prompt's id (it runs with
+`CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING`), then stops it, cuts the
+transcript, and starts it with `--resume SESSION --resume-session-at BEFORE
+--fork-session` (a new session that starts as a copy up to there; before the
+first prompt, a fresh one), and sends the new text.
+
 The window draws an answer from `shed_ai::markdown` (pulldown-cmark turned
 into blocks of text with styled ranges), as pieces of selectable text
 (`shed-app/src/ai_text.rs`); code blocks are coloured by `shed-project`'s

@@ -296,10 +296,19 @@ terminal of the bench.
   lists, tables, links, code blocks coloured by language), each tool Claude uses on
   one line (click it for the command, the change as a diff, and what came back),
   thinking folded away.
+- **Going back**: hover one of your messages for **Edit**, **Send Again** and
+  **Copy** (also in its right-click menu). **Edit** puts it in the prompt field;
+  sending it goes back to that message: the messages after it go, the files
+  Claude changed since then are put back as they were, and the edited message
+  gets a new answer. **Send Again** does the same with the message as it was (for
+  the last message at once; for an earlier one Shed asks first). Esc cancels an
+  edit. The earlier conversation is kept as its own session in the list.
 - **Copying**: drag over the text to select it (double-click a word, triple-click
   a paragraph, Shift+click to extend), then Ctrl+C. Each answer has a **Copy**
-  button when the mouse is over it, and each code block one above it (the code
-  only). Copies paste formatted where formatting is kept (mail, documents, chat;
+  button when the mouse is over it (on the last part of a response with tools in
+  between, **Copy whole response** copies everything Claude said in it; also
+  **Copy Response** in the right-click menu), and each code block one above it
+  (the code only). Copies paste formatted where formatting is kept (mail, documents, chat;
   on Linux) and as text elsewhere; an answer's **Copy** gives its Markdown as the
   text. Right-click for **Copy as Markdown**, **Copy Message as Plain Text** and
   **Copy the Whole Conversation**. Clicking a link opens it.

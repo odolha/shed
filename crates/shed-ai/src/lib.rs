@@ -10,7 +10,7 @@ mod transcript;
 
 pub use sessions::{SessionInfo, list_sessions, load_session};
 pub use summary::summarize;
-pub use transcript::Transcript;
+pub use transcript::{PromptMark, Transcript};
 
 use serde::{Deserialize, Serialize};
 

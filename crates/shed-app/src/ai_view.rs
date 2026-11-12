@@ -93,6 +93,9 @@ pub struct AiView {
     dragged: bool,
     /// The copy button that says "Copied" for a moment.
     copied: Option<(SharedString, Task<()>)>,
+    /// An earlier prompt being edited in the prompt field: sending goes
+    /// back to it.
+    editing: Option<usize>,
     _subs: Vec<Subscription>,
 }
 
@@ -198,6 +201,7 @@ impl AiView {
             selecting: false,
             dragged: false,
             copied: None,
+            editing: None,
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -242,6 +246,10 @@ impl AiView {
         self.entries.truncate(from);
         self.entries.extend(entries);
         self.parsed.retain(|i, _| *i < from);
+        // The prompt being edited changed under it (another window sent it).
+        if self.editing.is_some_and(|e| e >= from) {
+            self.editing = None;
+        }
         if self.selection.is_some_and(|s| s.ordered().1.entry >= from) {
             self.selection = None;
         }
@@ -453,7 +461,10 @@ impl AiView {
             return;
         }
         let images = std::mem::take(&mut self.images);
-        self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images });
+        match self.editing.take() {
+            Some(entry) => self.conn.send_msg(ClientMsg::AiEdit { tab: self.tab, entry: entry as u32, text, images }),
+            None => self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images }),
+        }
         self.prompt.update(cx, |p, cx| {
             p.buffer.select_all();
             p.buffer.insert("");
@@ -522,6 +533,7 @@ impl AiView {
             return;
         }
         match ks.key.as_str() {
+            "escape" if self.editing.is_some() => self.cancel_edit(cx),
             "escape" if self.status.state != AiState::Idle => self.stop(),
             "f" if sec => self.open_find(window, cx),
             "up" | "down" if sec => {
@@ -618,10 +630,88 @@ impl AiView {
             entries.push(MenuEntry::Separator);
         }
         let plain = if matches!(self.entries.get(i), Some(Entry::Assistant { .. })) { shed_ai::markdown::to_plain(&text) } else { text.clone() };
+        if let Some(Entry::User { .. }) = self.entries.get(i) {
+            if self.status.state == AiState::Idle {
+                entries.push(menu::item("Edit and Send Again…", move |this: &mut Self, window, cx| this.edit_prompt(i, window, cx)).icon("pencil"));
+                entries.push(menu::item("Send Again", move |this: &mut Self, window, cx| this.resend(i, window, cx)).icon("refresh"));
+                entries.push(MenuEntry::Separator);
+            }
+        } else {
+            let response = self.response_markdown(self.response_of(i));
+            if !response.is_empty() {
+                entries.push(menu::item("Copy Response", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(response.clone(), &response))).icon("copy"));
+            }
+        }
         entries.push(menu::item("Copy Message", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(text.clone(), &text))).icon("copy"));
         entries.push(menu::item("Copy Message as Plain Text", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(plain.clone()))));
         entries.push(menu::item("Copy the Whole Conversation", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(all.clone(), &all))));
         entries
+    }
+
+    /// Puts an earlier prompt into the field to change it; sending it goes
+    /// back to it.
+    fn edit_prompt(&mut self, entry: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Entry::User { text, .. }) = self.entries.get(entry) else { return };
+        let text = text.clone();
+        self.editing = Some(entry);
+        self.prompt.update(cx, |p, cx| {
+            p.buffer.select_all();
+            p.buffer.insert(&text);
+            cx.notify();
+        });
+        let target = self.focus_target(cx);
+        window.focus(&target, cx);
+        cx.notify();
+    }
+
+    /// Sends a prompt again as it was (a new answer); one before the last
+    /// asks first, as what came after it goes.
+    fn resend(&mut self, entry: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Entry::User { text, .. }) = self.entries.get(entry) else { return };
+        let msg = ClientMsg::AiEdit { tab: self.tab, entry: entry as u32, text: text.clone(), images: Vec::new() };
+        let last = !self.entries[entry + 1..].iter().any(|e| matches!(e, Entry::User { .. }));
+        if last {
+            self.conn.send_msg(msg);
+            return;
+        }
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            "Send this message again?",
+            Some("The conversation goes back to it: the later messages go (the old session is kept), and the files Claude changed since are put back."),
+            &["Send Again", "Cancel"],
+            cx,
+        );
+        let conn = self.conn.clone();
+        cx.spawn(async move |_, _| {
+            if let Ok(0) = answer.await {
+                conn.send_msg(msg);
+            }
+        })
+        .detach();
+    }
+
+    /// The entries of the response entry `i` is in: from after its prompt
+    /// to the next one.
+    fn response_of(&self, i: usize) -> std::ops::Range<usize> {
+        let start = self.entries[..i.min(self.entries.len())].iter().rposition(|e| matches!(e, Entry::User { .. })).map_or(0, |p| p + 1);
+        let end = self.entries[i.min(self.entries.len())..].iter().position(|e| matches!(e, Entry::User { .. })).map_or(self.entries.len(), |n| i + n);
+        start..end
+    }
+
+    /// Everything Claude said in a response, as Markdown.
+    fn response_markdown(&self, range: std::ops::Range<usize>) -> String {
+        self.entries[range].iter().filter_map(|e| if let Entry::Assistant { text } = e { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n\n")
+    }
+
+    fn cancel_edit(&mut self, cx: &mut Context<Self>) {
+        if self.editing.take().is_some() {
+            self.prompt.update(cx, |p, cx| {
+                p.buffer.select_all();
+                p.buffer.insert("");
+                cx.notify();
+            });
+            cx.notify();
+        }
     }
 
     /// An entry's selectable text, as drawn.
@@ -988,7 +1078,37 @@ impl AiView {
         let body = match entry {
             Entry::User { text, images } => {
                 let lines: Vec<&str> = text.lines().collect();
-                div()
+                let group: SharedString = format!("prompt-{i}").into();
+                let idle = self.status.state == AiState::Idle;
+                let action = |id: &str, glyph: &'static str, label: &'static str| {
+                    div()
+                        .id(SharedString::from(format!("{id}-{i}")))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_1p5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(11.0))
+                        .text_color(hsla(ui.text_dim))
+                        .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(svg().path(icon(glyph)).size(px(12.0)).text_color(hsla(ui.text_dim)))
+                        .child(label)
+                };
+                let actions = div()
+                    .flex()
+                    .justify_end()
+                    .gap_1()
+                    .invisible()
+                    .group_hover(group.clone(), |s| s.visible())
+                    .when(idle, |d| {
+                        d.child(action("edit", "pencil", "Edit").on_click(cx.listener(move |this, _, window, cx| this.edit_prompt(i, window, cx))))
+                            .child(action("resend", "refresh", "Send Again").on_click(cx.listener(move |this, _, window, cx| this.resend(i, window, cx))))
+                    })
+                    .child(self.copy_button(format!("copy-prompt-{i}").into(), ClipboardItem::new_string(text.clone()), &ui, cx));
+                let editing = self.editing == Some(i);
+                div().group(group).flex().flex_col().child(div()
                     .id(("user", i))
                     .mt_2()
                     .px_3()
@@ -1007,11 +1127,22 @@ impl AiView {
                         let label = if open { "Show less".to_string() } else { format!("Show all {} lines", lines.len()) };
                         d.child(div().id(("fold", i)).mt_1().cursor_pointer().text_size(px(11.0)).text_color(hsla(ui.ink(accent))).on_click(toggle).child(label))
                     })
+                    .when(editing, |d| d.border_l_4()))
+                    .child(actions)
                     .into_any_element()
             }
             Entry::Assistant { text } => {
                 let parsed = self.entry_pieces(i);
-                let copy = self.copy_button(format!("copy-entry-{i}").into(), ai_text::formatted_item(text.clone(), &text), &ui, cx);
+                // The last part of a response copies all of it.
+                let response = self.response_of(i);
+                let last = !self.entries[i + 1..response.end].iter().any(|e| matches!(e, Entry::Assistant { .. }));
+                let parts = self.entries[response.clone()].iter().filter(|e| matches!(e, Entry::Assistant { .. })).count();
+                let copy = if last && parts > 1 {
+                    let all = self.response_markdown(response);
+                    self.copy_button(format!("copy-entry-{i}").into(), ai_text::formatted_item(all.clone(), &all), &ui, cx).child("whole response")
+                } else {
+                    self.copy_button(format!("copy-entry-{i}").into(), ai_text::formatted_item(text.clone(), &text), &ui, cx)
+                };
                 let group: SharedString = format!("answer-{i}").into();
                 div()
                     .group(group.clone())
@@ -1406,6 +1537,19 @@ impl AiView {
         let accent = self.accent;
         let mut out = div().flex().flex_col().gap_1().mx_3().text_size(px(12.0));
         let mut any = false;
+        if self.editing.is_some() {
+            any = true;
+            out = out.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_color(hsla(ui.text_dim))
+                    .child(svg().path(icon("pencil")).size(px(12.0)).text_color(hsla(ui.ink(accent))))
+                    .child(div().flex_1().child("Editing an earlier message: sending goes back to it (later messages go, files Claude changed since are put back). Esc cancels."))
+                    .child(div().id("cancel-edit").cursor_pointer().text_color(hsla(ui.ink(accent))).child("Cancel").on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx)))),
+            );
+        }
         if let Some((editor, at, _)) = &self.find {
             any = true;
             let status = match at {

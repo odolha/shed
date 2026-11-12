@@ -725,6 +725,7 @@ impl Keeper {
             }
             ClientMsg::AiWatch { tab } => self.ai_watch(client, tab),
             ClientMsg::AiSend { tab, text, images } => self.ai_send(client, tab, text, images),
+            ClientMsg::AiEdit { tab, entry, text, images } => self.ai_edit(client, tab, entry as usize, text, images),
             ClientMsg::AiStop { tab } => self.ai_stop(tab),
             ClientMsg::AiStart { tab } => self.ai_start(client, tab),
             ClientMsg::AiAnswer { tab, request, allow, always } => self.ai_answer(tab, request, allow, always),

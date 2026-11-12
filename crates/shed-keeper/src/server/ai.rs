@@ -46,6 +46,20 @@ pub(super) struct AiRt {
     next_request: u64,
     /// The end of what it wrote to stderr, to show if it fails.
     stderr: Arc<std::sync::Mutex<String>>,
+    /// The next start goes back to this message of the session, as a new
+    /// session (an earlier prompt was edited).
+    resume_at: Option<String>,
+    /// An edited prompt waiting for its files to be put back.
+    editing: Option<Edit>,
+}
+
+/// An edited prompt on its way: the files go back first, then the
+/// conversation, then the new text goes out.
+struct Edit {
+    request: String,
+    entry: usize,
+    text: String,
+    images: Vec<AiImage>,
 }
 
 impl AiRt {
@@ -61,6 +75,8 @@ impl AiRt {
             started_with: (Vec::new(), None),
             next_request: 0,
             stderr: Arc::default(),
+            resume_at: None,
+            editing: None,
         }
     }
 
@@ -72,9 +88,14 @@ impl AiRt {
     }
 
     fn control(&mut self, request: Value) -> bool {
+        self.control_id(request).is_some()
+    }
+
+    /// Sends a control request; its id, if it went.
+    fn control_id(&mut self, request: Value) -> Option<String> {
         self.next_request += 1;
         let id = format!("shed-{}", self.next_request);
-        self.write(json!({"type": "control_request", "request_id": id, "request": request}))
+        self.write(json!({"type": "control_request", "request_id": id, "request": request})).then_some(id)
     }
 
     /// Stops the process (if any); events still on their way are ignored.
@@ -164,11 +185,17 @@ impl Keeper {
 
     pub(super) fn ai_send(self: &Arc<Self>, client: ClientId, tab: TabId, text: String, images: Vec<AiImage>) {
         let mut st = self.lock();
-        if self.ai_rt(&mut st, tab).is_none() {
+        self.ai_send_locked(&mut st, client, tab, text, images);
+        drop(st);
+        self.ai_dirty.notify_one();
+    }
+
+    fn ai_send_locked(self: &Arc<Self>, st: &mut State, client: ClientId, tab: TabId, text: String, images: Vec<AiImage>) {
+        if self.ai_rt(st, tab).is_none() {
             return;
         }
         if st.ai[&tab].input.is_none()
-            && let Err(e) = self.ai_spawn(&mut st, tab)
+            && let Err(e) = self.ai_spawn(st, tab)
         {
             st.send(client, KeeperMsg::Error(format!("cannot start Claude Code: {e}")));
             return;
@@ -185,9 +212,74 @@ impl Keeper {
             blocks.push(json!({"type": "text", "text": text}));
             Value::Array(blocks)
         };
-        rt.transcript.user(&text, images.len() as u32, now());
-        rt.write(json!({"type": "user", "message": {"role": "user", "content": content}}));
+        // Our own id for the message, kept in Claude Code's record: going
+        // back to it and putting files back both need it.
+        let uuid = uuid::Uuid::new_v4().to_string();
+        rt.transcript.user(&text, images.len() as u32, now(), Some(uuid.clone()));
+        rt.write(json!({"type": "user", "uuid": uuid, "message": {"role": "user", "content": content}}));
+    }
+
+    /// Sends an earlier prompt again, changed: the files Claude changed
+    /// since it go back (if Claude Code kept them), then the conversation
+    /// goes back to before it (as a new session, the old one is kept), and
+    /// the new text goes out.
+    pub(super) fn ai_edit(self: &Arc<Self>, client: ClientId, tab: TabId, entry: usize, text: String, images: Vec<AiImage>) {
+        let mut st = self.lock();
+        let Some(rt) = self.ai_rt(&mut st, tab) else { return };
+        if rt.transcript.status.state != AiState::Idle || rt.editing.is_some() {
+            st.send(client, KeeperMsg::Error("Claude is still working: stop it first".into()));
+            return;
+        }
+        let Some(mark) = rt.transcript.prompt_mark(entry).cloned() else {
+            st.send(client, KeeperMsg::Error("this message cannot be sent again: Claude Code's record of it is not known".into()));
+            return;
+        };
+        if rt.input.is_none()
+            && let Err(e) = self.ai_spawn(&mut st, tab)
+        {
+            st.send(client, KeeperMsg::Error(format!("cannot start Claude Code: {e}")));
+            return;
+        }
+        let rt = st.ai.get_mut(&tab).unwrap();
+        let uuid = mark.uuid.clone().unwrap_or_default();
+        match rt.control_id(json!({"subtype": "rewind_files", "user_message_id": uuid})) {
+            Some(request) => rt.editing = Some(Edit { request, entry, text, images }),
+            None => {
+                drop(st);
+                self.ai_edit_go_back(tab, Edit { request: String::new(), entry, text, images }, Some("Claude Code is not running".into()));
+            }
+        }
+    }
+
+    /// The files are back (or could not be): the conversation goes back
+    /// and the new text goes out.
+    fn ai_edit_go_back(self: &Arc<Self>, tab: TabId, edit: Edit, files_problem: Option<String>) {
+        let mut st = self.lock();
+        let Some(rt) = st.ai.get_mut(&tab) else { return };
+        let Some(mark) = rt.transcript.prompt_mark(edit.entry).cloned() else { return };
+        rt.stop();
+        rt.transcript.truncate(edit.entry);
+        match files_problem {
+            None => rt.transcript.notice("Went back to before this message; the files Claude changed since are as they were", false),
+            Some(why) => rt.transcript.notice(format!("Went back to before this message; files not put back: {why}"), true),
+        }
+        // The session goes on from the message before (a new session that
+        // starts as a copy); before the first message, a new one starts.
+        rt.resume_at = mark.before.clone();
+        if mark.before.is_none() {
+            rt.transcript.status.session = None;
+            if let Some(t) = st.tree.tab_mut(tab)
+                && let TabKind::Ai(ai) = &mut t.kind
+            {
+                ai.session = None;
+            }
+            st.broadcast_tree();
+        }
+        // No window asked: errors starting it again go to the notice.
+        let client: ClientId = u64::MAX;
+        self.ai_send_locked(&mut st, client, tab, edit.text, edit.images);
         drop(st);
+        self.save_soon.notify_one();
         self.ai_dirty.notify_one();
     }
 
@@ -197,9 +289,16 @@ impl Keeper {
         let mut cmd = tokio::process::Command::new(claude_program());
         cmd.args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
         cmd.args(["--permission-prompt-tool", "stdio"]);
+        let resume_at = st.ai.get_mut(&tab).and_then(|rt| rt.resume_at.take());
         if let Some(s) = &ai.session {
             cmd.args(["--resume", s]);
+            if let Some(at) = &resume_at {
+                cmd.args(["--resume-session-at", at, "--fork-session"]);
+            }
         }
+        // Claude Code keeps what files were before each prompt, so an
+        // edited prompt can put them back.
+        cmd.env("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
         if let Some(m) = &ai.model {
             cmd.args(["--model", m]);
         }
@@ -277,13 +376,29 @@ impl Keeper {
     }
 
     /// One line of Claude Code's output.
-    fn ai_event(&self, tab: TabId, generation: u64, line: &str) {
+    fn ai_event(self: &Arc<Self>, tab: TabId, generation: u64, line: &str) {
         let Ok(v) = serde_json::from_str::<Value>(line) else { return };
         let mut st = self.lock();
         let Some(rt) = st.ai.get_mut(&tab).filter(|rt| rt.generation == generation) else { return };
         let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
         if kind == "control_response" {
             let response = &v["response"];
+            let id = response.get("request_id").and_then(Value::as_str);
+            if let Some(edit) = rt.editing.take_if(|e| Some(e.request.as_str()) == id) {
+                let reply = response.get("response");
+                let problem = if response.get("subtype").and_then(Value::as_str) == Some("error") {
+                    Some(response.get("error").and_then(Value::as_str).unwrap_or("Claude Code refused").to_string())
+                } else if reply.and_then(|r| r.get("canRewind")).and_then(Value::as_bool) == Some(false) {
+                    Some(reply.and_then(|r| r.get("error")).and_then(Value::as_str).unwrap_or("Claude Code kept no copy").to_string())
+                } else {
+                    None
+                };
+                drop(st);
+                let keeper = self.clone();
+                // Not under this lock: it stops this very process.
+                tokio::spawn(async move { keeper.ai_edit_go_back(tab, edit, problem) });
+                return;
+            }
             if response.get("request_id").and_then(Value::as_str) == Some(INIT_REQUEST)
                 && let Some(reply) = response.get("response")
             {
