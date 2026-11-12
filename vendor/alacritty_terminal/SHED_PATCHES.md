@@ -14,5 +14,10 @@ reattach:
 - `title()`: the current title
 - `is_tab_stop(column)`
 
+One more, in `src/term/cell.rs`: a cell flag, `Flags::SHED_PROMPT`, which
+Shed sets on the first cell of the line where a command was typed (from the
+shell's OSC 133;B mark), to jump from command to command in the scrollback.
+It moves with the line into history and is cleared when the line is erased.
+
 When upgrading, copy the new release over this directory and reapply these
 accessors. Upstreaming them would remove the need for the vendored copy.

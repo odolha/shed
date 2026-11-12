@@ -267,6 +267,14 @@ the length is known), or custom metrics and a setter (the editor's own scroll; a
 terminal's scrollback in lines, from `Emulator::history_size` and
 `display_offset`).
 
+Jumping between commands: the emulator marks the first cell of the line where a
+command is typed (`Flags::SHED_PROMPT`, a vendored-alacritty patch) when the
+shell's OSC 133;B arrives, splitting its input there; the mark moves with the
+line into history. A replay writes `OSC 7777;shed;prompt-line` after each marked
+line, so a reattached window's emulator marks the same lines.
+`Emulator::jump_to_prompt` scrolls to the previous or next marked line. The AI
+tab jumps between the starts of prompts and of the responses to them.
+
 ## Links and the browser
 
 A bench's links (`Bench.links`, set with `SetBenchLinks` or `SavedEdit::Links`;

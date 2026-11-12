@@ -561,7 +561,11 @@ an ordinary shell line again (in bash, a redirection).
   search results, Shed's list): drag the thumb, or press the track to bring the
   thumb there and drag on. Turning the wheel brings up **Top** and **End**
   buttons near the bottom right for a few seconds (only those that go
-  somewhere); in an AI tab, **End** also follows the conversation again. A terminal's shows while it is scrolled back into its
+  somewhere); in an AI tab, **End** also follows the conversation again. In a
+  terminal and an AI tab there are **Prev** and **Next** too, which go from
+  command to command (the line you typed it on, Shed marks it from the shell's
+  prompt marks and keeps it across reopening) or message to message (yours, and
+  each response); Ctrl+Shift+↑ / ↓ do the same from the keyboard. A terminal's shows while it is scrolled back into its
   history, or under the mouse at the right edge.
 - **Zoom**: Ctrl+= and Ctrl+-, Ctrl+0 to reset. Every kind of tab zooms: a
   project tab's code, file tree and lists, an AI tab's conversation and prompt.
@@ -622,6 +626,7 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | Up, Ctrl+Up, Ctrl+Shift+Up (at a prompt) | Walk tab / bench / all history |
 | Shift+PageUp / Shift+PageDown | Scroll a page |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom the tab in / out / reset, any kind of tab (kept with the tab, and saved) |
+| Ctrl+Shift+↑ / ↓ | A terminal: to the line of the previous / next command typed; an AI tab: to the previous / next message (yours, or the response) |
 
 In a **project tab**: Ctrl+P opens a file by name, Ctrl+Shift+F searches every
 file, Ctrl+Shift+A sends the selection (or the file) to the AI tab, Ctrl+W closes
@@ -645,6 +650,7 @@ place in these.
 | Cmd+N (in Shed) | New bench |
 | Cmd+C / Cmd+V, Cmd+F | Copy / paste, find in scrollback |
 | Cmd+= / Cmd+- / Cmd+0 | Zoom |
+| Cmd+↑ / ↓ | Previous / next command or message |
 | Cmd+Q | Close Shed (as closing its window does) |
 
 Ctrl+R, the history keys and F2 are the same. Option types characters, as it

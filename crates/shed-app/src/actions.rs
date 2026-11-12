@@ -35,6 +35,8 @@ actions!(
         ToggleSetup,
         ShowShed,
         SearchScrollback,
+        PrevBlock,
+        NextBlock,
         Quit,
     ]
 );
@@ -58,6 +60,9 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl-+", "zoom_in"),
     ("ctrl--", "zoom_out"),
     ("ctrl-0", "zoom_reset"),
+    // From command to command in a terminal, message to message in an AI tab.
+    ("ctrl-shift-up", "prev_block"),
+    ("ctrl-shift-down", "next_block"),
     ("shift-pageup", "scroll_page_up"),
     ("shift-pagedown", "scroll_page_down"),
     ("ctrl-r", "logbook"),
@@ -111,6 +116,8 @@ pub const MAC_KEYS: &[(&str, &str)] = &[
     ("cmd-+", "zoom_in"),
     ("cmd--", "zoom_out"),
     ("cmd-0", "zoom_reset"),
+    ("cmd-up", "prev_block"),
+    ("cmd-down", "next_block"),
     ("shift-pageup", "scroll_page_up"),
     ("shift-pagedown", "scroll_page_down"),
     ("ctrl-r", "logbook"),
@@ -177,6 +184,9 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         "zoom_in" => KeyBinding::new(key, ZoomIn, w),
         "zoom_out" => KeyBinding::new(key, ZoomOut, w),
         "zoom_reset" => KeyBinding::new(key, ZoomReset, w),
+        // A terminal jumps between commands, an AI tab between messages.
+        "prev_block" => KeyBinding::new(key, PrevBlock, w),
+        "next_block" => KeyBinding::new(key, NextBlock, w),
         "scroll_page_up" => KeyBinding::new(key, ScrollPageUp, t),
         "scroll_page_down" => KeyBinding::new(key, ScrollPageDown, t),
         "search" => KeyBinding::new(key, SearchScrollback, t),

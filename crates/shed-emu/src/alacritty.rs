@@ -34,7 +34,15 @@ pub struct AlacrittyEmulator {
     search: Option<Search>,
     /// A sequence the parser has begun but not finished, for replays.
     tail: crate::tail::Tail,
+    /// How much of each prompt-line marker the input ended in the middle of.
+    prompt_marks: [usize; 2],
 }
+
+/// Where a command is typed: the shell's "input starts" mark (OSC 133;B),
+/// and Shed's own, which a replay writes for the lines it had marked.
+const PROMPT_MARKERS: [&[u8]; 2] = [b"\x1b]133;B", b"\x1b]7777;shed;prompt-line"];
+/// What a replay writes after a marked line.
+pub(crate) const PROMPT_LINE: &str = "\x1b]7777;shed;prompt-line\x07";
 
 /// A scrollback search in progress.
 struct Search {
@@ -97,7 +105,7 @@ impl AlacrittyEmulator {
         let events = Arc::new(Mutex::new(Vec::new()));
         let config = term::Config { scrolling_history: SCROLLBACK, kitty_keyboard: true, ..Default::default() };
         let term = Term::new(config, &Dims(size), Listener(events.clone()));
-        Self { term, processor: Processor::new(), events, size, palette, search: None, tail: Default::default() }
+        Self { term, processor: Processor::new(), events, size, palette, search: None, tail: Default::default(), prompt_marks: [0; 2] }
     }
 
     fn resolve(&self, color: Color, palette: &Palette) -> Rgb {
@@ -143,9 +151,39 @@ fn named(name: NamedColor, p: &Palette) -> Rgb {
     }
 }
 
+impl AlacrittyEmulator {
+    /// Marks the cursor's line as where a command is typed (the main
+    /// screen only: full-screen apps' screens have no commands).
+    fn mark_prompt_line(&mut self) {
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        let line = self.term.grid().cursor.point.line;
+        self.term.grid_mut()[line][Column(0)].flags.insert(Flags::SHED_PROMPT);
+    }
+}
+
 impl Emulator for AlacrittyEmulator {
     fn advance(&mut self, bytes: &[u8]) {
-        self.processor.advance(&mut self.term, bytes);
+        // Up to each prompt-line marker, then the cursor's line is marked.
+        let mut start = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            let mut hit = false;
+            for (k, marker) in PROMPT_MARKERS.iter().enumerate() {
+                let n = &mut self.prompt_marks[k];
+                *n = if marker[*n] == b { *n + 1 } else if marker[0] == b { 1 } else { 0 };
+                if *n == marker.len() {
+                    *n = 0;
+                    hit = true;
+                }
+            }
+            if hit {
+                self.processor.advance(&mut self.term, &bytes[start..=i]);
+                self.mark_prompt_line();
+                start = i + 1;
+            }
+        }
+        self.processor.advance(&mut self.term, &bytes[start..]);
         self.tail.advance(bytes);
     }
 
@@ -267,6 +305,28 @@ impl Emulator for AlacrittyEmulator {
 
     fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
+    }
+
+    fn jump_to_prompt(&mut self, up: bool) -> bool {
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return false;
+        }
+        let grid = self.term.grid();
+        let top = -(grid.display_offset() as i32);
+        let lines = (-(grid.history_size() as i32)..grid.screen_lines() as i32).filter(|l| grid[Line(*l)][Column(0)].flags.contains(Flags::SHED_PROMPT));
+        let target = if up { lines.filter(|l| *l < top).max() } else { lines.filter(|l| *l > top).min() };
+        let offset = match target {
+            Some(line) => (-line).max(0),
+            // Past the last command: the bottom.
+            None if !up => 0,
+            None => return false,
+        };
+        let delta = offset - grid.display_offset() as i32;
+        if delta == 0 {
+            return false;
+        }
+        self.term.scroll_display(Scroll::Delta(delta));
+        true
     }
 
     fn history_size(&self) -> usize {
@@ -735,6 +795,48 @@ mod tests {
         let m = e.modes();
         assert!(m.app_cursor && m.bracketed_paste && m.alt_screen && m.sgr_mouse);
         assert_eq!(m.mouse, MouseMode::Drag);
+    }
+
+    #[test]
+    fn jumps_go_from_command_to_command() {
+        let mut e = emu(20, 4);
+        // Three commands, each with five lines of output; the mark may come
+        // split across reads.
+        for (i, cmd) in ["one", "two", "three"].iter().enumerate() {
+            e.advance(b"\x1b]133;A\x07$ \x1b]13");
+            e.advance(b"3;B\x07");
+            e.advance(format!("{cmd}\r\n").as_bytes());
+            for n in 0..5 {
+                e.advance(format!("out {i}{n}\r\n").as_bytes());
+            }
+        }
+        e.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        let top_line = |e: &AlacrittyEmulator| e.row_text_at_top();
+        assert_eq!(e.display_offset(), 0);
+        assert!(e.jump_to_prompt(true));
+        assert_eq!(top_line(&e), "$ three");
+        assert!(e.jump_to_prompt(true));
+        assert_eq!(top_line(&e), "$ two");
+        assert!(e.jump_to_prompt(true));
+        assert_eq!(top_line(&e), "$ one");
+        assert!(!e.jump_to_prompt(true), "nothing before the first");
+        assert!(e.jump_to_prompt(false));
+        assert_eq!(top_line(&e), "$ two");
+        // The marks come back in a replay.
+        let replay = e.replay();
+        let mut again = emu(20, 4);
+        again.advance(&replay);
+        assert!(again.jump_to_prompt(true));
+        assert_eq!(top_line(&again), "$ three");
+        // A full-screen app's screen has no commands.
+        again.advance(b"\x1b[?1049h\x1b]133;B\x07");
+        assert!(!again.jump_to_prompt(true));
+    }
+
+    impl AlacrittyEmulator {
+        fn row_text_at_top(&self) -> String {
+            self.row_text(0).0.trim_end().to_string()
+        }
     }
 
     #[test]

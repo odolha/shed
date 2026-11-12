@@ -528,6 +528,14 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// Scrolls to the line of the previous (`up`) or next command typed.
+    fn jump_to_command(&mut self, up: bool, cx: &mut Context<Self>) {
+        if self.emu.jump_to_prompt(up) {
+            self.dirty = true;
+            cx.notify();
+        }
+    }
+
     fn scroll_page(&mut self, up: bool, cx: &mut Context<Self>) {
         if self.emu.modes().alt_screen {
             cx.propagate();
@@ -1024,6 +1032,8 @@ impl Render for TerminalView {
             .on_action(cx.listener(|v, _: &ZoomOut, _, cx| v.zoom(-1.0, cx)))
             .on_action(cx.listener(|v, _: &ZoomReset, _, cx| v.zoom(0.0, cx)))
             .on_action(cx.listener(|v, _: &ScrollPageUp, _, cx| v.scroll_page(true, cx)))
+            .on_action(cx.listener(|v, _: &crate::actions::PrevBlock, _, cx| v.jump_to_command(true, cx)))
+            .on_action(cx.listener(|v, _: &crate::actions::NextBlock, _, cx| v.jump_to_command(false, cx)))
             .on_action(cx.listener(|v, _: &ScrollPageDown, _, cx| v.scroll_page(false, cx)))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
@@ -1092,7 +1102,11 @@ impl Render for TerminalView {
                             .ok();
                     }),
                 };
-                crate::scrollbar::vertical(source, &self.bar, &self.ui, true).absolute().top_0().right_0().bottom_0()
+                let view = cx.entity().downgrade();
+                let step: crate::scrollbar::Step = std::rc::Rc::new(move |up, _, cx| {
+                    view.update(cx, |this, cx| this.jump_to_command(up, cx)).ok();
+                });
+                crate::scrollbar::vertical_with_blocks(source, &self.bar, &self.ui, true, Some(step)).absolute().top_0().right_0().bottom_0()
             })
             .when_some(preedit, |el, (left, top, text)| {
                 el.child(

@@ -130,6 +130,10 @@ pub trait Emulator: Send {
     /// How many lines of scrollback there are above the screen.
     fn history_size(&self) -> usize;
 
+    /// Scrolls so the previous (`up`) or next line where a command was typed
+    /// is at the top; past the last, to the bottom. Whether it moved.
+    fn jump_to_prompt(&mut self, up: bool) -> bool;
+
     /// Ends a synchronized update that has run past its deadline.
     /// Returns when it next needs to be called, if a sync update is pending.
     fn tick(&mut self) -> Option<std::time::Instant>;

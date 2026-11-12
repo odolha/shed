@@ -134,6 +134,10 @@ fn write_primary(out: &mut String, grid: &Grid<Cell>, pen: &mut Pen) {
     for line in top..=bottom {
         let row = &grid[Line(line)];
         write_row(out, row, grid.columns(), pen);
+        // Where a command was typed stays marked in the new emulator.
+        if row[Column(0)].flags.contains(Flags::SHED_PROMPT) {
+            out.push_str(super::PROMPT_LINE);
+        }
         if line == bottom {
             break;
         }

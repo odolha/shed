@@ -44,6 +44,20 @@ const PERMISSION_MODES: &[(&str, &str, &str)] = &[
     ("bypassPermissions", "Full Auto", "Full auto"),
 ];
 
+/// Where a jump to the previous (`up`) or next message lands, from the
+/// entry at the top (scrolled into it if `inside`): the starts of your
+/// messages and of the responses to them.
+fn block_target(entries: &[Entry], top: usize, inside: bool, up: bool) -> Option<usize> {
+    let is_prompt = |e: &Entry| matches!(e, Entry::User { .. });
+    let mut starts = (0..entries.len()).filter(|&i| i == 0 || is_prompt(&entries[i]) || is_prompt(&entries[i - 1]));
+    if up {
+        // Inside a message: its own start first.
+        starts.rfind(|&s| s < top || (s == top && inside))
+    } else {
+        starts.find(|&s| s > top)
+    }
+}
+
 /// The model Claude Code's "default" stands for: "Opus 5.5" from its
 /// description ("Opus 5.5 · Best for…").
 fn default_model_name(m: &Model) -> String {
@@ -596,7 +610,8 @@ impl AiView {
             "escape" if self.editing.is_some() => self.cancel_edit(cx),
             "escape" if self.status.state != AiState::Idle => self.stop(),
             "f" if sec => self.open_find(window, cx),
-            "up" | "down" if sec => {
+            // (Ctrl+Shift+arrows go from message to message.)
+            "up" | "down" if sec && !ks.modifiers.shift => {
                 let prompts: Vec<&String> = self.entries.iter().filter_map(|e| if let Entry::User { text, .. } = e { Some(text) } else { None }).collect();
                 if prompts.is_empty() {
                     return;
@@ -706,6 +721,18 @@ impl AiView {
         entries.push(menu::item("Copy Message as Plain Text", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(plain.clone()))));
         entries.push(menu::item("Copy the Whole Conversation", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(all.clone(), &all))));
         entries
+    }
+
+    /// Scrolls to the start of the previous (`up`) or next message: each of
+    /// yours, and each response to one. Past the last, to the end.
+    fn jump_block(&mut self, up: bool, cx: &mut Context<Self>) {
+        let top = self.list.logical_scroll_top();
+        match block_target(&self.entries, top.item_ix, top.offset_in_item > px(1.0), up) {
+            Some(item_ix) => self.list.scroll_to(gpui::ListOffset { item_ix, offset_in_item: px(0.0) }),
+            None if !up => self.list.scroll_to_end(),
+            None => return,
+        }
+        cx.notify();
     }
 
     /// What Claude is doing now, in a few words: the tool running, or
@@ -1773,13 +1800,21 @@ impl Render for AiView {
             }))
             .child(list(self.list.clone(), cx.processor(|this, i, _, cx| this.render_entry(i, cx))).flex_1().min_h_0().py_2())
             // After the list: over it, and first to hear the mouse.
-            .child(crate::scrollbar::vertical(crate::scrollbar::Source::List(self.list.clone()), &self.conversation_bar, &ui, false).absolute().top_0().right_0().bottom_0());
+            .child({
+                let view = cx.entity().downgrade();
+                let step: crate::scrollbar::Step = std::rc::Rc::new(move |up, _, cx| {
+                    view.update(cx, |this, cx| this.jump_block(up, cx)).ok();
+                });
+                crate::scrollbar::vertical_with_blocks(crate::scrollbar::Source::List(self.list.clone()), &self.conversation_bar, &ui, false, Some(step)).absolute().top_0().right_0().bottom_0()
+            });
         let empty = self.entries.is_empty();
         let images = self.images.len();
         div()
             .key_context("AiTab")
             .track_focus(&self.focus)
             .capture_key_down(cx.listener(Self::selection_key))
+            .on_action(cx.listener(|this, _: &crate::actions::PrevBlock, _, cx| this.jump_block(true, cx)))
+            .on_action(cx.listener(|this, _: &crate::actions::NextBlock, _, cx| this.jump_block(false, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 if std::mem::take(&mut this.selecting) && this.dragged {
                     // X11 convention: selecting copies to the primary selection.
@@ -1990,6 +2025,22 @@ mod tests {
         assert!(over_text(&flex_layout, gpui::point(px(2.0), px(2.0))));
         assert!(text_index(&flex_layout, text, gpui::point(px(2.0), px(2.0))).is_some());
         assert!(text_index(&block_layout, text, gpui::point(px(2.0), px(2.0))).is_none(), "GPUI changed: blocks fill the layout now");
+    }
+
+    #[test]
+    fn jumps_land_on_messages() {
+        let user = || Entry::User { text: "q".into(), images: 0 };
+        let said = || Entry::Assistant { text: "a".into() };
+        let tool = || Entry::Tool(Default::default());
+        // 0 you, 1 response (2, 3 more of it), 4 you, 5 response, 6 more.
+        let e = vec![user(), said(), tool(), said(), user(), tool(), said()];
+        assert_eq!(block_target(&e, 3, false, true), Some(1));
+        assert_eq!(block_target(&e, 1, false, true), Some(0));
+        assert_eq!(block_target(&e, 1, true, true), Some(1), "inside the response: its start");
+        assert_eq!(block_target(&e, 0, false, true), None);
+        assert_eq!(block_target(&e, 1, false, false), Some(4));
+        assert_eq!(block_target(&e, 4, false, false), Some(5));
+        assert_eq!(block_target(&e, 5, false, false), None, "then the end");
     }
 
     #[test]

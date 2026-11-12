@@ -130,6 +130,15 @@ fn offset_for(m: Metrics, track: f32, len: f32, top: f32) -> f32 {
 /// when there is something to scroll; with `quiet`, only while the mouse is
 /// over it, it is dragged or the content is not at its end (terminals).
 pub fn vertical(source: Source, state: &State, ui: &UiColors, quiet: bool) -> impl IntoElement + Styled {
+    vertical_with_blocks(source, state, ui, quiet, None)
+}
+
+/// Goes to the previous (`true`) or next block: message, command.
+pub type Step = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+
+/// A scrollbar whose content has blocks (messages, commands): its buttons
+/// also go to the previous and next one.
+pub fn vertical_with_blocks(source: Source, state: &State, ui: &UiColors, quiet: bool, step: Option<Step>) -> impl IntoElement + Styled {
     let state = state.clone();
     let ui = ui.clone();
     let color = ui.text;
@@ -170,7 +179,7 @@ pub fn vertical(source: Source, state: &State, ui: &UiColors, quiet: bool) -> im
                 }
             });
             if state.jumps_until.get().is_some_and(|t| t > Instant::now()) {
-                paint_jumps(&source, m, bounds, &ui, &state, window, cx);
+                paint_jumps(&source, m, bounds, &ui, &state, step.as_ref(), window, cx);
             }
 
             let (s, st) = (source.clone(), state.clone());
@@ -229,20 +238,35 @@ pub fn vertical(source: Source, state: &State, ui: &UiColors, quiet: bool) -> im
 
 /// The Top and End buttons, left of the bar near its foot: each a small
 /// pill with an arrow and a word; pressing one goes there.
-fn paint_jumps(source: &Source, m: Metrics, bar: Bounds<Pixels>, ui: &UiColors, state: &State, window: &mut Window, cx: &mut App) {
+#[allow(clippy::too_many_arguments)]
+fn paint_jumps(source: &Source, m: Metrics, bar: Bounds<Pixels>, ui: &UiColors, state: &State, step: Option<&Step>, window: &mut Window, cx: &mut App) {
     let color = ui.text;
-    let mut buttons: Vec<(&'static str, &'static str, f32)> = Vec::new();
+    // What a button does: go to an offset, or a block up or down.
+    #[derive(Clone, Copy)]
+    enum Go {
+        To(f32),
+        Block(bool),
+    }
+    let mut buttons: Vec<(&'static str, &'static str, Go)> = Vec::new();
     if m.offset > 1.0 {
-        buttons.push(("arrow-up", "Top", 0.0));
+        buttons.push(("arrow-up", "Top", Go::To(0.0)));
+    }
+    if step.is_some() {
+        if m.offset > 1.0 {
+            buttons.push(("arrow-up", "Prev", Go::Block(true)));
+        }
+        if m.offset < m.max - 1.0 {
+            buttons.push(("arrow-down", "Next", Go::Block(false)));
+        }
     }
     if m.offset < m.max - 1.0 {
-        buttons.push(("arrow-down", "End", m.max));
+        buttons.push(("arrow-down", "End", Go::To(m.max)));
     }
     let (h, w, gap) = (px(24.0), px(62.0), px(6.0));
     let right = bar.origin.x - px(6.0);
     let mut y = bar.origin.y + bar.size.height - px(12.0) - h * buttons.len() as f32 - gap * (buttons.len().saturating_sub(1)) as f32;
     let font = window.text_style().font();
-    for (glyph, label, to) in buttons {
+    for (glyph, label, go) in buttons {
         let b = Bounds::new(point(right - w, y), size(w, h));
         y += h + gap;
         let ground = PaintQuad::new(b)
@@ -258,16 +282,33 @@ fn paint_jumps(source: &Source, m: Metrics, bar: Bounds<Pixels>, ui: &UiColors, 
         let line = window.text_system().shape_line(SharedString::from(label), px(12.0), &[run]);
         let _ = line.paint(point(b.origin.x + px(25.0), b.origin.y + (h - px(16.0)) / 2.0), px(16.0), TextAlign::Left, None, window, cx);
 
-        let (s, st) = (source.clone(), state.clone());
+        let (s, st, step) = (source.clone(), state.clone(), step.cloned());
         window.on_mouse_event(move |e: &MouseDownEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && e.button == MouseButton::Left && b.contains(&e.position) {
-                s.set(to, window, cx);
-                // Moved by the button, not the wheel: they need not come back.
-                st.last_offset.set(Some(to));
-                st.jumps_until.set(None);
-                cx.stop_propagation();
-                window.refresh();
+            if phase != DispatchPhase::Bubble || e.button != MouseButton::Left || !b.contains(&e.position) {
+                return;
             }
+            match go {
+                Go::To(to) => {
+                    s.set(to, window, cx);
+                    // Moved by the button, not the wheel: they need not come back.
+                    st.last_offset.set(Some(to));
+                    st.jumps_until.set(None);
+                }
+                // Block by block: the buttons stay for the next press.
+                Go::Block(up) => {
+                    if let Some(step) = &step {
+                        step(up, window, cx);
+                    }
+                    st.jumps_until.set(Some(Instant::now() + JUMPS_FOR));
+                    cx.spawn(async move |cx| {
+                        cx.background_executor().timer(JUMPS_FOR + Duration::from_millis(50)).await;
+                        cx.update(|cx| cx.refresh_windows());
+                    })
+                    .detach();
+                }
+            }
+            cx.stop_propagation();
+            window.refresh();
         });
     }
 }
