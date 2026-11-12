@@ -134,8 +134,9 @@ the focused pane, when a tab is split.
 - **Right-click** a pane for copy, paste, split and close; a tab for rename, tags,
   setup, private, **Move to Bench** and close; the bench's name (right of the tab bar) for rename,
   badge, colours, Show Shed and Close Bench.
-- On the right of the tab bar: the **house** brings Shed forward (or Super+Space),
-  and the **rack** opens the Setup panel (or Ctrl+Shift+S).
+- On the right of the tab bar: the bench's [links](#links), the **house** brings
+  Shed forward (or Super+Space), and the **rack** opens the Setup panel (or
+  Ctrl+Shift+S).
 
 A new tab or pane opens in the folder of the one you were in. (Set
 `new_pane_dir = "bench"` to use the bench's folder instead.)
@@ -234,12 +235,18 @@ the AI tab to resolve it (**Ask AI**), and **Mark Resolved** saves and stages it
 you are resolving (which you edit and save as usual).
 The − and + beside a conflicted file take our or their whole version.
 
-**Links.** A project's web apps (local, staging, production) sit as buttons in
-its header: **Add Link…** in the **⋯** menu, then type a name and the address,
-`local localhost:3000`. Clicking one brings forward the browser tab already
-showing it (anywhere under that address) instead of opening it again; right-click
-for **Open in New Tab**, copying the address, or removing the link. Links are
-saved with the bench.
+### Links
+
+A bench's web pages (the app running locally, staging, dashboards, the CI) are
+the bench's **links**. They sit as chips on the right of its tab bar, whatever
+tab is showing, and beside the bench in Shed (in both views). Add one with **Add
+Link…** in the bench's menu (its name on the tab bar, or **⋯** in Shed) or in a
+project tab's **⋯** menu, then type a name and the address: `local
+localhost:3000`. Clicking one brings forward the browser tab already showing it
+(anywhere under that address) instead of opening it again; right-click for **Open
+in New Tab**, copying the address, **Edit…** or removing it. Links are saved with
+the bench, and can be changed while it is closed. (Links that older versions kept
+on project tabs move to their bench by themselves.)
 
 Bringing a tab forward needs Shed's small browser extension, since browsers do
 not let other programs find their tabs. Run `shed browser setup` once: it

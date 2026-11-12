@@ -283,6 +283,34 @@ fn closed_benches_change_in_place_and_launchers_still_find_them() {
 }
 
 #[test]
+fn bench_links_are_kept_open_or_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let bench = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("web".into()), cwd: None });
+    tree_until(&mut c, "web", |t| t.bench(bench).is_some());
+    let link = |name: &str| shed_model::ProjectLink { name: name.into(), url: format!("http://localhost/{name}") };
+
+    c.msg(ClientMsg::SetBenchLinks { bench, links: vec![link("app"), link("grafana")] });
+    tree_until(&mut c, "links set", |t| t.bench(bench).is_some_and(|b| b.links.len() == 2));
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed", |t| t.bench(bench).is_none());
+    let saved = std::fs::read_to_string(dir.path().join("benches/web.toml")).unwrap();
+    assert!(saved.contains("http://localhost/grafana"), "{saved}");
+
+    // Changed while closed, and there when it opens.
+    c.msg(ClientMsg::EditSaved { name: "web".into(), edit: shed_proto::SavedEdit::Links(vec![link("app")]) });
+    c.until("links edited", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Done(_)) => Some(()),
+        Frame::Keeper(KeeperMsg::Error(e)) => panic!("{e}"),
+        _ => None,
+    });
+    show_and_attach(&mut c, ShowTarget::Load { name: "web".into() });
+    let tree = tree_until(&mut c, "loaded", |t| t.bench(bench).is_some());
+    assert_eq!(tree.bench(bench).unwrap().links, vec![link("app")]);
+}
+
+#[test]
 fn tabs_move_between_running_and_closed_benches() {
     use shed_proto::BenchRef::{Running, Saved};
     let dir = tempfile::tempdir().unwrap();

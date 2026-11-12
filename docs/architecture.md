@@ -259,8 +259,9 @@ server's bench and tab ids from `shedd list` as "here".
 
 ## Links and the browser
 
-A project tab's links (`Project.links`) open through Shed's browser extension
-when it is there (`browser.rs`, `browser/chrome/`). The extension (Manifest V3,
+A bench's links (`Bench.links`, set with `SetBenchLinks` or `SavedEdit::Links`;
+older saved files kept them on project tabs, and `SavedBench::to_bench` gathers
+those into the bench) open through Shed's browser extension when it is there (`browser.rs`, `browser/chrome/`). The extension (Manifest V3,
 its ID fixed by the public key in its manifest) connects at browser start to the
 native messaging host `dev.shed.browser`, which `shed browser setup` registers in
 each Chromium-based browser's `NativeMessagingHosts` folder; the host is

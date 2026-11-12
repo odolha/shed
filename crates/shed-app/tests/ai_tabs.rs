@@ -70,8 +70,17 @@ for line in sys.stdin:
     c.msg(ClientMsg::AiWatch { tab });
     c.until("empty conversation", |f, _| matches!(f, Frame::Keeper(KeeperMsg::AiUpdate { from: 0, entries, .. }) if entries.is_empty()).then_some(()));
     c.msg(ClientMsg::AiSend { tab, text: "count the lines".into(), images: Vec::new() });
-    c.until("commands", |f, _| matches!(f, Frame::Keeper(KeeperMsg::AiInfo { commands, .. }) if commands[0].name == "review").then_some(()));
     let mut entries: Vec<Entry> = Vec::new();
+    // The conversation may start coming before the commands do: keep it.
+    c.until("commands", |f, _| {
+        if let Frame::Keeper(KeeperMsg::AiUpdate { tab: t, from, entries: e, .. }) = f
+            && *t == tab
+        {
+            entries.truncate(*from as usize);
+            entries.extend(e.iter().cloned());
+        }
+        matches!(f, Frame::Keeper(KeeperMsg::AiInfo { commands, .. }) if commands[0].name == "review").then_some(())
+    });
     let mut limits = false;
     c.until("the answer", |f, _| {
         if let Frame::Keeper(KeeperMsg::AiUpdate { tab: t, from, entries: e, .. }) = f
@@ -84,7 +93,7 @@ for line in sys.stdin:
         entries.iter().any(|e| matches!(e, Entry::Notice { text, .. } if text.starts_with("Done"))).then_some(())
     });
     assert!(limits, "the usage limits were passed on");
-    assert!(matches!(&entries[0], Entry::User { text, .. } if text == "count the lines"));
+    assert!(matches!(&entries[0], Entry::User { text, .. } if text == "count the lines"), "{:?}", &entries[..entries.len().min(3)]);
     assert!(entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.name == "Edit")));
     assert!(entries.iter().any(|e| matches!(e, Entry::Assistant { text } if text.contains("3 lines"))));
     // The session is the tab's now, and it is idle again.

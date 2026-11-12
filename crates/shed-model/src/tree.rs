@@ -173,6 +173,10 @@ pub struct Bench {
     pub launcher: String,
     /// Where its window was last, to open it there again.
     pub window: Option<WindowPlace>,
+    /// Web pages that go with the bench's work (an app, its dashboards),
+    /// shown on its tab bar and in Shed.
+    #[serde(default)]
+    pub links: Vec<ProjectLink>,
 }
 
 /// A bench name made safe for app IDs and file names.
@@ -744,6 +748,7 @@ mod tests {
             closing: false,
             launcher: "main".into(),
             window: None,
+            links: Vec::new(),
         }
     }
 

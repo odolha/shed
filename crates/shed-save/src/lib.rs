@@ -69,6 +69,10 @@ pub struct SavedBench {
     /// Where its window was last.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowPlace>,
+    /// Its web pages. (Older files kept them on project tabs; loading
+    /// gathers those here.)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<shed_model::ProjectLink>,
     pub tabs: Vec<SavedTab>,
 }
 
@@ -173,7 +177,8 @@ impl SavedProject {
     fn to_project(&self) -> shed_model::Project {
         let root = expand_home(&self.root);
         let open = self.open.iter().map(|f| root.join(f)).collect();
-        shed_model::Project { root, open, active: self.active, exclude: self.exclude.clone(), links: self.links.clone() }
+        // Links belong to the bench now (`SavedBench::all_links`).
+        shed_model::Project { root, open, active: self.active, exclude: self.exclude.clone(), links: Vec::new() }
     }
 }
 
@@ -303,7 +308,27 @@ impl SavedBench {
             active_tab: bench.tab_index(bench.active_tab).unwrap_or(0),
             aliases: bench.aliases.clone(),
             window: bench.window,
+            links: bench.links.clone(),
             tabs,
+        }
+    }
+
+    /// Every link: the bench's, then those older files kept on project tabs.
+    pub fn all_links(&self) -> Vec<shed_model::ProjectLink> {
+        let mut links = self.links.clone();
+        for link in self.tabs.iter().filter_map(|t| t.project.as_ref()).flat_map(|p| &p.links) {
+            if !links.iter().any(|l| l.name == link.name) {
+                links.push(link.clone());
+            }
+        }
+        links
+    }
+
+    /// Sets the bench's links (project tabs keep none of their own).
+    pub fn set_links(&mut self, links: Vec<shed_model::ProjectLink>) {
+        self.links = links;
+        for project in self.tabs.iter_mut().filter_map(|t| t.project.as_mut()) {
+            project.links.clear();
         }
     }
 
@@ -389,6 +414,7 @@ impl SavedBench {
             closing: false,
             launcher: self.launcher(),
             window: self.window,
+            links: self.all_links(),
         };
         Ok((bench, panes_out))
     }
@@ -900,7 +926,6 @@ mod tests {
             p.open = vec![home.join("code/api/src/main.rs")];
             p.active = Some(0);
             p.exclude = vec!["dist".into()];
-            p.links = vec![shed_model::ProjectLink { name: "local".into(), url: "http://localhost:3000/".into() }];
         }
         let mut ai = Tab::ai(home.join("code/api"));
         if let shed_model::TabKind::Ai(a) = &mut ai.kind {
@@ -920,7 +945,27 @@ mod tests {
             closing: false,
             launcher: "backend".into(),
             window: Some(WindowPlace { x: 40.0, y: 30.0, width: 1200.0, height: 800.0, state: WindowState::Maximized }),
+            links: vec![shed_model::ProjectLink { name: "local".into(), url: "http://localhost:3000/".into() }],
         }
+    }
+
+    #[test]
+    fn links_kept_on_project_tabs_move_to_the_bench() {
+        let mut saved = SavedBench::from_bench(&sample(), |_| PaneExtras::default());
+        let link = |name: &str| shed_model::ProjectLink { name: name.into(), url: format!("https://{name}.example/") };
+        saved.links = vec![link("local")];
+        // As older files had them: on the project tab.
+        let project = saved.tabs.iter_mut().find_map(|t| t.project.as_mut()).unwrap();
+        project.links = vec![link("ci"), shed_model::ProjectLink { name: "local".into(), url: "http://other/".into() }];
+        let text = saved.to_toml();
+        let (bench, _) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
+        assert_eq!(bench.links.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["local", "ci"]);
+        assert_eq!(bench.links[0].url, "https://local.example/", "the bench's own wins");
+        assert!(bench.tabs.iter().filter_map(|t| t.project_info()).all(|p| p.links.is_empty()));
+        // Setting them leaves none on the tabs to come back.
+        let mut saved = SavedBench::from_toml(&text).unwrap();
+        saved.set_links(vec![link("docs")]);
+        assert_eq!(saved.to_bench().unwrap().0.links, vec![link("docs")]);
     }
 
     #[test]

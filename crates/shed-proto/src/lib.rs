@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 24;
+pub const PROTOCOL_VERSION: u32 = 25;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -139,6 +139,8 @@ pub enum ClientMsg {
     /// Closes a remote tab and ends its shell on the server, for every PC.
     /// (`CloseTab` only lets go of it here.)
     EndRemoteTab { tab: TabId },
+    /// A bench's links, all of them.
+    SetBenchLinks { bench: BenchId, links: Vec<shed_model::ProjectLink> },
 }
 
 /// A picture sent with a prompt.
@@ -169,6 +171,8 @@ pub enum SavedEdit {
     NewProjectTab { root: PathBuf },
     /// Adds an AI tab working in `folder`.
     NewAiTab { folder: PathBuf },
+    /// The bench's links, all of them.
+    Links(Vec<shed_model::ProjectLink>),
 }
 
 /// A bench, running or closed.

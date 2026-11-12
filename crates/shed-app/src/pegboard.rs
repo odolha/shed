@@ -120,6 +120,10 @@ enum Edit {
     AddTag(TabId),
     /// A colour of one's own: `#rrggbb` or a colour's name.
     Color(BenchKey),
+    /// A new link for the bench: `name url`.
+    AddLink(BenchKey),
+    /// The bench's link at this index.
+    ChangeLink(BenchKey, usize),
 }
 
 fn menu_item(label: impl Into<SharedString>, action: impl Fn(&mut Pegboard, &mut Window, &mut Context<Pegboard>) + 'static) -> MenuEntry<Pegboard> {
@@ -481,6 +485,8 @@ impl Pegboard {
                 let Some(tags) = with_tag(&t.tags, &text) else { return };
                 return self.change_tab(tab, TabChange::Tags(tags), cx);
             }
+            Edit::AddLink(key) => return self.submit_link(key, None, &text, cx),
+            Edit::ChangeLink(key, i) => return self.submit_link(key, Some(i), &text, cx),
             Edit::Color(key) => {
                 match BenchColor::parse(&text) {
                     Some(color) => self.set_color(&key, color, cx),
@@ -494,6 +500,74 @@ impl Pegboard {
         };
         self.send(msg, cx);
         self.refresh(cx);
+    }
+
+    fn submit_link(&mut self, key: BenchKey, at: Option<usize>, text: &str, cx: &mut Context<Self>) {
+        if let Some(link) = crate::links::parse(text) {
+            let links = crate::links::with(&self.links_of(&key, cx), link, at);
+            self.set_links(&key, links, cx);
+        }
+    }
+
+    /// A bench's links, running or closed.
+    fn links_of(&self, key: &BenchKey, cx: &Context<Self>) -> Vec<shed_model::ProjectLink> {
+        match key {
+            BenchKey::Running(id) => self.state.read(cx).tree.bench(*id).map(|b| b.links.clone()).unwrap_or_default(),
+            BenchKey::Closed(name) => cx
+                .try_global::<PegboardData>()
+                .and_then(|d| d.0.stored.iter().find(|s| s.bench.name == *name).map(|s| s.bench.links.clone()))
+                .unwrap_or_default(),
+        }
+    }
+
+    fn set_links(&mut self, key: &BenchKey, links: Vec<shed_model::ProjectLink>, cx: &mut Context<Self>) {
+        let msg = match key {
+            BenchKey::Running(bench) => ClientMsg::SetBenchLinks { bench: *bench, links },
+            BenchKey::Closed(name) => ClientMsg::EditSaved { name: name.clone(), edit: SavedEdit::Links(links) },
+        };
+        self.send(msg, cx);
+        self.refresh(cx);
+    }
+
+    /// A bench's links as chips (click opens, right-click for more), and the
+    /// field for one being added or changed.
+    fn render_links(&self, entry: &Entry, ui: &UiColors, cx: &mut Context<Self>) -> gpui::Div {
+        let key = entry.key();
+        let accent = entry.bench.color.accent();
+        let links = entry.bench.links.clone();
+        let id = entry.bench.id;
+        let mut row = div().flex().flex_none().items_center().gap_1();
+        for (i, link) in entry.bench.links.iter().enumerate() {
+            if let Some(editor) = self.editor_for(&Edit::ChangeLink(key.clone(), i)) {
+                row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor));
+                continue;
+            }
+            let (url, links, k) = (link.url.clone(), links.clone(), key.clone());
+            row = row.child(
+                crate::links::chip(format!("link-{id}-{i}"), link, accent, ui)
+                    .tooltip(menu::tooltip("Open the link (right-click for more)"))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        crate::links::open(url.clone(), false, cx)
+                    }))
+                    .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        let (k1, k2) = (k.clone(), k.clone());
+                        let initial = links.get(i).map(crate::links::unparse).unwrap_or_default();
+                        let entries = crate::links::menu(
+                            links.clone(),
+                            i,
+                            move |this: &mut Self, links, cx| this.set_links(&k1, links, cx),
+                            move |this: &mut Self, window, cx| this.start_edit(Edit::ChangeLink(k2.clone(), i), initial.clone(), window, cx),
+                        );
+                        this.open_menu(e.position, entries, cx);
+                    })),
+            );
+        }
+        if let Some(editor) = self.editor_for(&Edit::AddLink(key)) {
+            row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor)).child(div().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("name url"));
+        }
+        row
     }
 
     fn editor_for(&self, edit: &Edit) -> Option<Entity<LineEditor>> {
@@ -526,6 +600,8 @@ impl Pegboard {
         let k = key.clone();
         entries.push(menu_item("New Project Tab…", move |this, _, cx| this.new_project_tab(&k, cx)).icon("project"));
         entries.push(MenuEntry::Separator);
+        let k = key.clone();
+        entries.push(menu_item("Add Link…", move |this, window, cx| this.start_edit(Edit::AddLink(k.clone()), String::new(), window, cx)).icon("link"));
         let (k, name) = (key.clone(), bench.name.clone());
         entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::BenchName(k.clone()), name.clone(), window, cx)).icon("pencil"));
         let (k, badge) = (key.clone(), bench.badge.clone().unwrap_or_default());
@@ -793,6 +869,7 @@ impl Pegboard {
                 if state_note.is_empty() { String::new() } else { format!("{state_note} · ") },
                 if tab_count == 1 { "" } else { "s" }
             )))
+            .child(self.render_links(entry, ui, cx))
             .child(div().flex_1());
 
         if bench.closing {
@@ -998,7 +1075,7 @@ impl Pegboard {
             );
         }
 
-        let mut actions = div().flex_none().h(px(26.0)).flex().items_center().gap_1();
+        let mut actions = div().flex_none().h(px(26.0)).flex().items_center().gap_1().child(self.render_links(entry, ui, cx));
         if bench.closing {
             actions = actions.child(div().text_size(px(12.0)).text_color(hsla(ui.ink(accent))).child("closing…"));
         } else {

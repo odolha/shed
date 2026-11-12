@@ -41,6 +41,10 @@ enum EditTarget {
     ProjectFolder,
     /// A server to open a remote tab on (`host` or `user@host`).
     RemoteHost,
+    /// A new link for the bench: `name url`.
+    AddLink,
+    /// The bench's link at this index.
+    EditLink(usize),
 }
 
 impl EditTarget {
@@ -53,6 +57,7 @@ impl EditTarget {
             EditTarget::Color => "Choosing a colour (#rrggbb or a name)",
             EditTarget::ProjectFolder => "Opening a folder as a project tab",
             EditTarget::RemoteHost => "Opening a remote tab: host, or user@host, as ssh takes it",
+            EditTarget::AddLink | EditTarget::EditLink(_) => "A link: name, then the address (app localhost:3000)",
         }
     }
 }
@@ -482,7 +487,8 @@ impl BenchWindow {
             EditTarget::Badge => self.bench(cx).map(|b| b.badge.clone().unwrap_or_default()),
             EditTarget::Color => self.bench(cx).map(|b| format!("#{:06X}", b.color.accent().to_hex())),
             EditTarget::ProjectFolder => self.bench(cx).map(|b| shed_save::home_relative(&b.cwd)),
-            EditTarget::RemoteHost => Some(String::new()),
+            EditTarget::RemoteHost | EditTarget::AddLink => Some(String::new()),
+            EditTarget::EditLink(i) => self.bench(cx).and_then(|b| b.links.get(i)).map(crate::links::unparse),
         };
         let Some(current) = current else { return };
         let editor = cx.new(|cx| LineEditor::selected(current, cx).submit_on_blur(window, cx).without_hint());
@@ -509,6 +515,15 @@ impl BenchWindow {
             EditTarget::ProjectFolder => ClientMsg::NewProjectTab { bench: self.bench, root: text.trim().into() },
             EditTarget::RemoteHost if text.trim().is_empty() => return,
             EditTarget::RemoteHost => ClientMsg::NewRemoteTab { bench: self.bench, host: text.trim().to_string(), join: None },
+            EditTarget::AddLink | EditTarget::EditLink(_) => {
+                let Some(link) = crate::links::parse(&text) else { return };
+                let Some(bench) = self.bench(cx) else { return };
+                let at = match target {
+                    EditTarget::EditLink(i) => Some(i),
+                    _ => None,
+                };
+                ClientMsg::SetBenchLinks { bench: self.bench, links: crate::links::with(&bench.links, link, at) }
+            }
             EditTarget::Badge => {
                 let badge: String = text.chars().filter(|c| !c.is_whitespace()).take(2).collect();
                 ClientMsg::SetBadge { bench: self.bench, badge: (!badge.is_empty()).then_some(badge) }
@@ -642,6 +657,7 @@ impl BenchWindow {
             MenuEntry::Separator,
             item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)).icon("pencil"),
             item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
+            item("Add Link…", |this, window, cx| this.start_edit(EditTarget::AddLink, window, cx)).icon("link"),
             MenuEntry::Separator,
         ];
         entries.push(MenuEntry::Palette(
@@ -798,6 +814,7 @@ impl BenchWindow {
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
                 })),
         )
+        .child(self.render_links(bench, cx))
         .child(
             div()
                 .id("hide-button")
@@ -838,8 +855,31 @@ impl BenchWindow {
         .child(self.render_bench_label(bench, cx))
     }
 
+    /// The bench's links, on the tab bar: click opens, right-click for more.
+    fn render_links(&self, bench: &Bench, cx: &mut Context<Self>) -> impl IntoElement {
+        let accent = bench.color.accent();
+        let links = bench.links.clone();
+        div().flex().flex_none().items_center().gap_1().px_1().children(bench.links.iter().enumerate().map(|(i, link)| {
+            let url = link.url.clone();
+            let links = links.clone();
+            crate::links::chip(format!("link-{i}"), link, accent, &self.ui)
+                .tooltip(menu::tooltip("Open the link (right-click for more)"))
+                .on_click(cx.listener(move |_, _, _, cx| crate::links::open(url.clone(), false, cx)))
+                .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    let entries = crate::links::menu(
+                        links.clone(),
+                        i,
+                        |this: &mut Self, links, cx| this.send(ClientMsg::SetBenchLinks { bench: this.bench, links }, cx),
+                        move |this: &mut Self, window, cx| this.start_edit(EditTarget::EditLink(i), window, cx),
+                    );
+                    this.open_menu(e.position, entries, cx);
+                }))
+        }))
+    }
+
     fn render_bench_label(&self, bench: &Bench, cx: &mut Context<Self>) -> AnyElement {
-        let editor = [EditTarget::BenchName, EditTarget::Badge, EditTarget::Color, EditTarget::ProjectFolder, EditTarget::RemoteHost].into_iter().find_map(|t| self.editor_for(t));
+        let in_label = |t: &EditTarget| !matches!(t, EditTarget::TabName(_) | EditTarget::AddTag(_));
+        let editor = self.editing.as_ref().filter(|(t, _, _)| in_label(t)).map(|(_, e, _)| e.clone());
         if let Some(editor) = editor {
             return div().flex().items_center().px_2().child(editor).into_any_element();
         }

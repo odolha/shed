@@ -957,6 +957,7 @@ impl Keeper {
             }
             ClientMsg::SetBenchColor { bench, color } => self.edit_bench(bench, |b| b.color = color),
             ClientMsg::SetBadge { bench, badge } => self.edit_bench(bench, |b| b.badge = badge),
+            ClientMsg::SetBenchLinks { bench, links } => self.edit_bench(bench, |b| b.links = links),
             ClientMsg::MoveTab { tab, bench, index } => {
                 let mut st = self.lock();
                 let Some(from) = st.tree.bench_of_tab(tab) else { return };
@@ -1269,6 +1270,10 @@ impl Keeper {
             SavedEdit::Badge(badge) => {
                 saved.badge = badge;
                 format!("rebadged {name}")
+            }
+            SavedEdit::Links(links) => {
+                saved.set_links(links);
+                format!("changed the links of {name}")
             }
             SavedEdit::RenameTab { tab, name: title } => {
                 saved.tab_mut(tab).ok_or("no such tab")?.name = title.filter(|n| !n.trim().is_empty());
@@ -2036,6 +2041,7 @@ impl Keeper {
             aliases: Default::default(),
             closing: false,
             window: None,
+            links: Vec::new(),
         });
         self.sync_alias_files(st);
         Ok(id)

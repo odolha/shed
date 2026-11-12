@@ -9,6 +9,7 @@ mod bench_window;
 mod emoji;
 mod keeper_conn;
 mod line_editor;
+mod links;
 mod logbook;
 mod logbook_view;
 #[cfg(target_os = "macos")]
