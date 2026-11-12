@@ -45,6 +45,8 @@ enum EditTarget {
     AddLink,
     /// The bench's link at this index.
     EditLink(usize),
+    /// The name of the bench's link at this index.
+    RenameLink(usize),
 }
 
 impl EditTarget {
@@ -58,6 +60,7 @@ impl EditTarget {
             EditTarget::ProjectFolder => "Opening a folder as a project tab",
             EditTarget::RemoteHost => "Opening a remote tab: host, or user@host, as ssh takes it",
             EditTarget::AddLink | EditTarget::EditLink(_) => "A link: name, then the address (app localhost:3000)",
+            EditTarget::RenameLink(_) => "The link's name",
         }
     }
 }
@@ -489,6 +492,7 @@ impl BenchWindow {
             EditTarget::ProjectFolder => self.bench(cx).map(|b| shed_save::home_relative(&b.cwd)),
             EditTarget::RemoteHost | EditTarget::AddLink => Some(String::new()),
             EditTarget::EditLink(i) => self.bench(cx).and_then(|b| b.links.get(i)).map(crate::links::unparse),
+            EditTarget::RenameLink(i) => self.bench(cx).and_then(|b| b.links.get(i)).map(|l| l.name.clone()),
         };
         let Some(current) = current else { return };
         let editor = cx.new(|cx| LineEditor::selected(current, cx).submit_on_blur(window, cx).without_hint());
@@ -515,6 +519,11 @@ impl BenchWindow {
             EditTarget::ProjectFolder => ClientMsg::NewProjectTab { bench: self.bench, root: text.trim().into() },
             EditTarget::RemoteHost if text.trim().is_empty() => return,
             EditTarget::RemoteHost => ClientMsg::NewRemoteTab { bench: self.bench, host: text.trim().to_string(), join: None },
+            EditTarget::RenameLink(i) => {
+                let Some(bench) = self.bench(cx) else { return };
+                let Some(links) = crate::links::renamed(&bench.links, i, &text) else { return };
+                ClientMsg::SetBenchLinks { bench: self.bench, links }
+            }
             EditTarget::AddLink | EditTarget::EditLink(_) => {
                 let Some(link) = crate::links::parse(&text) else { return };
                 let Some(bench) = self.bench(cx) else { return };
@@ -878,6 +887,7 @@ impl BenchWindow {
                         links.clone(),
                         i,
                         |this: &mut Self, links, cx| this.send(ClientMsg::SetBenchLinks { bench: this.bench, links }, cx),
+                        move |this: &mut Self, window, cx| this.start_edit(EditTarget::RenameLink(i), window, cx),
                         move |this: &mut Self, window, cx| this.start_edit(EditTarget::EditLink(i), window, cx),
                     );
                     this.open_menu(e.position, entries, cx);

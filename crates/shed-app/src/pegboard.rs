@@ -126,6 +126,8 @@ enum Edit {
     AddLink(BenchKey),
     /// The bench's link at this index.
     ChangeLink(BenchKey, usize),
+    /// The name of the bench's link at this index.
+    RenameLink(BenchKey, usize),
 }
 
 fn menu_item(label: impl Into<SharedString>, action: impl Fn(&mut Pegboard, &mut Window, &mut Context<Pegboard>) + 'static) -> MenuEntry<Pegboard> {
@@ -489,6 +491,12 @@ impl Pegboard {
             }
             Edit::AddLink(key) => return self.submit_link(key, None, &text, cx),
             Edit::ChangeLink(key, i) => return self.submit_link(key, Some(i), &text, cx),
+            Edit::RenameLink(key, i) => {
+                if let Some(links) = crate::links::renamed(&self.links_of(&key, cx), i, &text) {
+                    self.set_links(&key, links, cx);
+                }
+                return;
+            }
             Edit::Color(key) => {
                 match BenchColor::parse(&text) {
                     Some(color) => self.set_color(&key, color, cx),
@@ -540,7 +548,7 @@ impl Pegboard {
         let id = entry.bench.id;
         let mut row = div().flex().flex_none().items_center().gap_1();
         for (i, link) in entry.bench.links.iter().enumerate() {
-            if let Some(editor) = self.editor_for(&Edit::ChangeLink(key.clone(), i)) {
+            if let Some(editor) = self.editor_for(&Edit::ChangeLink(key.clone(), i)).or_else(|| self.editor_for(&Edit::RenameLink(key.clone(), i))) {
                 row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor));
                 continue;
             }
@@ -554,12 +562,14 @@ impl Pegboard {
                         crate::links::open(url.clone(), false, cx)
                     }))
                     .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                        let (k1, k2) = (k.clone(), k.clone());
+                        let (k1, k2, k3) = (k.clone(), k.clone(), k.clone());
                         let initial = links.get(i).map(crate::links::unparse).unwrap_or_default();
+                        let name = links.get(i).map(|l| l.name.clone()).unwrap_or_default();
                         let entries = crate::links::menu(
                             links.clone(),
                             i,
                             move |this: &mut Self, links, cx| this.set_links(&k1, links, cx),
+                            move |this: &mut Self, window, cx| this.start_edit(Edit::RenameLink(k3.clone(), i), name.clone(), window, cx),
                             move |this: &mut Self, window, cx| this.start_edit(Edit::ChangeLink(k2.clone(), i), initial.clone(), window, cx),
                         );
                         this.open_menu(e.position, entries, cx);
@@ -1158,7 +1168,7 @@ impl Pegboard {
         let text = ui.text;
         let mut row = div().flex().flex_none().items_center().gap_1();
         for (i, link) in entry.bench.links.iter().enumerate() {
-            if let Some(editor) = self.editor_for(&Edit::ChangeLink(key.clone(), i)) {
+            if let Some(editor) = self.editor_for(&Edit::ChangeLink(key.clone(), i)).or_else(|| self.editor_for(&Edit::RenameLink(key.clone(), i))) {
                 row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor));
                 continue;
             }
@@ -1187,12 +1197,14 @@ impl Pegboard {
                         crate::links::open(url.clone(), false, cx)
                     }))
                     .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                        let (k1, k2) = (k.clone(), k.clone());
+                        let (k1, k2, k3) = (k.clone(), k.clone(), k.clone());
                         let initial = links.get(i).map(crate::links::unparse).unwrap_or_default();
+                        let name = links.get(i).map(|l| l.name.clone()).unwrap_or_default();
                         let entries = crate::links::menu(
                             links.clone(),
                             i,
                             move |this: &mut Self, links, cx| this.set_links(&k1, links, cx),
+                            move |this: &mut Self, window, cx| this.start_edit(Edit::RenameLink(k3.clone(), i), name.clone(), window, cx),
                             move |this: &mut Self, window, cx| this.start_edit(Edit::ChangeLink(k2.clone(), i), initial.clone(), window, cx),
                         );
                         this.open_menu(e.position, entries, cx);

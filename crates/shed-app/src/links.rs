@@ -94,12 +94,20 @@ pub fn chip(id: impl Into<SharedString>, link: &ProjectLink, accent: Rgb, ui: &U
         .child(div().min_w_0().truncate().child(link.name.clone()))
 }
 
-/// A link's right-click menu. `set` stores the bench's links; `edit` starts
-/// editing the link at its index.
+/// `links` with the one at `i` called `name` (the address stays).
+pub fn renamed(links: &[ProjectLink], i: usize, name: &str) -> Option<Vec<ProjectLink>> {
+    let name = name.trim();
+    let link = links.get(i)?;
+    (!name.is_empty()).then(|| with(links, ProjectLink { name: name.to_string(), url: link.url.clone() }, Some(i)))
+}
+
+/// A link's right-click menu. `set` stores the bench's links; `rename`
+/// starts editing the link's name, `edit` its name and address.
 pub fn menu<V: 'static>(
     links: Vec<ProjectLink>,
     i: usize,
     set: impl Fn(&mut V, Vec<ProjectLink>, &mut Context<V>) + 'static,
+    rename: impl Fn(&mut V, &mut gpui::Window, &mut Context<V>) + 'static,
     edit: impl Fn(&mut V, &mut gpui::Window, &mut Context<V>) + 'static,
 ) -> Vec<MenuEntry<V>> {
     let Some(link) = links.get(i).cloned() else { return Vec::new() };
@@ -108,7 +116,8 @@ pub fn menu<V: 'static>(
         menu::item("Open", move |_: &mut V, _, cx| open(a.clone(), false, cx)).icon("link"),
         menu::item("Open in New Tab", move |_: &mut V, _, cx| open(b.clone(), true, cx)),
         menu::item("Copy URL", move |_: &mut V, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(c.clone()))),
-        menu::item("Edit…", edit).icon("pencil"),
+        menu::item("Rename…", rename).icon("pencil"),
+        menu::item("Change Address…", edit),
         MenuEntry::Separator,
         menu::danger("Remove Link", move |this: &mut V, _, cx| {
             let rest: Vec<ProjectLink> = links.iter().filter(|l| l.name != link.name).cloned().collect();
@@ -133,5 +142,8 @@ mod tests {
         assert_eq!(with(&links, link("c"), None), vec![link("a"), link("b"), link("c")]);
         assert_eq!(with(&links, link("c"), Some(0)), vec![link("c"), link("b")]);
         assert_eq!(with(&links, link("b"), Some(0)), vec![link("b")], "renamed onto another");
+        let r = renamed(&links, 1, " My App ").unwrap();
+        assert_eq!((r[1].name.as_str(), r[1].url.as_str()), ("My App", "https://b/"));
+        assert!(renamed(&links, 1, "  ").is_none());
     }
 }

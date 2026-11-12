@@ -248,7 +248,8 @@ Link…** in the bench's menu (its name on the tab bar, or **⋯** in Shed) or i
 project tab's **⋯** menu, then type a name and the address: `local
 localhost:3000`. Clicking one brings forward the browser tab already showing it
 (anywhere under that address) instead of opening it again; right-click for **Open
-in New Tab**, copying the address, **Edit…** or removing it. Links are saved with
+in New Tab**, copying the address, **Rename…** (any name, spaces too; the address
+stays), **Change Address…** or removing it. Links are saved with
 the bench, and can be changed while it is closed. (Links that older versions kept
 on project tabs move to their bench by themselves.)
 
