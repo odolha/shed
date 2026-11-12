@@ -35,6 +35,19 @@ const FOLD_LINES: usize = 12;
 /// Lines of a tool's output shown when it is opened.
 const RESULT_LINES: usize = 40;
 
+/// Answers being picked to one request of Claude's questions.
+struct Ask {
+    picks: Vec<std::collections::BTreeSet<usize>>,
+    other: Vec<Option<Entity<LineEditor>>>,
+    subs: Vec<Subscription>,
+}
+
+impl Ask {
+    fn new(questions: usize) -> Self {
+        Ask { picks: vec![Default::default(); questions], other: vec![None; questions], subs: Vec::new() }
+    }
+}
+
 /// Claude Code's permission modes: its name, the menu's label, the chip's.
 const PERMISSION_MODES: &[(&str, &str, &str)] = &[
     ("default", "Ask Before Edits", "Ask before edits"),
@@ -133,6 +146,8 @@ pub struct AiView {
     editing: Option<usize>,
     /// The working dots' step.
     spin: usize,
+    /// Answers being chosen to Claude's questions, by request.
+    asks: HashMap<String, Ask>,
     _subs: Vec<Subscription>,
 }
 
@@ -255,6 +270,7 @@ impl AiView {
             copied: None,
             editing: None,
             spin: 0,
+            asks: HashMap::new(),
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -733,6 +749,241 @@ impl AiView {
             None => return,
         }
         cx.notify();
+    }
+
+    /// Picks option `o` of question `q` (one, or one more of several).
+    fn pick(&mut self, request: &str, questions: &[shed_ai::Question], q: usize, o: usize, cx: &mut Context<Self>) {
+        let ask = self.asks.entry(request.to_string()).or_insert_with(|| Ask::new(questions.len()));
+        let picks = &mut ask.picks[q];
+        if questions[q].multi {
+            if !picks.remove(&o) {
+                picks.insert(o);
+            }
+        } else {
+            picks.clear();
+            picks.insert(o);
+        }
+        // One question, one answer, nothing typed: that is the answer.
+        let quick = questions.len() == 1 && !questions[0].multi && ask.other[0].as_ref().is_none_or(|e| e.read(cx).text().trim().is_empty());
+        if quick {
+            self.send_answers(request, questions, cx);
+        }
+        self.remeasure_request(request);
+        cx.notify();
+    }
+
+    /// The entry of a request changed height (a pick, a field opened).
+    fn remeasure_request(&self, request: &str) {
+        if let Some(i) = self.entries.iter().position(|e| matches!(e, Entry::Permission(p) if p.request == request)) {
+            self.list.remeasure_items(i..i + 1);
+        }
+    }
+
+    /// The answers chosen so far, one per question; `None` until each has one.
+    fn answers(&self, request: &str, questions: &[shed_ai::Question], cx: &gpui::App) -> Option<Vec<String>> {
+        let ask = self.asks.get(request)?;
+        questions
+            .iter()
+            .enumerate()
+            .map(|(qi, q)| {
+                let mut parts: Vec<String> = ask.picks[qi].iter().filter_map(|&o| q.options.get(o)).map(|o| o.label.clone()).collect();
+                if let Some(other) = ask.other[qi].as_ref().map(|e| e.read(cx).text().trim().to_string()).filter(|t| !t.is_empty()) {
+                    parts.push(other);
+                }
+                (!parts.is_empty()).then(|| parts.join(", "))
+            })
+            .collect()
+    }
+
+    fn send_answers(&mut self, request: &str, questions: &[shed_ai::Question], cx: &mut Context<Self>) {
+        let Some(answers) = self.answers(request, questions, cx) else { return };
+        self.conn.send_msg(ClientMsg::AiAnswerQuestions { tab: self.tab, request: request.to_string(), answers });
+        self.asks.remove(request);
+        cx.notify();
+    }
+
+    /// Claude's questions: each with its options to click (a dot for one
+    /// answer, a box for several), and a field for an answer of one's own.
+    fn render_questions(&mut self, i: usize, p: &shed_ai::Permission, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
+        let accent = self.accent;
+        let ink = ui.ink(accent);
+        let z = self.z();
+        let questions = std::rc::Rc::new(p.questions.clone());
+        let request = p.request.clone();
+        let mut card = div()
+            .id(("questions", i))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(hsla(if p.answer.is_none() { accent } else { ui.divider }))
+            .when(p.answer.is_none(), |d| d.bg(hsla_alpha(accent, 0.05)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(svg().path(icon("ai")).size(px(14.0 * z)).text_color(hsla(ink)))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(hsla(ui.text)).child(if p.questions.len() == 1 { "Claude asks" } else { "Claude asks a few things" })),
+            );
+        // Answered (or skipped): what was said.
+        if let Some(allowed) = p.answer {
+            for (qi, q) in p.questions.iter().enumerate() {
+                let said = if allowed { p.answers.get(qi).cloned().unwrap_or_default() } else { "(skipped)".into() };
+                card = card.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(div().text_size(px(12.0 * z)).text_color(hsla(ui.text_dim)).child(q.question.clone()))
+                        .child(div().text_color(hsla(if allowed { ui.text } else { ui.text_dim })).child(said)),
+                );
+            }
+            return card.into_any_element();
+        }
+        let ask = self.asks.entry(request.clone()).or_insert_with(|| Ask::new(questions.len()));
+        let picks: Vec<std::collections::BTreeSet<usize>> = ask.picks.clone();
+        let others: Vec<Option<Entity<LineEditor>>> = ask.other.clone();
+        for (qi, q) in p.questions.iter().enumerate() {
+            let mut block = div().flex().flex_col().gap_1();
+            let mut title = div().flex().items_center().gap_2();
+            if !q.header.is_empty() {
+                title = title.child(div().flex_none().px_1p5().rounded_sm().text_size(px(11.0 * z)).bg(hsla_alpha(accent, 0.18)).text_color(hsla(ink)).child(q.header.clone()));
+            }
+            title = title.child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).text_color(hsla(ui.text)).child(q.question.clone()));
+            if q.multi {
+                title = title.child(div().flex_none().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child("choose any"));
+            }
+            block = block.child(title);
+            for (oi, o) in q.options.iter().enumerate() {
+                let on = picks[qi].contains(&oi);
+                let (label, recommended) = match o.label.strip_suffix(" (Recommended)") {
+                    Some(l) => (l.to_string(), true),
+                    None => (o.label.clone(), false),
+                };
+                let mark = div()
+                    .flex_none()
+                    .mt(px(3.0 * z))
+                    .size(px(12.0 * z))
+                    .border_1()
+                    .border_color(hsla(if on { ink } else { ui.text_dim }))
+                    .when(q.multi, |d| d.rounded_sm())
+                    .when(!q.multi, |d| d.rounded_full())
+                    .when(on, |d| d.bg(hsla(ink)));
+                let (r, qs) = (request.clone(), questions.clone());
+                block = block.child(
+                    div()
+                        .id(SharedString::from(format!("ask-{i}-{qi}-{oi}")))
+                        .flex()
+                        .items_start()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .when(on, |d| d.bg(hsla_alpha(accent, 0.15)))
+                        .when(!on, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
+                        .on_click(cx.listener(move |this, _, _, cx| this.pick(&r, &qs, qi, oi, cx)))
+                        .child(mark)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(div().text_color(hsla(ui.text)).child(label))
+                                        .when(recommended, |d| d.child(div().px_1().rounded_sm().text_size(px(10.5 * z)).bg(hsla_alpha(accent, 0.18)).text_color(hsla(ink)).child("recommended"))),
+                                )
+                                .when(!o.description.is_empty() && o.description != o.label, |d| d.child(div().text_size(px(12.0 * z)).text_color(hsla(ui.text_dim)).child(o.description.clone()))),
+                        ),
+                );
+            }
+            // An answer of one's own.
+            block = match &others[qi] {
+                Some(editor) => block.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .child(div().flex_none().text_size(px(12.0 * z)).text_color(hsla(ui.text_dim)).child("Other:"))
+                        .child(div().flex_1().px_1().rounded_sm().border_1().border_color(hsla(ui.divider)).bg(hsla(ui.tab_active)).child(editor.clone())),
+                ),
+                None => {
+                    let (r, qs) = (request.clone(), questions.clone());
+                    block.child(
+                        div()
+                            .id(SharedString::from(format!("ask-other-{i}-{qi}")))
+                            .px_2()
+                            .py_0p5()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .text_size(px(12.0 * z))
+                            .text_color(hsla(ui.text_dim))
+                            .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                            .child("Other: write my own answer…")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let editor = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint());
+                                window.focus(&editor.read(cx).focus_handle(cx), cx);
+                                let sub = cx.observe(&editor, |_, _, cx| cx.notify());
+                                // Enter sends, once every question has an answer.
+                                let (r2, qs2) = (r.clone(), qs.clone());
+                                let submit = cx.subscribe(&editor, move |this, _, event: &crate::line_editor::EditorEvent, cx| {
+                                    if let crate::line_editor::EditorEvent::Submit(_) = event {
+                                        this.send_answers(&r2, &qs2, cx);
+                                    }
+                                });
+                                if let Some(ask) = this.asks.get_mut(&r) {
+                                    ask.other[qi] = Some(editor);
+                                    ask.subs.extend([sub, submit]);
+                                }
+                                this.remeasure_request(&r);
+                                cx.notify();
+                            })),
+                    )
+                }
+            };
+            card = card.child(block);
+        }
+        let ready = self.answers(&request, &questions, cx).is_some();
+        let (r1, q1, r2) = (request.clone(), questions.clone(), request.clone());
+        let button = |id: &str, glyph: &'static str, label: &'static str, color: Rgb, enabled: bool| {
+            div()
+                .id(SharedString::from(format!("{id}-{i}")))
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2p5()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(hsla_alpha(color, if enabled { 0.8 } else { 0.3 }))
+                .text_color(hsla_alpha(ui.ink(color), if enabled { 1.0 } else { 0.45 }))
+                .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(hsla_alpha(color, 0.18))))
+                .child(svg().path(icon(glyph)).size(px(13.0 * z)).text_color(hsla_alpha(ui.ink(color), if enabled { 1.0 } else { 0.45 })))
+                .child(label)
+        };
+        card.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(12.5 * z))
+                .child(button("ask-send", "send", "Send Answers", accent, ready).on_click(cx.listener(move |this, _, _, cx| this.send_answers(&r1, &q1, cx))))
+                .child(button("ask-skip", "close", "Skip", ui.text_dim, true).on_click(cx.listener(move |this, _, _, cx| {
+                    this.conn.send_msg(ClientMsg::AiAnswer { tab: this.tab, request: r2.clone(), allow: false, always: false });
+                    this.asks.remove(&r2);
+                    cx.notify();
+                })))
+                .when(!ready, |d| d.child(div().text_color(hsla(ui.text_dim)).child("Pick an answer for each question, or write your own"))),
+        )
+        .into_any_element()
     }
 
     /// What Claude is doing now, in a few words: the tool running, or
@@ -1347,6 +1598,7 @@ impl AiView {
                 }
                 el.into_any_element()
             }
+            Entry::Permission(p) if !p.questions.is_empty() => self.render_questions(i, &p, &ui, cx),
             Entry::Permission(p) => {
                 let request = p.request.clone();
                 let answer = |label: &'static str, allow: bool, always: bool, color: Rgb| {

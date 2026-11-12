@@ -478,6 +478,22 @@ impl Keeper {
         self.ai_dirty.notify_one();
     }
 
+    /// Answers Claude's questions: the tool goes ahead with the answers in
+    /// its input, where Claude Code reads them.
+    pub(super) fn ai_answer_questions(&self, tab: TabId, request: String, answers: Vec<String>) {
+        let mut st = self.lock();
+        let Some(rt) = st.ai.get_mut(&tab) else { return };
+        let Some(req) = rt.pending.remove(&request) else { return };
+        let input = req.get("input").cloned().unwrap_or(json!({}));
+        let questions = shed_ai::parse_questions(&input);
+        let updated = shed_ai::answered_input(&input, &questions, &answers);
+        let response = json!({"behavior": "allow", "updatedInput": updated});
+        rt.write(json!({"type": "control_response", "response": {"subtype": "success", "request_id": request, "response": response}}));
+        rt.transcript.answer_questions(&request, answers);
+        drop(st);
+        self.ai_dirty.notify_one();
+    }
+
     /// Shows another session (or a new one) in the tab; the process stops
     /// and starts again for it with the next prompt.
     pub(super) fn ai_open_session(&self, tab: TabId, session: Option<String>) {

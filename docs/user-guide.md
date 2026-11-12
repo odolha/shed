@@ -318,6 +318,13 @@ terminal of the bench.
   your say, a card shows what and how, with **Allow**, **Allow for This Session**
   and **Deny**; the tab's icon shows it is waiting. **Stop** (or Escape at the
   prompt) interrupts.
+- **Questions**: when Claude asks you something (to choose between ways to go),
+  it shows as a card: each question with its options to click (a dot when one
+  answer is wanted, a box when several may be), a description under each, and
+  the one Claude recommends marked. **Other** lets you write your own answer
+  (Enter sends). **Send Answers** sends them; with a single question, clicking an
+  option is the answer. **Skip** declines. Afterwards the card shows what you
+  answered.
 - **Below the prompt**: while Claude works, three dots take turns beside what it
   is doing (the tool running, thinking, writing) and for how long. Then the model
   (the default one by name: "Opus 5.5 (default)") and its effort, the mode, and

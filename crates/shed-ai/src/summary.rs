@@ -46,6 +46,13 @@ pub fn summarize(name: &str, input: &Value, cwd: &str) -> (String, String, Optio
             (format!("Search “{}”{within}", s("pattern")), String::new(), None)
         }
         "Glob" => (format!("Find {}", s("pattern")), String::new(), None),
+        "AskUserQuestion" => {
+            let questions = crate::parse_questions(input);
+            let first = questions.first().map(|q| q.question.clone()).unwrap_or_default();
+            let more = if questions.len() > 1 { format!(" (and {} more)", questions.len() - 1) } else { String::new() };
+            let detail = questions.iter().map(|q| format!("{}\n{}", q.question, q.options.iter().map(|o| format!("  · {}", o.label)).collect::<Vec<_>>().join("\n"))).collect::<Vec<_>>().join("\n\n");
+            (format!("Asked: {first}{more}"), detail, None)
+        }
         "WebFetch" => (format!("Fetch {}", s("url")), s("prompt"), None),
         "WebSearch" => (format!("Search the web for “{}”", s("query")), String::new(), None),
         "Task" | "Agent" => (format!("Agent: {}", s("description")), s("prompt"), None),
@@ -91,5 +98,24 @@ mod tests {
         assert_eq!(diff, Some(Diff { old: "a".into(), new: "b".into() }));
         let (s, _, _, _) = summarize("Grep", &json!({"pattern": "fn main", "path": "/p/src"}), "/p");
         assert_eq!(s, "Search “fn main” in src");
+    }
+
+    #[test]
+    fn questions_and_their_answers() {
+        let input = json!({"questions": [
+            {"question": "Which database?", "header": "DB", "multiSelect": false,
+             "options": [{"label": "Postgres (Recommended)", "description": "Already in use"}, {"label": "SQLite", "description": "Simpler"}]},
+            {"question": "Which checks?", "header": "CI", "multiSelect": true, "options": [{"label": "lint"}, {"label": "tests"}]}
+        ]});
+        let qs = crate::parse_questions(&input);
+        assert_eq!(qs.len(), 2);
+        assert_eq!((qs[0].header.as_str(), qs[0].options[1].label.as_str(), qs[0].multi), ("DB", "SQLite", false));
+        assert!(qs[1].multi && qs[1].options[0].description.is_empty());
+        let (s, _, _, _) = summarize("AskUserQuestion", &input, "/p");
+        assert_eq!(s, "Asked: Which database? (and 1 more)");
+        let out = crate::answered_input(&input, &qs, &["SQLite".into(), "lint, tests".into()]);
+        assert_eq!(out["answers"]["Which database?"], "SQLite");
+        assert_eq!(out["answers"]["Which checks?"], "lint, tests");
+        assert_eq!(out["questions"], input["questions"], "the questions go back as they came");
     }
 }

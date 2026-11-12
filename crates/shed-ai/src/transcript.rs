@@ -115,6 +115,16 @@ impl Transcript {
         self.push(Entry::Notice { text: text.into(), error });
     }
 
+    /// Records the user's answers to Claude's questions.
+    pub fn answer_questions(&mut self, request: &str, answers: Vec<String>) {
+        if let Some(i) = self.entries.iter().rposition(|e| matches!(e, Entry::Permission(p) if p.request == request))
+            && let Entry::Permission(p) = &mut self.entries[i]
+        {
+            p.answers = answers;
+        }
+        self.answer(request, true);
+    }
+
     /// Records the answer to a permission request.
     pub fn answer(&mut self, request: &str, allow: bool) {
         let at = self.entries.iter().rposition(|e| matches!(e, Entry::Permission(p) if p.request == request));
@@ -382,7 +392,8 @@ impl Transcript {
         if let Some(s) = req.get("permission_suggestions") {
             self.suggestions.insert(request.clone(), s.clone());
         }
-        self.push(Entry::Permission(Permission { request, tool, summary, detail, diff, answer: None }));
+        let questions = if tool == "AskUserQuestion" { crate::parse_questions(&input) } else { Vec::new() };
+        self.push(Entry::Permission(Permission { request, tool, summary, detail, diff, answer: None, questions, answers: Vec::new() }));
         self.status.state = State::Waiting;
     }
 }

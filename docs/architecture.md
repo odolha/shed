@@ -320,6 +320,12 @@ transcript, and starts it with `--resume SESSION --resume-session-at BEFORE
 --fork-session` (a new session that starts as a copy up to there; before the
 first prompt, a fresh one), and sends the new text.
 
+Claude's questions come as a `can_use_tool` request for its AskUserQuestion
+tool: the transcript keeps them in the `Permission` entry (`questions`), the
+window draws them as a form, and `AiAnswerQuestions` answers with the tool's
+input plus `answers` (question → chosen labels joined by ", ", or the user's
+own words), which is where Claude Code reads them.
+
 The window draws an answer from `shed_ai::markdown` (pulldown-cmark turned
 into blocks of text with styled ranges), as pieces of selectable text
 (`shed-app/src/ai_text.rs`); code blocks are coloured by `shed-project`'s

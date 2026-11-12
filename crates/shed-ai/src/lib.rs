@@ -61,6 +61,63 @@ pub struct Permission {
     pub detail: String,
     pub diff: Option<Diff>,
     pub answer: Option<bool>,
+    /// When Claude asks the user (its AskUserQuestion tool): the questions,
+    /// and once answered, the answer to each.
+    pub questions: Vec<Question>,
+    pub answers: Vec<String>,
+}
+
+/// A question Claude asks, with the answers it offers (the user may also
+/// write their own).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Question {
+    pub question: String,
+    /// A short label for it ("Auth method").
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    /// Several options may be chosen.
+    pub multi: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// The questions in an AskUserQuestion tool's input.
+pub fn parse_questions(input: &serde_json::Value) -> Vec<Question> {
+    let s = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    input
+        .get("questions")
+        .and_then(|q| q.as_array())
+        .map(|qs| {
+            qs.iter()
+                .map(|q| Question {
+                    question: s(q, "question"),
+                    header: s(q, "header"),
+                    multi: q.get("multiSelect").and_then(|m| m.as_bool()).unwrap_or(false),
+                    options: q
+                        .get("options")
+                        .and_then(|o| o.as_array())
+                        .map(|o| o.iter().map(|o| QuestionOption { label: s(o, "label"), description: s(o, "description") }).collect())
+                        .unwrap_or_default(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The tool input that answers `questions` (Claude Code reads `answers`:
+/// question → the chosen label, several joined by ", ", or the user's words).
+pub fn answered_input(input: &serde_json::Value, questions: &[Question], answers: &[String]) -> serde_json::Value {
+    let mut out = input.clone();
+    let map: serde_json::Map<String, serde_json::Value> =
+        questions.iter().zip(answers).map(|(q, a)| (q.question.clone(), serde_json::Value::String(a.clone()))).collect();
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("answers".into(), serde_json::Value::Object(map));
+    }
+    out
 }
 
 /// Where a conversation is.

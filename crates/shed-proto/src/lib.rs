@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 26;
+pub const PROTOCOL_VERSION: u32 = 27;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -145,6 +145,9 @@ pub enum ClientMsg {
     /// conversation goes back to before it, and the files Claude changed
     /// since are put back.
     AiEdit { tab: TabId, entry: u32, text: String, images: Vec<AiImage> },
+    /// Answers Claude's questions (its AskUserQuestion tool): one answer per
+    /// question, in order (several choices joined by ", ").
+    AiAnswerQuestions { tab: TabId, request: String, answers: Vec<String> },
 }
 
 /// A picture sent with a prompt.
