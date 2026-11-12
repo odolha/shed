@@ -361,7 +361,24 @@ impl AppState {
         let bench_name = self.tree.bench(bench).map(|b| b.name.clone()).unwrap_or_default();
         let title = view.read(cx).title();
         let what = if state == shed_ai::State::Waiting { "Claude needs your answer" } else { "Claude finished" };
-        crate::notify::send(&format!("{what} · {bench_name}"), &title);
+        // A click brings the bench's window and this tab forward.
+        let clicked = crate::notify::send_clickable(&format!("{what} · {bench_name}"), &title);
+        cx.spawn(async move |this, cx| {
+            if clicked.recv().await.is_ok() {
+                this.update(cx, |state, cx| state.go_to_tab(bench, tab, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Brings a bench's window forward (opening it if hidden) at `tab`.
+    pub fn go_to_tab(&mut self, bench: BenchId, tab: TabId, cx: &mut Context<Self>) {
+        if self.tree.bench(bench).is_none() {
+            return;
+        }
+        self.conn.send_msg(ClientMsg::FocusTab { tab });
+        self.show(bench, cx);
+        cx.activate(true);
     }
 
     /// Shows a file's change in the bench's project tab that holds it.

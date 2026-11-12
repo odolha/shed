@@ -351,7 +351,10 @@ terminal of the bench.
   see its diff in its project tab, ready to stage or throw away. When Claude keeps
   a task list, it shows there too.
 - **Notifications**: when Claude finishes or needs your answer while you are not
-  looking at its tab, the desktop says so.
+  looking at its tab, the desktop says so. Clicking the notification (or its
+  **Open**) brings the bench's window forward at that tab, opening the window if
+  the bench was hidden. (On macOS the notification says it, but a click does not
+  reach Shed.)
 - **Above**: the session's title, your usage limits for the 5-hour window and the
   week (with when they reset), what the session has cost, and how full its
   context is. **Also works in** lists the bench's other projects: click one to
