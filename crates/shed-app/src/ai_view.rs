@@ -302,12 +302,13 @@ impl AiView {
             _subs: subs,
         };
         view.load_sessions(cx);
-        // "5 min ago" keeps up: a redraw a minute, when there is a conversation.
+        // "5 min ago" and the limits' time left keep up: a redraw a minute,
+        // when there is a conversation or limits to show.
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(60)).await;
                 let alive = this.update(cx, |this, cx| {
-                    if !this.entries.is_empty() {
+                    if !this.entries.is_empty() || cx.try_global::<AiLimits>().is_some() {
                         cx.notify();
                     }
                 });
@@ -2105,13 +2106,23 @@ impl AiView {
                     .gap_1p5()
                     .tooltip(menu::tooltip_text(format!("{label}: {pct}% used · resets {}", until(w.resets))))
                     .child(div().text_color(hsla(ui.text_dim)).child(label.to_string()))
+                    // The bar, and how long until it resets, small beneath.
                     .child(
                         div()
-                            .w(px(width))
-                            .h(px(6.0 * z))
-                            .rounded_full()
-                            .bg(hsla_alpha(ui.text_dim, 0.22))
-                            .child(div().h_full().w(px(width * used.max(0.02))).rounded_full().bg(hsla(color))),
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(1.0))
+                            .pt(px(3.0 * z))
+                            .child(
+                                div()
+                                    .w(px(width))
+                                    .h(px(6.0 * z))
+                                    .rounded_full()
+                                    .bg(hsla_alpha(ui.text_dim, 0.22))
+                                    .child(div().h_full().w(px(width * used.max(0.02))).rounded_full().bg(hsla(color))),
+                            )
+                            .child(div().text_size(px(9.5 * z)).line_height(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(time_left(w.resets))),
                     )
                     .child(div().min_w(px(30.0 * z)).text_color(hsla(if pct >= 70 { ui.ink(color) } else { ui.text_dim })).child(format!("{pct}%")))
             })
@@ -2724,6 +2735,17 @@ fn until(secs: u64) -> String {
         60..3600 => format!("in {} min", d / 60),
         3600..86400 => format!("in {} h {} min", d / 3600, d % 3600 / 60),
         _ => format!("in {} d", d / 86400),
+    }
+}
+
+/// Time left until `secs`, short: `2h 14m left`, `3d 4h left`.
+fn time_left(secs: u64) -> String {
+    let d = secs.saturating_sub(unix_now());
+    match d {
+        0..60 => "resets now".into(),
+        60..3600 => format!("{}m left", d / 60),
+        3600..86400 => format!("{}h {}m left", d / 3600, d % 3600 / 60),
+        _ => format!("{}d {}h left", d / 86400, d % 86400 / 3600),
     }
 }
 

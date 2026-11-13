@@ -403,8 +403,9 @@ terminal of the bench.
   the bench was hidden. (On macOS the notification says it, but a click does not
   reach Shed.)
 - **Above**: the session's title, your usage limits for the 5-hour window and the
-  week as small bars (green, amber from 70 %, red from 90 %; hover one for when it
-  resets), what the session has cost, and how full its
+  week as small bars (green, amber from 70 %, red from 90 %), each with the time
+  left until it resets written small beneath (`2h 14m left`; hover for more),
+  what the session has cost, and how full its
   context is. **Also works in** lists the bench's other projects: click one to
   let Claude read and change it too.
 
