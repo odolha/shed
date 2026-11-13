@@ -257,6 +257,16 @@ in a remote tab runs `shedd logbook` (an SQLite `VACUUM INTO` copy to stdout)
 into `logbook-HOST.sqlite` in the runtime folder, and searches it with the
 server's bench and tab ids from `shedd list` as "here".
 
+## Startup and teardown
+
+A bench loads quietly by default (`load_bench(quiet)`: shells and scrollback, no
+`after_prompt` queue, nothing held; a remote tab's connect command still runs);
+`ShowTarget::LoadAndStart` or `start_on_open` run the startup as before.
+`Bench.started` records that the startup ran since it opened: `RunStartup` queues
+each pane's startup (with its waits, as a load would), `RunTeardown` stops tools
+and runs teardowns keeping the bench, and closing a bench or a tab runs teardown
+commands only when `started`.
+
 ## Sizes
 
 The configured font size is also the interface's scale (`theme::ui_scale`, size

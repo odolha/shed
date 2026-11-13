@@ -164,6 +164,7 @@ impl Render for SettingsPanel {
             let value = if dir == NewPaneDir::Bench { "bench" } else { "current" };
             this.set(Some("window"), "new_pane_dir", value.into(), cx);
         });
+        let start = toggle("start-on-open", &ui, config.start_on_open, cx, |this, on, cx| this.set(None, "start_on_open", on.into(), cx));
         let restore = toggle("auto-restore", &ui, config.auto_restore, cx, |this, on, cx| this.set(None, "auto_restore", on.into(), cx));
         let badges = toggle("icon-badges", &ui, config.window.icon_badges, cx, |this, on, cx| this.set(Some("window"), "icon_badges", on.into(), cx));
         let fetch = stepper(
@@ -253,6 +254,7 @@ impl Render for SettingsPanel {
             .child(row(&ui, "Shed window", "Cards with previews, or a line per bench", view))
             .child(heading("Benches"))
             .child(row(&ui, "Reopen at start", "Benches open when Shed last closed come back", restore))
+            .child(row(&ui, "Run startup when a bench opens", "Off: benches open quietly; Run Startup starts them", start))
             .child(row(&ui, "New tabs and panes open in", "", new_panes))
             .child(row(&ui, "Badges on taskbar icons", "Each bench's badge, or its initials", badges))
             .child(heading("Projects"))

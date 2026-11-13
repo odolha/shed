@@ -173,6 +173,9 @@ pub struct Bench {
     pub launcher: String,
     /// Where its window was last, to open it there again.
     pub window: Option<WindowPlace>,
+    /// Its startup ran since it opened (so closing runs its teardown).
+    #[serde(default)]
+    pub started: bool,
     /// Web pages that go with the bench's work (an app, its dashboards),
     /// shown on its tab bar and in Shed.
     #[serde(default)]
@@ -765,6 +768,7 @@ mod tests {
             tabs,
             aliases: Aliases::new(),
             closing: false,
+            started: false,
             launcher: "main".into(),
             window: None,
             links: Vec::new(),

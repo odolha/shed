@@ -79,10 +79,12 @@ over the bench. Shed remembers the choice (`compact_pegboard` in `shed.toml`).
   one forward. Beside it, **Hide** closes its window and keeps it running,
   **Close…** stops its programs and runs its teardown, and **Delete…** removes it;
   the last two ask first.
-- **Open Quietly (Nothing Runs)**, in a closed bench's menu (**⋯** or right-click),
-  opens it with its shells in their folders and their scrollback, and nothing else:
-  no startup commands, no programs started again, remote tabs not reconnected.
-  Its setup stays as it was, so the next ordinary **Open** runs it.
+- A bench **opens quietly**: its shells in their folders with their scrollback,
+  and nothing else runs (remote tabs still connect). **Open and Run Startup**, in
+  a closed bench's menu (**⋯** or right-click), opens it with its startup. A
+  running bench's menu has **Run Startup** and **Run Teardown**. (With **Run
+  startup when a bench opens** on in Settings, opening runs it, and the menu
+  offers **Open Quietly** instead.)
 - Double-click the **name**, or the pencil beside it, to rename the bench. Enter
   or clicking elsewhere keeps the new name; Escape leaves it as it was (this goes
   for every name and tag you type, in Shed and in bench windows).
@@ -445,8 +447,8 @@ even a full-screen editor mid-edit. Hide a bench with the **hide** button in its
 bar (beside the Shed button), from its name's menu, with Ctrl+Shift+H, or from Shed.
 
 **Closing** a bench saves it, then stops what runs in it: each pane gets Ctrl+C (and
-SIGTERM if that is not enough), then its teardown commands run at the prompt, one
-by one. Closing a bench's window asks whether to close the bench or only hide it.
+SIGTERM if that is not enough), then, if its startup ran since it opened, its
+teardown commands run at the prompt, one by one (a teardown undoes a startup). Closing a bench's window asks whether to close the bench or only hide it.
 Close a bench from Shed, from its name's menu, or with Ctrl+Shift+Q; that dialog
 also offers to delete it.
 
@@ -457,7 +459,14 @@ window goes; its size and state are still kept.)
 
 **Opening** a closed bench rebuilds it: every tab and split, every pane in its
 folder with its old scrollback dimmed above the prompt under a "restored" line.
-Then, for each pane:
+That is all, by default: nothing runs, which is safer now that benches hold
+projects and AI sessions. **Run Startup** on the tab bar (shown when the bench has
+a startup that has not run) starts it whenever you like, without reopening;
+**Run Teardown** (shown once it ran) stops what runs and runs the teardown, the
+bench staying open. Both are in the bench's menu too.
+
+Opened with its startup (**Open and Run Startup**, `shed load NAME --start`, or
+always with `start_on_open = true`), then, for each pane:
 
 - If it has **startup commands**, they run one after another, each at its prompt.
 - If not, what was running when it was saved comes back according to the **rack**:
@@ -703,7 +712,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | --- | --- |
 | `shed` | Opens the Shed window (starting the keeper if needed) |
 | `shed new [--name N] [--cwd DIR]` | Makes a bench and opens it |
-| `shed load NAME [--quiet]` | Opens a bench: raises it, shows it, or loads it if closed (`--quiet`: shells only, nothing runs) |
+| `shed load NAME [--start\|--quiet]` | Opens a bench: raises it, shows it, or loads it if closed (quietly, unless `--start` or `start_on_open`) |
 | `shed hide NAME` | Hides a running bench: closes its window, keeps it running |
 | `shed list` | Lists benches: open, hidden and closed |
 | `shed save NAME [--as COPY]` | Saves a bench now; `--as` saves a copy, handy as a template |
@@ -742,6 +751,7 @@ theme = "auto"                 # follow the desktop; or "shed-light", "shed-dark
 theme_light = "shed-light"     # what "auto" uses when the desktop is light
 theme_dark = "shed-dark"       # and when it is dark
 auto_restore = false           # reopen what was open or hidden when Shed last closed
+start_on_open = false          # opening a bench runs its startup (off: it opens quietly)
 autosave_seconds = 60
 
 [font]

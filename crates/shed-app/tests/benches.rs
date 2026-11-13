@@ -94,8 +94,8 @@ fn a_bench_survives_the_keeper_stopping() {
     assert!(status.tree.benches.is_empty(), "nothing starts by itself");
     assert_eq!(status.stored, ["work"]);
 
-    // …and opening the bench brings back what was saved.
-    let shown = show_and_attach(&mut c, ShowTarget::Load { name: "work".into() });
+    // …and opening the bench with its startup brings back what was saved.
+    let shown = show_and_attach(&mut c, ShowTarget::LoadAndStart { name: "work".into() });
     assert_eq!(shown, bench, "the same bench, by id");
 
     let replay = c.until("replay of the first pane", |f, _| match f {
@@ -143,8 +143,8 @@ fn rack_tools_restart_by_themselves() {
 
     let second = start_in(dir.path(), "second.sock");
     let mut c = Client::connect(&second.socket);
-    // Loading by name, as a pinned launcher does.
-    show_and_attach(&mut c, ShowTarget::Load { name: "logs".into() });
+    // Loading by name with its startup, as a pinned launcher with --start does.
+    show_and_attach(&mut c, ShowTarget::LoadAndStart { name: "logs".into() });
     let tree = tree_until(&mut c, "tail restarted", |t| {
         t.pane(pane).and_then(|p| p.tool.as_ref()).is_some_and(|tool| tool.argv.first().is_some_and(|a| a.ends_with("tail")))
     });
@@ -201,6 +201,9 @@ fn closing_shed_closes_every_bench_and_auto_restore_reopens_them() {
     let teardown = vec![format!("echo done > {}", marker.display())];
     c.msg(ClientMsg::SetPaneSetup { pane, setup: shed_model::PaneSetup { teardown, ..Default::default() } });
     tree_until(&mut c, "setup", |t| t.pane(pane).is_some_and(|p| !p.setup.teardown.is_empty()));
+    // A teardown undoes a startup: it runs for a bench whose startup ran.
+    c.msg(ClientMsg::RunStartup { bench: back });
+    tree_until(&mut c, "started", |t| t.bench(back).is_some_and(|b| b.started));
 
     // Closing Shed closes both, teardowns included, then the keeper stops.
     c.msg(ClientMsg::QuitShed);
@@ -375,6 +378,8 @@ fn tabs_move_between_running_and_closed_benches() {
     let teardown = vec![format!("echo done > {}", marker.display())];
     c.msg(ClientMsg::SetPaneSetup { pane, setup: shed_model::PaneSetup { teardown, ..Default::default() } });
     tree_until(&mut c, "setup", |t| t.pane(pane).is_some_and(|p| !p.setup.teardown.is_empty()));
+    c.msg(ClientMsg::RunStartup { bench: web });
+    tree_until(&mut c, "started", |t| t.bench(web).is_some_and(|b| b.started));
     c.msg(ClientMsg::MoveTabAcross { tab: notes, from: Running(web), to: Saved("docs".into()), index: 9 });
     done(&mut c, "into docs");
     tree_until(&mut c, "gone from web", |t| t.bench(web).is_some_and(|b| b.tabs.len() == 1));

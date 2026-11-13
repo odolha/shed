@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 31;
+pub const PROTOCOL_VERSION: u32 = 32;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -152,6 +152,11 @@ pub enum ClientMsg {
     ResetZoom,
     /// The divider before a tab on the tab bar.
     SetTabDivider { tab: TabId, divider: shed_model::TabDivider },
+    /// Runs a running bench's startup now (each pane's, at its prompt).
+    RunStartup { bench: BenchId },
+    /// Runs a running bench's teardown now (tools stopped, each pane's
+    /// teardown commands), keeping the bench open.
+    RunTeardown { bench: BenchId },
 }
 
 /// A picture sent with a prompt.
@@ -216,6 +221,9 @@ pub enum ShowTarget {
     /// A saved bench loaded quietly: shells in their folders with their
     /// scrollback, but no startup commands, no programs relaunched.
     LoadQuiet { name: String },
+    /// A saved bench loaded with its startup run (and what ran in it
+    /// started again).
+    LoadAndStart { name: String },
 }
 
 /// Sent by the keeper to a client.

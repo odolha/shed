@@ -33,6 +33,9 @@ pub struct Config {
     /// Shed reopens the benches that were open or hidden when it last
     /// closed (by hand or with the session). Off: every bench starts closed.
     pub auto_restore: bool,
+    /// Opening a bench runs its startup (and starts again what ran in it).
+    /// Off (the default), a bench opens quietly; Run Startup starts it.
+    pub start_on_open: bool,
     pub ai: AiConfig,
     pub macos: MacosConfig,
     pub git: GitConfig,

@@ -116,9 +116,13 @@ enum Command {
     Load {
         name: String,
         /// Loading from its file: shells only, in their folders with their
-        /// scrollback; no startup commands, no programs started again.
-        #[arg(long)]
+        /// scrollback; no startup commands, no programs started again (the
+        /// default, unless `start_on_open` is set).
+        #[arg(long, conflicts_with = "start")]
         quiet: bool,
+        /// Loading from its file: run its startup, and start again what ran.
+        #[arg(long)]
+        start: bool,
     },
     /// Hide a running bench: its window closes, its tools keep running.
     Hide { name: String },
@@ -305,8 +309,9 @@ fn main() -> anyhow::Result<()> {
             let cwd = cwd.map(std::path::absolute).transpose()?;
             run_app(ShowTarget::NewBench { name, cwd })
         }
-        Some(Command::Load { name, quiet: false }) => run_app(ShowTarget::Load { name }),
-        Some(Command::Load { name, quiet: true }) => run_app(ShowTarget::LoadQuiet { name }),
+        Some(Command::Load { name, quiet: true, .. }) => run_app(ShowTarget::LoadQuiet { name }),
+        Some(Command::Load { name, start: true, .. }) => run_app(ShowTarget::LoadAndStart { name }),
+        Some(Command::Load { name, .. }) => run_app(ShowTarget::Load { name }),
         Some(Command::Hide { name }) => {
             let tree = request(ClientMsg::Status, |m| match m {
                 KeeperMsg::Status(s) => Some(s.tree),

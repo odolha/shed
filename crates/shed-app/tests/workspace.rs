@@ -138,6 +138,11 @@ fn closing_stops_tools_runs_teardown_and_loading_runs_startup() {
     c.msg(ClientMsg::SetPaneSetup { pane, setup: setup.clone() });
     tree_until(&mut c, "setup", |t| t.pane(pane).is_some_and(|p| p.setup == setup));
 
+    // Its startup runs now (a bench opens quietly), so closing runs its teardown.
+    c.msg(ClientMsg::RunStartup { bench });
+    c.output_until(pane, "second-4");
+    tree_until(&mut c, "started", |t| t.bench(bench).is_some_and(|b| b.started));
+
     // Something running, for the close to stop first.
     c.input(pane, "sleep 300\n");
     tree_until(&mut c, "sleep", |t| t.pane(pane).is_some_and(|p| p.tool.is_some()));
@@ -151,7 +156,7 @@ fn closing_stops_tools_runs_teardown_and_loading_runs_startup() {
     assert!(saved.contains("startup = [") && saved.contains("teardown = ["), "{saved}");
 
     // Loading starts in `start_in` and runs the startup commands in order.
-    c.msg(ClientMsg::Show(ShowTarget::Load { name: "proj".into() }));
+    c.msg(ClientMsg::Show(ShowTarget::LoadAndStart { name: "proj".into() }));
     let loaded = c.until("load", |f, _| match f {
         Frame::Keeper(KeeperMsg::Show { bench }) => Some(*bench),
         _ => None,
@@ -201,10 +206,63 @@ fn a_quiet_load_runs_nothing_and_keeps_the_setup() {
     // A normal load afterwards runs it as before.
     c.msg(ClientMsg::CloseBench { bench });
     tree_until(&mut c, "closed again", |t| t.bench(bench).is_none());
-    c.msg(ClientMsg::Show(ShowTarget::Load { name: "calm".into() }));
+    c.msg(ClientMsg::Show(ShowTarget::LoadAndStart { name: "calm".into() }));
     c.until("load", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Show { bench: b }) if *b == bench).then_some(()));
     c.msg(ClientMsg::Attach { bench: Some(bench) });
     c.output_until(pane, "started-42");
+}
+
+#[test]
+fn startup_and_teardown_run_when_asked_and_teardown_only_after_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("torn-down");
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let (bench, pane) = new_bench(&mut c, "life", None);
+    c.prompt(pane);
+    let setup = PaneSetup {
+        startup: vec!["echo up-$((5*5))".into()],
+        teardown: vec![format!("echo down >> {}", marker.display())],
+        wait: false,
+        ..Default::default()
+    };
+    c.msg(ClientMsg::SetPaneSetup { pane, setup: setup.clone() });
+    tree_until(&mut c, "setup", |t| t.pane(pane).is_some_and(|p| p.setup == setup));
+
+    // Opened quietly and closed: no startup ran, so no teardown either.
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed", |t| t.bench(bench).is_none());
+    c.msg(ClientMsg::Show(ShowTarget::Load { name: "life".into() }));
+    c.until("load", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Show { bench: b }) if *b == bench).then_some(()));
+    c.msg(ClientMsg::Attach { bench: Some(bench) });
+    let tree = tree_until(&mut c, "loaded", |t| t.bench(bench).is_some());
+    assert!(!tree.bench(bench).unwrap().started, "it opens quietly");
+    assert!(!marker.exists(), "no teardown without a startup");
+
+    // Run Startup: the startup runs in the open bench.
+    c.prompt(pane);
+    c.msg(ClientMsg::RunStartup { bench });
+    c.output_until(pane, "up-25");
+    tree_until(&mut c, "started", |t| t.bench(bench).is_some_and(|b| b.started));
+
+    // Run Teardown: the teardown runs, and the bench stays open.
+    c.msg(ClientMsg::RunTeardown { bench });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "the teardown did not run");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let tree = tree_until(&mut c, "stopped", |t| t.bench(bench).is_some_and(|b| !b.started));
+    assert!(tree.bench(bench).is_some(), "still open");
+
+    // Started again, then closed: the teardown runs with the close.
+    c.msg(ClientMsg::RunStartup { bench });
+    tree_until(&mut c, "started again", |t| t.bench(bench).is_some_and(|b| b.started));
+    c.output_until(pane, "up-25");
+    c.prompt(pane);
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed again", |t| t.bench(bench).is_none());
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 2, "once on demand, once closing");
 }
 
 fn pegboard(c: &mut Client) -> PegboardInfo {
@@ -271,7 +329,7 @@ fn startup_waits_for_other_panes_to_be_ready() {
     std::fs::write(dir.path().join("benches/stack.toml"), file).unwrap();
 
     let mut c = Client::connect(&env.socket);
-    c.msg(ClientMsg::Show(ShowTarget::Load { name: "stack".into() }));
+    c.msg(ClientMsg::Show(ShowTarget::LoadAndStart { name: "stack".into() }));
     let bench = c.until("show", |f, _| match f {
         Frame::Keeper(KeeperMsg::Show { bench }) => Some(*bench),
         _ => None,

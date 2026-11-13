@@ -771,6 +771,13 @@ impl BenchWindow {
         ));
         entries.push(item("Custom Colour…", |this, window, cx| this.start_edit(EditTarget::Color, window, cx)).icon("bench-color"));
         entries.push(MenuEntry::Separator);
+        if let Some(b) = self.bench(cx) {
+            let has_startup = b.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.startup.is_empty());
+            if has_startup {
+                entries.push(item(if b.started { "Run Startup Again" } else { "Run Startup" }, |this, _, cx| this.send(ClientMsg::RunStartup { bench: this.bench }, cx)).icon("go"));
+            }
+            entries.push(item("Run Teardown", |this, _, cx| this.send(ClientMsg::RunTeardown { bench: this.bench }, cx)).icon("stop"));
+        }
         entries.push(item("Show Shed", |this, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))).icon("shed"));
         entries.push(item("Hide Bench", |this, window, cx| this.hide(window, cx)).icon("detach"));
         entries.push(danger("Close Bench…", |this: &mut Self, window, cx| this.close_bench(window, cx)).icon("power"));
@@ -934,10 +941,43 @@ impl BenchWindow {
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
                 })),
         );
+        // Startup and teardown on demand: a bench opens quietly, and runs its
+        // teardown when closed only if its startup ran.
+        let has_startup = bench.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.startup.is_empty());
+        let has_teardown = bench.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.teardown.is_empty());
+        let run = |id: &'static str, glyph: &'static str, label: &'static str, tip: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .cursor_pointer()
+                .text_size(px(12.0 * s))
+                .text_color(hsla(ui.ink(accent)))
+                .hover(|st| st.bg(hsla(ui.tab_hover)))
+                .tooltip(menu::tooltip(tip))
+                .child(svg().path(icon(glyph)).size(px(14.0 * s)).text_color(hsla(ui.ink(accent))))
+                .child(label)
+        };
+        let lifecycle = if bench.closing {
+            None
+        } else if has_startup && !bench.started {
+            Some(run("run-startup", "go", "Run Startup", "Run each pane's startup now; closing then runs the teardown").on_click(cx.listener(|this, _, _, cx| {
+                this.send(ClientMsg::RunStartup { bench: this.bench }, cx);
+            })))
+        } else if bench.started && has_teardown {
+            Some(run("run-teardown", "stop", "Run Teardown", "Stop what runs and run each pane's teardown; the bench stays open").on_click(cx.listener(|this, _, _, cx| {
+                this.send(ClientMsg::RunTeardown { bench: this.bench }, cx);
+            })))
+        } else {
+            None
+        };
         let controls = div()
             .flex()
             .flex_none()
             .h(row)
+            .children(lifecycle)
             .child(self.render_links(bench, cx))
         .child(
             div()

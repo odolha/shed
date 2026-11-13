@@ -144,6 +144,9 @@ pub struct Pegboard {
     editing: Option<(Edit, Entity<LineEditor>, Subscription)>,
     /// The Setup panel of one tab, over the right side.
     setup: Option<(Entity<SetupPanel>, Subscription)>,
+    /// Opening a bench runs its startup (the config's `start_on_open`), as
+    /// of the last render.
+    start_on_open: bool,
     /// The list's scroll, and its scrollbar.
     scroll: gpui::ScrollHandle,
     scroll_bar: crate::scrollbar::State,
@@ -212,6 +215,7 @@ impl Pegboard {
             setup: None,
             scroll: gpui::ScrollHandle::new(),
             scroll_bar: Default::default(),
+            start_on_open: false,
             _subscriptions: subscriptions,
         }
     }
@@ -612,12 +616,29 @@ impl Pegboard {
         let open_label = if entry.status == Status::Open { "Go to Bench" } else { "Open Bench" };
         let open_icon = if entry.status == Status::Closed { "bench-load" } else { "go" };
         entries.push(menu_item(open_label, move |this, _, cx| this.open(&e, None, cx)).icon(open_icon));
+        let has_startup = bench.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.startup.is_empty());
+        let has_teardown = bench.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.teardown.is_empty());
         if entry.status == Status::Closed {
-            // Shells only: nothing runs until asked.
+            // Opening is quiet unless the config starts benches; the other
+            // way is here.
             let name = bench.name.clone();
-            entries.push(menu_item("Open Quietly (Nothing Runs)", move |this, _, cx| {
-                this.send(ClientMsg::Show(ShowTarget::LoadQuiet { name: name.clone() }), cx);
-            }));
+            if self.start_on_open {
+                entries.push(menu_item("Open Quietly (Nothing Runs)", move |this, _, cx| {
+                    this.send(ClientMsg::Show(ShowTarget::LoadQuiet { name: name.clone() }), cx);
+                }));
+            } else {
+                entries.push(menu_item("Open and Run Startup", move |this, _, cx| {
+                    this.send(ClientMsg::Show(ShowTarget::LoadAndStart { name: name.clone() }), cx);
+                }).icon("go"));
+            }
+        } else if !bench.closing {
+            let id = bench.id;
+            if has_startup {
+                entries.push(menu_item(if bench.started { "Run Startup Again" } else { "Run Startup" }, move |this, _, cx| this.send(ClientMsg::RunStartup { bench: id }, cx)).icon("go"));
+            }
+            if has_teardown || bench.started {
+                entries.push(menu_item("Run Teardown", move |this, _, cx| this.send(ClientMsg::RunTeardown { bench: id }, cx)).icon("stop"));
+            }
         }
         let k = key.clone();
         entries.push(menu_item("New Tab", move |this, _, cx| this.new_tab(&k, cx)).icon("tab-new"));
@@ -1592,6 +1613,7 @@ impl Pegboard {
             cx.try_global::<PegboardData>().map(|d| d.0.previews.iter().cloned().collect()).unwrap_or_default();
 
         let compact = self.state.read(cx).settings.config.window.compact_pegboard;
+        self.start_on_open = self.state.read(cx).settings.config.start_on_open;
         let mut list = div().flex().flex_col().gap_3();
         let mut first = 0;
         for entry in &entries {

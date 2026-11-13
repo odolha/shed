@@ -729,6 +729,11 @@ impl Keeper {
             ClientMsg::AiAnswerQuestions { tab, request, answers } => self.ai_answer_questions(tab, request, answers),
             ClientMsg::ResetZoom => self.reset_zoom(client),
             ClientMsg::SetTabDivider { tab, divider } => self.edit_tab(tab, |t| t.divider = divider),
+            ClientMsg::RunStartup { bench } => self.run_startup(bench),
+            ClientMsg::RunTeardown { bench } => {
+                let keeper = self.clone();
+                tokio::spawn(async move { keeper.run_teardown(bench).await });
+            }
             ClientMsg::AiStop { tab } => self.ai_stop(tab),
             ClientMsg::AiStart { tab } => self.ai_start(client, tab),
             ClientMsg::AiAnswer { tab, request, allow, always } => self.ai_answer(tab, request, allow, always),
@@ -1154,7 +1159,8 @@ impl Keeper {
                 if fresh && st.config.auto_restore {
                     let session = self.cfg.store.as_ref().map(Store::session).unwrap_or_default();
                     for SessionBench { name, open: had_window } in session {
-                        match self.load_bench(&mut st, &name, false) {
+                        let quiet = !st.config.start_on_open;
+                        match self.load_bench(&mut st, &name, quiet) {
                             Ok(id) if had_window => open.push(id),
                             Ok(_) => {}
                             Err(e) => warn!("cannot load bench {name:?}: {e}"),
@@ -1174,8 +1180,13 @@ impl Keeper {
                 }
                 open
             }
-            ShowTarget::Load { name: ref given } | ShowTarget::LoadQuiet { name: ref given } => {
-                let quiet = matches!(target, ShowTarget::LoadQuiet { .. });
+            ShowTarget::Load { name: ref given } | ShowTarget::LoadQuiet { name: ref given } | ShowTarget::LoadAndStart { name: ref given } => {
+                // Quiet unless asked, or unless the config starts benches as they open.
+                let quiet = match target {
+                    ShowTarget::LoadQuiet { .. } => true,
+                    ShowTarget::LoadAndStart { .. } => false,
+                    _ => !st.config.start_on_open,
+                };
                 let name = self.bench_name(&st, given);
                 let running = st.tree.benches.iter().find(|b| b.name == name).map(|b| b.id);
                 match running.map(Ok).unwrap_or_else(|| self.load_bench(&mut st, &name, quiet)) {
@@ -1378,6 +1389,7 @@ impl Keeper {
             }
         }
         let id = bench.id;
+        bench.started = !quiet;
         info!(name = %bench.name, panes = started.len(), quiet, "bench loaded");
         // Startup that waits for other panes is held until they are ready.
         let setups: Vec<(PaneId, PaneSetup)> = bench.tabs.iter().flat_map(|t| &t.panes).map(|p| (p.id, p.setup.clone())).collect();
@@ -1463,12 +1475,14 @@ impl Keeper {
         quiet: bool,
     ) -> Result<(), String> {
         let store = self.cfg.store.as_ref().ok_or("saving is turned off")?;
+        let remote = tab.remote_info().is_some();
         for pane in &mut tab.panes {
             let sp = panes.iter().find(|(id, _)| *id == pane.id).map(|(_, p)| p.clone());
             let restore = store.scrollback(&saved.name, pane.id).map(|text| shed_save::restored_scrollback(&text, &saved.saved));
             // The pane's own startup wins over whatever was running at save
-            // time; a quiet load runs neither.
-            let after_prompt: VecDeque<(String, bool)> = if quiet {
+            // time; a quiet load runs neither (but a remote tab connects: that
+            // is how it shows its shell, not a startup of the user's).
+            let after_prompt: VecDeque<(String, bool)> = if quiet && !remote {
                 VecDeque::new()
             } else if !pane.setup.startup.is_empty() {
                 pane.setup.startup.iter().map(|c| (c.clone(), !pane.setup.wait)).collect()
@@ -1645,10 +1659,80 @@ impl Keeper {
         }
     }
 
+    /// Runs a running bench's startup now: each pane's startup commands, typed
+    /// at its next prompt (now, if it is at one), waiting for the panes it
+    /// waits for, as a load would. Remote tabs are left as they are.
+    fn run_startup(&self, bench: BenchId) {
+        let mut st = self.lock();
+        let Some(b) = st.tree.bench(bench) else { return };
+        let panes: Vec<(PaneId, PaneSetup)> = b
+            .tabs
+            .iter()
+            .filter(|t| t.remote_info().is_none())
+            .flat_map(|t| &t.panes)
+            .filter(|p| !p.setup.startup.is_empty())
+            .map(|p| (p.id, p.setup.clone()))
+            .collect();
+        let starting: Vec<PaneId> = panes.iter().map(|(id, _)| *id).collect();
+        for (pane, setup) in &panes {
+            if let Some(rt) = st.panes.get_mut(pane) {
+                rt.after_prompt.extend(setup.startup.iter().map(|c| (c.clone(), !setup.wait)));
+                rt.readiness = Readiness::Pending;
+                rt.startup_pending = false;
+                rt.ready_text = setup.ready_when.clone().filter(|t| !t.trim().is_empty());
+                rt.waits_for = setup.after.iter().copied().filter(|d| d != pane && starting.contains(d)).collect();
+                // At a prompt now: the first command goes at once.
+                rt.held_at_prompt = rt.running.is_none();
+            }
+        }
+        // Panes at a prompt with nothing to wait for start now; the others
+        // at their next prompt, or when what they wait for is ready.
+        for (pane, _) in &panes {
+            self.show_held(&mut st, *pane);
+            let go = st.panes.get(pane).is_some_and(|rt| rt.waits_for.is_empty() && rt.held_at_prompt);
+            if go {
+                if let Some(rt) = st.panes.get_mut(pane) {
+                    rt.held_at_prompt = false;
+                }
+                self.send_after_prompt(&mut st, *pane);
+            }
+        }
+        if let Some(b) = st.tree.bench_mut(bench) {
+            b.started = true;
+        }
+        info!(?bench, panes = panes.len(), "startup run");
+        st.broadcast_tree();
+    }
+
+    /// Runs a running bench's teardown now, as closing would, but keeps it
+    /// open: tools stopped, each pane's teardown commands run.
+    async fn run_teardown(self: Arc<Self>, bench: BenchId) {
+        let panes = {
+            let mut st = self.lock();
+            let Some(b) = st.tree.bench_mut(bench) else { return };
+            b.started = false;
+            st.broadcast_tree();
+            st.pane_rt_ids_in(bench)
+        };
+        let remote: Vec<PaneId> = {
+            let st = self.lock();
+            panes.iter().copied().filter(|p| st.tree.locate_pane(*p).and_then(|(_, t)| st.tree.tab(t)).is_some_and(|t| t.remote_info().is_some())).collect()
+        };
+        let steps: Vec<_> = panes.into_iter().filter(|p| !remote.contains(p)).map(|p| tokio::spawn(self.clone().teardown_pane(p, true))).collect();
+        for step in steps {
+            let _ = tokio::time::timeout(TEARDOWN_LIMIT, step).await;
+        }
+        info!(?bench, "teardown run");
+    }
+
     /// Stops panes as closing their bench would (tools stopped, teardowns
     /// run), then hangs them up.
     async fn stop_panes(self: Arc<Self>, panes: Vec<PaneId>) {
-        let steps: Vec<_> = panes.iter().map(|p| tokio::spawn(self.clone().teardown_pane(*p))).collect();
+        let teardown = {
+            let st = self.lock();
+            panes.first().and_then(|p| st.panes.get(p)).and_then(|rt| st.tree.bench(rt.bench)).is_some_and(|b| b.started)
+        };
+        let steps: Vec<_> = panes.iter().map(|p| tokio::spawn(self.clone().teardown_pane(*p, teardown))).collect();
         for step in steps {
             let _ = tokio::time::timeout(TEARDOWN_LIMIT, step).await;
         }
@@ -1792,11 +1876,14 @@ impl Keeper {
                 return;
             }
             b.closing = true;
+            // Its teardown undoes its startup: only if the startup ran.
+            let teardown = b.started;
             st.broadcast_tree();
-            st.pane_rt_ids_in(bench)
+            (st.pane_rt_ids_in(bench), teardown)
         };
-        info!(?bench, "closing bench");
-        let steps: Vec<_> = panes.into_iter().map(|p| tokio::spawn(self.clone().teardown_pane(p))).collect();
+        let (panes, teardown) = panes;
+        info!(?bench, teardown, "closing bench");
+        let steps: Vec<_> = panes.into_iter().map(|p| tokio::spawn(self.clone().teardown_pane(p, teardown))).collect();
         for step in steps {
             let _ = tokio::time::timeout(TEARDOWN_LIMIT, step).await;
         }
@@ -1805,7 +1892,9 @@ impl Keeper {
         info!(?bench, "bench closed");
     }
 
-    async fn teardown_pane(self: Arc<Self>, pane: PaneId) {
+    /// Stops a pane's running tool, then (`with_teardown`) runs its teardown
+    /// commands at the prompt, one by one.
+    async fn teardown_pane(self: Arc<Self>, pane: PaneId, with_teardown: bool) {
         let (mut prompts, running, teardown, hooked) = {
             let st = self.lock();
             let Some(rt) = st.panes.get(&pane) else { return };
@@ -1817,7 +1906,7 @@ impl Keeper {
             }
             let tree_pane = st.tree.pane(pane);
             let running = rt.running.is_some() || tree_pane.is_some_and(|p| p.tool.is_some());
-            let teardown = tree_pane.map(|p| p.setup.teardown.clone()).unwrap_or_default();
+            let teardown = if with_teardown { tree_pane.map(|p| p.setup.teardown.clone()).unwrap_or_default() } else { Vec::new() };
             (rt.prompts.subscribe(), running, teardown, rt.hooked)
         };
         let send = |bytes: &[u8]| {
@@ -2083,6 +2172,7 @@ impl Keeper {
             active_tab: tab_id,
             aliases: Default::default(),
             closing: false,
+            started: false,
             window: None,
             links: Vec::new(),
         });
