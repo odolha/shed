@@ -113,16 +113,57 @@ impl Shed {
         Some(removed)
     }
 
-    /// Moves `tab` to `bench` at `index` (clamped) and makes it active there.
-    /// A bench left without tabs is removed.
+    /// Moves a tab to `bench`, before the tab at `index` there (counted with
+    /// the moved tab still in place), into that tab's group; past the end,
+    /// last. It becomes active there; a bench left without tabs is removed.
     pub fn move_tab(&mut self, tab: TabId, bench: BenchId, index: usize) -> bool {
+        self.move_tab_into(tab, bench, index, true)
+    }
+
+    /// Moves a tab just before or after `to`, into `to`'s group.
+    pub fn move_tab_next_to(&mut self, tab: TabId, to: TabId, after: bool) -> bool {
+        if tab == to {
+            return false;
+        }
+        let Some(bench) = self.bench_of_tab(to) else { return false };
+        let Some(at) = self.bench(bench).and_then(|b| b.tabs.iter().position(|t| t.id == to)) else { return false };
+        if after { self.move_tab_into(tab, bench, at + 1, false) } else { self.move_tab_into(tab, bench, at, true) }
+    }
+
+    /// `join_next`: put first in the group of the tab it lands before.
+    fn move_tab_into(&mut self, tab: TabId, bench: BenchId, index: usize, join_next: bool) -> bool {
         if self.bench(bench).is_none() {
             return false;
         }
-        let Some(moved) = self.take_tab(tab) else { return false };
+        // Dropped on a tab, it joins that tab's group.
+        let onto = self.bench(bench).and_then(|b| b.tabs.get(index)).map(|t| t.id).filter(|t| *t != tab && join_next);
+        // A group's divider is on its first tab: leaving, that tab hands it on.
+        if let Some(from) = self.bench_of_tab(tab)
+            && let Some(b) = self.bench_mut(from)
+            && let Some(at) = b.tabs.iter().position(|t| t.id == tab)
+        {
+            let divider = b.tabs[at].divider;
+            if divider != TabDivider::None
+                && let Some(next) = b.tabs.get_mut(at + 1)
+                && next.divider == TabDivider::None
+            {
+                next.divider = divider;
+            }
+        }
+        // `index` counts the tab itself where it is now: moving right, one less.
+        let from_here = self.bench(bench).and_then(|b| b.tabs.iter().position(|t| t.id == tab));
+        let index = if from_here.is_some_and(|at| at < index) { index - 1 } else { index };
+        let Some(mut moved) = self.take_tab(tab) else { return false };
+        moved.divider = TabDivider::None;
         let target = self.bench_mut(bench).unwrap();
         let index = index.min(target.tabs.len());
         target.tabs.insert(index, moved);
+        // Put first in that group: the divider moves to it.
+        if let Some(onto) = onto
+            && target.tabs.get(index + 1).is_some_and(|t| t.id == onto)
+        {
+            target.tabs[index].divider = std::mem::take(&mut target.tabs[index + 1].divider);
+        }
         target.active_tab = tab;
         self.drop_empty_benches();
         true
@@ -752,6 +793,33 @@ pub fn split_rect(area: Rect, dir: SplitDir, ratio: f32) -> (Rect, Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tab_dropped_on_another_joins_its_group() {
+        let b = bench((0..5).map(|_| Tab::with_pane(pane())).collect());
+        let bench = b.id;
+        let mut shed = Shed { benches: vec![b], ..Default::default() };
+        let tabs = |shed: &Shed| shed.bench(bench).unwrap().tabs.iter().map(|t| (t.id, t.divider)).collect::<Vec<_>>();
+        let all = tabs(&shed);
+        let (a1, a2, b1, b2) = (all[1].0, all[2].0, all[3].0, all[4].0);
+        // Groups: [first, a1, a2] [b1, b2]
+        shed.tab_mut(b1).unwrap().divider = TabDivider::Space;
+        // a1 dropped on b1 (moving right): first in b's group.
+        assert!(shed.move_tab(a1, bench, 3));
+        let now: Vec<_> = tabs(&shed).into_iter().skip(1).collect();
+        assert_eq!(now, [(a2, TabDivider::None), (a1, TabDivider::Space), (b1, TabDivider::None), (b2, TabDivider::None)]);
+        // a1 (first of its group) dropped back on a2 (moving left): b1 keeps the group going.
+        assert!(shed.move_tab(a1, bench, 1));
+        let now: Vec<_> = tabs(&shed).into_iter().skip(1).collect();
+        assert_eq!(now, [(a1, TabDivider::None), (a2, TabDivider::None), (b1, TabDivider::Space), (b2, TabDivider::None)]);
+        // b2 put after a2: last in a's group; before b1: first in b's.
+        assert!(shed.move_tab_next_to(b2, a2, true));
+        let now: Vec<_> = tabs(&shed).into_iter().skip(1).collect();
+        assert_eq!(now, [(a1, TabDivider::None), (a2, TabDivider::None), (b2, TabDivider::None), (b1, TabDivider::Space)]);
+        assert!(shed.move_tab_next_to(b2, b1, false));
+        let now: Vec<_> = tabs(&shed).into_iter().skip(1).collect();
+        assert_eq!(now, [(a1, TabDivider::None), (a2, TabDivider::None), (b2, TabDivider::Space), (b1, TabDivider::None)]);
+    }
 
     fn pane() -> Pane {
         Pane::new(PaneId::new(), "/".into())

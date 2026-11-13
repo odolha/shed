@@ -156,6 +156,9 @@ pub struct BenchWindow {
     remote_shells: HashMap<String, RemoteShells>,
     /// The server whose shells the open menu lists.
     remote_menu: Option<String>,
+    /// While a tab is dragged over another: that tab, and whether it would
+    /// go after it (the right half) rather than before.
+    drop_hint: Option<(TabId, bool)>,
     _following: Subscription,
 }
 
@@ -186,6 +189,7 @@ impl BenchWindow {
             state,
             ui: UiColors::default(),
             focused: None,
+            drop_hint: None,
             title: String::new(),
             editing: None,
             menu: None,
@@ -852,10 +856,36 @@ impl BenchWindow {
                     this.open_menu(e.position, entries, cx);
                 }))
                 .on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
-                .drag_over::<DraggedTab>(move |s, _, _, _| s.border_l_2().border_color(hsla(accent)))
+                // Dropped on the left half it goes before this tab, on the
+                // right half after it: either way into this tab's group.
+                .on_drag_move::<DraggedTab>(cx.listener(move |this, e: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    let over = e.bounds.contains(&e.event.position);
+                    let hint = if over {
+                        Some((tab_id, e.event.position.x > e.bounds.center().x))
+                    } else if this.drop_hint.is_some_and(|(t, _)| t == tab_id) {
+                        None
+                    } else {
+                        return;
+                    };
+                    if this.drop_hint != hint {
+                        this.drop_hint = hint;
+                        cx.notify();
+                    }
+                }))
                 .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
-                    this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: i }, cx);
+                    let after = this.drop_hint.is_some_and(|(t, after)| t == tab_id && after);
+                    this.drop_hint = None;
+                    if d.tab != tab_id {
+                        this.send(ClientMsg::MoveTabNextTo { tab: d.tab, to: tab_id, after }, cx);
+                    }
+                    cx.notify();
                 }));
+            if cx.has_active_drag()
+                && let Some((t, after)) = self.drop_hint
+                && t == tab_id
+            {
+                el = if after { el.border_r_2() } else { el.border_l_2() }.border_color(hsla(accent));
+            }
             el = match (active, tint) {
                 (true, Some(t)) => el.bg(hsla_alpha(t, 0.35)).text_color(hsla(ui.text)).font_weight(FontWeight::MEDIUM),
                 (false, Some(t)) => el.bg(hsla_alpha(t, 0.16)).hover(|s| s.bg(hsla_alpha(t, 0.26))),
@@ -946,6 +976,7 @@ impl BenchWindow {
                 .min_w(px(40.0))
                 .h(tab_h)
                 .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
+                    this.drop_hint = None;
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
                 })),
         );

@@ -261,7 +261,7 @@ fn closed_benches_change_in_place_and_launchers_still_find_them() {
     done(&mut c, "new tab");
     c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: RenameTab { tab: first, name: Some("main".into()) } });
     done(&mut c, "tab renamed");
-    c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: MoveTab { tab: first, index: 1 } });
+    c.msg(ClientMsg::EditSaved { name: "notes".into(), edit: MoveTab { tab: first, index: 2 } });
     done(&mut c, "tab moved");
 
     // A pinned launcher still says `shed load docs`, its launcher key.

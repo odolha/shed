@@ -135,7 +135,10 @@ the focused pane, when a tab is split. The tab bar is set apart by a faint groun
 of that colour and a line under it, the shown tab lighter and in bolder type; how
 large it is drawn is a setting (**Tab bar size** in Settings).
 
-- **Tabs**: click to switch, double-click to rename, drag to reorder. Middle-click
+- **Tabs**: click to switch, double-click to rename, drag to reorder: dropped on
+  a tab's left half it goes before it, on the right half after it (a line shows
+  which), into that tab's group either way; a group's first tab leaving keeps
+  the group, the next tab starting it. Middle-click
   or **Close Tab…** in the right-click menu closes one, after asking, so a slip
   does not stop what runs in it; closing a tab's only pane (Ctrl+Shift+W) asks
   the same. Each tab has one icon, the same as in Shed's compact view: what it is

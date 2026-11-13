@@ -534,10 +534,29 @@ impl SavedBench {
     }
 
     /// Moves a tab to `index` among the others.
+    /// Puts a tab before the one at `index` (counted with it still in
+    /// place), into that tab's group, as `Shed::move_tab` does.
     pub fn move_tab(&mut self, tab: TabId, index: usize) -> bool {
+        use shed_model::TabDivider;
         let Some(i) = self.tabs.iter().position(|t| t.id == tab) else { return false };
-        let t = self.tabs.remove(i);
-        self.tabs.insert(index.min(self.tabs.len()), t);
+        let onto = self.tabs.get(index).map(|t| t.id).filter(|t| *t != tab);
+        // Leaving its group's first place, it hands the divider on.
+        let divider = self.tabs[i].divider;
+        if divider != TabDivider::None
+            && let Some(next) = self.tabs.get_mut(i + 1)
+            && next.divider == TabDivider::None
+        {
+            next.divider = divider;
+        }
+        let mut t = self.tabs.remove(i);
+        t.divider = TabDivider::None;
+        let index = if i < index { index - 1 } else { index }.min(self.tabs.len());
+        self.tabs.insert(index, t);
+        if let Some(onto) = onto
+            && self.tabs.get(index + 1).is_some_and(|t| t.id == onto)
+        {
+            self.tabs[index].divider = std::mem::take(&mut self.tabs[index + 1].divider);
+        }
         true
     }
 

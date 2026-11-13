@@ -970,10 +970,20 @@ impl Keeper {
             ClientMsg::SetBenchColor { bench, color } => self.edit_bench(bench, |b| b.color = color),
             ClientMsg::SetBadge { bench, badge } => self.edit_bench(bench, |b| b.badge = badge),
             ClientMsg::SetBenchLinks { bench, links } => self.edit_bench(bench, |b| b.links = links),
-            ClientMsg::MoveTab { tab, bench, index } => {
+            ClientMsg::MoveTab { .. } | ClientMsg::MoveTabNextTo { .. } => {
                 let mut st = self.lock();
+                let tab = match &msg {
+                    ClientMsg::MoveTab { tab, .. } | ClientMsg::MoveTabNextTo { tab, .. } => *tab,
+                    _ => return,
+                };
                 let Some(from) = st.tree.bench_of_tab(tab) else { return };
-                if st.tree.move_tab(tab, bench, index) {
+                let moved = match msg {
+                    ClientMsg::MoveTab { bench, index, .. } => st.tree.move_tab(tab, bench, index),
+                    ClientMsg::MoveTabNextTo { to, after, .. } => st.tree.move_tab_next_to(tab, to, after),
+                    _ => false,
+                };
+                let Some(bench) = st.tree.bench_of_tab(tab) else { return };
+                if moved {
                     self.sync_alias_files(&mut st);
                     if from != bench {
                         // The tab's panes now belong to another bench's windows.
