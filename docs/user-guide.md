@@ -145,7 +145,7 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   not fit on one row they wrap onto more, the bar growing to hold them; the
   buttons on the right stay on the first row.
 - **Groups**: right-click a tab, **Divider Before**: **Space** starts a group
-  there (a gap before it; a group goes onto the next row whole, and wraps inside
+  there (once a bench has groups, each sits on a tray of its own, a gap between; a group goes onto the next row whole, and wraps inside
   only when it alone is wider than the bar), **New Row** starts its group on a row
   of its own, **None** joins it to the tabs before. Dividers are saved with the
   bench.

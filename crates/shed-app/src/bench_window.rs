@@ -26,7 +26,7 @@ use crate::state::{AppState, Focus};
 use crate::theme::{UiColors, hsla, hsla_alpha};
 use crate::window_place::{PlaceTracker, Placed};
 
-const TAB_BAR_HEIGHT: f32 = 36.0;
+const TAB_BAR_HEIGHT: f32 = 40.0;
 
 /// What the inline text field is editing.
 #[derive(Clone, Copy, PartialEq)]
@@ -796,11 +796,21 @@ impl BenchWindow {
         let row = px(TAB_BAR_HEIGHT * s);
         // Tabs wrap onto more rows when they do not fit; the buttons stay on
         // the right of the first.
-        let mut tabs = div().flex_1().min_w_0().flex().flex_wrap();
+        let pad = px(4.0 * s);
+        let tab_h = row - pad * 2.0;
+        let mut tabs = div().flex_1().min_w_0().flex().flex_wrap().gap_x(px(10.0 * s)).gap_y(pad).p(pad);
         // Tabs in groups, split where a tab has a divider before it: a group
         // goes onto the next row whole, and wraps inside only when it alone
-        // is wider than the bar.
-        let group = || div().flex().flex_wrap().min_w_0();
+        // is wider than the bar. With groups, each sits on a tray of its own.
+        let grouped = bench.tabs.iter().skip(1).any(|t| t.divider != TabDivider::None);
+        let group = move || {
+            div()
+                .flex()
+                .flex_wrap()
+                .min_w_0()
+                .gap(px(2.0 * s))
+                .when(grouped, |d| d.p(px(2.0 * s)).rounded_lg().bg(hsla_alpha(accent, 0.07)).border_1().border_color(hsla_alpha(accent, 0.22)))
+        };
         let mut current = group();
         let base = self.state.read(cx).settings.font.size;
 
@@ -810,8 +820,6 @@ impl BenchWindow {
                 if tab.divider == TabDivider::Row {
                     // A full-width nothing: what follows starts a row.
                     tabs = tabs.child(div().w_full().h(px(0.0)));
-                } else {
-                    current = current.ml(px(18.0 * s));
                 }
             }
             let active = tab.id == bench.active_tab;
@@ -824,11 +832,10 @@ impl BenchWindow {
                 .flex()
                 .items_center()
                 .gap_1p5()
-                .h(row)
+                .h(if grouped { tab_h - px(4.0 * s) - px(2.0) } else { tab_h })
                 .px_3()
-                .max_w(px(260.0))
-                .border_r_1()
-                .border_color(hsla(ui.divider))
+                .max_w(px(260.0 * s))
+                .rounded_md()
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     if event.click_count() >= 2 {
@@ -850,14 +857,14 @@ impl BenchWindow {
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: i }, cx);
                 }));
             el = match (active, tint) {
-                (true, Some(t)) => el.bg(hsla_alpha(t, 0.35)).text_color(hsla(ui.text)),
-                (false, Some(t)) => el.bg(hsla_alpha(t, 0.18)).hover(|s| s.bg(hsla_alpha(t, 0.25))),
+                (true, Some(t)) => el.bg(hsla_alpha(t, 0.35)).text_color(hsla(ui.text)).font_weight(FontWeight::MEDIUM),
+                (false, Some(t)) => el.bg(hsla_alpha(t, 0.16)).hover(|s| s.bg(hsla_alpha(t, 0.26))),
                 (true, None) => el.bg(hsla(ui.tab_active)).text_color(hsla(ui.text)).font_weight(FontWeight::MEDIUM),
-                (false, None) => el.hover(|s| s.bg(hsla(ui.tab_hover))),
+                (false, None) => el.hover(|s| s.bg(hsla_alpha(ui.text, 0.06))),
             };
             if active {
-                // The active tab carries the bench colour along its top.
-                el = el.border_t_2().border_color(hsla(accent));
+                // The shown tab: lifted, with the bench's colour under it.
+                el = el.border_b_2().border_color(hsla(accent));
             }
             // One icon, as in Shed: what the tab is, or that it waits or works.
             let (glyph, tint) = tab_icon(tab, accent, ui);
@@ -911,7 +918,8 @@ impl BenchWindow {
         let tabs = tabs.child(current.child(
             div()
                 .id("new-tab")
-                .h(row)
+                .h(if grouped { tab_h - px(4.0 * s) - px(2.0) } else { tab_h })
+                .rounded_md()
                 .flex()
                 .items_center()
                 .px_2()
@@ -936,7 +944,7 @@ impl BenchWindow {
                 .id("tab-bar-end")
                 .flex_1()
                 .min_w(px(40.0))
-                .h(row)
+                .h(tab_h)
                 .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
                 })),
