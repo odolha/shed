@@ -358,3 +358,25 @@ fn startup_waits_for_other_panes_to_be_ready() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[test]
+fn tags_take_the_colours_set_for_them_everywhere() {
+    use shed_model::{Tag, tag_color};
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("shed.toml"), "[tag_colors]\nprod = \"red\"\n").unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let (bench, _) = new_bench(&mut c, "tags", None);
+    let tab = c.tree.bench(bench).unwrap().tabs[0].id;
+    let color_of = |t: &Shed, label: &str| t.tab(tab).and_then(|t| t.tags.iter().find(|g| g.label == label).map(|g| g.color));
+
+    // Whatever colour a window sends, the set one wins; others stay as sent.
+    let teal = tag_color("teal").unwrap();
+    let tags = vec![Tag { label: "prod".into(), color: teal, tint_tab: false }, Tag { label: "db".into(), color: teal, tint_tab: false }];
+    c.msg(ClientMsg::SetTags { tab, tags });
+    tree_until(&mut c, "prod in red", |t| color_of(t, "prod") == tag_color("red") && color_of(t, "db") == Some(teal));
+
+    // Set in shed.toml later: tabs that have it change.
+    std::fs::write(dir.path().join("shed.toml"), "[tag_colors]\nprod = \"red\"\ndb = \"violet\"\n").unwrap();
+    tree_until(&mut c, "db in violet", |t| color_of(t, "db") == tag_color("violet"));
+}

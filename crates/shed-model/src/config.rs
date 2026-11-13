@@ -40,6 +40,9 @@ pub struct Config {
     pub macos: MacosConfig,
     pub git: GitConfig,
     pub editor: EditorConfig,
+    /// A colour per tag label (`prod = "red"`, or `"#rrggbb"`): every tag with
+    /// that label is drawn in it, wherever it is.
+    pub tag_colors: BTreeMap<String, String>,
 }
 
 /// The editor in project tabs.
@@ -431,7 +434,41 @@ impl Config {
                 tags.push(rule.to_tag());
             }
         }
+        self.recolor_tags(&mut tags);
         tags
+    }
+
+    /// The colour a tag with this label gets: the one set for it
+    /// (`[tag_colors]`), else its own stable one.
+    pub fn tag_color_of(&self, label: &str) -> Rgb {
+        self.tag_colors.get(label).and_then(|c| tag_color(c)).unwrap_or_else(|| default_tag_color(label))
+    }
+
+    /// Gives tags the colours set for their labels; whether any changed.
+    pub fn recolor_tags(&self, tags: &mut [Tag]) -> bool {
+        let mut changed = false;
+        for t in tags {
+            if let Some(c) = self.tag_colors.get(&t.label).and_then(|c| tag_color(c))
+                && t.color != c
+            {
+                t.color = c;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Removes one value from `shed.toml` (a table's key), keeping the rest.
+    pub fn remove_value(path: &Path, table: &str, key: &str) -> Result<(), String> {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
+        if let Some(t) = doc.get_mut(table).and_then(|t| t.as_table_like_mut()) {
+            t.remove(key);
+            if t.is_empty() {
+                doc.remove(table);
+            }
+        }
+        paths::write_whole(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
     }
 }
 
@@ -741,6 +778,25 @@ mod tests {
         // A value that does not fit is refused, and the file stays.
         assert!(Config::set_value(&path, Some("window"), "tab_bar_scale", "big".into()).is_err());
         assert_eq!(Config::load_from(&path).unwrap().window.tab_bar_scale, 1.3);
+    }
+
+    #[test]
+    fn tags_take_the_colours_set_for_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shed.toml");
+        std::fs::write(&path, "# mine\n").unwrap();
+        Config::set_value(&path, Some("tag_colors"), "prod db", "red".into()).unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.tag_color_of("prod db"), tag_color("red").unwrap());
+        assert_eq!(config.tag_color_of("other"), default_tag_color("other"));
+        let mut tags = vec![Tag { label: "prod db".into(), color: tag_color("teal").unwrap(), tint_tab: true }];
+        assert!(config.recolor_tags(&mut tags));
+        assert_eq!(tags[0].color, tag_color("red").unwrap());
+        assert!(!config.recolor_tags(&mut tags));
+        Config::remove_value(&path, "tag_colors", "prod db").unwrap();
+        assert!(Config::load_from(&path).unwrap().tag_colors.is_empty());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# mine"), "{text:?}");
     }
 
     #[test]

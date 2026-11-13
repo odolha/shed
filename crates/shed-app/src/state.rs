@@ -572,6 +572,17 @@ impl AppState {
         self.apply_settings(settings, cx);
     }
 
+    /// Removes one setting from `shed.toml` (back to the default) and takes it at once.
+    pub fn remove_config_value(&mut self, table: &str, key: &str, cx: &mut Context<Self>) {
+        if let Err(e) = Config::remove_value(&Config::path(), table, key) {
+            self.notice = Some(format!("cannot change the setting: {e}"));
+            cx.notify();
+            return;
+        }
+        let settings = Settings::load(&self.settings);
+        self.apply_settings(settings, cx);
+    }
+
     /// Switches the Shed window between cards and the compact list.
     pub fn set_compact_pegboard(&mut self, compact: bool, cx: &mut Context<Self>) {
         if let Err(e) = Config::set_compact_pegboard(&Config::path(), compact) {

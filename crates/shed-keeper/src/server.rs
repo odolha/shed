@@ -400,6 +400,16 @@ impl Keeper {
                 Ok(config) => {
                     st.config = config;
                     apply_theme(st);
+                    // Tag colours set (or changed) there reach every tab.
+                    let State { tree, config, .. } = &mut *st;
+                    let mut recolored = false;
+                    for tab in tree.benches.iter_mut().flat_map(|b| &mut b.tabs) {
+                        recolored |= config.recolor_tags(&mut tab.tags);
+                    }
+                    if recolored {
+                        st.broadcast_tree();
+                        self.save_soon.notify_one();
+                    }
                     info!("config loaded");
                 }
                 Err(e) => warn!("config not loaded: {e}"),
@@ -908,7 +918,12 @@ impl Keeper {
                 }
             }
             ClientMsg::RenameTab { tab, name } => self.edit_tab(tab, |t| t.name = name.filter(|n| !n.trim().is_empty())),
-            ClientMsg::SetTags { tab, tags } => self.edit_tab(tab, |t| t.tags = tags),
+            ClientMsg::SetTags { tab, mut tags } => {
+                // Labels with a colour set get it, whatever the window sent.
+                self.lock().config.recolor_tags(&mut tags);
+                self.edit_tab(tab, |t| t.tags = tags);
+                self.save_soon.notify_one();
+            }
             ClientMsg::SetPrivate { tab, private } => self.edit_tab(tab, |t| t.private = private),
             ClientMsg::SetZoom { tab, zoom } => self.edit_tab(tab, |t| t.zoom = zoom.clamp(-20.0, 60.0)),
             ClientMsg::StartNow { pane } => {
@@ -1106,7 +1121,14 @@ impl Keeper {
                     }
                 }
                 let order = self.cfg.store.as_ref().map(|s| s.order()).unwrap_or_default();
-                self.lock().send(client, KeeperMsg::Pegboard(PegboardInfo { stored, previews, order }));
+                let st = self.lock();
+                // Closed benches' tags in the colours set now.
+                for s in &mut stored {
+                    for tab in &mut s.bench.tabs {
+                        st.config.recolor_tags(&mut tab.tags);
+                    }
+                }
+                st.send(client, KeeperMsg::Pegboard(PegboardInfo { stored, previews, order }));
             }
             ClientMsg::Shutdown => {
                 info!(client, "shutdown requested");
@@ -1393,6 +1415,9 @@ impl Keeper {
             return Err(format!("another bench named {:?} is running", saved.name));
         }
         let (mut bench, panes) = saved.to_bench()?;
+        for tab in &mut bench.tabs {
+            st.config.recolor_tags(&mut tab.tags);
+        }
         let bench_cwd = bench.cwd.clone();
         let mut started = Vec::new();
         for tab in &mut bench.tabs {

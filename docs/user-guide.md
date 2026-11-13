@@ -662,9 +662,23 @@ an ordinary shell line again (in bash, a redirection).
 ## Tags and private tabs
 
 A **tag** is a short coloured label on a tab: `prod`, `staging`, `db`. Add one from
-the tab's menu (type `prod`, or `prod red` for a colour), or from its shell with
+the tab's menu: **Add Tag** lists the tags Shed knows (on any tab, open or closed,
+or set in Settings), each with its colour, and **New Tag…** takes a new one (type
+`prod`, or `prod red` for a colour). From its shell:
 `shed tag add prod --color red --tint`. A tag can **tint** the whole tab, which is a
 useful warning on production shells.
+
+**Settings → Tags** lists every tag with how many tabs have it. Pick a colour for
+one and every tab with that tag takes it, in running and closed benches, and so do
+tags added later; **Default** goes back to the tag's own colour. **Add a tag**
+gives a new tag a colour before any tab has it, so it is offered when adding tags.
+The colours are kept in `shed.toml`:
+
+```toml
+[tag_colors]
+prod = "red"                  # red, orange, yellow, green, blue, violet, teal, grey, or #rrggbb
+db = "violet"
+```
 
 Tags can also come from **rules** in `shed.toml`: for example, every tab running
 `ssh` to a host with `prod` in its name gets a red `prod` tag.
@@ -825,6 +839,9 @@ tree = false                   # changed files by folder (the toggle in Changes)
 
 [editor]                       # the editor in project tabs
 wrap = false                   # wrap long lines at the edge (Wrap, or Alt+Z)
+
+[tag_colors]                   # a colour per tag label, for every tab with it
+prod = "red"
 
 [rack]                         # what restarts by itself when a bench opens
 auto = ["nvim", "vim", "hx", "ssh", "htop", "btop", "less", "tail -f", "cargo watch", "npm run dev"]

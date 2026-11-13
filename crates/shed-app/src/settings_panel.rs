@@ -4,6 +4,7 @@
 
 use gpui::{Context, Entity, EventEmitter, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, prelude::*, px, svg};
 use shed_model::config::{Appearance, Config, NewPaneDir};
+use shed_model::{Rgb, TAG_COLORS};
 
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
@@ -17,6 +18,8 @@ pub enum SettingsEvent {
 pub struct SettingsPanel {
     state: Entity<AppState>,
     family: Entity<LineEditor>,
+    /// A tag to give a colour to (and so to offer when adding tags).
+    new_tag: Entity<LineEditor>,
     _subs: Vec<Subscription>,
 }
 
@@ -26,7 +29,18 @@ impl SettingsPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let family_now = state.read(cx).settings.config.font.family.clone();
         let family = cx.new(|cx| LineEditor::new(family_now, cx).without_hint());
+        let new_tag = cx.new(|cx| LineEditor::new(String::new(), cx));
         let subs = vec![
+            cx.subscribe(&new_tag, |this, editor, event: &EditorEvent, cx| {
+                if let EditorEvent::Submit(text) = event
+                    && let Some(label) = text.split_whitespace().next()
+                {
+                    // Its own colour to start with; picked again below.
+                    let color = this.state.read(cx).settings.config.tag_color_of(label);
+                    this.set(Some("tag_colors"), label, color_name(color).into(), cx);
+                    editor.update(cx, |e, cx| e.clear(cx));
+                }
+            }),
             cx.subscribe(&family, |this, _, event: &EditorEvent, cx| {
                 if let EditorEvent::Submit(text) = event
                     && !text.trim().is_empty()
@@ -36,7 +50,7 @@ impl SettingsPanel {
             }),
             cx.observe(&state, |_, _, cx| cx.notify()),
         ];
-        Self { state, family, _subs: subs }
+        Self { state, family, new_tag, _subs: subs }
     }
 
     /// Writes one setting; Shed takes it at once.
@@ -44,6 +58,70 @@ impl SettingsPanel {
         let (table, key) = (table.map(str::to_string), key.to_string());
         self.state.update(cx, |state, cx| state.set_config_value(table.as_deref(), &key, value, cx));
     }
+}
+
+/// How a tag colour is written: its name, else `#rrggbb`.
+fn color_name(color: Rgb) -> String {
+    TAG_COLORS.iter().find(|(_, c)| *c == color).map_or_else(|| format!("#{:06X}", color.to_hex()), |(n, _)| n.to_string())
+}
+
+/// A tag: its chip, how many tabs carry it, the colours to pick from, and
+/// going back to its own colour when one is set.
+fn tag_row(ui: &UiColors, label: String, color: Rgb, uses: usize, set: bool, cx: &mut Context<SettingsPanel>) -> gpui::Div {
+    let ink = ui.ink(color);
+    let swatches = TAG_COLORS.iter().map(|(name, c)| {
+        let (label, name, c) = (label.clone(), *name, *c);
+        div()
+            .id(SharedString::from(format!("tag-{label}-{name}")))
+            .size(crate::theme::us(14.0))
+            .rounded_full()
+            .border_2()
+            .border_color(hsla(if c == color { ui.text } else { ui.background }))
+            .bg(hsla(c))
+            .cursor_pointer()
+            .tooltip(crate::menu::tooltip(name))
+            .on_click(cx.listener(move |this, _, _, cx| this.set(Some("tag_colors"), &label, name.into(), cx)))
+    });
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .py_1()
+        .child(
+            div()
+                .flex_none()
+                .max_w(px(130.0))
+                .truncate()
+                .px_1p5()
+                .rounded_md()
+                .bg(hsla_alpha(color, 0.22))
+                .text_color(hsla(ink))
+                .child(label.clone()),
+        )
+        .child(div().flex_1().text_size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim)).child(match uses {
+            0 => "not on a tab".to_string(),
+            1 => "1 tab".to_string(),
+            n => format!("{n} tabs"),
+        }))
+        .child(div().flex().gap_1().children(swatches))
+        .child(
+            div()
+                .id(SharedString::from(format!("tag-default-{label}")))
+                .w(crate::theme::us(48.0))
+                .text_size(crate::theme::us(11.0))
+                .when(set, |d| {
+                    let label = label.clone();
+                    d.cursor_pointer()
+                        .text_color(hsla(ui.text_dim))
+                        .hover(|s| s.text_color(hsla(ui.text)))
+                        .tooltip(crate::menu::tooltip("Back to the tag's own colour (and out of this list, when no tab has it)"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let label = label.clone();
+                            this.state.update(cx, |state, cx| state.remove_config_value("tag_colors", &label, cx));
+                        }))
+                        .child("Default")
+                }),
+        )
 }
 
 /// A row: what it is, a line saying more, and its control on the right.
@@ -134,6 +212,8 @@ impl Render for SettingsPanel {
         let state = self.state.read(cx);
         let ui = state.settings.ui.clone();
         let config = state.settings.config.clone();
+        // Every tag in use or given a colour, with its colour to pick.
+        let tags: Vec<(String, Rgb, usize)> = crate::bench_window::known_tags(cx, state);
         let heading = |text: &str| div().mt_4().mb_1().text_size(crate::theme::us(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(hsla(ui.text_dim)).child(text.to_uppercase());
 
         let appearance = segmented(
@@ -177,6 +257,11 @@ impl Render for SettingsPanel {
                 this.set(Some("git"), "fetch_minutes", (now + sign as i64).clamp(0, 120).into(), cx);
             },
         );
+        let set_labels: Vec<String> = config.tag_colors.keys().cloned().collect();
+        let tag_rows: Vec<gpui::Div> = tags.into_iter().map(|(label, color, uses)| {
+            let set = set_labels.contains(&label);
+            tag_row(&ui, label, color, uses, set, cx)
+        }).collect();
         let path = Config::path();
         let open_file = div()
             .id("open-shed-toml")
@@ -257,6 +342,18 @@ impl Render for SettingsPanel {
             .child(row(&ui, "Run startup when a bench opens", "Off: benches open quietly; Run Startup starts them", start))
             .child(row(&ui, "New tabs and panes open in", "", new_panes))
             .child(row(&ui, "Badges on taskbar icons", "Each bench's badge, or its initials", badges))
+            .child(heading("Tags"))
+            .child(div().mb_1().text_size(crate::theme::us(11.5)).text_color(hsla(ui.text_dim)).child("A colour per tag, for every tab that has it; tags here are offered when adding one."))
+            .children(tag_rows)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .mt_1()
+                    .child(div().text_color(hsla(ui.text_dim)).child("Add a tag:"))
+                    .child(div().w(px(170.0)).px_1().rounded_sm().border_1().border_color(hsla(ui.divider)).child(self.new_tag.clone())),
+            )
             .child(heading("Projects"))
             .child(row(&ui, "Git fetch", "How often project tabs fetch, to know what is behind", fetch))
             .child(open_file)

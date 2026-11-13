@@ -12,7 +12,7 @@ use gpui::{
 };
 use shed_model::{TabDivider, 
     Bench, BenchColor, BenchId, Direction, PaneId, PaneNode, Rgb, SplitDir, Tab, TabId, Tag,
-    default_tag_color, tag_color,
+    tag_color,
 };
 use shed_model::config::NewPaneDir;
 use shed_proto::{BenchRef, ClientMsg};
@@ -89,14 +89,32 @@ pub fn tab_icon(tab: &Tab, accent: Rgb, ui: &UiColors) -> (&'static str, Rgb) {
     }
 }
 
-/// `tags` with the one `text` describes added: "prod", or "prod red".
-pub fn with_tag(tags: &[Tag], text: &str) -> Option<Vec<Tag>> {
+/// `tags` with the one `text` describes added: "prod", or "prod red". Without
+/// a colour, the one set for the label (`[tag_colors]`), else its own.
+pub fn with_tag(tags: &[Tag], text: &str, config: &shed_model::config::Config) -> Option<Vec<Tag>> {
     let mut words = text.split_whitespace();
     let label = words.next()?;
-    let color = words.next().and_then(tag_color).unwrap_or_else(|| default_tag_color(label));
+    let color = words.next().and_then(tag_color).unwrap_or_else(|| config.tag_color_of(label));
     let mut tags: Vec<Tag> = tags.iter().filter(|t| t.label != label).cloned().collect();
     tags.push(Tag { label: label.to_string(), color, tint_tab: false });
     Some(tags)
+}
+
+/// Every tag label Shed knows: on tabs of running and closed benches, and
+/// with a colour set; each with its colour and how many tabs carry it.
+pub fn known_tags(cx: &gpui::App, state: &crate::state::AppState) -> Vec<(String, Rgb, usize)> {
+    let mut found: std::collections::BTreeMap<String, (Rgb, usize)> = std::collections::BTreeMap::new();
+    let config = &state.settings.config;
+    let closed = cx.try_global::<crate::pegboard::PegboardData>().map(|p| p.0.stored.iter().map(|s| &s.bench).collect::<Vec<_>>()).unwrap_or_default();
+    for bench in state.tree.benches.iter().chain(closed) {
+        for tag in bench.tabs.iter().flat_map(|t| &t.tags) {
+            found.entry(tag.label.clone()).or_insert((tag.color, 0)).1 += 1;
+        }
+    }
+    for label in config.tag_colors.keys() {
+        found.entry(label.clone()).or_insert((config.tag_color_of(label), 0));
+    }
+    found.into_iter().map(|(label, (color, n))| (label.clone(), if config.tag_colors.contains_key(&label) { config.tag_color_of(&label) } else { color }, n)).collect()
 }
 
 fn item(label: impl Into<SharedString>, action: impl Fn(&mut BenchWindow, &mut Window, &mut Context<BenchWindow>) + 'static) -> MenuEntry<BenchWindow> {
@@ -570,7 +588,7 @@ impl BenchWindow {
             }
             EditTarget::AddTag(tab) => {
                 let Some(t) = self.tab(tab, cx) else { return };
-                let Some(tags) = with_tag(&t.tags, &text) else { return };
+                let Some(tags) = with_tag(&t.tags, &text, &self.state.read(cx).settings.config) else { return };
                 ClientMsg::SetTags { tab, tags }
             }
         };
@@ -581,7 +599,29 @@ impl BenchWindow {
         let Some(tab) = self.tab(tab_id, cx) else { return Vec::new() };
         let mut entries = vec![
             item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)).icon("pencil"),
-            item("Add Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)).icon("tag"),
+            // The tags Shed knows, to pick from; or a new one.
+            more("Add Tag", move |this: &mut Self, cx| {
+                let on: Vec<String> = this.tab(tab_id, cx).map(|t| t.tags.iter().map(|t| t.label.clone()).collect()).unwrap_or_default();
+                let known = known_tags(cx, this.state.read(cx));
+                let mut entries: Vec<MenuEntry<Self>> = known
+                    .into_iter()
+                    .filter(|(label, ..)| !on.contains(label))
+                    .map(|(label, color, _)| {
+                        item(label.clone(), move |this, _, cx| {
+                            let Some(t) = this.tab(tab_id, cx) else { return };
+                            let Some(tags) = with_tag(&t.tags, &label, &this.state.read(cx).settings.config) else { return };
+                            this.send(ClientMsg::SetTags { tab: tab_id, tags }, cx);
+                        })
+                        .dot(color)
+                    })
+                    .collect();
+                if !entries.is_empty() {
+                    entries.push(MenuEntry::Separator);
+                }
+                entries.push(item("New Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)).icon("plus"));
+                entries
+            })
+            .icon("tag"),
         ];
         // Dividers group the tab bar: a space before this tab, or a new row.
         let divider = move |label: &'static str, d: TabDivider| {

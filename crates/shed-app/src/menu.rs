@@ -14,7 +14,8 @@ pub type MenuAction<V> = Rc<dyn Fn(&mut V, &mut Window, &mut Context<V>)>;
 pub type MenuEntries<V> = Rc<dyn Fn(&mut V, &mut Context<V>) -> Vec<MenuEntry<V>>>;
 
 pub enum MenuEntry<V> {
-    Item { label: SharedString, icon: Option<&'static str>, danger: bool, action: MenuAction<V> },
+    /// `dot`: a colour shown before the label (a tag's), in the icon's place.
+    Item { label: SharedString, icon: Option<&'static str>, danger: bool, action: MenuAction<V>, dot: Option<Rgb> },
     /// Colours to pick from, as a grid of dots.
     Palette(Vec<Swatch<V>>),
     /// Opens another menu in its place.
@@ -42,10 +43,18 @@ impl<V> MenuEntry<V> {
         }
         self
     }
+
+    /// Shows a dot of this colour before the label.
+    pub fn dot(mut self, color: Rgb) -> Self {
+        if let MenuEntry::Item { dot, .. } = &mut self {
+            *dot = Some(color);
+        }
+        self
+    }
 }
 
 pub fn item<V>(label: impl Into<SharedString>, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> MenuEntry<V> {
-    MenuEntry::Item { label: label.into(), icon: None, danger: false, action: Rc::new(action) }
+    MenuEntry::Item { label: label.into(), icon: None, danger: false, action: Rc::new(action), dot: None }
 }
 
 /// An item that opens another menu, made when it is chosen.
@@ -55,7 +64,7 @@ pub fn more<V>(label: impl Into<SharedString>, entries: impl Fn(&mut V, &mut Con
 
 /// An item in red, for what stops or removes things.
 pub fn danger<V>(label: impl Into<SharedString>, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> MenuEntry<V> {
-    MenuEntry::Item { label: label.into(), icon: None, danger: true, action: Rc::new(action) }
+    MenuEntry::Item { label: label.into(), icon: None, danger: true, action: Rc::new(action), dot: None }
 }
 
 /// A one-line tooltip: `.tooltip(tooltip("Close"))`.
@@ -168,7 +177,7 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
         .text_size(crate::theme::us(13.0))
         .text_color(hsla(ui.text));
     // With icons on some items, every label starts at the same place.
-    let icons = entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::More { icon: Some(_), .. }));
+    let icons = entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::Item { dot: Some(_), .. } | MenuEntry::More { icon: Some(_), .. }));
     let lead = |glyph: &Option<&'static str>, color: Rgb| match glyph {
         Some(name) => Some(svg().path(icon(name)).size(crate::theme::us(14.0)).text_color(hsla(color)).into_any_element()),
         None if icons => Some(div().size(px(14.0)).into_any_element()),
@@ -242,10 +251,13 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
                     }))
                     .into_any_element()
             }
-            MenuEntry::Item { label, icon: glyph, danger, action } => {
+            MenuEntry::Item { label, icon: glyph, danger, action, dot } => {
                 let action = action.clone();
                 let color = if *danger { ui.danger } else { ui.text };
-                let lead = lead(glyph, if *danger { color } else { ui.text_dim });
+                let lead = match dot {
+                    Some(c) => Some(div().size(px(14.0)).flex().items_center().justify_center().child(div().size(px(10.0)).rounded_full().bg(hsla(*c))).into_any_element()),
+                    None => lead(glyph, if *danger { color } else { ui.text_dim }),
+                };
                 row(i)
                     .text_color(hsla(color))
                     .hover(|s| s.bg(hsla(ui.tab_hover)))

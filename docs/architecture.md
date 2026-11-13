@@ -113,6 +113,12 @@ prompt redrawn by the line editor does not count), what is running, and what to 
 the logbook. The folder and the program in the foreground are also read from
 `/proc` every second, for tag rules and for saving.
 
+Tag colours set in `[tag_colors]` belong to the keeper: `Config::recolor_tags`
+gives tags those colours when a window sets a tab's tags, when tag rules make
+them, when a saved bench loads or is listed for the Shed window, and across the
+tree whenever `shed.toml` changes. Windows list the tags they can offer with
+`bench_window::known_tags` (running and closed benches, and the configured ones).
+
 The hook also gives each tab its own history file, binds Ctrl+Up and Ctrl+Shift+Up to
 walk the logbook (through `shed hook walk`), and applies Shed's aliases from a file
 the keeper writes per tab, at every prompt. The shell's own aliases edited in Shed

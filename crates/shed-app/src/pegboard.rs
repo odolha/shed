@@ -495,7 +495,7 @@ impl Pegboard {
             Edit::TabName(tab) => return self.change_tab(tab, TabChange::Rename((!text.is_empty()).then_some(text)), cx),
             Edit::AddTag(tab) => {
                 let Some((_, t)) = self.find_tab(tab, cx) else { return };
-                let Some(tags) = with_tag(&t.tags, &text) else { return };
+                let Some(tags) = with_tag(&t.tags, &text, &self.state.read(cx).settings.config) else { return };
                 return self.change_tab(tab, TabChange::Tags(tags), cx);
             }
             Edit::AddLink(key) => return self.submit_link(key, None, &text, cx),
@@ -710,7 +710,31 @@ impl Pegboard {
         if tab.project_info().is_none() && tab.ai_info().is_none() {
             entries.push(menu_item("Setup…", move |this, window, cx| this.open_setup(bench, tab_id, window, cx)).icon("rack"));
         }
-        entries.push(menu_item("Add Tag…", move |this, window, cx| this.start_edit(Edit::AddTag(tab_id), String::new(), window, cx)).icon("tag"));
+        // The tags Shed knows, to pick from; or a new one.
+        entries.push(
+            more("Add Tag", move |this: &mut Self, cx| {
+                let on: Vec<String> = this.find_tab(tab_id, cx).map(|(_, t)| t.tags.iter().map(|t| t.label.clone()).collect()).unwrap_or_default();
+                let known = crate::bench_window::known_tags(cx, this.state.read(cx));
+                let mut entries: Vec<MenuEntry<Self>> = known
+                    .into_iter()
+                    .filter(|(label, ..)| !on.contains(label))
+                    .map(|(label, color, _)| {
+                        menu_item(label.clone(), move |this, _, cx| {
+                            let Some((_, t)) = this.find_tab(tab_id, cx) else { return };
+                            let Some(tags) = with_tag(&t.tags, &label, &this.state.read(cx).settings.config) else { return };
+                            this.change_tab(tab_id, TabChange::Tags(tags), cx);
+                        })
+                        .dot(color)
+                    })
+                    .collect();
+                if !entries.is_empty() {
+                    entries.push(MenuEntry::Separator);
+                }
+                entries.push(menu_item("New Tag…", move |this, window, cx| this.start_edit(Edit::AddTag(tab_id), String::new(), window, cx)).icon("plus"));
+                entries
+            })
+            .icon("tag"),
+        );
         for tag in &tab.tags {
             let (label, tint) = (tag.label.clone(), tag.tint_tab);
             let l = label.clone();
