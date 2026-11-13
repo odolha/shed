@@ -172,6 +172,41 @@ fn closing_stops_tools_runs_teardown_and_loading_runs_startup() {
     }
 }
 
+#[test]
+fn a_quiet_load_runs_nothing_and_keeps_the_setup() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let (bench, pane) = new_bench(&mut c, "calm", None);
+    c.prompt(pane);
+    let setup = PaneSetup { startup: vec!["echo started-$((20+22))".into()], wait: false, ..Default::default() };
+    c.msg(ClientMsg::SetPaneSetup { pane, setup: setup.clone() });
+    tree_until(&mut c, "setup", |t| t.pane(pane).is_some_and(|p| p.setup == setup));
+    c.input(pane, "echo before-$((3*3))\n");
+    c.output_until(pane, "before-9");
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed", |t| t.bench(bench).is_none());
+
+    // Quietly: the shell and its scrollback, and a prompt; no startup.
+    c.msg(ClientMsg::Show(ShowTarget::LoadQuiet { name: "calm".into() }));
+    c.until("quiet load", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Show { bench: b }) if *b == bench).then_some(()));
+    c.msg(ClientMsg::Attach { bench: Some(bench) });
+    c.seen(pane, "before-9");
+    c.input(pane, "echo alive-$((6*7))\n");
+    let out = c.output_until(pane, "alive-42");
+    assert!(!out.contains("started-42"), "the startup ran: {out:?}");
+    let tree = tree_until(&mut c, "loaded", |t| t.pane(pane).is_some());
+    assert_eq!(tree.pane(pane).unwrap().setup, setup, "the setup stays for the next load");
+
+    // A normal load afterwards runs it as before.
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed again", |t| t.bench(bench).is_none());
+    c.msg(ClientMsg::Show(ShowTarget::Load { name: "calm".into() }));
+    c.until("load", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Show { bench: b }) if *b == bench).then_some(()));
+    c.msg(ClientMsg::Attach { bench: Some(bench) });
+    c.output_until(pane, "started-42");
+}
+
 fn pegboard(c: &mut Client) -> PegboardInfo {
     c.msg(ClientMsg::Pegboard);
     c.until("pegboard", |f, _| match f {

@@ -1152,7 +1152,7 @@ impl Keeper {
                 if fresh && st.config.auto_restore {
                     let session = self.cfg.store.as_ref().map(Store::session).unwrap_or_default();
                     for SessionBench { name, open: had_window } in session {
-                        match self.load_bench(&mut st, &name) {
+                        match self.load_bench(&mut st, &name, false) {
                             Ok(id) if had_window => open.push(id),
                             Ok(_) => {}
                             Err(e) => warn!("cannot load bench {name:?}: {e}"),
@@ -1172,10 +1172,11 @@ impl Keeper {
                 }
                 open
             }
-            ShowTarget::Load { name } => {
-                let name = self.bench_name(&st, &name);
+            ShowTarget::Load { name: ref given } | ShowTarget::LoadQuiet { name: ref given } => {
+                let quiet = matches!(target, ShowTarget::LoadQuiet { .. });
+                let name = self.bench_name(&st, given);
                 let running = st.tree.benches.iter().find(|b| b.name == name).map(|b| b.id);
-                match running.map(Ok).unwrap_or_else(|| self.load_bench(&mut st, &name)) {
+                match running.map(Ok).unwrap_or_else(|| self.load_bench(&mut st, &name, quiet)) {
                     Ok(id) => vec![id],
                     Err(e) => {
                         st.send(client, KeeperMsg::Error(format!("cannot load {name:?}: {e}")));
@@ -1353,7 +1354,10 @@ impl Keeper {
 
     /// Rebuilds a saved bench: every pane in its folder with its old
     /// scrollback, and its tools restarted or typed according to the rack.
-    fn load_bench(self: &Arc<Self>, st: &mut State, name: &str) -> Result<BenchId, String> {
+    /// Loads a saved bench. `quiet`: its shells start in their folders with
+    /// their scrollback, and nothing else runs (no startup, no relaunched
+    /// programs, nothing held); its setup stays for the next load.
+    fn load_bench(self: &Arc<Self>, st: &mut State, name: &str, quiet: bool) -> Result<BenchId, String> {
         let store = self.cfg.store.as_ref().ok_or("saving is turned off")?;
         let saved = store.load(name).map_err(|e| e.to_string())?;
         if st.tree.bench(saved.id).is_some() {
@@ -1366,17 +1370,19 @@ impl Keeper {
         let bench_cwd = bench.cwd.clone();
         let mut started = Vec::new();
         for tab in &mut bench.tabs {
-            if let Err(e) = self.start_saved_tab(st, &saved, &panes, bench.id, &bench_cwd, tab, &mut started) {
+            if let Err(e) = self.start_saved_tab(st, &saved, &panes, bench.id, &bench_cwd, tab, &mut started, quiet) {
                 st.hang_up(&started);
                 return Err(e);
             }
         }
         let id = bench.id;
-        info!(name = %bench.name, panes = started.len(), "bench loaded");
+        info!(name = %bench.name, panes = started.len(), quiet, "bench loaded");
         // Startup that waits for other panes is held until they are ready.
         let setups: Vec<(PaneId, PaneSetup)> = bench.tabs.iter().flat_map(|t| &t.panes).map(|p| (p.id, p.setup.clone())).collect();
         for (pane, setup) in &setups {
-            if let Some(rt) = st.panes.get_mut(pane) {
+            if let Some(rt) = st.panes.get_mut(pane)
+                && !quiet
+            {
                 rt.ready_text = setup.ready_when.clone().filter(|t| !t.trim().is_empty());
                 rt.waits_for = setup.after.iter().copied().filter(|d| d != pane && started.contains(d)).collect();
             }
@@ -1452,13 +1458,17 @@ impl Keeper {
         bench_cwd: &Path,
         tab: &mut Tab,
         started: &mut Vec<PaneId>,
+        quiet: bool,
     ) -> Result<(), String> {
         let store = self.cfg.store.as_ref().ok_or("saving is turned off")?;
         for pane in &mut tab.panes {
             let sp = panes.iter().find(|(id, _)| *id == pane.id).map(|(_, p)| p.clone());
             let restore = store.scrollback(&saved.name, pane.id).map(|text| shed_save::restored_scrollback(&text, &saved.saved));
-            // The pane's own startup wins over whatever was running at save time.
-            let after_prompt: VecDeque<(String, bool)> = if !pane.setup.startup.is_empty() {
+            // The pane's own startup wins over whatever was running at save
+            // time; a quiet load runs neither.
+            let after_prompt: VecDeque<(String, bool)> = if quiet {
+                VecDeque::new()
+            } else if !pane.setup.startup.is_empty() {
                 pane.setup.startup.iter().map(|c| (c.clone(), !pane.setup.wait)).collect()
             } else {
                 let tool = sp.as_ref().and_then(|p| p.tool.clone());
@@ -1525,7 +1535,7 @@ impl Keeper {
                 let (whole, panes) = from.to_bench()?;
                 let mut moved = whole.tabs.into_iter().find(|t| t.id == tab).ok_or("no such tab")?;
                 let mut started = Vec::new();
-                if let Err(e) = self.start_saved_tab(&mut st, &from, &panes, bench, &whole.cwd, &mut moved, &mut started) {
+                if let Err(e) = self.start_saved_tab(&mut st, &from, &panes, bench, &whole.cwd, &mut moved, &mut started, false) {
                     st.hang_up(&started);
                     return Err(e);
                 }

@@ -79,6 +79,10 @@ over the bench. Shed remembers the choice (`compact_pegboard` in `shed.toml`).
   one forward. Beside it, **Hide** closes its window and keeps it running,
   **Close…** stops its programs and runs its teardown, and **Delete…** removes it;
   the last two ask first.
+- **Open Quietly (Nothing Runs)**, in a closed bench's menu (**⋯** or right-click),
+  opens it with its shells in their folders and their scrollback, and nothing else:
+  no startup commands, no programs started again, remote tabs not reconnected.
+  Its setup stays as it was, so the next ordinary **Open** runs it.
 - Double-click the **name**, or the pencil beside it, to rename the bench. Enter
   or clicking elsewhere keeps the new name; Escape leaves it as it was (this goes
   for every name and tag you type, in Shed and in bench windows).
@@ -686,7 +690,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | --- | --- |
 | `shed` | Opens the Shed window (starting the keeper if needed) |
 | `shed new [--name N] [--cwd DIR]` | Makes a bench and opens it |
-| `shed load NAME` | Opens a bench: raises it, shows it, or loads it if closed |
+| `shed load NAME [--quiet]` | Opens a bench: raises it, shows it, or loads it if closed (`--quiet`: shells only, nothing runs) |
 | `shed hide NAME` | Hides a running bench: closes its window, keeps it running |
 | `shed list` | Lists benches: open, hidden and closed |
 | `shed save NAME [--as COPY]` | Saves a bench now; `--as` saves a copy, handy as a template |

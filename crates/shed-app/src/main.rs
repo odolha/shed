@@ -112,7 +112,13 @@ enum Command {
     },
     /// Open a bench by name: raise its window, reattach it, or load it from
     /// its saved file.
-    Load { name: String },
+    Load {
+        name: String,
+        /// Loading from its file: shells only, in their folders with their
+        /// scrollback; no startup commands, no programs started again.
+        #[arg(long)]
+        quiet: bool,
+    },
     /// Hide a running bench: its window closes, its tools keep running.
     Hide { name: String },
     /// Save a running bench now (it also saves itself every minute).
@@ -298,7 +304,8 @@ fn main() -> anyhow::Result<()> {
             let cwd = cwd.map(std::path::absolute).transpose()?;
             run_app(ShowTarget::NewBench { name, cwd })
         }
-        Some(Command::Load { name }) => run_app(ShowTarget::Load { name }),
+        Some(Command::Load { name, quiet: false }) => run_app(ShowTarget::Load { name }),
+        Some(Command::Load { name, quiet: true }) => run_app(ShowTarget::LoadQuiet { name }),
         Some(Command::Hide { name }) => {
             let tree = request(ClientMsg::Status, |m| match m {
                 KeeperMsg::Status(s) => Some(s.tree),

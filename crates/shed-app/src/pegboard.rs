@@ -612,6 +612,13 @@ impl Pegboard {
         let open_label = if entry.status == Status::Open { "Go to Bench" } else { "Open Bench" };
         let open_icon = if entry.status == Status::Closed { "bench-load" } else { "go" };
         entries.push(menu_item(open_label, move |this, _, cx| this.open(&e, None, cx)).icon(open_icon));
+        if entry.status == Status::Closed {
+            // Shells only: nothing runs until asked.
+            let name = bench.name.clone();
+            entries.push(menu_item("Open Quietly (Nothing Runs)", move |this, _, cx| {
+                this.send(ClientMsg::Show(ShowTarget::LoadQuiet { name: name.clone() }), cx);
+            }));
+        }
         let k = key.clone();
         entries.push(menu_item("New Tab", move |this, _, cx| this.new_tab(&k, cx)).icon("tab-new"));
         let k = key.clone();
