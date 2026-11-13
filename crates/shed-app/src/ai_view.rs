@@ -109,6 +109,10 @@ pub struct AiView {
     expanded: HashSet<usize>,
     prompt: Entity<TextView>,
     images: Vec<AiImage>,
+    /// The pictures' thumbnails, one per picture.
+    previews: Vec<Arc<gpui::Image>>,
+    /// Other files to go with the prompt: their paths are added to it.
+    files: Vec<PathBuf>,
     sessions: Arc<Vec<SessionInfo>>,
     sessions_task: Option<Task<()>>,
     filter: Entity<LineEditor>,
@@ -253,6 +257,8 @@ impl AiView {
             expanded: HashSet::new(),
             prompt,
             images: Vec::new(),
+            previews: Vec::new(),
+            files: Vec::new(),
             sessions: Arc::default(),
             sessions_task: None,
             filter,
@@ -574,18 +580,24 @@ impl AiView {
         {
             return self.complete(i, cx);
         }
-        let text = self.prompt.read(cx).buffer.text().trim_end().to_string();
-        if text.trim().is_empty() && self.images.is_empty() {
+        let mut text = self.prompt.read(cx).buffer.text().trim_end().to_string();
+        if text.trim().is_empty() && self.images.is_empty() && self.files.is_empty() {
             return;
         }
+        if self.editing.is_some() && self.status.state != AiState::Idle {
+            return;
+        }
+        // Files go as their paths, for Claude to read.
+        let files = std::mem::take(&mut self.files);
+        if !files.is_empty() {
+            let list: Vec<String> = files.iter().map(|f| format!("- {}", f.display())).collect();
+            text = format!("{}{}Attached files:\n{}", text, if text.is_empty() { "" } else { "\n\n" }, list.join("\n"));
+        }
+        self.previews.clear();
         let images = std::mem::take(&mut self.images);
         if self.status.state != AiState::Idle {
             // Claude is busy: the message waits its turn, and goes when the
             // turn ends. (An earlier message is only edited when it is idle.)
-            if self.editing.is_some() {
-                self.images = images;
-                return;
-            }
             self.queue.push((text, images));
             self.prompt.update(cx, |p, cx| {
                 p.buffer.select_all();
@@ -713,7 +725,7 @@ impl AiView {
                 });
                 let Some(image) = image else { return };
                 let media_type = image.format.mime_type().to_string();
-                self.images.push(AiImage { media_type, data: image.bytes });
+                self.add_picture(AiImage { media_type, data: image.bytes });
                 cx.notify();
             }
             _ => return,
@@ -722,10 +734,114 @@ impl AiView {
     }
 
     /// Dropped files go into the prompt as their paths.
+    /// Dropped files go with the prompt: pictures as pictures (with a
+    /// thumbnail), the others as their paths.
     fn on_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
-        let text: Vec<String> = paths.paths().iter().map(|p| p.display().to_string()).collect();
-        let text = format!("{} ", text.join(" "));
-        self.prompt.update(cx, |p, cx| p.paste_text(&text, cx));
+        for path in paths.paths() {
+            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+            let media_type = match ext.as_deref() {
+                Some("png") => Some("image/png"),
+                Some("jpg" | "jpeg") => Some("image/jpeg"),
+                Some("gif") => Some("image/gif"),
+                Some("webp") => Some("image/webp"),
+                _ => None,
+            };
+            let small = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= 10 * 1024 * 1024);
+            match media_type.filter(|_| small).and_then(|t| Some((t, std::fs::read(path).ok()?))) {
+                Some((media_type, data)) => self.add_picture(AiImage { media_type: media_type.into(), data }),
+                None => {
+                    if !self.files.contains(path) {
+                        self.files.push(path.clone());
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn add_picture(&mut self, image: AiImage) {
+        let format = gpui::ImageFormat::from_mime_type(&image.media_type).unwrap_or(gpui::ImageFormat::Png);
+        self.previews.push(Arc::new(gpui::Image::from_bytes(format, image.data.clone())));
+        self.images.push(image);
+    }
+
+    /// What goes with the prompt: thumbnails of the pictures and the names of
+    /// the files (the path in a tooltip), each with a × to leave it out.
+    fn render_attachments(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.images.is_empty() && self.files.is_empty() {
+            return None;
+        }
+        let z = self.z();
+        let remove = |id: SharedString| {
+            div()
+                .id(id)
+                .absolute()
+                .top(px(-6.0))
+                .right(px(-6.0))
+                .size(px(18.0 * z))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .cursor_pointer()
+                .bg(hsla(ui.tab_active))
+                .border_1()
+                .border_color(hsla(ui.divider))
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .tooltip(menu::tooltip("Leave it out"))
+                .child(svg().path(icon("close")).size(px(10.0 * z)).text_color(hsla(ui.text)))
+        };
+        let mut row = div().mx_3().mt_2().flex().flex_wrap().items_end().gap_3();
+        for (i, preview) in self.previews.iter().enumerate() {
+            row = row.child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hsla(ui.divider))
+                    .bg(hsla(ui.tab_active))
+                    .p_0p5()
+                    .child(gpui::img(preview.clone()).h(px(56.0 * z)).max_w(px(120.0 * z)).rounded_sm())
+                    .child(remove(SharedString::from(format!("drop-picture-{i}"))).on_click(cx.listener(move |this, _, _, cx| {
+                        if i < this.images.len() {
+                            this.images.remove(i);
+                            this.previews.remove(i);
+                        }
+                        cx.notify();
+                    }))),
+            );
+        }
+        for (i, file) in self.files.iter().enumerate() {
+            let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| file.display().to_string());
+            row = row.child(
+                div()
+                    .id(("attached-file", i))
+                    .relative()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hsla(ui.divider))
+                    .bg(hsla(ui.tab_active))
+                    .text_size(px(12.0 * z))
+                    .text_color(hsla(ui.text))
+                    .tooltip(menu::tooltip_text(file.display().to_string()))
+                    .child(svg().path(icon(if file.is_dir() { "folder" } else { "file" })).size(px(13.0 * z)).text_color(hsla(ui.text_dim)))
+                    .child(div().max_w(px(220.0 * z)).truncate().child(name))
+                    .child(remove(SharedString::from(format!("drop-file-{i}"))).on_click(cx.listener(move |this, _, _, cx| {
+                        if i < this.files.len() {
+                            this.files.remove(i);
+                        }
+                        cx.notify();
+                    }))),
+            );
+        }
+        Some(row.into_any_element())
     }
 
     /// Puts text into the prompt, as "send to AI" does.
@@ -2265,7 +2381,6 @@ impl Render for AiView {
                 crate::scrollbar::vertical_with_blocks(crate::scrollbar::Source::List(self.list.clone()), &self.conversation_bar, &ui, false, Some(step)).absolute().top_0().right_0().bottom_0()
             });
         let empty = self.entries.is_empty();
-        let images = self.images.len();
         div()
             .key_context("AiTab")
             .track_focus(&self.focus)
@@ -2346,23 +2461,7 @@ impl Render for AiView {
                     })
                     .children(self.render_extras(&ui, cx))
                     .children(self.render_completion(&ui, cx))
-                    .when(images > 0, |d| {
-                        d.child(
-                            div()
-                                .id("ai-images")
-                                .mx_3()
-                                .flex()
-                                .gap_2()
-                                .items_center()
-                                .text_size(px(11.0 * self.z()))
-                                .text_color(hsla(ui.text_dim))
-                                .child(format!("{images} picture(s) will go with the prompt"))
-                                .child(div().id("drop-images").cursor_pointer().text_color(hsla(ui.ink(self.accent))).on_click(cx.listener(|this, _, _, cx| {
-                                    this.images.clear();
-                                    cx.notify();
-                                })).child("Remove")),
-                        )
-                    })
+                    .children(self.render_attachments(&ui, cx))
                     .child(
                         div()
                             .mx_3()

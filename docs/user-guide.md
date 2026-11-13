@@ -314,8 +314,10 @@ terminal of the bench.
   message instead: queued messages show above the prompt (each with **Remove**)
   and go one by one as turns end. Typing `/` lists Claude Code's commands and
   skills to complete (Tab or Enter picks one). Ctrl+Up and Ctrl+Down go through earlier prompts. Paste a
-  screenshot with Ctrl+V and it goes with the prompt; drop files to put their
-  paths in. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
+  screenshot with Ctrl+V, or drop pictures, and they go with the prompt: small
+  thumbnails above it, each with a × to leave it out. Other dropped files show
+  by name (the path on hover, a × to leave one out) and go as their paths, for
+  Claude to read. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
   its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu
   sends a file or folder.
 - **Times**: under each of your messages and over each response, in small text,
