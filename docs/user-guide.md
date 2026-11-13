@@ -139,7 +139,9 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   the same. Each tab has one icon, the same as in Shed's compact view: what it is
   (terminal, program running, project, AI, remote), or, in the bench's colour,
   that it is working or that a command is [waiting for Enter](#opening-hiding-closing).
-- **New tab**: the button after the last tab, or Ctrl+Shift+T.
+- **New tab**: the button after the last tab, or Ctrl+Shift+T. When the tabs do
+  not fit on one row they wrap onto more, the bar growing to hold them; the
+  buttons on the right stay on the first row.
 - **Splits**: Ctrl+Shift+E splits right, Ctrl+Shift+O splits down; drag the line
   between panes to resize; Alt+arrows move between panes.
 - **Right-click** a pane for copy, paste, split and close; a tab for rename, tags,

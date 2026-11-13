@@ -728,17 +728,10 @@ impl BenchWindow {
         let ui = &self.ui;
         let accent = bench.color.accent();
         let tab_count = bench.tabs.len();
-        let mut bar = div()
-            .id("tab-bar")
-            .flex()
-            .flex_none()
-            .h(px(TAB_BAR_HEIGHT * s))
-            // Set apart from the panes: a ground of the bench's colour, a line under it.
-            .bg(hsla_alpha(accent, 0.09))
-            .border_b_1()
-            .border_color(hsla_alpha(accent, 0.35))
-            .text_size(px(13.5 * s))
-            .text_color(hsla(ui.text_dim));
+        let row = px(TAB_BAR_HEIGHT * s);
+        // Tabs wrap onto more rows when they do not fit; the buttons stay on
+        // the right of the first.
+        let mut tabs = div().flex_1().min_w_0().flex().flex_wrap();
 
         for (i, tab) in bench.tabs.iter().enumerate() {
             let active = tab.id == bench.active_tab;
@@ -751,7 +744,7 @@ impl BenchWindow {
                 .flex()
                 .items_center()
                 .gap_1p5()
-                .h_full()
+                .h(row)
                 .px_3()
                 .max_w(px(260.0))
                 .border_r_1()
@@ -811,12 +804,13 @@ impl BenchWindow {
             if let Some(editor) = self.editor_for(EditTarget::AddTag(tab_id)) {
                 el = el.child(editor);
             }
-            bar = bar.child(el);
+            tabs = tabs.child(el);
         }
 
-        bar.child(
+        let tabs = tabs.child(
             div()
                 .id("new-tab")
+                .h(row)
                 .flex()
                 .items_center()
                 .px_2()
@@ -840,12 +834,17 @@ impl BenchWindow {
             div()
                 .id("tab-bar-end")
                 .flex_1()
-                .h_full()
+                .min_w(px(40.0))
+                .h(row)
                 .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
                 })),
-        )
-        .child(self.render_links(bench, cx))
+        );
+        let controls = div()
+            .flex()
+            .flex_none()
+            .h(row)
+            .child(self.render_links(bench, cx))
         .child(
             div()
                 .id("hide-button")
@@ -883,7 +882,21 @@ impl BenchWindow {
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_setup(window, cx)))
                 .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if self.setup.is_some() { accent } else { ui.text_dim }))),
         )
-        .child(self.render_bench_label(bench, cx))
+            .child(self.render_bench_label(bench, cx));
+        div()
+            .id("tab-bar")
+            .flex()
+            .flex_none()
+            .items_start()
+            .min_h(row)
+            // Set apart from the panes: a ground of the bench's colour, a line under it.
+            .bg(hsla_alpha(accent, 0.09))
+            .border_b_1()
+            .border_color(hsla_alpha(accent, 0.35))
+            .text_size(px(13.5 * s))
+            .text_color(hsla(ui.text_dim))
+            .child(tabs)
+            .child(controls)
     }
 
     /// The bench's links, on the tab bar: click opens, right-click for more.
