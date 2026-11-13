@@ -119,8 +119,9 @@ pub fn highlights(text: &Text, ink: Rgb, code_bg: Rgb) -> Vec<(Range<usize>, Hig
             if s.strike {
                 h.strikethrough = Some(StrikethroughStyle { thickness: px(1.0), color: None });
             }
+            // Code in the text's own colour on a faint ground: only links
+            // are coloured, so they read as links.
             if s.code {
-                h.color = Some(hsla(ink));
                 h.background_color = Some(hsla_alpha(code_bg, 0.6));
             }
             if s.link {
@@ -163,6 +164,11 @@ pub fn word_at(text: &str, at: usize) -> Range<usize> {
     let start = text[..at].char_indices().rev().take_while(|(_, c)| is_word(*c)).last().map_or(at, |(i, _)| i);
     let end = text[at..].char_indices().find(|(_, c)| !is_word(*c)).map_or(text.len(), |(i, _)| at + i);
     start..end
+}
+
+/// The range of the link at byte `at`, if any.
+pub fn link_range_at(text: &Text, at: usize) -> Option<Range<usize>> {
+    text.links.iter().find(|(r, _)| r.contains(&at)).map(|(r, _)| r.clone())
 }
 
 /// The link at byte `at`, if any.
@@ -367,7 +373,12 @@ pub fn parse_file_link(url: &str) -> Option<(std::path::PathBuf, Place)> {
 /// `~/x`), those that exist under one of `bases` or as written, and makes
 /// them links (`exists` answers whether a path is a file, and is cached by
 /// the caller). Text already a link is left alone.
-pub fn link_files(text: &mut Text, bases: &[std::path::PathBuf], exists: &mut dyn FnMut(&std::path::Path) -> bool) {
+pub fn link_files(
+    text: &mut Text,
+    bases: &[std::path::PathBuf],
+    exists: &mut dyn FnMut(&std::path::Path) -> bool,
+    find: &mut dyn FnMut(&std::path::Path) -> Option<std::path::PathBuf>,
+) {
     let breaks = |c: char| c.is_whitespace() || "\"'`<>|()[]{},;".contains(c);
     let s = text.text.clone();
     let mut found: Vec<(Range<usize>, String)> = Vec::new();
@@ -399,8 +410,10 @@ pub fn link_files(text: &mut Text, bases: &[std::path::PathBuf], exists: &mut dy
             None => Some(std::path::PathBuf::from(path)),
         };
         let Some(expanded) = expanded else { continue };
-        let candidates: Vec<std::path::PathBuf> = if expanded.is_absolute() { vec![expanded] } else { bases.iter().map(|b| b.join(&expanded)).collect() };
-        if let Some(abs) = candidates.into_iter().find(|p| exists(p)) {
+        let candidates: Vec<std::path::PathBuf> = if expanded.is_absolute() { vec![expanded.clone()] } else { bases.iter().map(|b| b.join(&expanded)).collect() };
+        // Not where it says: the one file of the projects that ends so.
+        let file = candidates.into_iter().find(|p| exists(p)).or_else(|| if expanded.is_absolute() { None } else { find(&expanded) });
+        if let Some(abs) = file {
             found.push((start..end, format!("{FILE_LINK}{line}:{col}:{}", abs.display())));
         }
     }
@@ -435,9 +448,28 @@ fn mark_link(text: &mut Text, range: Range<usize>) {
     text.spans = spans;
 }
 
+/// The one file of the projects (root, files relative to it) whose path
+/// ends with `rel`; none when no file or several do.
+pub fn find_in_projects(rel: &std::path::Path, projects: &[(std::path::PathBuf, std::sync::Arc<Vec<std::path::PathBuf>>)]) -> Option<std::path::PathBuf> {
+    let mut hits = projects.iter().flat_map(|(root, files)| files.iter().filter(|f| f.ends_with(rel)).map(move |f| root.join(f)));
+    let first = hits.next()?;
+    hits.next().is_none().then_some(first)
+}
+
 #[cfg(test)]
 mod file_tests {
     use super::*;
+
+    #[test]
+    fn bare_names_are_found_in_the_projects_when_only_one_file_has_them() {
+        let files = std::sync::Arc::new(vec!["src/main/knowledge/guide.md".into(), "README.md".into(), "docs/README.md".into()]);
+        let projects = vec![(std::path::PathBuf::from("/p"), files)];
+        let p = |s: &str| std::path::Path::new(s).to_path_buf();
+        assert_eq!(find_in_projects(&p("guide.md"), &projects), Some(p("/p/src/main/knowledge/guide.md")));
+        assert_eq!(find_in_projects(&p("knowledge/guide.md"), &projects), Some(p("/p/src/main/knowledge/guide.md")));
+        assert_eq!(find_in_projects(&p("README.md"), &projects), None, "two files have it");
+        assert_eq!(find_in_projects(&p("e.md"), &projects), None, "a whole name, not part of one");
+    }
 
     #[test]
     fn named_files_become_links() {
@@ -450,7 +482,8 @@ mod file_tests {
             .find_map(|b| if let shed_ai::markdown::Block::Paragraph(t) = b { Some(t) } else { None })
             .unwrap();
         let mut exists = |p: &std::path::Path| p.is_file();
-        link_files(&mut text, &[dir.path().to_path_buf()], &mut exists);
+        let mut find = |_: &std::path::Path| None;
+        link_files(&mut text, &[dir.path().to_path_buf()], &mut exists, &mut find);
         let named: Vec<&str> = text.links.iter().map(|(r, _)| &text.text[r.clone()]).collect();
         assert_eq!(named, ["src/main.rs:42:7", "Cargo.toml"]);
         let (path, at) = parse_file_link(&text.links[0].1).unwrap();

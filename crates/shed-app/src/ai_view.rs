@@ -152,6 +152,12 @@ pub struct AiView {
     spin: usize,
     /// Answers being chosen to Claude's questions, by request.
     asks: HashMap<String, Ask>,
+    /// The bench's projects' files (root, paths relative to it), to find a
+    /// file Claude names by its name alone; and what was found so.
+    project_files: Vec<(PathBuf, Arc<Vec<PathBuf>>)>,
+    file_lookups: HashMap<PathBuf, Option<PathBuf>>,
+    /// The link the mouse is over: entry, piece, its range.
+    hover_link: Option<(usize, usize, Range<usize>)>,
     /// Whether paths Claude names are files, as found (for its links).
     file_exists: HashMap<PathBuf, bool>,
     /// Messages written while Claude works, sent one by one as turns end.
@@ -287,6 +293,9 @@ impl AiView {
             asks: HashMap::new(),
             queue: Vec::new(),
             file_exists: HashMap::new(),
+            hover_link: None,
+            project_files: Vec::new(),
+            file_lookups: HashMap::new(),
             show_prompts: false,
             prompts_scroll: UniformListScrollHandle::new(),
             prompts_bar: Default::default(),
@@ -386,6 +395,7 @@ impl AiView {
             self.load_sessions(cx);
             // Files Claude made in the turn: links to them, now they exist.
             self.file_exists.clear();
+            self.file_lookups.clear();
             self.parsed.clear();
             // The next queued message goes now.
             if !self.queue.is_empty() {
@@ -1158,6 +1168,17 @@ impl AiView {
         .into_any_element()
     }
 
+    /// Takes the bench's projects' file lists as they are now; when one
+    /// changed, Claude's answers are read for links again.
+    pub fn set_project_files(&mut self, files: Vec<(PathBuf, Arc<Vec<PathBuf>>)>) {
+        let same = files.len() == self.project_files.len() && files.iter().zip(&self.project_files).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1));
+        if !same {
+            self.project_files = files;
+            self.file_lookups.clear();
+            self.parsed.clear();
+        }
+    }
+
     /// Opens a file in the bench's project tab that holds it (one is opened
     /// for its project if none does), at `at`.
     fn reveal_file(&mut self, path: PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) {
@@ -1258,8 +1279,10 @@ impl AiView {
                 bases.extend(self.projects.iter().cloned());
                 let known = &mut self.file_exists;
                 let mut exists = |p: &std::path::Path| *known.entry(p.to_path_buf()).or_insert_with(|| p.is_file());
+                let (lookups, projects) = (&mut self.file_lookups, &self.project_files);
+                let mut find = |rel: &std::path::Path| lookups.entry(rel.to_path_buf()).or_insert_with(|| ai_text::find_in_projects(rel, projects)).clone();
                 for piece in pieces.iter_mut().filter(|p| !matches!(p.kind, Kind::Code { .. })) {
-                    ai_text::link_files(&mut piece.text, &bases, &mut exists);
+                    ai_text::link_files(&mut piece.text, &bases, &mut exists, &mut find);
                 }
                 let palette = &self.settings.palette;
                 let code = pieces
@@ -1370,6 +1393,10 @@ impl AiView {
             .map(|r| text.floor_char_boundary(r.start)..text.floor_char_boundary(r.end))
             .filter(|r| r.start < r.end);
         let sel_style = HighlightStyle { background_color: Some(hsla_alpha(self.accent, 0.35)), ..Default::default() };
+        // The link under the mouse: a light ground, and the hand.
+        let hovered = self.hover_link.as_ref().filter(|(e, p, _)| (*e, *p) == (i, j)).map(|(_, _, r)| r.clone());
+        let hover_style = HighlightStyle { background_color: Some(hsla_alpha(self.accent, 0.16)), ..Default::default() };
+        let styles = ai_text::with_selection(styles, hovered.clone(), hover_style);
         let styled = StyledText::new(SharedString::from(text.clone())).with_highlights(ai_text::with_selection(styles, selected, sel_style));
         let (down, moved, up) = (styled.layout().clone(), styled.layout().clone(), styled.layout().clone());
         let (p1, p2, p3) = (parsed.clone(), parsed.clone(), parsed.clone());
@@ -1380,7 +1407,7 @@ impl AiView {
             .flex()
             .flex_col()
             .min_w_0()
-            .cursor(CursorStyle::IBeam)
+            .cursor(if hovered.is_some() { CursorStyle::PointingHand } else { CursorStyle::IBeam })
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                 let text = &p1.pieces[j].text.text;
                 let Some(at) = text_index(&down, text, e.position) else { return };
@@ -1402,7 +1429,28 @@ impl AiView {
                 cx.notify();
             }))
             .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
-                if !this.selecting || e.pressed_button != Some(MouseButton::Left) || !over_text(&moved, e.position) {
+                if !this.selecting || e.pressed_button != Some(MouseButton::Left) {
+                    // Over a link of this text, or off the one it was over.
+                    let over = if over_text(&moved, e.position) {
+                        text_index(&moved, &p3.pieces[j].text.text, e.position).and_then(|at| ai_text::link_range_at(&p3.pieces[j].text, at))
+                    } else {
+                        None
+                    };
+                    let mine = this.hover_link.as_ref().is_some_and(|(e, p, _)| (*e, *p) == (i, j));
+                    match over {
+                        Some(r) if this.hover_link.as_ref().is_none_or(|h| *h != (i, j, r.clone())) => {
+                            this.hover_link = Some((i, j, r));
+                            cx.notify();
+                        }
+                        None if mine => {
+                            this.hover_link = None;
+                            cx.notify();
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                if !over_text(&moved, e.position) {
                     return;
                 }
                 let Some(offset) = text_index(&moved, &p3.pieces[j].text.text, e.position) else { return };
@@ -2368,6 +2416,16 @@ impl MenuHost for AiView {
 impl Render for AiView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ui = current_ui(cx);
+        // The bench's projects' file lists, to find files Claude names.
+        if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+            let state = state.read(cx);
+            let files: Vec<(PathBuf, Arc<Vec<PathBuf>>)> = state
+                .tree
+                .bench(self.bench)
+                .map(|b| b.tabs.iter().filter_map(|t| state.projects.get(&t.id)).map(|v| v.read(cx).file_index()).collect())
+                .unwrap_or_default();
+            self.set_project_files(files);
+        }
         let limits = cx.try_global::<AiLimits>().map(|l| l.0).unwrap_or_default();
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
         let count = self.shown_sessions(cx).len();

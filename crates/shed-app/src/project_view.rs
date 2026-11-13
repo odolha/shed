@@ -298,6 +298,11 @@ impl ProjectView {
         cx.notify();
     }
 
+    /// The project's folder and its files (relative to it), as last listed.
+    pub fn file_index(&self) -> (PathBuf, Arc<Vec<PathBuf>>) {
+        (self.root.clone(), self.files.clone())
+    }
+
     /// The tab's zoom, in font points: the code, the tree and the lists.
     pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
         if zoom != self.zoom {

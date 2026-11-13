@@ -428,14 +428,8 @@ impl AppState {
     /// a line and column (from 1). False if no project tab holds it.
     pub fn open_in_project(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) -> bool {
         let Some(b) = self.tree.bench(bench) else { return false };
-        let tab = b
-            .tabs
-            .iter()
-            .filter_map(|t| Some((t.id, &t.project_info()?.root)))
-            .filter(|(_, root)| path.starts_with(root))
-            .max_by_key(|(_, root)| root.as_os_str().len())
-            .map(|(id, _)| id);
-        let Some(tab) = tab else { return false };
+        let roots: Vec<(TabId, std::path::PathBuf)> = b.tabs.iter().filter_map(|t| Some((t.id, t.project_info()?.root.clone()))).collect();
+        let Some((tab, path)) = project_holding(&path, &roots) else { return false };
         let Some(view) = self.projects.get(&tab).cloned() else { return false };
         self.conn.send_msg(ClientMsg::FocusTab { tab });
         view.update(cx, |v, cx| v.open_path(path, at, cx));
@@ -928,6 +922,23 @@ pub fn close_tab(conn: &KeeperConn, tab: &Tab, bench: BenchRef, window: &mut gpu
     .detach();
 }
 
+/// The project (of `roots`) that holds `path`, the innermost, and the path
+/// as that project knows it. Compared with links resolved: a project open as
+/// ~/Workspace/x holds ~/Work/x/f when ~/Work links to ~/Workspace.
+pub fn project_holding(path: &std::path::Path, roots: &[(TabId, std::path::PathBuf)]) -> Option<(TabId, std::path::PathBuf)> {
+    let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let real_path = real(path);
+    roots
+        .iter()
+        .filter_map(|(id, root)| {
+            let real_root = real(root);
+            let rel = real_path.strip_prefix(&real_root).ok()?.to_path_buf();
+            Some((*id, real_root.as_os_str().len(), root.join(rel)))
+        })
+        .max_by_key(|(_, len, _)| *len)
+        .map(|(id, _, p)| (id, p))
+}
+
 /// The app state, for views that reach across benches (a terminal's
 /// Ctrl+click opening a file in a project tab).
 pub struct AppHandle(pub gpui::WeakEntity<AppState>);
@@ -1012,5 +1023,25 @@ fn release_freed_memory() {
     // SAFETY: malloc_trim only returns free heap pages to the kernel.
     unsafe {
         libc::malloc_trim(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_project_holds_its_files_through_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("Workspace/app");
+        std::fs::create_dir_all(real.join("docs")).unwrap();
+        std::fs::write(real.join("docs/guide.md"), "").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("Workspace"), dir.path().join("Work")).unwrap();
+        let (outer, inner) = (TabId::new(), TabId::new());
+        let roots = vec![(outer, dir.path().join("Workspace")), (inner, real.clone())];
+        // Named through the link, held by the innermost project.
+        let (tab, path) = project_holding(&dir.path().join("Work/app/docs/guide.md"), &roots).unwrap();
+        assert_eq!((tab, path), (inner, real.join("docs/guide.md")));
+        assert!(project_holding(&dir.path().join("elsewhere.md"), &roots).is_none());
     }
 }
