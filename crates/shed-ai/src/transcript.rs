@@ -39,6 +39,23 @@ pub struct Transcript {
     pub clock: u64,
     /// The time of the record being applied, if it says.
     applying_time: Option<u64>,
+    /// Where the pictures of prompts are kept, to show them again (none:
+    /// only their number is known).
+    pub picture_dir: Option<std::path::PathBuf>,
+}
+
+/// The file name a picture is kept under: its content's hash, its kind.
+fn picture_name(data: &[u8], media_type: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    let ext = match media_type {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    format!("{:016x}.{ext}", h.finish())
 }
 
 /// `2026-11-12T13:02:43.223Z` as Unix seconds.
@@ -98,8 +115,9 @@ impl Transcript {
 
     /// What the user sends, as it goes out, with the message id it goes
     /// out with.
-    pub fn user(&mut self, text: &str, images: u32, now: u64, uuid: Option<String>) {
-        let entry = self.push(Entry::User { text: text.to_string(), images, at: now });
+    pub fn user(&mut self, text: &str, images: &[(String, Vec<u8>)], now: u64, uuid: Option<String>) {
+        let pictures = images.iter().filter_map(|(media, data)| self.keep_picture(media, data)).collect();
+        let entry = self.push(Entry::User { text: text.to_string(), images: images.len() as u32, at: now, pictures });
         self.mark_prompt(entry, uuid);
         self.status.state = State::Working;
         self.status.since = Some(now);
@@ -136,6 +154,20 @@ impl Transcript {
 
     pub fn notice(&mut self, text: impl Into<String>, error: bool) {
         self.push(Entry::Notice { text: text.into(), error });
+    }
+
+    /// Keeps a prompt's picture in `picture_dir` (once: the same picture is
+    /// the same file); its path.
+    pub fn keep_picture(&self, media_type: &str, data: &[u8]) -> Option<String> {
+        let dir = self.picture_dir.as_ref()?;
+        let path = dir.join(picture_name(data, media_type));
+        if !path.exists() {
+            std::fs::create_dir_all(dir).ok()?;
+            let part = path.with_extension("part");
+            std::fs::write(&part, data).ok()?;
+            std::fs::rename(&part, &path).ok()?;
+        }
+        Some(path.to_string_lossy().into_owned())
     }
 
     /// When the record being applied happened: its own time, else now.
@@ -303,20 +335,33 @@ impl Transcript {
 
     fn user_message(&mut self, msg: &Value) {
         match msg.get("content") {
-            Some(Value::String(text)) => self.prompt(text, 0),
+            Some(Value::String(text)) => self.prompt(text, 0, Vec::new()),
             Some(Value::Array(blocks)) => {
                 let mut text = String::new();
                 let mut images = 0;
+                let mut pictures = Vec::new();
                 for b in blocks {
                     match b.get("type").and_then(Value::as_str).unwrap_or("") {
                         "tool_result" => self.tool_result(b),
                         "text" => text.push_str(b.get("text").and_then(Value::as_str).unwrap_or("")),
-                        "image" => images += 1,
+                        "image" => {
+                            images += 1;
+                            // Saved sessions keep the picture itself.
+                            use base64::Engine;
+                            let source = b.get("source");
+                            let media = source.and_then(|s| s.get("media_type")).and_then(Value::as_str).unwrap_or("image/png");
+                            if let Some(data) = source.and_then(|s| s.get("data")).and_then(Value::as_str)
+                                && let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data)
+                                && let Some(path) = self.keep_picture(media, &bytes)
+                            {
+                                pictures.push(path);
+                            }
+                        }
                         _ => {}
                     }
                 }
                 if !text.is_empty() || images > 0 {
-                    self.prompt(&text, images);
+                    self.prompt(&text, images, pictures);
                 }
             }
             _ => {}
@@ -325,7 +370,7 @@ impl Transcript {
 
     /// A user's message from a saved session: a prompt, or one of Claude
     /// Code's own notes.
-    fn prompt(&mut self, text: &str, images: u32) {
+    fn prompt(&mut self, text: &str, images: u32, pictures: Vec<String>) {
         if text.starts_with("[Request interrupted") {
             return self.notice("Stopped", false);
         }
@@ -337,13 +382,13 @@ impl Transcript {
             let name = rest.split("</command-name>").next().unwrap_or("");
             let args = text.split("<command-args>").nth(1).and_then(|a| a.split("</command-args>").next()).unwrap_or("");
             let at = self.now();
-            let entry = self.push(Entry::User { text: format!("{name} {args}").trim().to_string(), images, at });
+            let entry = self.push(Entry::User { text: format!("{name} {args}").trim().to_string(), images, at, pictures });
             let uuid = self.applying_uuid.clone();
             self.mark_prompt(entry, uuid);
             return;
         }
         let at = self.now();
-        let entry = self.push(Entry::User { text: text.to_string(), images, at });
+        let entry = self.push(Entry::User { text: text.to_string(), images, at, pictures });
         let uuid = self.applying_uuid.clone();
         self.mark_prompt(entry, uuid);
     }
@@ -444,6 +489,30 @@ mod tests {
     }
 
     #[test]
+    fn pictures_sent_or_saved_are_kept_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = Transcript::new("/tmp/shed-ai-test");
+        t.picture_dir = Some(dir.path().join("pictures"));
+        let png = b"\x89PNG not really".to_vec();
+        t.user("look", &[("image/png".into(), png.clone())], 1, None);
+        let Entry::User { pictures, images, .. } = &t.entries[0] else { panic!() };
+        assert_eq!(*images, 1);
+        assert_eq!(std::fs::read(&pictures[0]).unwrap(), png);
+        // The same picture read back from a saved session is the same file.
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.encode(&png);
+        let mut saved = Transcript::new("/tmp/shed-ai-test");
+        saved.picture_dir = t.picture_dir.clone();
+        saved.apply(&serde_json::json!({"type": "user", "message": {"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
+            {"type": "text", "text": "look"},
+        ]}}));
+        let Entry::User { pictures: again, .. } = &saved.entries[0] else { panic!("{:?}", saved.entries) };
+        assert_eq!(again, pictures);
+        assert_eq!(std::fs::read_dir(dir.path().join("pictures")).unwrap().count(), 1);
+    }
+
+    #[test]
     fn a_streamed_turn_with_tools_and_a_permission() {
         let mut t = replay("edit-and-bash.jsonl");
         let kinds: Vec<&str> = t
@@ -496,10 +565,10 @@ mod tests {
     fn prompts_know_where_to_go_back_to() {
         use serde_json::json;
         let mut t = Transcript::new("/tmp");
-        t.user("first", 0, 0, Some("u1".into()));
+        t.user("first", &[], 0, Some("u1".into()));
         t.apply(&json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [{"type": "text", "text": "one"}]}}));
         t.apply(&json!({"type": "result", "subtype": "success", "uuid": "r1"}));
-        t.user("second", 0, 0, Some("u2".into()));
+        t.user("second", &[], 0, Some("u2".into()));
         t.apply(&json!({"type": "assistant", "uuid": "a2", "message": {"id": "m2", "content": [{"type": "text", "text": "two"}]}}));
         let second = t.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap();
         assert_eq!(t.prompt_mark(0).unwrap().before, None);
@@ -508,7 +577,7 @@ mod tests {
         t.truncate(second);
         assert_eq!(t.entries.len(), second);
         assert!(t.prompt_mark(second).is_none() && t.prompt_mark(0).is_some());
-        t.user("second, again", 0, 0, Some("u3".into()));
+        t.user("second, again", &[], 0, Some("u3".into()));
         assert_eq!(t.prompt_mark(second).unwrap().before.as_deref(), Some("a1"));
         // A saved session's prompts carry their ids too.
         let mut saved = Transcript::new("/tmp");

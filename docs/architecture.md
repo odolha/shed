@@ -354,7 +354,10 @@ behind `shed-html:`, which the patched Linux clipboard offers as `text/html`.
 
 Sessions are read from Claude Code's own files
 (`~/.claude/projects/<folder>/<id>.jsonl`), by the window to list them (titles from
-its `ai-title` records) and by the keeper to show a session again. `shed-ai` has
+its `ai-title` records) and by the keeper to show a session again. Pictures in a
+prompt (sent, or base64 image blocks in a saved session) are written once to
+`$XDG_STATE_HOME/shed/ai-pictures/<hash>.<ext>` (`Transcript::keep_picture`), and
+`Entry::User.pictures` carries their paths for the window to show. `shed-ai` has
 no UI and no processes; its tests replay recorded streams
 (`crates/shed-ai/tests/streams/`), and `crates/shed-app/tests/ai_tabs.rs` runs the
 keeper against a stand-in `claude` (`SHED_CLAUDE`).

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 pub enum Entry {
     /// What the user asked; `images` pictures came with it; when (Unix
     /// seconds, 0 if not known).
-    User { text: String, images: u32, at: u64 },
+    User { text: String, images: u32, at: u64, pictures: Vec<String> },
     /// Claude's answer, in Markdown; grows while it streams. `at`: when it
     /// started.
     Assistant { text: String, at: u64 },

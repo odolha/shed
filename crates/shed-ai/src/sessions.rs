@@ -105,10 +105,13 @@ fn read_info(path: &Path) -> Option<SessionInfo> {
 }
 
 /// A saved session as a conversation, to show it again.
-pub fn load_session(folder: &Path, id: &str) -> Option<Transcript> {
+/// A saved session as a conversation; its prompts' pictures are kept in
+/// `picture_dir`, to show them.
+pub fn load_session(folder: &Path, id: &str, picture_dir: Option<std::path::PathBuf>) -> Option<Transcript> {
     let path = sessions_dir(folder).join(format!("{id}.jsonl"));
     let file = std::fs::File::open(path).ok()?;
     let mut t = Transcript::new(&folder.to_string_lossy());
+    t.picture_dir = picture_dir;
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         if !(line.contains("\"user\"") || line.contains("\"assistant\"")) {
             continue;
@@ -150,7 +153,7 @@ mod tests {
         let list = list_sessions(folder);
         assert_eq!(list.len(), 1, "{list:?}");
         assert_eq!((list[0].id.as_str(), list[0].title.as_str(), list[0].prompts), ("aaa", "Notes.txt line append", 1));
-        let t = load_session(folder, "aaa").unwrap();
+        let t = load_session(folder, "aaa", None).unwrap();
         assert!(!t.entries.is_empty());
     }
 }

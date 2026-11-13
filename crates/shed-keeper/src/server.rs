@@ -165,6 +165,9 @@ struct PaneRt {
     after_prompt: VecDeque<(String, bool)>,
     /// Ticks at every prompt, for closing a bench step by step.
     prompts: tokio::sync::watch::Sender<u64>,
+    /// At every command the shell runs: the prompt count then, so a wait for
+    /// a command's end is not ended by a prompt shown before it ran.
+    executed: tokio::sync::watch::Sender<u64>,
     /// The shell has shown a prompt mark: it runs Shed's hook.
     hooked: bool,
     /// The shell reported a command's end (or its first prompt) since the
@@ -1895,7 +1898,7 @@ impl Keeper {
     /// Stops a pane's running tool, then (`with_teardown`) runs its teardown
     /// commands at the prompt, one by one.
     async fn teardown_pane(self: Arc<Self>, pane: PaneId, with_teardown: bool) {
-        let (mut prompts, running, teardown, hooked) = {
+        let (mut prompts, mut executed, running, teardown, hooked) = {
             let st = self.lock();
             let Some(rt) = st.panes.get(&pane) else { return };
             // A remote tab's shell is on the server and outlives the bench:
@@ -1907,7 +1910,7 @@ impl Keeper {
             let tree_pane = st.tree.pane(pane);
             let running = rt.running.is_some() || tree_pane.is_some_and(|p| p.tool.is_some());
             let teardown = if with_teardown { tree_pane.map(|p| p.setup.teardown.clone()).unwrap_or_default() } else { Vec::new() };
-            (rt.prompts.subscribe(), running, teardown, rt.hooked)
+            (rt.prompts.subscribe(), rt.executed.subscribe(), running, teardown, rt.hooked)
         };
         let send = |bytes: &[u8]| {
             if let Some(rt) = self.lock().panes.get(&pane) {
@@ -1935,11 +1938,46 @@ impl Keeper {
                 next_prompt(&mut prompts, hooked, Duration::from_secs(3)).await;
             }
         }
+        // Waits for the command just typed to run, then for the prompt after
+        // it (a prompt still on its way from before does not count).
+        async fn command_done(
+            prompts: &mut tokio::sync::watch::Receiver<u64>,
+            executed: &mut tokio::sync::watch::Receiver<u64>,
+            hooked: bool,
+            limit: Duration,
+        ) -> bool {
+            if !hooked {
+                tokio::time::sleep(Duration::from_millis(800)).await;
+                return true;
+            }
+            tokio::time::timeout(limit, async {
+                tokio::select! {
+                    r = executed.changed() => r.ok()?,
+                    // A line that runs nothing (a comment) only brings a prompt back.
+                    r = async {
+                        prompts.changed().await?;
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        Ok::<_, tokio::sync::watch::error::RecvError>(())
+                    } => {
+                        r.ok()?;
+                        if !executed.has_changed().unwrap_or(false) {
+                            return Some(());
+                        }
+                    }
+                }
+                let at = *executed.borrow_and_update();
+                prompts.wait_for(|n| *n > at).await.ok().map(|_| ())
+            })
+            .await
+            .is_ok_and(|r| r.is_some())
+        }
         for command in teardown {
             let mut bytes = command.into_bytes();
             bytes.push(b'\r');
+            executed.borrow_and_update();
+            prompts.borrow_and_update();
             send(&bytes);
-            if !next_prompt(&mut prompts, hooked, TEARDOWN_LIMIT).await {
+            if !command_done(&mut prompts, &mut executed, hooked, TEARDOWN_LIMIT).await {
                 warn!(?pane, "a teardown command did not finish in time");
                 break;
             }
@@ -2296,6 +2334,7 @@ impl Keeper {
             last_finished: None,
             after_prompt: spec.after_prompt,
             prompts: tokio::sync::watch::channel(0).0,
+            executed: tokio::sync::watch::channel(0).0,
             hooked: false,
             new_prompt: false,
             reports_ends: false,
@@ -2415,6 +2454,10 @@ impl Keeper {
             // Any command running ends the wait, even one bash leaves out of
             // history (and so sends no command text for).
             Mark::Executed => {
+                if let Some(rt) = st.panes.get(&pane) {
+                    let at = *rt.prompts.borrow();
+                    rt.executed.send_replace(at);
+                }
                 if let Some(p) = st.tree.pane_mut(pane)
                     && p.waiting.take().is_some()
                 {

@@ -1714,7 +1714,7 @@ impl AiView {
             cx.notify();
         });
         let body = match entry {
-            Entry::User { text, images, at } => {
+            Entry::User { text, images, at, pictures } => {
                 let lines: Vec<&str> = text.lines().collect();
                 let group: SharedString = format!("prompt-{i}").into();
                 let idle = self.status.state == AiState::Idle;
@@ -1761,7 +1761,33 @@ impl AiView {
                         let parsed = self.entry_pieces(i);
                         self.sel_text(i, 0, &parsed, Vec::new(), cx)
                     })
-                    .when(images > 0, |d| d.child(div().mt_1().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{images} picture(s) attached"))))
+                    // The pictures sent with it, small; a click opens one whole.
+                    .when(!pictures.is_empty(), |d| {
+                        let z = self.z();
+                        let dim = ui.text_dim;
+                        d.child(div().mt_2().flex().flex_wrap().gap_2().children(pictures.iter().enumerate().map(|(n, path)| {
+                            let url = format!("file://{path}");
+                            div()
+                                .id(SharedString::from(format!("picture-{i}-{n}")))
+                                .flex_none()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(hsla(ui.divider))
+                                .p_0p5()
+                                .cursor_pointer()
+                                .tooltip(menu::tooltip("Open the picture"))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(move |_, _, cx| cx.open_url(&url))
+                                .child(
+                                    gpui::img(PathBuf::from(path))
+                                        .h(px(72.0 * z))
+                                        .max_w(px(160.0 * z))
+                                        .rounded_sm()
+                                        .with_fallback(move || div().px_2().py_1().text_size(px(11.0 * z)).text_color(hsla(dim)).child("picture no longer there").into_any_element()),
+                                )
+                        })))
+                    })
+                    .when(pictures.is_empty() && images > 0, |d| d.child(div().mt_1().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{images} picture(s) attached"))))
                     .when(lines.len() > FOLD_LINES, |d| {
                         let label = if open { "Show less".to_string() } else { format!("Show all {} lines", lines.len()) };
                         d.child(div().id(("fold", i)).mt_1().cursor_pointer().text_size(px(11.0 * self.z())).text_color(hsla(ui.ink(accent))).on_click(toggle).child(label))
@@ -2736,7 +2762,7 @@ mod tests {
 
     #[test]
     fn jumps_land_on_messages() {
-        let user = || Entry::User { text: "q".into(), images: 0, at: 0 };
+        let user = || Entry::User { text: "q".into(), images: 0, at: 0, pictures: Vec::new() };
         let said = || Entry::Assistant { text: "a".into(), at: 0 };
         let tool = || Entry::Tool(Default::default());
         // 0 you, 1 response (2, 3 more of it), 4 you, 5 response, 6 more.

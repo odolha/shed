@@ -315,7 +315,10 @@ terminal of the bench.
   and go one by one as turns end. Typing `/` lists Claude Code's commands and
   skills to complete (Tab or Enter picks one). Ctrl+Up and Ctrl+Down go through earlier prompts. Paste a
   screenshot with Ctrl+V, or drop pictures, and they go with the prompt: small
-  thumbnails above it, each with a × to leave it out. Other dropped files show
+  thumbnails above it, each with a × to leave it out. Sent pictures stay in your
+  message as thumbnails (a click opens one whole), also in sessions shown again;
+  Shed keeps a copy in `~/.local/state/shed/ai-pictures`, and a picture deleted
+  from there says so instead. Other dropped files show
   by name (the path on hover, a × to leave one out) and go as their paths, for
   Claude to read. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
   its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu

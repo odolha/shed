@@ -5811,6 +5811,7 @@ dependencies = [
 name = "shed-ai"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "pulldown-cmark",
  "serde",
  "serde_json",

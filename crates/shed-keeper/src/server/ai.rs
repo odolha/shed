@@ -143,6 +143,11 @@ impl State {
 }
 
 impl Keeper {
+    /// Where the pictures sent with prompts are kept, to show them again.
+    fn picture_dir(&self) -> PathBuf {
+        self.cfg.state_dir.join("ai-pictures")
+    }
+
     /// The tab's conversation, made (from its saved session, if any) the first time.
     fn ai_rt<'a>(&self, st: &'a mut State, tab: TabId) -> Option<&'a mut AiRt> {
         if !st.ai.contains_key(&tab) {
@@ -150,8 +155,12 @@ impl Keeper {
             let transcript = ai
                 .session
                 .as_deref()
-                .and_then(|id| shed_ai::load_session(&ai.folder, id))
-                .unwrap_or_else(|| Transcript::new(&ai.folder.to_string_lossy()));
+                .and_then(|id| shed_ai::load_session(&ai.folder, id, Some(self.picture_dir())))
+                .unwrap_or_else(|| {
+                    let mut t = Transcript::new(&ai.folder.to_string_lossy());
+                    t.picture_dir = Some(self.picture_dir());
+                    t
+                });
             st.ai.insert(tab, AiRt::new(transcript));
         }
         st.ai.get_mut(&tab)
@@ -215,7 +224,8 @@ impl Keeper {
         // Our own id for the message, kept in Claude Code's record: going
         // back to it and putting files back both need it.
         let uuid = uuid::Uuid::new_v4().to_string();
-        rt.transcript.user(&text, images.len() as u32, now(), Some(uuid.clone()));
+        let pictures: Vec<(String, Vec<u8>)> = images.iter().map(|i| (i.media_type.clone(), i.data.clone())).collect();
+        rt.transcript.user(&text, &pictures, now(), Some(uuid.clone()));
         rt.write(json!({"type": "user", "uuid": uuid, "message": {"role": "user", "content": content}}));
     }
 
@@ -511,8 +521,12 @@ impl Keeper {
         let transcript = ai
             .session
             .as_deref()
-            .and_then(|id| shed_ai::load_session(&ai.folder, id))
-            .unwrap_or_else(|| Transcript::new(&ai.folder.to_string_lossy()));
+            .and_then(|id| shed_ai::load_session(&ai.folder, id, Some(self.picture_dir())))
+            .unwrap_or_else(|| {
+                    let mut t = Transcript::new(&ai.folder.to_string_lossy());
+                    t.picture_dir = Some(self.picture_dir());
+                    t
+                });
         let mut rt = AiRt::new(transcript);
         rt.transcript.touch_all();
         st.ai.insert(tab, rt);
