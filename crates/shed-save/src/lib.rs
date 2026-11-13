@@ -96,6 +96,9 @@ pub struct SavedTab {
     /// Font size points over the configured size (the tab's zoom).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub zoom: f32,
+    /// A divider before the tab on the tab bar: `space` or `row`.
+    #[serde(default, skip_serializing_if = "is_no_divider")]
+    pub divider: shed_model::TabDivider,
     /// What a project tab shows; a terminal tab has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<SavedProject>,
@@ -225,6 +228,10 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_no_divider(d: &shed_model::TabDivider) -> bool {
+    *d == shed_model::TabDivider::None
+}
+
 fn is_zero(v: &f32) -> bool {
     *v == 0.0
 }
@@ -290,6 +297,7 @@ impl SavedBench {
                     active_pane: order.iter().position(|id| *id == tab.active_pane).unwrap_or(0),
                     aliases: tab.aliases.clone(),
                     zoom: tab.zoom,
+                    divider: tab.divider,
                     project,
                     ai,
                     remote: tab.remote_info().cloned(),
@@ -357,6 +365,7 @@ impl SavedBench {
                 tab.private = st.private;
                 tab.aliases = st.aliases.clone();
                 tab.zoom = st.zoom;
+                tab.divider = st.divider;
                 tabs.push(tab);
                 continue;
             }
@@ -396,6 +405,7 @@ impl SavedBench {
                 panes,
                 aliases: st.aliases.clone(),
                 zoom: st.zoom,
+                divider: st.divider,
             });
         }
         if tabs.is_empty() {
@@ -451,6 +461,7 @@ impl SavedBench {
             active_pane: 0,
             aliases: Aliases::new(),
             zoom: 0.0,
+            divider: Default::default(),
             project: None,
             ai: None,
             remote: None,
@@ -483,6 +494,7 @@ impl SavedBench {
             active_pane: 0,
             aliases: Aliases::new(),
             zoom: 0.0,
+            divider: Default::default(),
             project: Some(SavedProject { root: home_relative(root), open: Vec::new(), active: None, exclude: Vec::new(), links: Vec::new() }),
             ai: None,
             remote: None,
@@ -947,6 +959,20 @@ mod tests {
             window: Some(WindowPlace { x: 40.0, y: 30.0, width: 1200.0, height: 800.0, state: WindowState::Maximized }),
             links: vec![shed_model::ProjectLink { name: "local".into(), url: "http://localhost:3000/".into() }],
         }
+    }
+
+    #[test]
+    fn tab_dividers_are_kept() {
+        let mut bench = sample();
+        bench.tabs[1].divider = shed_model::TabDivider::Row;
+        bench.tabs[2].divider = shed_model::TabDivider::Space;
+        let text = SavedBench::from_bench(&bench, |_| PaneExtras::default()).to_toml();
+        assert!(text.contains("divider = \"row\"") && text.contains("divider = \"space\""), "{text}");
+        let (back, _) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
+        let dividers: Vec<_> = back.tabs.iter().map(|t| t.divider).collect();
+        assert_eq!(dividers, [shed_model::TabDivider::None, shed_model::TabDivider::Row, shed_model::TabDivider::Space, shed_model::TabDivider::None]);
+        // Files from before have none.
+        assert!(!SavedBench::from_bench(&sample(), |_| PaneExtras::default()).to_toml().contains("divider"));
     }
 
     #[test]

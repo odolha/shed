@@ -10,7 +10,7 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, Pixels, PromptLevel, SharedString, Subscription, Window, canvas,
     div, prelude::*, px, relative, svg,
 };
-use shed_model::{
+use shed_model::{TabDivider, 
     Bench, BenchColor, BenchId, Direction, PaneId, PaneNode, Rgb, SplitDir, Tab, TabId, Tag,
     default_tag_color, tag_color,
 };
@@ -149,6 +149,8 @@ pub struct BenchWindow {
     drag: Option<SplitDrag>,
     /// The Setup panel, while open.
     setup: Option<(Entity<SetupPanel>, Subscription)>,
+    /// A touchpad's Ctrl+scroll so far, towards a zoom step.
+    wheel_zoom: Rc<std::cell::Cell<f32>>,
     place: PlaceTracker,
     /// The shells each server keeps, as last asked (for New Remote Tab).
     remote_shells: HashMap<String, RemoteShells>,
@@ -190,6 +192,7 @@ impl BenchWindow {
             split_bounds: Rc::default(),
             drag: None,
             setup: None,
+            wheel_zoom: Rc::default(),
             place,
             remote_shells: HashMap::new(),
             remote_menu: None,
@@ -576,6 +579,24 @@ impl BenchWindow {
             item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)).icon("pencil"),
             item("Add Tag…", move |this, window, cx| this.start_edit(EditTarget::AddTag(tab_id), window, cx)).icon("tag"),
         ];
+        // Dividers group the tab bar: a space before this tab, or a new row.
+        let divider = move |label: &'static str, d: TabDivider| {
+            item(label, move |this: &mut Self, _, cx| this.send(ClientMsg::SetTabDivider { tab: tab_id, divider: d }, cx))
+        };
+        let first = self.bench(cx).is_some_and(|b| b.tabs.first().map(|t| t.id) == Some(tab_id));
+        if !first {
+            entries.push(more("Divider Before", move |this: &mut Self, cx| {
+                let now = this.tab(tab_id, cx).map(|t| t.divider).unwrap_or_default();
+                [
+                    (TabDivider::Space, "Space: a New Group", "Space: a New Group  ✓"),
+                    (TabDivider::Row, "New Row", "New Row  ✓"),
+                    (TabDivider::None, "None", "None  ✓"),
+                ]
+                .into_iter()
+                .map(|(d, label, checked)| divider(if d == now { checked } else { label }, d))
+                .collect()
+            }));
+        }
         match tab.project_info() {
             _ if tab.ai_info().is_some() => {}
             Some(project) => {
@@ -681,6 +702,43 @@ impl BenchWindow {
         entries
     }
 
+    /// Ctrl (Cmd) with the wheel zooms the shown tab, whatever is under the
+    /// mouse: heard first (the capture phase), so it does not also scroll.
+    fn ctrl_wheel_zoom(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity().downgrade();
+        let pending = self.wheel_zoom.clone();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let (view, pending) = (view.clone(), pending.clone());
+                window.on_mouse_event(move |e: &gpui::ScrollWheelEvent, phase, _, cx| {
+                    if phase != gpui::DispatchPhase::Capture || !e.modifiers.secondary() {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    // A notch is a step; a touchpad's pixels add up to one.
+                    let step = match e.delta {
+                        gpui::ScrollDelta::Lines(d) => d.y.signum(),
+                        gpui::ScrollDelta::Pixels(d) => {
+                            let total = pending.get() + f32::from(d.y);
+                            if total.abs() < 40.0 {
+                                pending.set(total);
+                                return;
+                            }
+                            pending.set(0.0);
+                            total.signum()
+                        }
+                    };
+                    if step != 0.0 {
+                        view.update(cx, |this, cx| this.zoom_tab(step, cx)).ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
     /// Zooms the shown tab by `delta` points (0 goes back to the usual size).
     fn zoom_tab(&mut self, delta: f32, cx: &mut Context<Self>) {
         let Some(tab) = self.bench(cx).and_then(|b| b.active_tab().cloned()) else { return };
@@ -732,8 +790,23 @@ impl BenchWindow {
         // Tabs wrap onto more rows when they do not fit; the buttons stay on
         // the right of the first.
         let mut tabs = div().flex_1().min_w_0().flex().flex_wrap();
+        // Tabs in groups, split where a tab has a divider before it: a group
+        // goes onto the next row whole, and wraps inside only when it alone
+        // is wider than the bar.
+        let group = || div().flex().flex_wrap().min_w_0();
+        let mut current = group();
+        let base = self.state.read(cx).settings.font.size;
 
         for (i, tab) in bench.tabs.iter().enumerate() {
+            if i > 0 && tab.divider != TabDivider::None {
+                tabs = tabs.child(std::mem::replace(&mut current, group()));
+                if tab.divider == TabDivider::Row {
+                    // A full-width nothing: what follows starts a row.
+                    tabs = tabs.child(div().w_full().h(px(0.0)));
+                } else {
+                    current = current.ml(px(18.0 * s));
+                }
+            }
             let active = tab.id == bench.active_tab;
             let tab_id = tab.id;
             let title = tab.display_title();
@@ -789,6 +862,27 @@ impl BenchWindow {
                 Some(editor) => el = el.child(editor),
                 None => el = el.child(div().truncate().child(title)),
             }
+            // A zoomed tab says how much; a click puts it back.
+            if tab.zoom != 0.0 {
+                let pct = ((base + tab.zoom) / base * 100.0).round();
+                el = el.child(
+                    div()
+                        .id(("zoom", i))
+                        .flex_none()
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(10.5 * s))
+                        .bg(hsla_alpha(ui.text_dim, 0.18))
+                        .hover(|st| st.bg(hsla_alpha(ui.text_dim, 0.3)))
+                        .tooltip(menu::tooltip("Zoom: click for the usual size"))
+                        .child(format!("{pct}%"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.send(ClientMsg::SetZoom { tab: tab_id, zoom: 0.0 }, cx);
+                        })),
+                );
+            }
             for tag in tab.all_tags() {
                 el = el.child(
                     div()
@@ -804,10 +898,10 @@ impl BenchWindow {
             if let Some(editor) = self.editor_for(EditTarget::AddTag(tab_id)) {
                 el = el.child(editor);
             }
-            tabs = tabs.child(el);
+            current = current.child(el);
         }
 
-        let tabs = tabs.child(
+        let tabs = tabs.child(current.child(
             div()
                 .id("new-tab")
                 .h(row)
@@ -828,7 +922,7 @@ impl BenchWindow {
                     this.open_menu(e.position, entries, cx);
                 }))
                 .child(svg().path(icon("tab-new")).size(px(16.0 * s)).text_color(hsla(ui.text_dim))),
-        )
+        ))
         .child(
             // Dropping a tab on the empty part of the bar moves it to the end.
             div()
@@ -1102,6 +1196,7 @@ impl Render for BenchWindow {
             // The terminal background, drawn first and full-window, so the renderer
             // turns it into the frame's clear colour.
             .bg(hsla(self.state.read(cx).settings.palette.background))
+            .child(self.ctrl_wheel_zoom(cx))
             .capture_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
                 if this.menu.is_some() && e.keystroke.key == "escape" {
                     this.menu = None;

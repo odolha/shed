@@ -728,6 +728,7 @@ impl Keeper {
             ClientMsg::AiEdit { tab, entry, text, images } => self.ai_edit(client, tab, entry as usize, text, images),
             ClientMsg::AiAnswerQuestions { tab, request, answers } => self.ai_answer_questions(tab, request, answers),
             ClientMsg::ResetZoom => self.reset_zoom(client),
+            ClientMsg::SetTabDivider { tab, divider } => self.edit_tab(tab, |t| t.divider = divider),
             ClientMsg::AiStop { tab } => self.ai_stop(tab),
             ClientMsg::AiStart { tab } => self.ai_start(client, tab),
             ClientMsg::AiAnswer { tab, request, allow, always } => self.ai_answer(tab, request, allow, always),

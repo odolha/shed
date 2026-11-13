@@ -142,6 +142,14 @@ large it is drawn is a setting (**Tab bar size** in Settings).
 - **New tab**: the button after the last tab, or Ctrl+Shift+T. When the tabs do
   not fit on one row they wrap onto more, the bar growing to hold them; the
   buttons on the right stay on the first row.
+- **Groups**: right-click a tab, **Divider Before**: **Space** starts a group
+  there (a gap before it; a group goes onto the next row whole, and wraps inside
+  only when it alone is wider than the bar), **New Row** starts its group on a row
+  of its own, **None** joins it to the tabs before. Dividers are saved with the
+  bench.
+- **Zoom**: Ctrl+= / Ctrl+- / Ctrl+0, or **Ctrl+wheel** anywhere in the tab
+  (Cmd on macOS). A zoomed tab shows how much on the tab (`120%`); click that to
+  go back to the usual size.
 - **Splits**: Ctrl+Shift+E splits right, Ctrl+Shift+O splits down; drag the line
   between panes to resize; Alt+arrows move between panes.
 - **Right-click** a pane for copy, paste, split and close; a tab for rename, tags,

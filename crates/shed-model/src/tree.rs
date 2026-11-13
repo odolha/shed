@@ -222,6 +222,22 @@ pub struct Tab {
     pub zoom: f32,
     /// What the tab is: terminals, or a project's code.
     pub kind: TabKind,
+    /// A divider before this tab on the tab bar: it starts a group.
+    #[serde(default)]
+    pub divider: TabDivider,
+}
+
+/// What sets a tab apart from the one before it on the tab bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabDivider {
+    #[default]
+    None,
+    /// A space: the tabs from here on are a group, which goes onto the next
+    /// row whole when it does not fit.
+    Space,
+    /// A new row: the group starts a row of its own.
+    Row,
 }
 
 /// What a tab holds. Only terminal tabs have panes; the others show
@@ -310,6 +326,7 @@ impl Tab {
             panes: vec![pane],
             aliases: Aliases::new(),
             zoom: 0.0,
+            divider: TabDivider::None,
         }
     }
 
@@ -329,6 +346,7 @@ impl Tab {
             panes: Vec::new(),
             aliases: Aliases::new(),
             zoom: 0.0,
+            divider: TabDivider::None,
         }
     }
 
