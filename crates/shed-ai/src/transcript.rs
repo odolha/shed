@@ -55,6 +55,36 @@ fn is_picture_note(text: &str) -> bool {
     })
 }
 
+/// Keeps a picture in `dir` (once: the same picture is the same file); its path.
+pub fn keep_picture_in(dir: &std::path::Path, media_type: &str, data: &[u8]) -> Option<String> {
+    let path = dir.join(picture_name(data, media_type));
+    // Seen again: kept longer (`prune_pictures` goes by this time).
+    if let Ok(f) = std::fs::File::options().append(true).open(&path) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    } else {
+        std::fs::create_dir_all(dir).ok()?;
+        let part = path.with_extension("part");
+        std::fs::write(&part, data).ok()?;
+        std::fs::rename(&part, &path).ok()?;
+    }
+    Some(path.to_string_lossy().into_owned())
+}
+
+/// Deletes kept pictures not sent or seen in a session for `max_age` (they
+/// come back from the session file if it is shown again); how many went.
+pub fn prune_pictures(dir: &std::path::Path, max_age: std::time::Duration) -> usize {
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(max_age) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut gone = 0;
+    for e in entries.flatten() {
+        let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < cutoff);
+        if old && e.path().is_file() && std::fs::remove_file(e.path()).is_ok() {
+            gone += 1;
+        }
+    }
+    gone
+}
+
 fn picture_name(data: &[u8], media_type: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -169,15 +199,12 @@ impl Transcript {
     /// Keeps a prompt's picture in `picture_dir` (once: the same picture is
     /// the same file); its path.
     pub fn keep_picture(&self, media_type: &str, data: &[u8]) -> Option<String> {
-        let dir = self.picture_dir.as_ref()?;
-        let path = dir.join(picture_name(data, media_type));
-        if !path.exists() {
-            std::fs::create_dir_all(dir).ok()?;
-            let part = path.with_extension("part");
-            std::fs::write(&part, data).ok()?;
-            std::fs::rename(&part, &path).ok()?;
-        }
-        Some(path.to_string_lossy().into_owned())
+        keep_picture_in(self.picture_dir.as_ref()?, media_type, data)
+    }
+
+    /// When the record being applied happened: its own time, else now.
+    fn now(&self) -> u64 {
+        self.applying_time.unwrap_or(self.clock)
     }
 
     /// The picture in an `image` block (base64), kept; its path.
@@ -190,10 +217,6 @@ impl Transcript {
         self.keep_picture(media, &bytes)
     }
 
-    /// When the record being applied happened: its own time, else now.
-    fn now(&self) -> u64 {
-        self.applying_time.unwrap_or(self.clock)
-    }
 
     /// Records the user's answers to Claude's questions.
     pub fn answer_questions(&mut self, request: &str, answers: Vec<String>) {
@@ -550,6 +573,24 @@ mod tests {
         let Entry::User { pictures: again, .. } = &saved.entries[0] else { panic!("{:?}", saved.entries) };
         assert_eq!(again, pictures);
         assert_eq!(std::fs::read_dir(dir.path().join("pictures")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn pictures_unseen_for_long_go_and_seen_ones_stay() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = Transcript::new("/tmp/shed-ai-test");
+        t.picture_dir = Some(dir.path().to_path_buf());
+        let old = t.keep_picture("image/png", b"old").unwrap();
+        let seen = t.keep_picture("image/png", b"seen").unwrap();
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 24 * 3600);
+        for p in [&old, &seen] {
+            std::fs::File::options().append(true).open(p).unwrap().set_modified(long_ago).unwrap();
+        }
+        // Shown again (a session read again): its clock starts over.
+        assert_eq!(t.keep_picture("image/png", b"seen").unwrap(), seen);
+        assert_eq!(prune_pictures(dir.path(), std::time::Duration::from_secs(60 * 24 * 3600)), 1);
+        assert!(!std::path::Path::new(&old).exists());
+        assert!(std::path::Path::new(&seen).exists());
     }
 
     #[test]

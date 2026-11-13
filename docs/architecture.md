@@ -364,7 +364,16 @@ prompt (sent, or base64 image blocks in a saved session) are written once to
 `Entry::User.pictures` carries their paths for the window to show; pictures in a
 tool's result (Claude reading a screenshot) go to `Tool.pictures` the same way,
 and Claude Code's `[Image: original …]` notes that follow them, sent as user
-messages, are not shown as prompts. `shed-ai` has
+messages, are not shown as prompts. The keeper deletes pictures there unseen for
+60 days (`prune_pictures`, by modification time, which `keep_picture` renews).
+
+The window's conversation list starts at `AiView::first` (the last
+`SHOWN_AT_FIRST` entries), with one row above the entries while earlier ones are
+out of it; that row, once painted, splices the next ones in (`show_from`),
+keeping the view where it was. Rows and entries map through `row` / `entry_at`;
+search, the prompt list and block jumps `reveal` an entry before scrolling to it.
+Drafts are `AiTab.drafts`, changed through `AiSettings` and saved with the bench.
+`shed-ai` has
 no UI and no processes; its tests replay recorded streams
 (`crates/shed-ai/tests/streams/`), and `crates/shed-app/tests/ai_tabs.rs` runs the
 keeper against a stand-in `claude` (`SHED_CLAUDE`).

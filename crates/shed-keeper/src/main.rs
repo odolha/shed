@@ -43,6 +43,9 @@ enum Cmd {
     Logbook,
 }
 
+/// How long a picture from an AI prompt is kept after it was last shown.
+const PICTURES_KEPT: std::time::Duration = std::time::Duration::from_secs(60 * 24 * 3600);
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     match args.command {
@@ -98,6 +101,13 @@ fn main() -> anyhow::Result<()> {
                     Ok(Ok(Some(made))) => info!(backup = %made.display(), "backed up the setup"),
                     Ok(Err(e)) => tracing::warn!("cannot back up the setup: {e}"),
                     _ => {}
+                }
+                // Pictures from AI prompts and screenshots, unseen for 60 days.
+                let pictures = paths::state_dir().join("ai-pictures");
+                if let Ok(gone) = tokio::task::spawn_blocking(move || shed_ai::prune_pictures(&pictures, PICTURES_KEPT)).await
+                    && gone > 0
+                {
+                    info!(gone, "old AI pictures deleted");
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }

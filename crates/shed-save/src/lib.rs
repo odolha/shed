@@ -128,6 +128,9 @@ pub struct SavedAi {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub follow: bool,
+    /// Messages kept to send later.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drafts: Vec<String>,
 }
 
 impl SavedAi {
@@ -140,6 +143,7 @@ impl SavedAi {
             mode: a.mode.clone(),
             effort: a.effort.clone(),
             follow: a.follow,
+            drafts: a.drafts.clone(),
         }
     }
 
@@ -153,6 +157,7 @@ impl SavedAi {
             effort: self.effort.clone(),
             follow: self.follow,
             activity: Default::default(),
+            drafts: self.drafts.clone(),
         }
     }
 }
@@ -510,7 +515,7 @@ impl SavedBench {
         let id = self.add_project_tab(folder);
         let tab = self.tab_mut(id).unwrap();
         tab.project = None;
-        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false });
+        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new() });
         id
     }
 
@@ -995,6 +1000,21 @@ mod tests {
         assert_eq!(dividers, [shed_model::TabDivider::None, shed_model::TabDivider::Row, shed_model::TabDivider::Space, shed_model::TabDivider::None]);
         // Files from before have none.
         assert!(!SavedBench::from_bench(&sample(), |_| PaneExtras::default()).to_toml().contains("divider"));
+    }
+
+    #[test]
+    fn ai_drafts_are_kept() {
+        let mut bench = sample();
+        let mut ai = Tab::ai("/tmp".into());
+        if let TabKind::Ai(a) = &mut ai.kind {
+            a.drafts = vec!["ask about the cache\nlater".into(), "and the docs".into()];
+        }
+        bench.tabs.push(ai);
+        let text = SavedBench::from_bench(&bench, |_| PaneExtras::default()).to_toml();
+        let (back, _) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
+        let drafts = back.tabs.last().and_then(|t| t.ai_info()).map(|a| a.drafts.clone()).unwrap();
+        assert_eq!(drafts, ["ask about the cache\nlater", "and the docs"]);
+        assert!(!SavedBench::from_bench(&sample(), |_| PaneExtras::default()).to_toml().contains("drafts"));
     }
 
     #[test]

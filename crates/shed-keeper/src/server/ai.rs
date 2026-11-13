@@ -546,6 +546,7 @@ impl Keeper {
         ai.mode = if new.mode.is_empty() { "default".into() } else { new.mode };
         ai.effort = new.effort;
         ai.follow = new.follow;
+        ai.drafts = new.drafts;
         let ai = ai.clone();
         st.broadcast_tree();
         if let Some(rt) = st.ai.get_mut(&tab)

@@ -77,6 +77,10 @@ fn default_model_name(m: &Model) -> String {
     m.description.split(" · ").next().filter(|s| !s.is_empty()).unwrap_or(&m.name).to_string()
 }
 
+/// How many entries a conversation shows at first, and brings in at a time
+/// scrolling up: a long one opens as fast as a short one.
+const SHOWN_AT_FIRST: usize = 150;
+
 /// The account's usage limits, for every AI tab to show.
 #[derive(Default)]
 pub struct AiLimits(pub Limits);
@@ -162,6 +166,11 @@ pub struct AiView {
     file_exists: HashMap<PathBuf, bool>,
     /// Messages written while Claude works, sent one by one as turns end.
     queue: Vec<(String, Vec<AiImage>)>,
+    /// The first entry the list holds: a long conversation shows its end,
+    /// and earlier entries come in as they are needed (`show_from`).
+    first: usize,
+    /// The list of drafts is open above the prompt.
+    drafts_open: bool,
     /// The left side shows the folder's sessions, or this one's prompts.
     show_prompts: bool,
     prompts_scroll: UniformListScrollHandle,
@@ -224,7 +233,7 @@ impl AiView {
             wrap: true,
             auto_height: Some((2, 14)),
             submit_on_enter: false,
-            placeholder: Some("Ask Claude…  (Ctrl+Enter sends, Enter breaks the line, / for commands)".into()),
+            placeholder: Some("Ask Claude…  (Ctrl+Enter sends, Ctrl+S keeps it as a draft, Enter breaks the line, / for commands)".into()),
             ..Default::default()
         };
         let prompt = cx.new(|cx| TextView::new("", options, &settings, cx));
@@ -240,7 +249,8 @@ impl AiView {
                     this.completion = None;
                     cx.notify();
                 }
-                TextEvent::Save => {}
+                // Ctrl+S keeps the message as a draft.
+                TextEvent::Save => this.save_draft(cx),
             }),
             cx.observe(&filter, |_, _, cx| cx.notify()),
         ];
@@ -292,6 +302,8 @@ impl AiView {
             spin: 0,
             asks: HashMap::new(),
             queue: Vec::new(),
+            first: 0,
+            drafts_open: false,
             file_exists: HashMap::new(),
             hover_link: None,
             project_files: Vec::new(),
@@ -384,11 +396,17 @@ impl AiView {
         if self.selection.is_some_and(|s| s.ordered().1.entry >= from) {
             self.selection = None;
         }
-        if from == 0 {
-            self.expanded.clear();
-            self.list.reset(self.entries.len());
+        let len = self.entries.len();
+        if from == 0 || from < self.first {
+            if from == 0 {
+                self.expanded.clear();
+            }
+            // Only the end at first: earlier entries come in as needed.
+            self.first = len.saturating_sub(SHOWN_AT_FIRST).min(if from == 0 { len } else { from });
+            self.list.reset(self.rows());
         } else {
-            self.list.splice(from..old_len, self.entries.len() - from);
+            let old_rows = old_len - self.first + self.head();
+            self.list.splice(self.row(from)..old_rows, len - from);
         }
         let finished = self.status.state != AiState::Idle && status.state == AiState::Idle;
         self.status = status;
@@ -470,6 +488,94 @@ impl AiView {
         }
     }
 
+    /// A row above the entries when earlier ones are not in the list yet.
+    fn head(&self) -> usize {
+        usize::from(self.first > 0)
+    }
+
+    fn rows(&self) -> usize {
+        self.entries.len() - self.first.min(self.entries.len()) + self.head()
+    }
+
+    /// The list row of an entry (one in the list).
+    fn row(&self, entry: usize) -> usize {
+        entry.saturating_sub(self.first) + self.head()
+    }
+
+    /// The entry a list row shows; `None` for the row of earlier entries.
+    fn entry_at(&self, row: usize) -> Option<usize> {
+        row.checked_sub(self.head()).map(|r| r + self.first)
+    }
+
+    /// The entry at the top of the view.
+    fn top_entry(&self) -> (usize, gpui::Pixels) {
+        let top = self.list.logical_scroll_top();
+        match self.entry_at(top.item_ix) {
+            Some(e) => (e.min(self.entries.len()), top.offset_in_item),
+            None => (self.first, px(0.0)),
+        }
+    }
+
+    /// Takes earlier entries into the list, from `from` on.
+    fn show_from(&mut self, from: usize) {
+        if from >= self.first {
+            return;
+        }
+        let old_head = self.head();
+        let added = self.first - from;
+        self.first = from;
+        self.list.splice(0..old_head, added + self.head());
+    }
+
+    /// Makes sure an entry is in the list (and some before it, for context).
+    fn reveal(&mut self, entry: usize) {
+        if entry < self.first {
+            self.show_from(entry.saturating_sub(10));
+        }
+    }
+
+    /// The next entries up, keeping the view where it is.
+    fn show_earlier(&mut self, all: bool, cx: &mut Context<Self>) {
+        if self.first == 0 {
+            return;
+        }
+        let (entry, offset) = self.top_entry();
+        self.show_from(if all { 0 } else { self.first.saturating_sub(SHOWN_AT_FIRST) });
+        self.list.scroll_to(gpui::ListOffset { item_ix: self.row(entry), offset_in_item: offset });
+        cx.notify();
+    }
+
+    /// The row above the entries, while there are earlier ones: shown, it
+    /// brings the next ones in.
+    fn render_earlier(&self, cx: &mut Context<Self>) -> AnyElement {
+        let ui = current_ui(cx);
+        let view = cx.entity().downgrade();
+        let n = self.first;
+        let link = |id: &'static str, label: &'static str| {
+            div().id(id).px_1p5().rounded_sm().cursor_pointer().text_color(hsla(ui.ink(self.accent))).hover(|s| s.bg(hsla(ui.tab_hover))).child(label)
+        };
+        div()
+            .flex()
+            .justify_center()
+            .items_center()
+            .gap_2()
+            .py_2()
+            .text_size(px(12.0 * self.z()))
+            .text_color(hsla(ui.text_dim))
+            .child(format!("{n} earlier {}", if n == 1 { "entry" } else { "entries" }))
+            .child(link("show-earlier", "Show Earlier").on_click(cx.listener(|this, _, _, cx| this.show_earlier(false, cx))))
+            .child(link("show-all", "Show All").on_click(cx.listener(|this, _, _, cx| this.show_earlier(true, cx))))
+            // Drawn means scrolled to: the next ones come in (measuring
+            // lays it out without drawing it).
+            .child(gpui::canvas(|_, _, _| {}, move |_, _, _, cx| {
+                let view = view.clone();
+                cx.defer(move |cx| {
+                    view.update(cx, |this, cx| this.show_earlier(false, cx)).ok();
+                });
+            }).size_0())
+            .into_any_element()
+    }
+
     /// Goes to the next (or previous) entry containing what is typed.
     fn find_step(&mut self, back: bool, cx: &mut Context<Self>) {
         let Some((editor, at, _)) = &self.find else { return };
@@ -485,7 +591,8 @@ impl AiView {
             if let Some(f) = &mut self.find {
                 f.1 = Some(i);
             }
-            self.list.scroll_to_reveal_item(i);
+            self.reveal(i);
+            self.list.scroll_to_reveal_item(self.row(i));
         }
         cx.notify();
     }
@@ -637,6 +744,93 @@ impl AiView {
         self.completion = None;
         self.list.scroll_to_end();
         cx.notify();
+    }
+
+    /// Changes the drafts here at once (a second change before the keeper
+    /// answers builds on the first), and in the keeper.
+    fn change_drafts(&mut self, change: impl FnOnce(&mut Vec<String>)) {
+        change(&mut self.ai.drafts);
+        self.conn.send_msg(ClientMsg::AiSettings { tab: self.tab, settings: self.ai.clone() });
+    }
+
+    /// Keeps what is in the prompt as a draft, to send some other time:
+    /// attached files and pictures go with it as paths.
+    fn save_draft(&mut self, cx: &mut Context<Self>) {
+        let mut text = self.prompt.read(cx).buffer.text().trim_end().to_string();
+        let dir = shed_model::paths::state_dir().join("ai-pictures");
+        let mut files: Vec<String> = self.images.iter().filter_map(|i| shed_ai::keep_picture_in(&dir, &i.media_type, &i.data)).collect();
+        files.extend(self.files.iter().map(|f| f.display().to_string()));
+        if text.trim().is_empty() && files.is_empty() {
+            return;
+        }
+        if !files.is_empty() {
+            let list: Vec<String> = files.iter().map(|f| format!("- {f}")).collect();
+            text = format!("{}{}Attached files:\n{}", text, if text.is_empty() { "" } else { "\n\n" }, list.join("\n"));
+        }
+        self.images.clear();
+        self.previews.clear();
+        self.files.clear();
+        self.change_drafts(|d| d.push(text));
+        self.drafts_open = true;
+        self.prompt.update(cx, |p, cx| {
+            p.buffer.select_all();
+            p.buffer.insert("");
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// Sends a draft now (after the current turn, when Claude is busy).
+    fn send_draft(&mut self, n: usize, cx: &mut Context<Self>) {
+        let Some(text) = self.ai.drafts.get(n).cloned() else { return };
+        self.change_drafts(|d| {
+            d.remove(n);
+        });
+        if self.status.state != AiState::Idle {
+            self.queue.push((text, Vec::new()));
+        } else {
+            self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images: Vec::new() });
+            self.list.scroll_to_end();
+        }
+        cx.notify();
+    }
+
+    /// Puts a draft back in the prompt to change it (after what is there).
+    fn edit_draft(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = self.ai.drafts.get(n).cloned() else { return };
+        self.change_drafts(|d| {
+            d.remove(n);
+        });
+        self.prompt.update(cx, |p, cx| {
+            let had = p.buffer.text();
+            p.buffer.select_all();
+            p.buffer.insert(&if had.trim().is_empty() { text } else { format!("{}\n\n{text}", had.trim_end()) });
+            cx.notify();
+        });
+        let focus = self.prompt.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn delete_draft(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = self.ai.drafts.get(n).cloned() else { return };
+        let first: String = text.lines().next().unwrap_or("").chars().take(80).collect();
+        let answer = window.prompt(gpui::PromptLevel::Warning, "Delete this draft?", Some(&first), &["Delete Draft", "Cancel"], cx);
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                this.update(cx, |this, cx| {
+                    // Still there, where it was (another window may have changed the list).
+                    if this.ai.drafts.get(n) == Some(&text) {
+                        this.change_drafts(|d| {
+                            d.remove(n);
+                        });
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     /// Starts Claude Code as the user starts typing, once.
@@ -919,15 +1113,43 @@ impl AiView {
         entries.push(menu::item("Copy Message", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(text.clone(), &text))).icon("copy"));
         entries.push(menu::item("Copy Message as Plain Text", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(plain.clone()))));
         entries.push(menu::item("Copy the Whole Conversation", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(all.clone(), &all))));
+        if self.expanded.iter().any(|&e| matches!(self.entries.get(e), Some(Entry::Tool(_) | Entry::Thinking { .. }))) {
+            entries.push(MenuEntry::Separator);
+            entries.push(menu::item("Collapse All Steps", |this: &mut Self, _, cx| this.collapse_all(cx)));
+        }
         entries
+    }
+
+    /// Closes an opened step (or thinking).
+    fn collapse(&mut self, i: usize, cx: &mut Context<Self>) {
+        if self.expanded.remove(&i) && i >= self.first {
+            let row = self.row(i);
+            self.list.remeasure_items(row..row + 1);
+            // Its line back in view, if the view was further down it.
+            if self.top_entry().0 > i {
+                self.list.scroll_to(gpui::ListOffset { item_ix: row, offset_in_item: px(0.0) });
+            }
+        }
+        cx.notify();
+    }
+
+    /// Closes every opened step and thinking (your long messages stay as they are).
+    fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        let entries = &self.entries;
+        self.expanded.retain(|&e| !matches!(entries.get(e), Some(Entry::Tool(_) | Entry::Thinking { .. })));
+        self.list.remeasure();
+        cx.notify();
     }
 
     /// Scrolls to the start of the previous (`up`) or next message: each of
     /// yours, and each response to one. Past the last, to the end.
     fn jump_block(&mut self, up: bool, cx: &mut Context<Self>) {
-        let top = self.list.logical_scroll_top();
-        match block_target(&self.entries, top.item_ix, top.offset_in_item > px(1.0), up) {
-            Some(item_ix) => self.list.scroll_to(gpui::ListOffset { item_ix, offset_in_item: px(0.0) }),
+        let (top, offset) = self.top_entry();
+        match block_target(&self.entries, top, offset > px(1.0), up) {
+            Some(entry) => {
+                self.reveal(entry);
+                self.list.scroll_to(gpui::ListOffset { item_ix: self.row(entry), offset_in_item: px(0.0) });
+            }
             None if !up => self.list.scroll_to_end(),
             None => return,
         }
@@ -957,8 +1179,11 @@ impl AiView {
 
     /// The entry of a request changed height (a pick, a field opened).
     fn remeasure_request(&self, request: &str) {
-        if let Some(i) = self.entries.iter().position(|e| matches!(e, Entry::Permission(p) if p.request == request)) {
-            self.list.remeasure_items(i..i + 1);
+        if let Some(i) = self.entries.iter().position(|e| matches!(e, Entry::Permission(p) if p.request == request))
+            && i >= self.first
+        {
+            let row = self.row(i);
+            self.list.remeasure_items(row..row + 1);
         }
     }
 
@@ -1734,7 +1959,8 @@ impl AiView {
             if !this.expanded.remove(&i) {
                 this.expanded.insert(i);
             }
-            this.list.remeasure_items(i..i + 1);
+            let row = this.row(i);
+            this.list.remeasure_items(row..row + 1);
             cx.notify();
         });
         let body = match entry {
@@ -1861,6 +2087,7 @@ impl AiView {
                         .rounded_sm()
                         .hover(|s| s.bg(hsla(ui.tab_hover)))
                         .on_click(toggle)
+                        .child(div().flex_none().w(px(10.0)).text_color(hsla(ui.text_dim)).child(if open { "▾" } else { "▸" }))
                         .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(mark))
                         .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_color(hsla(ui.text_dim)).child(t.summary.clone()))
                         .children(copy)
@@ -1905,6 +2132,20 @@ impl AiView {
                     if j < parsed.pieces.len() {
                         el = el.child(div().my_1().child(self.render_code(i, j, &parsed, &ui, &mono, cx)));
                     }
+                    // Closing it from its end, without going back up to its line.
+                    el = el.child(
+                        div().flex().child(
+                            div()
+                                .id(("tool-collapse", i))
+                                .px_1p5()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_color(hsla(ui.text_dim))
+                                .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                                .on_click(cx.listener(move |this, _, _, cx| this.collapse(i, cx)))
+                                .child("▴ Collapse"),
+                        ),
+                    );
                 }
                 el.into_any_element()
             }
@@ -2040,7 +2281,7 @@ impl AiView {
         let ui = current_ui(cx);
         let shown = self.shown_prompts(cx);
         let z = self.z();
-        let top = self.list.logical_scroll_top().item_ix;
+        let top = self.top_entry().0;
         range
             .filter_map(|n| {
                 let (entry, number, text, at) = shown.get(n)?.clone();
@@ -2062,7 +2303,8 @@ impl AiView {
                         .when(here, |d| d.bg(hsla_alpha(self.accent, 0.16)))
                         .hover(|s| s.bg(hsla(ui.tab_hover)))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.list.scroll_to(gpui::ListOffset { item_ix: entry, offset_in_item: px(0.0) });
+                            this.reveal(entry);
+                            this.list.scroll_to(gpui::ListOffset { item_ix: this.row(entry), offset_in_item: px(0.0) });
                             cx.notify();
                         }))
                         .child(div().truncate().text_color(hsla(ui.text)).child(first))
@@ -2275,6 +2517,38 @@ impl AiView {
                     }))
                     .child(svg().path(icon("eye")).size(px(14.0)).text_color(hsla(if self.ai.follow { ui.ink(accent) } else { ui.text_dim }))),
             )
+            // Drafts: how many, opening their list; and keeping the prompt as one.
+            .when(!self.ai.drafts.is_empty(), |d| {
+                let n = self.ai.drafts.len();
+                d.child(
+                    chip("ai-drafts", format!("Drafts ({n})"))
+                        .when(self.drafts_open, |d| d.bg(hsla_alpha(accent, 0.2)))
+                        .tooltip(menu::tooltip("Messages kept to send later"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.drafts_open = !this.drafts_open;
+                            cx.notify();
+                        })),
+                )
+            })
+            .child(
+                div()
+                    .id("ai-draft")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hsla(ui.divider))
+                    .text_color(hsla(ui.text))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .tooltip(menu::tooltip("Keep the message as a draft, to send later (Ctrl+S)"))
+                    .on_click(cx.listener(|this, _, _, cx| this.save_draft(cx)))
+                    .child(svg().path(icon("pencil")).size(px(13.0)).text_color(hsla(ui.text_dim)))
+                    .child("Draft"),
+            )
             .child(
                 div()
                     .id("ai-send")
@@ -2335,6 +2609,44 @@ impl AiView {
         let accent = self.accent;
         let mut out = div().flex().flex_col().gap_1().mx_3().text_size(px(12.0 * self.z()));
         let mut any = false;
+        if self.drafts_open && !self.ai.drafts.is_empty() {
+            any = true;
+            out = out.child(div().text_color(hsla(ui.text_dim)).child("Drafts: sent only when you choose, in any order"));
+            for (n, text) in self.ai.drafts.iter().enumerate() {
+                let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+                let more = text.lines().count().saturating_sub(1);
+                let action = |id: (&'static str, usize), label: &'static str, color: Rgb| {
+                    div()
+                        .id(id)
+                        .flex_none()
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_color(hsla(color))
+                        .hover(|s| s.bg(hsla(ui.tab_hover)))
+                        .child(label)
+                };
+                out = out.child(
+                    div()
+                        .id(("draft", n))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(hsla(ui.divider))
+                        .tooltip(menu::tooltip_text(text.clone()))
+                        .child(svg().path(icon("pencil")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)))
+                        .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(first))
+                        .when(more > 0, |d| d.child(div().flex_none().text_color(hsla(ui.text_dim)).child(format!("+{more} lines"))))
+                        .child(action(("draft-send", n), "Send", ui.ink(accent)).on_click(cx.listener(move |this, _, _, cx| this.send_draft(n, cx))))
+                        .child(action(("draft-edit", n), "Edit", ui.text).on_click(cx.listener(move |this, _, window, cx| this.edit_draft(n, window, cx))))
+                        .child(action(("draft-delete", n), "Delete…", ui.danger).on_click(cx.listener(move |this, _, window, cx| this.delete_draft(n, window, cx)))),
+                );
+            }
+        }
         for (n, (text, images)) in self.queue.iter().enumerate() {
             any = true;
             let first = text.lines().next().unwrap_or("").to_string();
@@ -2530,7 +2842,18 @@ impl Render for AiView {
                     cx.notify();
                 }
             }))
-            .child(list(self.list.clone(), cx.processor(|this, i, _, cx| this.render_entry(i, cx))).flex_1().min_h_0().py_2())
+            .child(
+                list(
+                    self.list.clone(),
+                    cx.processor(|this, row, _, cx| match this.entry_at(row) {
+                        Some(i) => this.render_entry(i, cx),
+                        None => this.render_earlier(cx),
+                    }),
+                )
+                .flex_1()
+                .min_h_0()
+                .py_2(),
+            )
             // After the list: over it, and first to hear the mouse.
             .child({
                 let view = cx.entity().downgrade();

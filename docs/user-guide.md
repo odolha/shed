@@ -326,13 +326,17 @@ terminal of the bench.
 - **The prompt** grows with what you type. Enter breaks the line; **Ctrl+Enter**
   (Cmd+Enter) or the send button sends. While Claude works, sending queues the
   message instead: queued messages show above the prompt (each with **Remove**)
-  and go one by one as turns end. Typing `/` lists Claude Code's commands and
+  and go one by one as turns end. **Draft** (or Ctrl+S) keeps the message for
+  later instead, with its files and pictures: **Drafts (N)** opens the list, and
+  each draft has **Send** (queued if Claude is busy), **Edit** (back into the
+  prompt) and **Delete…**. Drafts are kept with the bench, in no order. Typing `/` lists Claude Code's commands and
   skills to complete (Tab or Enter picks one). Ctrl+Up and Ctrl+Down go through earlier prompts. Paste a
   screenshot with Ctrl+V, or drop pictures, and they go with the prompt: small
   thumbnails above it, each with a × to leave it out. Sent pictures stay in your
   message as thumbnails (a click opens one whole), also in sessions shown again;
-  Shed keeps a copy in `~/.local/state/shed/ai-pictures`, and a picture deleted
-  from there says so instead. Screenshots and other pictures Claude reads show
+  Shed keeps a copy in `~/.local/state/shed/ai-pictures` (deleted after 60 days
+  unseen; showing the session again brings it back), and a picture missing from
+  there says so instead. Screenshots and other pictures Claude reads show
   the same way under the step that read them. Other dropped files show
   by name (the path on hover, a × to leave one out) and go as their paths, for
   Claude to read. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
@@ -353,7 +357,12 @@ terminal of the bench.
   lists, tables, links, code blocks coloured by language), each tool Claude uses on
   one line (click it for the command, the change as a diff, and what came back,
   each in a block to select in or copy whole; hovering the line shows **Copy**
-  for the whole command), thinking folded away.
+  for the whole command), thinking folded away. An opened step closes from its
+  line, or from **▴ Collapse** at its end; **Collapse All Steps** in the
+  right-click menu closes them all. A long conversation opens at its last 150
+  entries; scrolling to the top brings in the next ones (or **Show Earlier**,
+  **Show All**), and searching, the prompt list and the block jumps bring in what
+  they need.
 - **Going back**: hover one of your messages for **Edit**, **Send Again** and
   **Copy** (also in its right-click menu). **Edit** puts it in the prompt field;
   sending it goes back to that message: the messages after it go, the files

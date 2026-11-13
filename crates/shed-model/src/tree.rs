@@ -323,6 +323,8 @@ pub struct AiTab {
     pub follow: bool,
     /// Where the conversation is, for the tab bar.
     pub activity: AiActivity,
+    /// Messages written to send some other time, in no order.
+    pub drafts: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
