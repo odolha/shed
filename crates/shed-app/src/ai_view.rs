@@ -1832,11 +1832,33 @@ impl AiView {
             .and_then(|id| self.sessions.iter().find(|s| &s.id == id))
             .map(|s| s.title.clone())
             .unwrap_or_else(|| if self.ai.session.is_some() { "Session".into() } else { "New session".into() });
-        let window = |label: &str, w: Option<shed_ai::Window>| {
+        // Each limit as a small bar: green, amber from 70 %, red from 90 %;
+        // when it resets in its tooltip.
+        let palette = &self.settings.palette;
+        let (green, amber) = (palette.ansi[2], palette.ansi[3]);
+        let z = self.z();
+        let window = |id: &'static str, label: &str, w: Option<shed_ai::Window>| {
             w.map(|w| {
-                let pct = (w.used * 100.0).round() as u32;
-                let color = if pct >= 90 { ui.danger } else if pct >= 70 { ui.ink(accent) } else { ui.text_dim };
-                div().text_color(hsla(color)).child(format!("{label} {pct}% · resets {}", until(w.resets)))
+                let used = w.used.clamp(0.0, 1.0);
+                let pct = (used * 100.0).round() as u32;
+                let color = if pct >= 90 { ui.danger } else if pct >= 70 { amber } else { green };
+                let width = 64.0 * z;
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .tooltip(menu::tooltip_text(format!("{label}: {pct}% used · resets {}", until(w.resets))))
+                    .child(div().text_color(hsla(ui.text_dim)).child(label.to_string()))
+                    .child(
+                        div()
+                            .w(px(width))
+                            .h(px(6.0 * z))
+                            .rounded_full()
+                            .bg(hsla_alpha(ui.text_dim, 0.22))
+                            .child(div().h_full().w(px(width * used.max(0.02))).rounded_full().bg(hsla(color))),
+                    )
+                    .child(div().min_w(px(30.0 * z)).text_color(hsla(if pct >= 70 { ui.ink(color) } else { ui.text_dim })).child(format!("{pct}%")))
             })
         };
         let mut chips = div().flex().flex_wrap().items_center().gap_1().text_size(px(11.0 * self.z()));
@@ -1896,8 +1918,9 @@ impl AiView {
                             .flex_none()
                             .gap_3()
                             .text_size(px(11.0 * self.z()))
-                            .children(window("5 h", limits.five_hour))
-                            .children(window("week", limits.week))
+                            .items_center()
+                            .children(window("limit-5h", "5 h", limits.five_hour))
+                            .children(window("limit-week", "week", limits.week))
                             .when(self.status.cost > 0.0, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("${:.2}", self.status.cost))))
                             .when(self.status.context > 0, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("{}k context", self.status.context / 1000)))),
                     ),

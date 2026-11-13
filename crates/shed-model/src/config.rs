@@ -128,11 +128,13 @@ pub struct WindowConfig {
     /// The Shed window lists each bench on one line, its tabs as chips,
     /// without previews (switched from the window's toolbar).
     pub compact_pegboard: bool,
+    /// How large a bench window's tab bar is drawn: 1 is the usual size.
+    pub tab_bar_scale: f32,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
-        Self { padding: 6.0, new_pane_dir: NewPaneDir::Current, icon_badges: false, compact_pegboard: false }
+        Self { padding: 6.0, new_pane_dir: NewPaneDir::Current, icon_badges: false, compact_pegboard: false, tab_bar_scale: 1.0 }
     }
 }
 
@@ -363,6 +365,28 @@ impl Config {
             Appearance::Dark => self.dark_name(),
         };
         doc["theme"] = toml_edit::value(theme);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Sets one value in `shed.toml` (`table` is `None` for the top level),
+    /// keeping the rest of the file as written: comments, order, the rest.
+    pub fn set_value(path: &Path, table: Option<&str>, key: &str, value: toml_edit::Value) -> Result<(), String> {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
+        match table {
+            Some(t) => {
+                if !doc.contains_table(t) {
+                    doc[t] = toml_edit::table();
+                }
+                doc[t][key] = toml_edit::Item::Value(value);
+            }
+            None => doc[key] = toml_edit::Item::Value(value),
+        }
+        // What it means is checked before it is written.
+        toml::from_str::<Config>(&doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -686,6 +710,22 @@ mod tests {
         assert_eq!(fixed.appearance(), Some(Appearance::Light));
         let mine = Config { theme: Some("solarized".into()), ..Default::default() };
         assert_eq!(mine.appearance(), None);
+    }
+
+    #[test]
+    fn single_settings_are_written_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shed.toml");
+        std::fs::write(&path, "# mine\n[font]\nsize = 15 # big\n").unwrap();
+        Config::set_value(&path, Some("window"), "tab_bar_scale", 1.3.into()).unwrap();
+        Config::set_value(&path, Some("font"), "size", 16.0.into()).unwrap();
+        Config::set_value(&path, None, "auto_restore", false.into()).unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!((config.window.tab_bar_scale, config.font.size, config.auto_restore), (1.3, 16.0, false));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("# mine"));
+        // A value that does not fit is refused, and the file stays.
+        assert!(Config::set_value(&path, Some("window"), "tab_bar_scale", "big".into()).is_err());
+        assert_eq!(Config::load_from(&path).unwrap().window.tab_bar_scale, 1.3);
     }
 
     #[test]

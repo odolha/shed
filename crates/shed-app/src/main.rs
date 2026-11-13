@@ -25,6 +25,7 @@ mod scrollbar;
 mod selection;
 mod settings;
 mod setup_cli;
+mod settings_panel;
 mod setup_panel;
 mod shed_window;
 mod state;

@@ -18,6 +18,8 @@ pub struct ShedWindow {
     /// Shed is closing: benches are being closed, then it quits.
     quitting: bool,
     place: PlaceTracker,
+    /// The settings, over the right side, while open.
+    settings: Option<(Entity<crate::settings_panel::SettingsPanel>, Subscription)>,
     _following: Subscription,
 }
 
@@ -56,7 +58,20 @@ impl ShedWindow {
             .detach();
         }
         let following = PlaceTracker::follow(window, cx);
-        Self { state, board, quitting: false, place, _following: following }
+        Self { state, board, quitting: false, place, settings: None, _following: following }
+    }
+
+    fn toggle_settings(&mut self, cx: &mut Context<Self>) {
+        if self.settings.take().is_none() {
+            let panel = cx.new(|cx| crate::settings_panel::SettingsPanel::new(self.state.clone(), cx));
+            let sub = cx.subscribe(&panel, |this, _, event: &crate::settings_panel::SettingsEvent, cx| {
+                let crate::settings_panel::SettingsEvent::Close = event;
+                this.settings = None;
+                cx.notify();
+            });
+            self.settings = Some((panel, sub));
+        }
+        cx.notify();
     }
 
     /// Closing Shed closes every bench; asks first if any is running.
@@ -233,11 +248,36 @@ impl Render for ShedWindow {
                     .child(svg().path(icon("shed")).size(px(18.0)).text_color(hsla(ui.accent)))
                     .child(div().text_size(px(16.0)).child("Shed"))
                     .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("open-settings")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .text_size(px(12.0))
+                            .text_color(hsla(ui.text_dim))
+                            .when(self.settings.is_some(), |d| d.bg(hsla_alpha(ui.accent, 0.2)))
+                            .hover(|s| s.bg(hsla(ui.tab_hover)))
+                            .child(svg().path(icon("settings")).size(px(14.0)).text_color(hsla(ui.text_dim)))
+                            .child("Settings")
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_settings(cx))),
+                    )
                     .child(view_switch)
                     .child(switch),
             )
             .children(banner)
             .children(notice)
-            .child(div().flex_1().min_h_0().child(self.board.clone()))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.board.clone())
+                    .when_some(self.settings.as_ref().map(|(p, _)| p.clone()), |d, panel| d.child(div().absolute().top_0().right_0().h_full().child(panel))),
+            )
     }
 }

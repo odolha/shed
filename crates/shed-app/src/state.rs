@@ -541,6 +541,18 @@ impl AppState {
         self.apply_settings(settings, cx);
     }
 
+    /// Writes one setting to `shed.toml` and takes it at once; a value that
+    /// does not fit is said, and the file left as it was.
+    pub fn set_config_value(&mut self, table: Option<&str>, key: &str, value: toml_edit::Value, cx: &mut Context<Self>) {
+        if let Err(e) = Config::set_value(&Config::path(), table, key, value) {
+            self.notice = Some(format!("cannot change the setting: {e}"));
+            cx.notify();
+            return;
+        }
+        let settings = Settings::load(&self.settings);
+        self.apply_settings(settings, cx);
+    }
+
     /// Switches the Shed window between cards and the compact list.
     pub fn set_compact_pegboard(&mut self, compact: bool, cx: &mut Context<Self>) {
         if let Err(e) = Config::set_compact_pegboard(&Config::path(), compact) {

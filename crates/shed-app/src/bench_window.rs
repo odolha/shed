@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, MouseButton,
+    AnyElement, App, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, MouseButton,
     MouseDownEvent, MouseMoveEvent, Pixels, PromptLevel, SharedString, Subscription, Window, canvas,
     div, prelude::*, px, relative, svg,
 };
@@ -26,7 +26,7 @@ use crate::state::{AppState, Focus};
 use crate::theme::{UiColors, hsla, hsla_alpha};
 use crate::window_place::{PlaceTracker, Placed};
 
-const TAB_BAR_HEIGHT: f32 = 32.0;
+const TAB_BAR_HEIGHT: f32 = 36.0;
 
 /// What the inline text field is editing.
 #[derive(Clone, Copy, PartialEq)]
@@ -724,6 +724,7 @@ impl BenchWindow {
     }
 
     fn render_tab_bar(&self, bench: &Bench, cx: &mut Context<Self>) -> impl IntoElement {
+        let s = self.bar_scale(cx);
         let ui = &self.ui;
         let accent = bench.color.accent();
         let tab_count = bench.tabs.len();
@@ -731,9 +732,12 @@ impl BenchWindow {
             .id("tab-bar")
             .flex()
             .flex_none()
-            .h(px(TAB_BAR_HEIGHT))
-            .bg(hsla(ui.background))
-            .text_size(px(13.0))
+            .h(px(TAB_BAR_HEIGHT * s))
+            // Set apart from the panes: a ground of the bench's colour, a line under it.
+            .bg(hsla_alpha(accent, 0.09))
+            .border_b_1()
+            .border_color(hsla_alpha(accent, 0.35))
+            .text_size(px(13.5 * s))
             .text_color(hsla(ui.text_dim));
 
         for (i, tab) in bench.tabs.iter().enumerate() {
@@ -775,7 +779,7 @@ impl BenchWindow {
             el = match (active, tint) {
                 (true, Some(t)) => el.bg(hsla_alpha(t, 0.35)).text_color(hsla(ui.text)),
                 (false, Some(t)) => el.bg(hsla_alpha(t, 0.18)).hover(|s| s.bg(hsla_alpha(t, 0.25))),
-                (true, None) => el.bg(hsla(ui.tab_active)).text_color(hsla(ui.text)),
+                (true, None) => el.bg(hsla(ui.tab_active)).text_color(hsla(ui.text)).font_weight(FontWeight::MEDIUM),
                 (false, None) => el.hover(|s| s.bg(hsla(ui.tab_hover))),
             };
             if active {
@@ -784,9 +788,9 @@ impl BenchWindow {
             }
             // One icon, as in Shed: what the tab is, or that it waits or works.
             let (glyph, tint) = tab_icon(tab, accent, ui);
-            el = el.child(svg().path(icon(glyph)).size(px(14.0)).flex_none().text_color(hsla(tint)));
+            el = el.child(svg().path(icon(glyph)).size(px(14.0 * s)).flex_none().text_color(hsla(tint)));
             if tab.private {
-                el = el.child(svg().path(icon("private")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
+                el = el.child(svg().path(icon("private")).size(px(12.0 * s)).flex_none().text_color(hsla(ui.text_dim)));
             }
             match self.editor_for(EditTarget::TabName(tab_id)) {
                 Some(editor) => el = el.child(editor),
@@ -798,7 +802,7 @@ impl BenchWindow {
                         .flex_none()
                         .px_1()
                         .rounded_sm()
-                        .text_size(px(11.0))
+                        .text_size(px(11.0 * s))
                         .bg(hsla_alpha(tag.color, 0.25))
                         .text_color(hsla(self.ui.ink(tag.color)))
                         .child(tag.label.clone()),
@@ -829,7 +833,7 @@ impl BenchWindow {
                     ];
                     this.open_menu(e.position, entries, cx);
                 }))
-                .child(svg().path(icon("tab-new")).size(px(16.0)).text_color(hsla(ui.text_dim))),
+                .child(svg().path(icon("tab-new")).size(px(16.0 * s)).text_color(hsla(ui.text_dim))),
         )
         .child(
             // Dropping a tab on the empty part of the bar moves it to the end.
@@ -852,7 +856,7 @@ impl BenchWindow {
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
                 .tooltip(menu::tooltip("Hide: close the window, keep the bench running"))
                 .on_click(cx.listener(|this, _, window, cx| this.hide(window, cx)))
-                .child(svg().path(icon("detach")).size(px(16.0)).text_color(hsla(ui.text_dim))),
+                .child(svg().path(icon("detach")).size(px(16.0 * s)).text_color(hsla(ui.text_dim))),
         )
         .child(
             div()
@@ -864,7 +868,7 @@ impl BenchWindow {
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
                 .tooltip(menu::tooltip("Show Shed: every bench"))
                 .on_click(cx.listener(|this, _, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))))
-                .child(svg().path(icon("shed")).size(px(16.0)).text_color(hsla(ui.text_dim))),
+                .child(svg().path(icon("shed")).size(px(16.0 * s)).text_color(hsla(ui.text_dim))),
         )
         .child(
             div()
@@ -877,12 +881,17 @@ impl BenchWindow {
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
                 .tooltip(menu::tooltip("Setup: startup, teardown, aliases"))
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_setup(window, cx)))
-                .child(svg().path(icon("rack")).size(px(16.0)).text_color(hsla(if self.setup.is_some() { accent } else { ui.text_dim }))),
+                .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if self.setup.is_some() { accent } else { ui.text_dim }))),
         )
         .child(self.render_bench_label(bench, cx))
     }
 
     /// The bench's links, on the tab bar: click opens, right-click for more.
+    /// How large the tab bar is drawn (`[window] tab_bar_scale`).
+    fn bar_scale(&self, cx: &App) -> f32 {
+        self.state.read(cx).settings.config.window.tab_bar_scale.clamp(0.7, 2.0)
+    }
+
     fn render_links(&self, bench: &Bench, cx: &mut Context<Self>) -> impl IntoElement {
         let accent = bench.color.accent();
         let links = bench.links.clone();
@@ -906,6 +915,7 @@ impl BenchWindow {
     }
 
     fn render_bench_label(&self, bench: &Bench, cx: &mut Context<Self>) -> AnyElement {
+        let s = self.bar_scale(cx);
         let in_label = |t: &EditTarget| !matches!(t, EditTarget::TabName(_) | EditTarget::AddTag(_));
         let editor = self.editing.as_ref().filter(|(t, _, _)| in_label(t)).map(|(_, e, _)| e.clone());
         if let Some(editor) = editor {
@@ -929,7 +939,7 @@ impl BenchWindow {
                 let entries = this.bench_menu(cx);
                 this.open_menu(e.position, entries, cx);
             }))
-            .child(svg().path(icon("bench")).size(px(14.0)).text_color(hsla(self.ui.ink(accent))))
+            .child(svg().path(icon("bench")).size(px(14.0 * s)).text_color(hsla(self.ui.ink(accent))))
             .child(bench.name.clone())
             .when_some(bench.badge.clone(), |el, badge| {
                 el.child(div().px_1().rounded_sm().bg(hsla_alpha(accent, 0.25)).child(badge))

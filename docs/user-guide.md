@@ -129,7 +129,9 @@ as it opens and closes; benches never moved come after the others, by name.
 ![A bench with two panes](images/bench.png)
 
 The coloured stripe and the tab bar carry the bench's colour; so does the border of
-the focused pane, when a tab is split.
+the focused pane, when a tab is split. The tab bar is set apart by a faint ground
+of that colour and a line under it, the shown tab lighter and in bolder type; how
+large it is drawn is a setting (**Tab bar size** in Settings).
 
 - **Tabs**: click to switch, double-click to rename, drag to reorder. Middle-click
   or **Close Tab…** in the right-click menu closes one, after asking, so a slip
@@ -360,7 +362,8 @@ terminal of the bench.
   the bench was hidden. (On macOS the notification says it, but a click does not
   reach Shed.)
 - **Above**: the session's title, your usage limits for the 5-hour window and the
-  week (with when they reset), what the session has cost, and how full its
+  week as small bars (green, amber from 70 %, red from 90 %; hover one for when it
+  resets), what the session has cost, and how full its
   context is. **Also works in** lists the bench's other projects: click one to
   let Claude read and change it too.
 
@@ -710,6 +713,13 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 
 ## Settings: shed.toml
 
+**Settings** in the Shed window's toolbar opens the ones most changed: appearance,
+font and its size, tab bar size, the Shed window's view, reopening benches at
+start, where new tabs open, taskbar badges and how often project tabs fetch. Each
+change applies at once and is written to `shed.toml`, keeping the rest of the file
+as you wrote it (a value that does not fit is refused and said). **Open shed.toml**
+there opens the file for everything else.
+
 Settings live in `~/.config/shed/shed.toml`. Every setting is optional, and changes
 apply as soon as the file is saved.
 
@@ -732,6 +742,7 @@ padding = 6                    # pixels between the window edge and the text
 new_pane_dir = "current"       # or "bench": where new tabs and panes open
 icon_badges = false            # draw each bench's badge on its taskbar icon
 compact_pegboard = false       # the Shed window as a compact list (its toolbar switches it)
+tab_bar_scale = 1.0            # how large a bench window's tab bar is drawn (0.7 to 2)
 
 [shell]
 integration = true             # load Shed's bash or zsh integration into its shells
