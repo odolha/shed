@@ -1833,6 +1833,7 @@ impl AiView {
             Kind::Code { lang, .. } => lang.clone(),
             _ => String::new(),
         };
+        let is_error = lang == "error" && matches!(self.entries.get(i), Some(Entry::Tool(_)));
         let styles: Vec<(Range<usize>, HighlightStyle)> = parsed.code.get(j).cloned().flatten().unwrap_or_default().into_iter().map(|(r, c)| (r, HighlightStyle::color(hsla(c)))).collect();
         let copy = self.copy_button(format!("copy-code-{i}-{j}").into(), ClipboardItem::new_string(piece.text.text.clone()), ui, cx);
         div()
@@ -1855,7 +1856,18 @@ impl AiView {
                     .child(if lang.is_empty() { "code".to_string() } else { lang })
                     .child(copy),
             )
-            .child(div().px_2().py_1().font_family(mono.to_string()).text_size(px(12.0 * self.z())).line_height(relative(1.35)).child(self.sel_text(i, j, parsed, styles, cx)))
+            // Its own colour: words the colouring leaves alone (and a tool's
+            // output) are not left to the default, black.
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .font_family(mono.to_string())
+                    .text_size(px(12.0 * self.z()))
+                    .line_height(relative(1.35))
+                    .text_color(hsla(if is_error { ui.danger } else { ui.text }))
+                    .child(self.sel_text(i, j, parsed, styles, cx)),
+            )
     }
 
     fn transcript_markdown(&self) -> String {

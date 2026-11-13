@@ -805,15 +805,20 @@ impl BenchWindow {
         let mut tabs = div().flex_1().min_w_0().flex().flex_wrap().gap_x(px(10.0 * s)).gap_y(pad).p(pad);
         // Tabs in groups, split where a tab has a divider before it: a group
         // goes onto the next row whole, and wraps inside only when it alone
-        // is wider than the bar. With groups, each sits on a tray of its own.
-        let grouped = bench.tabs.iter().skip(1).any(|t| t.divider != TabDivider::None);
+        // is wider than the bar. Each group sits on a tray of its own.
         let group = move || {
             div()
                 .flex()
                 .flex_wrap()
                 .min_w_0()
                 .gap(px(2.0 * s))
-                .when(grouped, |d| d.p(px(2.0 * s)).rounded_lg().bg(hsla_alpha(accent, 0.07)).border_1().border_color(hsla_alpha(accent, 0.22)))
+                // On a tray, one group or several: the bar looks the same
+                // with dividers or without.
+                .p(px(2.0 * s))
+                .rounded_lg()
+                .bg(hsla_alpha(accent, 0.07))
+                .border_1()
+                .border_color(hsla_alpha(accent, 0.22))
         };
         let mut current = group();
         let base = self.state.read(cx).settings.font.size;
@@ -836,7 +841,7 @@ impl BenchWindow {
                 .flex()
                 .items_center()
                 .gap_1p5()
-                .h(if grouped { tab_h - px(4.0 * s) - px(2.0) } else { tab_h })
+                .h(tab_h - px(4.0 * s) - px(2.0))
                 .px_3()
                 .max_w(px(260.0 * s))
                 .rounded_md()
@@ -948,7 +953,7 @@ impl BenchWindow {
         let tabs = tabs.child(current.child(
             div()
                 .id("new-tab")
-                .h(if grouped { tab_h - px(4.0 * s) - px(2.0) } else { tab_h })
+                .h(tab_h - px(4.0 * s) - px(2.0))
                 .rounded_md()
                 .flex()
                 .items_center()
