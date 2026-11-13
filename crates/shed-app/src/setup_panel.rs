@@ -263,14 +263,14 @@ impl SetupPanel {
             .cursor_pointer()
             .hover(|s| s.bg(hsla(ui.divider)))
             .on_click(cx.listener(move |this, _, _, cx| on(this, cx)))
-            .child(svg().path(icon("close")).size(px(11.0)).text_color(hsla(ui.text_dim)))
+            .child(svg().path(icon("close")).size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim)))
             .into_any_element()
     }
 
     fn link(&self, id: SharedString, label: &str, accent: Rgb, cx: &mut Context<Self>, on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static) -> AnyElement {
         div()
             .id(id)
-            .text_size(px(12.0))
+            .text_size(crate::theme::us(12.0))
             .text_color(hsla(self.state.read(cx).settings.ui.ink(accent)))
             .cursor_pointer()
             .hover(|s| s.underline())
@@ -324,10 +324,10 @@ impl SetupPanel {
             .items_center()
             .gap_2()
             .child(div().text_color(hsla(if active { accent } else { ui.text })).child(format!("Pane {}", index + 1)))
-            .child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(format!("now in {}", home_relative(&pane.cwd))));
+            .child(div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)).child(format!("now in {}", home_relative(&pane.cwd))));
         if let Some(r) = &running {
-            head = head.child(svg().path(icon("tool")).size(px(11.0)).text_color(hsla(ui.text_dim))).child(
-                div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).truncate().child(r.clone()),
+            head = head.child(svg().path(icon("tool")).size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim))).child(
+                div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)).truncate().child(r.clone()),
             );
         }
 
@@ -354,12 +354,12 @@ impl SetupPanel {
             }));
         }
         let startup_hint = if pane.setup.startup.is_empty() {
-            Some(div().pl(px(96.0)).text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("Empty: on load, what was running is restarted or typed, by the rack."))
+            Some(div().pl(px(96.0)).text_size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim)).child("Empty: on load, what was running is restarted or typed, by the rack."))
         } else {
             None
         };
         let teardown_hint = if pane.setup.teardown.is_empty() {
-            Some(div().pl(px(96.0)).text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("Empty: closing the bench stops the running tool."))
+            Some(div().pl(px(96.0)).text_size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim)).child("Empty: closing the bench stops the running tool."))
         } else {
             None
         };
@@ -416,7 +416,7 @@ impl SetupPanel {
                     .id(SharedString::from(format!("after-{me}-{other}")))
                     .px_1p5()
                     .rounded_sm()
-                    .text_size(px(12.0))
+                    .text_size(crate::theme::us(12.0))
                     .border_1()
                     .when(picked, |d| d.bg(hsla_alpha(accent, 0.25)).border_color(hsla_alpha(accent, 0.6)).text_color(hsla(ui.ink(accent))))
                     .when(!picked, |d| d.border_color(hsla(ui.divider)).text_color(hsla(if loops { ui.divider } else { ui.text_dim })))
@@ -438,7 +438,7 @@ impl SetupPanel {
             }
         }
         if !any {
-            chips = chips.child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child("no other panes in this bench"));
+            chips = chips.child(div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)).child("no other panes in this bench"));
         }
         chips.into_any_element()
     }
@@ -464,7 +464,7 @@ impl SetupPanel {
             let over = (!hidden.is_empty()).then(|| {
                 div()
                     .flex_none()
-                    .text_size(px(11.0))
+                    .text_size(crate::theme::us(11.0))
                     .text_color(hsla(ui.text_dim))
                     .child(format!("over {}", hidden.iter().map(|l| l.name()).collect::<Vec<_>>().join(", ")))
             });
@@ -472,7 +472,7 @@ impl SetupPanel {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(div().w(px(48.0)).flex_none().text_size(px(11.0)).text_color(hsla(level_color)).child(level.name()))
+                .child(div().w(px(48.0)).flex_none().text_size(crate::theme::us(11.0)).text_color(hsla(level_color)).child(level.name()))
                 .child(div().flex_1().min_w_0().font_family(mono.clone()).child(content))
                 .children(over);
             let name = name.clone();
@@ -504,7 +504,7 @@ impl SetupPanel {
                 .id(SharedString::from(format!("level-{}", level.name())))
                 .px_1p5()
                 .rounded_sm()
-                .text_size(px(12.0))
+                .text_size(crate::theme::us(12.0))
                 .cursor_pointer()
                 .when(on, |d| d.bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))))
                 .when(!on, |d| d.text_color(hsla(ui.text_dim)))
@@ -533,7 +533,7 @@ impl SetupPanel {
             .child(div().text_color(hsla(ui.text)).child("Aliases"))
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::theme::us(11.0))
                     .text_color(hsla(ui.text_dim))
                     .child(
                         "Tab over bench over global over your shell's own. Changes apply at each shell's next prompt; \
@@ -558,7 +558,7 @@ impl Render for SetupPanel {
             .flex()
             .items_center()
             .gap_2()
-            .child(svg().path(icon("rack")).size(px(16.0)).text_color(hsla(accent)))
+            .child(svg().path(icon("rack")).size(crate::theme::us(16.0)).text_color(hsla(accent)))
             .child(div().flex_1().truncate().text_color(hsla(ui.text)).child(format!("Setup · {title}")))
             .child(
                 div()
@@ -568,10 +568,10 @@ impl Render for SetupPanel {
                     .cursor_pointer()
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(PanelEvent::Close)))
-                    .child(svg().path(icon("close")).size(px(12.0)).text_color(hsla(ui.text_dim))),
+                    .child(svg().path(icon("close")).size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim))),
             );
         let intro = div()
-            .text_size(px(11.0))
+            .text_size(crate::theme::us(11.0))
             .text_color(hsla(ui.text_dim))
             .child("Used the next time this bench loads, and when it is closed. Click a value to edit; empty it to remove it.");
 
@@ -593,7 +593,7 @@ impl Render for SetupPanel {
             .bg(hsla(ui.tab_active))
             .border_l_1()
             .border_color(hsla(ui.divider))
-            .text_size(px(13.0))
+            .text_size(crate::theme::us(13.0))
             .overflow_y_scroll()
             .child(header)
             .child(intro)

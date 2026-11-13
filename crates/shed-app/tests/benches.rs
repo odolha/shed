@@ -311,6 +311,29 @@ fn bench_links_are_kept_open_or_closed() {
 }
 
 #[test]
+fn zoom_resets_everywhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let open = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("open".into()), cwd: None });
+    let closed = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("closed".into()), cwd: None });
+    let tree = tree_until(&mut c, "both", |t| t.bench(open).is_some() && t.bench(closed).is_some());
+    let (a, b) = (tree.bench(open).unwrap().tabs[0].id, tree.bench(closed).unwrap().tabs[0].id);
+    c.msg(ClientMsg::SetZoom { tab: a, zoom: 3.0 });
+    c.msg(ClientMsg::SetZoom { tab: b, zoom: -2.0 });
+    tree_until(&mut c, "zoomed", |t| t.tab(a).is_some_and(|t| t.zoom == 3.0) && t.tab(b).is_some_and(|t| t.zoom == -2.0));
+    c.msg(ClientMsg::CloseBench { bench: closed });
+    tree_until(&mut c, "closed", |t| t.bench(closed).is_none());
+    assert!(std::fs::read_to_string(dir.path().join("benches/closed.toml")).unwrap().contains("zoom = -2"));
+
+    c.msg(ClientMsg::ResetZoom);
+    tree_until(&mut c, "reset", |t| t.tab(a).is_some_and(|t| t.zoom == 0.0));
+    c.until("done", |f, _| matches!(f, Frame::Keeper(KeeperMsg::Done(text)) if text.starts_with("zoom reset")).then_some(()));
+    let saved = std::fs::read_to_string(dir.path().join("benches/closed.toml")).unwrap();
+    assert!(!saved.contains("zoom = -2"), "{saved}");
+}
+
+#[test]
 fn tabs_move_between_running_and_closed_benches() {
     use shed_proto::BenchRef::{Running, Saved};
     let dir = tempfile::tempdir().unwrap();

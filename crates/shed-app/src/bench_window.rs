@@ -902,7 +902,7 @@ impl BenchWindow {
     /// The bench's links, on the tab bar: click opens, right-click for more.
     /// How large the tab bar is drawn (`[window] tab_bar_scale`).
     fn bar_scale(&self, cx: &App) -> f32 {
-        self.state.read(cx).settings.config.window.tab_bar_scale.clamp(0.7, 2.0)
+        self.state.read(cx).settings.config.window.tab_bar_scale.clamp(0.7, 2.0) * crate::theme::ui_scale()
     }
 
     fn render_links(&self, bench: &Bench, cx: &mut Context<Self>) -> impl IntoElement {

@@ -326,7 +326,8 @@ impl AiView {
 
     /// How much larger than usual the tab's text is drawn.
     fn z(&self) -> f32 {
-        self.settings.font.size / self.base.font.size.max(1.0)
+        // The tab's zoom and the configured size together.
+        self.settings.font.size / crate::theme::BASE_FONT_SIZE
     }
 
     pub fn apply_settings(&mut self, settings: &Settings, cx: &mut Context<Self>) {

@@ -77,6 +77,7 @@ fn initials(name: &str) -> String {
 
 impl AppState {
     pub fn new(conn: KeeperConn, settings: Settings) -> Self {
+        crate::theme::set_ui_scale(settings.font.size);
         Self {
             conn,
             tree: Shed::default(),
@@ -517,6 +518,7 @@ impl AppState {
             warn!("config: {e}");
         }
         cx.set_global(crate::prompt::CurrentUi(settings.ui.clone()));
+        crate::theme::set_ui_scale(settings.font.size);
         self.settings = settings;
         self.sync_identities(cx);
         for view in self.panes.values() {

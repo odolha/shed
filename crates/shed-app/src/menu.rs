@@ -81,7 +81,7 @@ impl Render for Tooltip {
             .bg(hsla(ui.tab_active))
             .border_1()
             .border_color(hsla(ui.divider))
-            .text_size(px(12.0))
+            .text_size(crate::theme::us(12.0))
             .text_color(hsla(ui.text))
             .child(self.0.clone())
     }
@@ -118,7 +118,7 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
         .rounded_md()
         // No drop shadow: a blurred shadow is redrawn over the whole menu on
         // every hover change, which tripled the cost of moving through it.
-        .text_size(px(13.0))
+        .text_size(crate::theme::us(13.0))
         .text_color(hsla(ui.text))
         .on_mouse_down_out(cx.listener(|this: &mut V, _, window, cx| {
             *this.menu_slot() = None;
@@ -127,7 +127,7 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
     // With icons on some items, every label starts at the same place.
     let icons = menu.entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::More { icon: Some(_), .. }));
     let lead = |glyph: &Option<&'static str>, color: Rgb| match glyph {
-        Some(name) => Some(svg().path(icon(name)).size(px(14.0)).text_color(hsla(color)).into_any_element()),
+        Some(name) => Some(svg().path(icon(name)).size(crate::theme::us(14.0)).text_color(hsla(color)).into_any_element()),
         None if icons => Some(div().size(px(14.0)).into_any_element()),
         None => None,
     };

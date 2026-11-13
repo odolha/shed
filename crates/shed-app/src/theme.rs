@@ -1,8 +1,33 @@
 //! Fonts and colours. `shed.toml` and theme files arrive in phase 3.
 
-use gpui::{Font, Hsla, font};
+use std::cell::Cell;
+
+use gpui::{Font, Hsla, Pixels, font, px};
 use shed_emu::Rgb;
 use shed_model::config::{FontConfig, Theme};
+
+/// The font size everything else is drawn at: 14 points means scale 1.
+pub const BASE_FONT_SIZE: f32 = 14.0;
+
+thread_local! {
+    /// How large the interface is drawn, from the font size in Settings.
+    static UI_SCALE: Cell<f32> = const { Cell::new(1.0) };
+}
+
+/// Sets the interface's scale from the configured font size.
+pub fn set_ui_scale(font_size: f32) {
+    UI_SCALE.with(|s| s.set((font_size / BASE_FONT_SIZE).clamp(0.5, 3.0)));
+}
+
+pub fn ui_scale() -> f32 {
+    UI_SCALE.with(Cell::get)
+}
+
+/// A size in the interface, grown or shrunk with the configured font
+/// size: `text_size(us(13.0))`.
+pub fn us(n: f32) -> Pixels {
+    px(n * ui_scale())
+}
 
 pub fn hsla(c: Rgb) -> Hsla {
     gpui::rgb_to_hsla(gpui::rgb(c.to_hex()))

@@ -155,6 +155,6 @@ impl Render for LineEditor {
             .items_center()
             .gap_2()
             .child(field)
-            .children(self.hint.map(|hint| div().flex_none().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(hint)))
+            .children(self.hint.map(|hint| div().flex_none().text_size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim)).child(hint)))
     }
 }

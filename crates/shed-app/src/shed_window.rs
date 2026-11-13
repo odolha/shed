@@ -1,7 +1,7 @@
 //! The Shed window: the pegboard, with the Shed icon. It lives as long as
 //! Shed does; closing it closes every bench and Shed with them.
 
-use gpui::{Context, Entity, PromptLevel, SharedString, Subscription, Window, div, prelude::*, px, svg};
+use gpui::{Context, Entity, PromptLevel, SharedString, Subscription, Window, div, prelude::*, svg};
 use shed_model::config::Appearance;
 use shed_proto::{ClientMsg, ShowTarget};
 
@@ -147,7 +147,7 @@ impl Render for ShedWindow {
                     .when(on, |d| d.bg(hsla_alpha(ui.accent, 0.2)))
                     .when(!on, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
                     .tooltip(crate::menu::tooltip(tip))
-                    .child(svg().path(icon(glyph)).size(px(15.0)).text_color(hsla(tint)))
+                    .child(svg().path(icon(glyph)).size(crate::theme::us(15.0)).text_color(hsla(tint)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.state.update(cx, |state, cx| state.set_appearance(appearance, cx));
                     }))
@@ -174,7 +174,7 @@ impl Render for ShedWindow {
                     .when(on, |d| d.bg(hsla_alpha(ui.accent, 0.2)))
                     .when(!on, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
                     .tooltip(crate::menu::tooltip(tip))
-                    .child(svg().path(icon(glyph)).size(px(15.0)).text_color(hsla(tint)))
+                    .child(svg().path(icon(glyph)).size(crate::theme::us(15.0)).text_color(hsla(tint)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.state.update(cx, |state, cx| state.set_compact_pegboard(value, cx));
                     }))
@@ -189,7 +189,7 @@ impl Render for ShedWindow {
                 .flex_none()
                 .px_4()
                 .py_1()
-                .text_size(px(12.0))
+                .text_size(crate::theme::us(12.0))
                 .text_color(hsla(ui.text))
                 .bg(hsla(ui.tab_hover))
                 .child(text)
@@ -206,7 +206,7 @@ impl Render for ShedWindow {
                 .px_3()
                 .py_1()
                 .rounded_md()
-                .text_size(px(12.0))
+                .text_size(crate::theme::us(12.0))
                 .text_color(hsla(ui.text))
                 .bg(hsla_alpha(ui.danger, 0.18))
                 .child(div().flex_1().child(text))
@@ -245,8 +245,8 @@ impl Render for ShedWindow {
                     .gap_2()
                     .px_4()
                     .pt_3()
-                    .child(svg().path(icon("shed")).size(px(18.0)).text_color(hsla(ui.accent)))
-                    .child(div().text_size(px(16.0)).child("Shed"))
+                    .child(svg().path(icon("shed")).size(crate::theme::us(18.0)).text_color(hsla(ui.accent)))
+                    .child(div().text_size(crate::theme::us(16.0)).child("Shed"))
                     .child(div().flex_1())
                     .child(
                         div()
@@ -258,11 +258,11 @@ impl Render for ShedWindow {
                             .py_0p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .text_size(px(12.0))
+                            .text_size(crate::theme::us(12.0))
                             .text_color(hsla(ui.text_dim))
                             .when(self.settings.is_some(), |d| d.bg(hsla_alpha(ui.accent, 0.2)))
                             .hover(|s| s.bg(hsla(ui.tab_hover)))
-                            .child(svg().path(icon("settings")).size(px(14.0)).text_color(hsla(ui.text_dim)))
+                            .child(svg().path(icon("settings")).size(crate::theme::us(14.0)).text_color(hsla(ui.text_dim)))
                             .child("Settings")
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_settings(cx))),
                     )

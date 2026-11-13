@@ -2,7 +2,7 @@
 //! tab bar and in Shed, opened through the browser extension when it is
 //! there (bringing an open tab forward) and the usual way when not.
 
-use gpui::{App, ClipboardItem, Context, Div, SharedString, Stateful, div, prelude::*, px, svg};
+use gpui::{App, ClipboardItem, Context, Div, SharedString, Stateful, div, prelude::*, svg};
 use shed_model::{ProjectLink, Rgb};
 
 use crate::assets::icon;
@@ -80,17 +80,17 @@ pub fn chip(id: impl Into<SharedString>, link: &ProjectLink, accent: Rgb, ui: &U
         .flex_none()
         .items_center()
         .gap_1()
-        .max_w(px(180.0))
+        .max_w(crate::theme::us(180.0))
         .px_2()
         .py_0p5()
         .rounded_md()
         .border_1()
         .border_color(hsla_alpha(accent, 0.5))
         .cursor_pointer()
-        .text_size(px(12.0))
+        .text_size(crate::theme::us(12.0))
         .text_color(hsla(ink))
         .hover(move |s| s.bg(hsla_alpha(accent, 0.15)))
-        .child(svg().path(icon("link")).size(px(12.0)).flex_none().text_color(hsla(ink)))
+        .child(svg().path(icon("link")).size(crate::theme::us(12.0)).flex_none().text_color(hsla(ink)))
         .child(div().min_w_0().truncate().child(link.name.clone()))
 }
 

@@ -257,6 +257,14 @@ in a remote tab runs `shedd logbook` (an SQLite `VACUUM INTO` copy to stdout)
 into `logbook-HOST.sqlite` in the runtime folder, and searches it with the
 server's bench and tab ids from `shedd list` as "here".
 
+## Sizes
+
+The configured font size is also the interface's scale (`theme::ui_scale`, size
+÷ 14, set when settings apply): chrome sizes go through `theme::us(n)`, AI and
+project tabs multiply it with the tab's own zoom (`z()`), the tab bar with
+`tab_bar_scale`. `ResetZoom` sets every running tab's zoom to 0 and rewrites
+closed benches' files that had any.
+
 ## Scrollbars
 
 GPUI draws none: `shed-app/src/scrollbar.rs` paints a thumb (one quad) over the

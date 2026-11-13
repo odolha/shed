@@ -248,7 +248,7 @@ impl Render for LogbookSearch {
             .flex()
             .items_center()
             .justify_between()
-            .text_size(px(12.0))
+            .text_size(crate::theme::us(12.0))
             .text_color(hsla(ui.text_dim))
             .child(div().flex().gap_2().child(scopes).children(self.server.as_ref().map(|host| {
                 let text = if self.fetching.is_some() { format!("on {host} (fetching…)") } else { format!("on {host}") };
@@ -272,7 +272,7 @@ impl Render for LogbookSearch {
             .child(div().flex_none().child(after.to_string()));
 
         let start = self.selected.saturating_sub(ROWS - 1);
-        let mut list = div().flex().flex_col().font_family(self.mono.clone()).text_size(px(13.0));
+        let mut list = div().flex().flex_col().font_family(self.mono.clone()).text_size(crate::theme::us(13.0));
         if let Some(e) = &self.error {
             list = list.child(div().text_color(hsla(ui.text_dim)).child(e.clone()));
         } else if self.results.is_empty() {
@@ -309,7 +309,7 @@ impl Render for LogbookSearch {
             .bg(hsla(ui.tab_active))
             .border_t_2()
             .border_color(hsla(self.accent))
-            .text_size(px(13.0))
+            .text_size(crate::theme::us(13.0))
             .child(header)
             .child(input)
             .child(list)

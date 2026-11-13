@@ -716,7 +716,10 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 ## Settings: shed.toml
 
 **Settings** in the Shed window's toolbar opens the ones most changed: appearance,
-font and its size, tab bar size, the Shed window's view, reopening benches at
+font and its size (the size is for everything: terminals and code, AI
+conversations, project trees, menus and Shed's own windows; 14 is the usual),
+**Reset Everywhere** for zoom (every tab of every bench, open or closed, back to
+the usual size, to start alike everywhere), tab bar size, the Shed window's view, reopening benches at
 start, where new tabs open, taskbar badges and how often project tabs fetch. Each
 change applies at once and is written to `shed.toml`, keeping the rest of the file
 as you wrote it (a value that does not fit is refused and said). **Open shed.toml**

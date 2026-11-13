@@ -62,7 +62,7 @@ fn row(ui: &UiColors, title: &str, about: &str, control: impl IntoElement) -> gp
                 .flex()
                 .flex_col()
                 .child(div().text_color(hsla(ui.text)).child(title.to_string()))
-                .when(!about.is_empty(), |d| d.child(div().text_size(px(11.5)).text_color(hsla(ui.text_dim)).child(about.to_string()))),
+                .when(!about.is_empty(), |d| d.child(div().text_size(crate::theme::us(11.5)).text_color(hsla(ui.text_dim)).child(about.to_string()))),
         )
         .child(div().flex_none().child(control))
 }
@@ -85,7 +85,7 @@ fn segmented<T: Clone + PartialEq + 'static>(
             .py_0p5()
             .rounded_sm()
             .cursor_pointer()
-            .text_size(px(12.0))
+            .text_size(crate::theme::us(12.0))
             .when(selected, |d| d.bg(hsla_alpha(ui.accent, 0.22)).text_color(hsla(ui.text)))
             .when(!selected, |d| d.text_color(hsla(ui.text_dim)).hover(|s| s.bg(hsla(ui.tab_hover))))
             .child(label)
@@ -107,7 +107,7 @@ fn stepper(id: &str, ui: &UiColors, shown: String, cx: &mut Context<SettingsPane
             .cursor_pointer()
             .bg(hsla(ui.tab_active))
             .hover(|s| s.bg(hsla(ui.tab_hover)))
-            .child(svg().path(icon(glyph)).size(px(12.0)).text_color(hsla(ui.text)))
+            .child(svg().path(icon(glyph)).size(crate::theme::us(12.0)).text_color(hsla(ui.text)))
             .on_click(cx.listener(move |this, _, _, cx| step(this, sign, cx)))
     };
     div().flex().items_center().gap_1().child(button(-1.0, "minus")).child(div().min_w(px(52.0)).flex().justify_center().text_color(hsla(ui.text)).child(shown)).child(button(1.0, "plus"))
@@ -134,7 +134,7 @@ impl Render for SettingsPanel {
         let state = self.state.read(cx);
         let ui = state.settings.ui.clone();
         let config = state.settings.config.clone();
-        let heading = |text: &str| div().mt_4().mb_1().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(hsla(ui.text_dim)).child(text.to_uppercase());
+        let heading = |text: &str| div().mt_4().mb_1().text_size(crate::theme::us(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(hsla(ui.text_dim)).child(text.to_uppercase());
 
         let appearance = segmented(
             "appearance",
@@ -190,7 +190,7 @@ impl Render for SettingsPanel {
             .border_1()
             .border_color(hsla(ui.divider))
             .hover(|s| s.bg(hsla(ui.tab_hover)))
-            .child(svg().path(icon("file")).size(px(13.0)).text_color(hsla(ui.text_dim)))
+            .child(svg().path(icon("file")).size(crate::theme::us(13.0)).text_color(hsla(ui.text_dim)))
             .child(div().text_color(hsla(ui.text)).child("Open shed.toml"))
             .on_click(move |_, _, cx| cx.open_url(&format!("file://{}", path.display())));
 
@@ -205,15 +205,15 @@ impl Render for SettingsPanel {
             .bg(hsla(ui.background))
             .border_l_1()
             .border_color(hsla(ui.divider))
-            .text_size(px(13.0))
+            .text_size(crate::theme::us(13.0))
             .overflow_y_scroll()
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(svg().path(icon("settings")).size(px(16.0)).text_color(hsla(ui.text)))
-                    .child(div().flex_1().text_size(px(15.0)).text_color(hsla(ui.text)).child("Settings"))
+                    .child(svg().path(icon("settings")).size(crate::theme::us(16.0)).text_color(hsla(ui.text)))
+                    .child(div().flex_1().text_size(crate::theme::us(15.0)).text_color(hsla(ui.text)).child("Settings"))
                     .child(
                         div()
                             .id("settings-close")
@@ -221,13 +221,33 @@ impl Render for SettingsPanel {
                             .rounded_sm()
                             .cursor_pointer()
                             .hover(|s| s.bg(hsla(ui.tab_hover)))
-                            .child(svg().path(icon("close")).size(px(14.0)).text_color(hsla(ui.text_dim)))
+                            .child(svg().path(icon("close")).size(crate::theme::us(14.0)).text_color(hsla(ui.text_dim)))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close))),
                     ),
             )
             .child(heading("Look"))
             .child(row(&ui, "Appearance", "Auto follows the desktop's light or dark", appearance))
-            .child(row(&ui, "Font size", "Terminals and code; each tab still zooms on its own", font_size))
+            .child(row(&ui, "Font size", "Everything: terminals, code, conversations, Shed itself", font_size))
+            .child(row(
+                &ui,
+                "Zoom",
+                "Each tab's own zoom (Ctrl+= / Ctrl+-), in every bench, open or closed",
+                div()
+                    .id("reset-zoom")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .border_1()
+                    .border_color(hsla(ui.divider))
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .child(svg().path(icon("refresh")).size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)))
+                    .child(div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.text)).child("Reset Everywhere"))
+                    .on_click(cx.listener(|this, _, _, cx| this.state.read(cx).conn.send_msg(shed_proto::ClientMsg::ResetZoom))),
+            ))
             .child(row(&ui, "Font", "Its family name; Enter applies it", div().w(px(170.0)).px_1().rounded_sm().border_1().border_color(hsla(ui.divider)).child(self.family.clone())))
             .child(row(&ui, "Tab bar size", "How large a bench window's tab bar is", bar))
             .child(row(&ui, "Shed window", "Cards with previews, or a line per bench", view))
@@ -238,6 +258,6 @@ impl Render for SettingsPanel {
             .child(heading("Projects"))
             .child(row(&ui, "Git fetch", "How often project tabs fetch, to know what is behind", fetch))
             .child(open_file)
-            .child(div().mt_2().text_size(px(11.5)).text_color(hsla(ui.text_dim)).child("Keys, the rack, tag rules, themes and the rest are in shed.toml; Shed follows the file as it changes."))
+            .child(div().mt_2().text_size(crate::theme::us(11.5)).text_color(hsla(ui.text_dim)).child("Keys, the rack, tag rules, themes and the rest are in shed.toml; Shed follows the file as it changes."))
     }
 }

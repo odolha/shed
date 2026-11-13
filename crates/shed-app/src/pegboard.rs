@@ -100,7 +100,7 @@ impl Render for DraggedBench {
             .bg(hsla(ui.tab_active))
             .border_1()
             .border_color(hsla(ui.divider))
-            .text_size(px(14.0))
+            .text_size(crate::theme::us(14.0))
             .text_color(hsla(ui.text))
             .child(self.name.clone())
     }
@@ -554,7 +554,7 @@ impl Pegboard {
         let mut row = div().flex().flex_none().items_center().gap_1();
         for (i, link) in entry.bench.links.iter().enumerate() {
             if let Some(editor) = self.editor_for(&Edit::ChangeLink(key.clone(), i)).or_else(|| self.editor_for(&Edit::RenameLink(key.clone(), i))) {
-                row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor));
+                row = row.child(div().w(px(260.0)).text_size(crate::theme::us(12.0)).child(editor));
                 continue;
             }
             let (url, links, k) = (link.url.clone(), links.clone(), key.clone());
@@ -582,7 +582,7 @@ impl Pegboard {
             );
         }
         if let Some(editor) = self.editor_for(&Edit::AddLink(key)) {
-            row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor)).child(div().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child("name url"));
+            row = row.child(div().w(px(260.0)).text_size(crate::theme::us(12.0)).child(editor)).child(div().text_size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim)).child("name url"));
         }
         row
     }
@@ -757,12 +757,12 @@ impl Pegboard {
             .px_2()
             .py_0p5()
             .rounded_sm()
-            .text_size(px(12.0))
+            .text_size(crate::theme::us(12.0))
             .cursor_pointer()
             .text_color(hsla(ink))
             .when(filled, |d| d.bg(hsla_alpha(color, 0.2)))
             .hover(move |s| s.bg(hsla_alpha(color, 0.3)))
-            .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(ink)))
+            .child(svg().path(icon(glyph)).size(crate::theme::us(13.0)).text_color(hsla(ink)))
             .child(label.to_string())
             .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
             .into_any_element()
@@ -787,7 +787,7 @@ impl Pegboard {
             .cursor_pointer()
             .hover(|s| s.bg(hsla(ui.tab_hover)))
             .tooltip(menu::tooltip("Rename"))
-            .child(svg().path(icon("pencil")).size(px(12.0)).text_color(hsla(ui.text_dim)))
+            .child(svg().path(icon("pencil")).size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)))
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 on(this, window, cx)
@@ -814,7 +814,7 @@ impl Pegboard {
             .px_1p5()
             .py_0p5()
             .rounded_md()
-            .text_size(px(11.0))
+            .text_size(crate::theme::us(11.0))
             .bg(hsla_alpha(state_color, 0.16))
             .text_color(hsla(state_color))
             .child(div().size(px(7.0)).rounded_full().when(entry.status == Status::Closed, |d| d.border_1().border_color(hsla(state_color))).when(entry.status != Status::Closed, |d| d.bg(hsla(state_color))))
@@ -849,7 +849,7 @@ impl Pegboard {
                     .child(
                         div()
                             .id(SharedString::from(format!("name-{id}")))
-                            .text_size(px(15.0))
+                            .text_size(crate::theme::us(15.0))
                             .text_color(hsla(ui.text))
                             .cursor_text()
                             .child(bench.name.clone())
@@ -868,7 +868,7 @@ impl Pegboard {
         let badge = match self.editor_for(&Edit::Badge(key.clone())).or_else(|| self.editor_for(&Edit::Color(key.clone()))) {
             Some(editor) => Some(div().w(px(110.0)).child(editor).into_any_element()),
             None => bench.badge.clone().map(|badge| {
-                div().px_1().rounded_sm().text_size(px(12.0)).bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))).child(badge).into_any_element()
+                div().px_1().rounded_sm().text_size(crate::theme::us(12.0)).bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))).child(badge).into_any_element()
             }),
         };
         // Dragging the grip moves the bench among the others.
@@ -877,7 +877,7 @@ impl Pegboard {
             .flex_none()
             .cursor_grab()
             .tooltip(menu::tooltip("Drag to move the bench"))
-            .child(svg().path(icon("grip")).size(px(14.0)).text_color(hsla(ui.text_dim)))
+            .child(svg().path(icon("grip")).size(crate::theme::us(14.0)).text_color(hsla(ui.text_dim)))
             .on_drag(DraggedBench { id, name: bench.name.clone() }, |d, _, _, cx| cx.new(|_| d.clone()));
         let mut header = div()
             .flex()
@@ -888,7 +888,7 @@ impl Pegboard {
             .child(name)
             .children(badge)
             .child(state_badge)
-            .child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(format!(
+            .child(div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)).child(format!(
                 "{}{tab_count} tab{}",
                 if state_note.is_empty() { String::new() } else { format!("{state_note} · ") },
                 if tab_count == 1 { "" } else { "s" }
@@ -897,7 +897,7 @@ impl Pegboard {
             .child(div().flex_1());
 
         if bench.closing {
-            header = header.child(div().text_size(px(12.0)).text_color(hsla(ui.ink(accent))).child("closing…"));
+            header = header.child(div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.ink(accent))).child("closing…"));
         } else {
             let (open_icon, open_label) = if entry.status == Status::Open { ("go", "Go to") } else { ("bench-load", "Open") };
             let e = entry.clone();
@@ -924,7 +924,7 @@ impl Pegboard {
                     .cursor_pointer()
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
                     .tooltip(menu::tooltip("More: rename, badge, colour, new tab"))
-                    .child(svg().path(icon("more")).size(px(15.0)).text_color(hsla(ui.text_dim)))
+                    .child(svg().path(icon("more")).size(crate::theme::us(15.0)).text_color(hsla(ui.text_dim)))
                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                         let entries = this.bench_menu(&e);
                         this.open_menu(ev.position, entries, cx);
@@ -955,10 +955,10 @@ impl Pegboard {
                     .border_dashed()
                     .border_color(hsla(ui.divider))
                     .cursor_pointer()
-                    .text_size(px(12.0))
+                    .text_size(crate::theme::us(12.0))
                     .text_color(hsla(ui.text_dim))
                     .hover(move |s| s.border_color(hsla(accent)).text_color(hsla(ink)))
-                    .child(svg().path(icon("tab-new")).size(px(14.0)).text_color(hsla(ui.text_dim)))
+                    .child(svg().path(icon("tab-new")).size(crate::theme::us(14.0)).text_color(hsla(ui.text_dim)))
                     .child("New tab")
                     .on_click(cx.listener(move |this, _, _, cx| this.new_tab(&k, cx))),
             );
@@ -1022,7 +1022,7 @@ impl Pegboard {
                 div()
                     .id(SharedString::from(format!("name-{id}")))
                     .flex_none()
-                    .text_size(px(15.0))
+                    .text_size(crate::theme::us(15.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(hsla(if closed { ui.text_dim } else { ui.text }))
                     .cursor_pointer()
@@ -1040,7 +1040,7 @@ impl Pegboard {
         let badge = match self.editor_for(&Edit::Badge(key.clone())).or_else(|| self.editor_for(&Edit::Color(key.clone()))) {
             Some(editor) => Some(div().w(px(110.0)).child(editor).into_any_element()),
             None => bench.badge.clone().map(|badge| {
-                div().flex_none().px_1().rounded_sm().text_size(px(11.0)).bg(hsla_alpha(accent, 0.2)).text_color(hsla(ui.ink(accent))).child(badge).into_any_element()
+                div().flex_none().px_1().rounded_sm().text_size(crate::theme::us(11.0)).bg(hsla_alpha(accent, 0.2)).text_color(hsla(ui.ink(accent))).child(badge).into_any_element()
             }),
         };
         let state = match entry.status {
@@ -1055,11 +1055,11 @@ impl Pegboard {
             .invisible()
             .group_hover(group.clone(), |s| s.visible())
             .tooltip(menu::tooltip("Drag to move the bench"))
-            .child(svg().path(icon("grip")).size(px(12.0)).text_color(hsla(ui.text_dim)))
+            .child(svg().path(icon("grip")).size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)))
             .on_drag(DraggedBench { id, name: bench.name.clone() }, |d, _, _, cx| cx.new(|_| d.clone()));
 
         let mut header = div()
-            .h(px(28.0))
+            .h(crate::theme::us(28.0))
             .flex()
             .items_center()
             .gap_2()
@@ -1067,11 +1067,11 @@ impl Pegboard {
             .child(dot)
             .child(name)
             .children(badge)
-            .when(!state.is_empty(), |d| d.child(div().flex_none().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child(state)))
+            .when(!state.is_empty(), |d| d.child(div().flex_none().text_size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)).child(state)))
             .child(div().flex_1())
             .child(self.render_quiet_links(entry, ui, cx));
         if bench.closing {
-            header = header.child(div().text_size(px(12.0)).text_color(hsla(ui.text_dim)).child("closing…"));
+            header = header.child(div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)).child("closing…"));
         } else {
             let (open_icon, open_label) = if entry.status == Status::Open { ("go", "Go to") } else { ("bench-load", "Open") };
             let e = entry.clone();
@@ -1099,19 +1099,19 @@ impl Pegboard {
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(format!("new-tab-{id}")))
-                    .h(px(26.0))
+                    .h(crate::theme::us(26.0))
                     .px_2()
                     .flex()
                     .items_center()
                     .gap_1p5()
                     .rounded_md()
                     .cursor_pointer()
-                    .text_size(px(12.0))
+                    .text_size(crate::theme::us(12.0))
                     .text_color(hsla(ui.text_dim))
                     .invisible()
                     .group_hover(group.clone(), |s| s.visible())
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
-                    .child(svg().path(icon("tab-new")).size(px(13.0)).text_color(hsla(ui.text_dim)))
+                    .child(svg().path(icon("tab-new")).size(crate::theme::us(13.0)).text_color(hsla(ui.text_dim)))
                     .child("New tab")
                     .on_click(cx.listener(move |this, _, _, cx| this.new_tab(&k, cx))),
             );
@@ -1165,11 +1165,11 @@ impl Pegboard {
             .px_1p5()
             .py_0p5()
             .rounded_md()
-            .text_size(px(12.0))
+            .text_size(crate::theme::us(12.0))
             .cursor_pointer()
             .text_color(hsla(ui.text_dim))
             .hover(move |s| s.bg(hsla(ui.tab_hover)).text_color(hsla(text)))
-            .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(ui.text_dim)))
+            .child(svg().path(icon(glyph)).size(crate::theme::us(13.0)).text_color(hsla(ui.text_dim)))
             .children(label.map(str::to_string))
             .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
     }
@@ -1184,7 +1184,7 @@ impl Pegboard {
         let mut row = div().flex().flex_none().items_center().gap_1();
         for (i, link) in entry.bench.links.iter().enumerate() {
             if let Some(editor) = self.editor_for(&Edit::ChangeLink(key.clone(), i)).or_else(|| self.editor_for(&Edit::RenameLink(key.clone(), i))) {
-                row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor));
+                row = row.child(div().w(px(260.0)).text_size(crate::theme::us(12.0)).child(editor));
                 continue;
             }
             let (url, links, k) = (link.url.clone(), links.clone(), key.clone());
@@ -1200,11 +1200,11 @@ impl Pegboard {
                     .py_0p5()
                     .rounded_md()
                     .cursor_pointer()
-                    .text_size(px(12.0))
+                    .text_size(crate::theme::us(12.0))
                     .text_color(hsla(ui.text))
                     .hover(move |s| s.bg(hsla(ui.tab_hover)).text_color(hsla(text)))
                     .tooltip(menu::tooltip_text(link.url.clone()))
-                    .child(svg().path(icon("link")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)))
+                    .child(svg().path(icon("link")).size(crate::theme::us(12.0)).flex_none().text_color(hsla(ui.text_dim)))
                     .child(div().min_w_0().truncate().child(link.name.clone()))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |_, _, _, cx| {
@@ -1227,7 +1227,7 @@ impl Pegboard {
             );
         }
         if let Some(editor) = self.editor_for(&Edit::AddLink(key)) {
-            row = row.child(div().w(px(260.0)).text_size(px(12.0)).child(editor));
+            row = row.child(div().w(px(260.0)).text_size(crate::theme::us(12.0)).child(editor));
         }
         row
     }
@@ -1283,8 +1283,8 @@ impl Pegboard {
         div()
             .id(SharedString::from(format!("tab-{tab_id}")))
             .relative()
-            .h(px(26.0))
-            .w(px(CHIP_WIDTH))
+            .h(crate::theme::us(26.0))
+            .w(crate::theme::us(CHIP_WIDTH))
             .flex_none()
             .overflow_hidden()
             .flex()
@@ -1292,7 +1292,7 @@ impl Pegboard {
             .gap_1p5()
             .px_2()
             .rounded_md()
-            .text_size(px(13.0))
+            .text_size(crate::theme::us(13.0))
             .cursor_pointer()
             // A light ground of their own, so tabs stand out from the bench.
             .when(selected, |d| d.bg(hsla_alpha(accent, 0.18)))
@@ -1313,12 +1313,12 @@ impl Pegboard {
             }))
             // The tab the bench shows: a short bar in its colour.
             .when(active, |d| d.child(div().absolute().left_0().top(px(6.0)).h(px(14.0)).w(px(2.0)).rounded_full().bg(hsla(accent))))
-            .child(svg().path(icon(glyph)).size(px(14.0)).flex_none().text_color(hsla(tint)))
+            .child(svg().path(icon(glyph)).size(crate::theme::us(14.0)).flex_none().text_color(hsla(tint)))
             .child(title_el)
             .child(tags)
-            .when(tab.private, |d| d.child(svg().path(icon("private")).size(px(11.0)).flex_none().text_color(hsla(ui.text_dim))))
+            .when(tab.private, |d| d.child(svg().path(icon("private")).size(crate::theme::us(11.0)).flex_none().text_color(hsla(ui.text_dim))))
             .child(div().flex_1())
-            .children(detail.map(|d| div().flex_shrink_0().max_w(px(CHIP_WIDTH * 0.4)).truncate().text_size(px(11.5)).text_color(hsla(ui.text_dim)).child(d)))
+            .children(detail.map(|d| div().flex_shrink_0().max_w(crate::theme::us(CHIP_WIDTH * 0.4)).truncate().text_size(crate::theme::us(11.5)).text_color(hsla(ui.text_dim)).child(d)))
             .into_any_element()
     }
 
@@ -1330,21 +1330,21 @@ impl Pegboard {
         let title = tab.display_title();
         let mut head = div().flex().items_center().gap_1p5().min_w_0();
         if tab.project_info().is_some() {
-            head = head.child(svg().path(icon("project")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
+            head = head.child(svg().path(icon("project")).size(crate::theme::us(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
         }
         if tab.ai_info().is_some() {
-            head = head.child(svg().path(icon("ai")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
+            head = head.child(svg().path(icon("ai")).size(crate::theme::us(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
         }
         if tab.remote_info().is_some() {
-            head = head.child(svg().path(icon("server")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
+            head = head.child(svg().path(icon("server")).size(crate::theme::us(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
         }
         if waiting {
-            head = head.child(svg().path(icon("tool-waiting")).size(px(12.0)).flex_none().text_color(hsla(accent)));
+            head = head.child(svg().path(icon("tool-waiting")).size(crate::theme::us(12.0)).flex_none().text_color(hsla(accent)));
         } else if tool.is_some() {
-            head = head.child(svg().path(icon("tool")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
+            head = head.child(svg().path(icon("tool")).size(crate::theme::us(12.0)).flex_none().text_color(hsla(ui.text_dim)));
         }
         if tab.private {
-            head = head.child(svg().path(icon("private")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)));
+            head = head.child(svg().path(icon("private")).size(crate::theme::us(12.0)).flex_none().text_color(hsla(ui.text_dim)));
         }
         head = match self.editor_for(&Edit::TabName(tab_id)) {
             Some(editor) => head.child(div().flex_1().min_w_0().child(editor)),
@@ -1385,7 +1385,7 @@ impl Pegboard {
                     .flex_none()
                     .px_1()
                     .rounded_sm()
-                    .text_size(px(11.0))
+                    .text_size(crate::theme::us(11.0))
                     .bg(hsla_alpha(tag.color, 0.25))
                     .text_color(hsla(ui.ink(tag.color)))
                     .child(tag.label.clone()),
@@ -1427,7 +1427,7 @@ impl Pegboard {
         // A closed bench's screen is a memory: dimmer than live ones. (By
         // colour: `opacity` draws through a window-sized layer, per card.)
         let color = if running { hsla(ui.text_dim) } else { hsla_alpha(ui.text_dim, 0.55) };
-        let preview = div().h(px(PREVIEW_LINES as f32 * 11.0)).overflow_hidden();
+        let preview = div().h(crate::theme::us(PREVIEW_LINES as f32 * 11.0)).overflow_hidden();
         // A project or a conversation has no screen: its icon stands in.
         let glyph = if ai.is_some() { "ai" } else { "project" };
         let preview = match project.as_ref().or(ai.as_ref()) {
@@ -1435,7 +1435,7 @@ impl Pegboard {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(svg().path(icon(glyph)).size(px(36.0)).text_color(hsla_alpha(ui.ink(accent), if running { 0.5 } else { 0.3 }))),
+                .child(svg().path(icon(glyph)).size(crate::theme::us(36.0)).text_color(hsla_alpha(ui.ink(accent), if running { 0.5 } else { 0.3 }))),
             None => preview.child(preview_text(lines, mono, color)),
         };
 
@@ -1460,7 +1460,7 @@ impl Pegboard {
         div()
             .id(SharedString::from(format!("tab-{tab_id}")))
             .group("card")
-            .w(px(CARD_WIDTH))
+            .w(crate::theme::us(CARD_WIDTH))
             .flex()
             .flex_col()
             .gap_1()
@@ -1485,7 +1485,7 @@ impl Pegboard {
             }))
             .child(head)
             .child(preview)
-            .child(div().truncate().text_size(px(11.0)).text_color(hsla(ui.text_dim)).child(foot.join(" · ")))
+            .child(div().truncate().text_size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim)).child(foot.join(" · ")))
             .into_any_element()
     }
 }
@@ -1500,7 +1500,7 @@ fn preview_text(lines: Vec<String>, family: SharedString, color: Hsla) -> impl I
     canvas(
         |_, _, _| {},
         move |bounds, _, window, cx| {
-            let line_height = px(11.0);
+            let line_height = crate::theme::us(11.0);
             let shown = &lines[lines.len().saturating_sub(PREVIEW_LINES)..];
             let top = bounds.bottom() - line_height * shown.len() as f32;
             for (i, text) in shown.iter().enumerate().filter(|(_, t)| !t.is_empty()) {
@@ -1513,7 +1513,7 @@ fn preview_text(lines: Vec<String>, family: SharedString, color: Hsla) -> impl I
                     strikethrough: None,
                     letter_spacing: None,
                 };
-                let line = window.text_system().shape_line(SharedString::from(text.clone()), px(9.0), &[run]);
+                let line = window.text_system().shape_line(SharedString::from(text.clone()), crate::theme::us(9.0), &[run]);
                 let origin = point(bounds.left(), top + line_height * i as f32);
                 let _ = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
             }
@@ -1610,13 +1610,13 @@ impl Pegboard {
             .flex()
             .items_center()
             .gap_2()
-            .child(svg().path(icon("pegboard")).size(px(18.0)).text_color(hsla(ui.text_dim)))
-            .child(div().flex_1().max_w(px(480.0)).text_size(px(14.0)).child(self.filter.clone()))
+            .child(svg().path(icon("pegboard")).size(crate::theme::us(18.0)).text_color(hsla(ui.text_dim)))
+            .child(div().flex_1().max_w(px(480.0)).text_size(crate::theme::us(14.0)).child(self.filter.clone()))
             .child(
                 div()
                     .flex_1()
                     .truncate()
-                    .text_size(px(12.0))
+                    .text_size(crate::theme::us(12.0))
                     .text_color(hsla(ui.text_dim))
                     .child("Filter · ↑↓ Enter to go · double-click to rename · right-click for more · drag tabs to move them"),
             )
@@ -1633,7 +1633,7 @@ impl Pegboard {
             .flex_col()
             .gap_3()
             .p_4()
-            .text_size(px(13.0))
+            .text_size(crate::theme::us(13.0))
             .on_key_down(cx.listener(Self::on_key))
             .child(search)
             .child(

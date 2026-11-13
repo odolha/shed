@@ -727,6 +727,7 @@ impl Keeper {
             ClientMsg::AiSend { tab, text, images } => self.ai_send(client, tab, text, images),
             ClientMsg::AiEdit { tab, entry, text, images } => self.ai_edit(client, tab, entry as usize, text, images),
             ClientMsg::AiAnswerQuestions { tab, request, answers } => self.ai_answer_questions(tab, request, answers),
+            ClientMsg::ResetZoom => self.reset_zoom(client),
             ClientMsg::AiStop { tab } => self.ai_stop(tab),
             ClientMsg::AiStart { tab } => self.ai_start(client, tab),
             ClientMsg::AiAnswer { tab, request, allow, always } => self.ai_answer(tab, request, allow, always),
@@ -1979,6 +1980,35 @@ impl Keeper {
 
     /// A remote tab: a pane running `shed remote connect HOST ID`, again
     /// each time the bench loads, which joins the shell the server keeps.
+    /// Every tab at the usual size: running ones now, closed benches' in
+    /// their files.
+    fn reset_zoom(&self, client: ClientId) {
+        let mut st = self.lock();
+        for tab in st.tree.benches.iter_mut().flat_map(|b| b.tabs.iter_mut()) {
+            tab.zoom = 0.0;
+        }
+        let running: Vec<String> = st.tree.benches.iter().map(|b| b.name.clone()).collect();
+        let mut files = 0;
+        if let Some(store) = &self.cfg.store {
+            for info in store.list().into_iter().filter(|i| !running.contains(&i.name)) {
+                let Ok(mut saved) = store.load(&info.name) else { continue };
+                if saved.tabs.iter().all(|t| t.zoom == 0.0) {
+                    continue;
+                }
+                for t in &mut saved.tabs {
+                    t.zoom = 0.0;
+                }
+                if store.save(&saved, &[]).is_ok() {
+                    files += 1;
+                }
+            }
+        }
+        st.broadcast_tree();
+        st.send(client, KeeperMsg::Done(format!("zoom reset everywhere ({files} closed bench(es) changed)")));
+        drop(st);
+        self.save_soon.notify_one();
+    }
+
     fn new_remote_tab(self: &Arc<Self>, client: ClientId, bench: BenchId, host: String, join: Option<String>) {
         let host = host.trim().to_string();
         let mut st = self.lock();

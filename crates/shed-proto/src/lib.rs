@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 29;
+pub const PROTOCOL_VERSION: u32 = 30;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -148,6 +148,8 @@ pub enum ClientMsg {
     /// Answers Claude's questions (its AskUserQuestion tool): one answer per
     /// question, in order (several choices joined by ", ").
     AiAnswerQuestions { tab: TabId, request: String, answers: Vec<String> },
+    /// Every tab back to the usual size, in running benches and saved ones.
+    ResetZoom,
 }
 
 /// A picture sent with a prompt.
