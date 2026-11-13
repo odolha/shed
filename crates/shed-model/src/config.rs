@@ -48,11 +48,13 @@ pub struct GitConfig {
     /// Minutes between fetches while a project tab is open, so "behind" is
     /// true; 0 turns it off.
     pub fetch_minutes: u64,
+    /// Changed files shown by folder, as a tree, instead of a flat list.
+    pub tree: bool,
 }
 
 impl Default for GitConfig {
     fn default() -> Self {
-        Self { fetch_minutes: 5 }
+        Self { fetch_minutes: 5, tree: false }
     }
 }
 

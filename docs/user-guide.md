@@ -238,7 +238,11 @@ its submenu beside it when the mouse is over it.
 
 **Changes** (beside Files and Search) lists conflicted, staged and changed files.
 Each file has a box: ticked, it goes in the next commit (it is staged); click
-the box to add or leave out a file. Hover a file to stage (+), unstage (−) or
+the box to add or leave out a file. The folder button at the right of Fetch,
+Pull and Push shows the files by folder, as a tree (folders holding a single
+folder joined, `src/app`); click a folder to close or open it, its box to add or
+leave out every file under it. The list button goes back to the flat list; the
+choice is remembered (`[git] tree`). Hover a file to stage (+), unstage (−) or
 discard it (↺, after asking); **Stage All** and **Unstage All** do every file.
 Click a file for its diff: hunk by hunk, each with **Stage**, **Unstage** or
 **Discard…**, unified or **Side by Side**. **Not Pushed** lists the commits the
@@ -802,6 +806,7 @@ screen = true                  # send the text on the screen along
 
 [git]                          # Git in project tabs
 fetch_minutes = 5              # fetch this often while a project tab is open; 0: never
+tree = false                   # changed files by folder (the toggle in Changes)
 
 [rack]                         # what restarts by itself when a bench opens
 auto = ["nvim", "vim", "hx", "ssh", "htop", "btop", "less", "tail -f", "cargo watch", "npm run dev"]

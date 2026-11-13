@@ -46,6 +46,8 @@ pub(super) struct GitState {
     new_branch: Option<(Entity<LineEditor>, Subscription)>,
     /// Commits the upstream does not have yet, newest first.
     pub outgoing: Vec<Commit>,
+    /// Folders closed in the tree of changed files, per section.
+    collapsed: HashSet<(Section, String)>,
     /// A push waiting to be confirmed.
     push_review: Option<PushReview>,
     _message_sub: Subscription,
@@ -170,6 +172,7 @@ impl GitState {
             history_scroll: UniformListScrollHandle::new(),
             new_branch: None,
             outgoing: Vec::new(),
+            collapsed: HashSet::new(),
             push_review: None,
             _message_sub: sub,
         })
@@ -740,7 +743,22 @@ impl ProjectView {
                         let entries = vec![menu::danger("Force-Push…", |this: &mut Self, _, cx| this.push(true, cx))];
                         this.open_menu(e.position, entries, cx);
                     })),
-            );
+            )
+            .child(div().flex_1())
+            // A mode: files listed flat, or by folder.
+            .child({
+                let tree = self.settings.config.git.tree;
+                div()
+                    .id("git-tree-toggle")
+                    .flex_none()
+                    .p_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|st| st.bg(hsla(ui.tab_hover)))
+                    .tooltip(menu::tooltip(if tree { "Show the files in a flat list" } else { "Show the files by folder" }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_tree(!tree, cx)))
+                    .child(svg().path(icon(if tree { "view-list" } else { "folder" })).size(px(13.0)).text_color(hsla(ui.text_dim)))
+            });
         let mut list = div().id("git-files").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.bars.git_files_scroll).flex().flex_col();
         if let Some(op) = &s.operation {
             let op2 = op.clone();
@@ -776,21 +794,15 @@ impl ProjectView {
         let unstaged: Vec<GitEntry> = s.unstaged().cloned().collect();
         if !conflicts.is_empty() {
             list = list.child(self.section_header("Conflicts", conflicts.len(), None, ui, cx));
-            for (n, e) in conflicts.iter().enumerate() {
-                list = list.child(self.file_row(n + 10_000, e, Section::Conflict, ui, cx));
-            }
+            list = list.children(self.section_rows(10_000, &conflicts, Section::Conflict, ui, cx));
         }
         if !staged.is_empty() {
             list = list.child(self.section_header("Staged", staged.len(), Some(("Unstage All", Section::Staged)), ui, cx));
-            for (n, e) in staged.iter().enumerate() {
-                list = list.child(self.file_row(n + 20_000, e, Section::Staged, ui, cx));
-            }
+            list = list.children(self.section_rows(20_000, &staged, Section::Staged, ui, cx));
         }
         if !unstaged.is_empty() {
             list = list.child(self.section_header("Changes", unstaged.len(), Some(("Stage All", Section::Unstaged)), ui, cx));
-            for (n, e) in unstaged.iter().enumerate() {
-                list = list.child(self.file_row(n + 30_000, e, Section::Unstaged, ui, cx));
-            }
+            list = list.children(self.section_rows(30_000, &unstaged, Section::Unstaged, ui, cx));
         }
         if s.entries.is_empty() {
             list = list.child(div().p_2().text_color(hsla(ui.text_dim)).child("Nothing changed."));
@@ -1004,7 +1016,89 @@ impl ProjectView {
             .into_any_element()
     }
 
-    fn file_row(&self, id: usize, e: &GitEntry, section: Section, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
+    /// A section's files: a flat list, or by folder (`[git] tree`).
+    fn section_rows(&self, base: usize, entries: &[GitEntry], section: Section, ui: &UiColors, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !self.settings.config.git.tree {
+            return entries.iter().enumerate().map(|(n, e)| self.file_row(base + n, e, section, None, ui, cx)).collect();
+        }
+        let collapsed = self.git.as_ref().map(|g| &g.collapsed);
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        let rows = folder_rows(&paths, |dir| collapsed.is_some_and(|c| c.contains(&(section, dir.to_string()))));
+        rows.into_iter()
+            .enumerate()
+            .map(|(k, row)| match row {
+                FolderRow::File { index, depth } => self.file_row(base + index, &entries[index], section, Some(depth), ui, cx),
+                FolderRow::Folder { path, name, depth, files, open } => {
+                    let under: Vec<String> = files.iter().map(|&i| entries[i].path.clone()).collect();
+                    self.folder_row(base + 5_000 + k, path, name, depth, open, under, section, ui, cx)
+                }
+            })
+            .collect()
+    }
+
+    /// A folder in the tree of changed files: opens and closes; its box adds
+    /// or leaves out every file under it.
+    #[allow(clippy::too_many_arguments)]
+    fn folder_row(&self, id: usize, path: String, name: String, depth: usize, open: bool, under: Vec<String>, section: Section, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
+        let staged = section == Section::Staged;
+        let count = under.len();
+        div()
+            .id(("git-folder", id))
+            .h(px(ROW_HEIGHT * self.z()))
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .pl(px(4.0 + depth as f32 * 14.0))
+            .pr_1()
+            .rounded_sm()
+            .cursor_pointer()
+            .hover(|s| s.bg(hsla(ui.tab_hover)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(git) = &mut this.git {
+                    let key = (section, path.clone());
+                    if !git.collapsed.remove(&key) {
+                        git.collapsed.insert(key);
+                    }
+                }
+                cx.notify();
+            }))
+            .when(section != Section::Conflict, |d| {
+                d.child(
+                    div()
+                        .id(("folder-include", id))
+                        .flex_none()
+                        .w(px(14.0))
+                        .cursor_pointer()
+                        .text_color(hsla(if staged { ui.ink(self.accent) } else { ui.text_dim }))
+                        .tooltip(menu::tooltip(if staged { "Leave the folder's files out of the commit" } else { "Add the folder's files to the commit" }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            let paths = under.clone();
+                            if staged {
+                                this.git_op("Unstaging…", move |r| r.unstage(&paths).map(|_| String::new()), cx);
+                            } else {
+                                this.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
+                            }
+                        }))
+                        .child(if staged { "☑" } else { "☐" }),
+                )
+            })
+            .child(div().flex_none().w(px(10.0)).text_color(hsla(ui.text_dim)).child(if open { "▾" } else { "▸" }))
+            .child(svg().path(icon("folder")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)))
+            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(name))
+            .child(div().flex_none().text_color(hsla(ui.text_dim)).child(count.to_string()))
+            .into_any_element()
+    }
+
+    fn set_tree(&mut self, tree: bool, cx: &mut Context<Self>) {
+        self.settings.config.git.tree = tree;
+        if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+            state.update(cx, |state, cx| state.set_config_value(Some("git"), "tree", tree.into(), cx));
+        }
+        cx.notify();
+    }
+
+    fn file_row(&self, id: usize, e: &GitEntry, section: Section, depth: Option<usize>, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
         let code = match section {
             Section::Conflict => 'U',
             Section::Staged => e.index,
@@ -1044,6 +1138,8 @@ impl ProjectView {
             .rounded_sm()
             .cursor_pointer()
             .hover(|s| s.bg(hsla(ui.tab_hover)))
+            // In the tree, under its folder (past the folder's box and arrow).
+            .when_some(depth, |d, depth| d.pl(px(4.0 + depth as f32 * 14.0 + 12.0)))
             .on_click(cx.listener(move |this, _, _, cx| match section {
                 Section::Conflict => {
                     let full = this.git.as_ref().map(|g| g.repo.root.join(&path)).unwrap_or_default();
@@ -1078,7 +1174,7 @@ impl ProjectView {
             })
             .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(code.to_string()))
             .child(div().flex_none().text_color(hsla(ui.text)).child(name))
-            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(dir));
+            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).when(depth.is_none(), |d| d.child(dir)));
         row = match section {
             Section::Unstaged => row
                 .child(action(("discard", id), "discard", "Discard changes…").on_click(cx.listener(move |this, _, window, cx| {
@@ -1537,7 +1633,7 @@ fn g_path(git: &Option<GitState>, rel: &str) -> PathBuf {
     git.as_ref().map(|g| g.repo.root.join(rel)).unwrap_or_default()
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Section {
     Conflict,
     Staged,
@@ -1559,5 +1655,90 @@ fn short_ago(secs: u64) -> String {
         3600..86400 => format!("{} h", d / 3600),
         86400..2_592_000 => format!("{} d", d / 86400),
         _ => format!("{} mo", d / 2_592_000),
+    }
+}
+
+/// A row of the tree of changed files.
+#[derive(Debug, PartialEq)]
+enum FolderRow {
+    /// `path` from the root; `name` may join folders that hold only one
+    /// folder (`src/app`); `files` are every file under it.
+    Folder { path: String, name: String, depth: usize, files: Vec<usize>, open: bool },
+    /// The file at `index` in the list given.
+    File { index: usize, depth: usize },
+}
+
+/// Paths as a tree: folders first (by name), then files; a closed folder's
+/// contents left out.
+fn folder_rows(paths: &[&str], closed: impl Fn(&str) -> bool) -> Vec<FolderRow> {
+    #[derive(Default)]
+    struct Node {
+        dirs: std::collections::BTreeMap<String, Node>,
+        files: Vec<usize>,
+    }
+    impl Node {
+        fn all(&self, out: &mut Vec<usize>) {
+            for d in self.dirs.values() {
+                d.all(out);
+            }
+            out.extend(&self.files);
+        }
+    }
+    let mut root = Node::default();
+    for (i, p) in paths.iter().enumerate() {
+        let mut node = &mut root;
+        let mut parts: Vec<&str> = p.split('/').collect();
+        parts.pop();
+        for part in parts {
+            node = node.dirs.entry(part.to_string()).or_default();
+        }
+        node.files.push(i);
+    }
+    fn walk(node: &Node, prefix: &str, depth: usize, paths: &[&str], closed: &dyn Fn(&str) -> bool, out: &mut Vec<FolderRow>) {
+        for (name, child) in &node.dirs {
+            let (mut name, mut child) = (name.clone(), child);
+            while child.files.is_empty() && child.dirs.len() == 1 {
+                let (sub, next) = child.dirs.iter().next().unwrap();
+                name = format!("{name}/{sub}");
+                child = next;
+            }
+            let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+            let mut files = Vec::new();
+            child.all(&mut files);
+            let open = !closed(&path);
+            out.push(FolderRow::Folder { path: path.clone(), name, depth, files, open });
+            if open {
+                walk(child, &path, depth + 1, paths, closed, out);
+            }
+        }
+        let mut files = node.files.clone();
+        files.sort_by_key(|&i| paths[i].rsplit('/').next().unwrap_or("").to_lowercase());
+        out.extend(files.into_iter().map(|index| FolderRow::File { index, depth }));
+    }
+    let mut out = Vec::new();
+    walk(&root, "", 0, paths, &closed, &mut out);
+    out
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    #[test]
+    fn changed_files_by_folder() {
+        let paths = ["src/app/a.rs", "src/app/b.rs", "README.md", "src/lib.rs", "docs/x/y/z.md"];
+        let rows = folder_rows(&paths, |_| false);
+        let shown: Vec<String> = rows
+            .iter()
+            .map(|r| match r {
+                FolderRow::Folder { name, depth, files, .. } => format!("{}{name}/ ({})", "  ".repeat(*depth), files.len()),
+                FolderRow::File { index, depth } => format!("{}{}", "  ".repeat(*depth), paths[*index].rsplit('/').next().unwrap()),
+            })
+            .collect();
+        assert_eq!(shown, ["docs/x/y/ (1)", "  z.md", "src/ (3)", "  app/ (2)", "    a.rs", "    b.rs", "  lib.rs", "README.md"]);
+        // A closed folder hides what is in it.
+        let rows = folder_rows(&paths, |p| p == "src");
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(&rows[2], FolderRow::Folder { path, open: false, .. } if path == "src"));
     }
 }
