@@ -1209,46 +1209,71 @@ impl ProjectView {
 
     fn render_panel_switch(&self, ui: &UiColors, cx: &mut Context<Self>) -> impl IntoElement {
         let accent = self.accent;
+        let z = self.z();
+        let tabs: Vec<(&'static str, &'static str, &'static str, Panel)> = {
+            let mut t = vec![("panel-files", "folder", "Files", Panel::Files), ("panel-search", "search", "Search", Panel::Search)];
+            if self.git.is_some() {
+                t.push(("panel-changes", "branch", "Changes", Panel::Changes));
+                t.push(("panel-history", "history", "History", Panel::History));
+            }
+            t
+        };
+        // Labels as long as the panel has room for them: else only the shown
+        // panel's, else none (each name on hover).
+        let label_w = |label: &str| 7.2 * z * label.chars().count() as f32;
+        let icon_w = 13.0 + 16.0;
+        let all: f32 = tabs.iter().map(|(_, _, l, _)| icon_w + 4.0 + label_w(l)).sum();
+        let active: f32 = tabs.iter().map(|(_, _, l, p)| icon_w + if *p == self.panel { 4.0 + label_w(l) } else { 0.0 }).sum();
+        let room = self.tree_width;
+        let labelled = |panel: Panel| all <= room || (active <= room && panel == self.panel);
         let tab = |id: &'static str, glyph: &'static str, label: &'static str, panel: Panel| {
             let on = self.panel == panel;
+            let show = labelled(panel);
+            let tip = match (panel, show) {
+                (Panel::Search, _) => Some("Search in files (Ctrl+Shift+F)"),
+                (_, false) => Some(label),
+                _ => None,
+            };
             div()
                 .id(id)
                 .flex()
+                .flex_none()
                 .items_center()
                 .gap_1()
                 .px_2()
                 .h_full()
                 .cursor_pointer()
-                .text_size(px(12.0 * self.z()))
+                .text_size(px(12.0 * z))
                 .text_color(hsla(if on { ui.text } else { ui.text_dim }))
                 .when(on, |d| d.border_b_2().border_color(hsla(accent)))
                 .hover(|s| s.text_color(hsla(ui.text)))
-                .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(ui.text_dim)))
-                .child(label)
+                .when_some(tip, |d, tip| d.tooltip(menu::tooltip(tip)))
+                .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(if on { ui.text } else { ui.text_dim })))
+                .when(show, |d| d.child(label))
         };
         div()
             .flex()
             .flex_none()
             .h(px(28.0))
+            // Never past the panel, over the editor.
+            .overflow_hidden()
             .border_b_1()
             .border_color(hsla(ui.divider))
-            .child(tab("panel-files", "folder", "Files", Panel::Files).on_click(cx.listener(|this, _, _, cx| {
-                this.panel = Panel::Files;
-                cx.notify();
-            })))
-            .child(
-                tab("panel-search", "search", "Search", Panel::Search)
-                    .tooltip(menu::tooltip("Search in files (Ctrl+Shift+F)"))
-                    .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
-            )
-            .when(self.git.is_some(), |d| {
-                d.child(tab("panel-changes", "branch", "Changes", Panel::Changes).on_click(cx.listener(|this, _, _, cx| {
-                    this.panel = Panel::Changes;
-                    this.git_refresh(cx);
-                    cx.notify();
-                })))
-                .child(tab("panel-history", "history", "History", Panel::History).on_click(cx.listener(|this, _, _, cx| this.open_history(None, cx))))
-            })
+            .children(tabs.into_iter().map(|(id, glyph, label, panel)| {
+                tab(id, glyph, label, panel).on_click(cx.listener(move |this, _, window, cx| match panel {
+                    Panel::Search => this.open_search(window, cx),
+                    Panel::History => this.open_history(None, cx),
+                    Panel::Changes => {
+                        this.panel = Panel::Changes;
+                        this.git_refresh(cx);
+                        cx.notify();
+                    }
+                    other => {
+                        this.panel = other;
+                        cx.notify();
+                    }
+                }))
+            }))
     }
 
     fn on_resize(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
