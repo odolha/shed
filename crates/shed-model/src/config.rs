@@ -39,6 +39,16 @@ pub struct Config {
     pub ai: AiConfig,
     pub macos: MacosConfig,
     pub git: GitConfig,
+    pub editor: EditorConfig,
+}
+
+/// The editor in project tabs.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EditorConfig {
+    /// Long lines wrap at the window's edge instead of scrolling sideways
+    /// (Wrap in the editor's status bar, or Alt+Z).
+    pub wrap: bool,
 }
 
 /// Git in project tabs.

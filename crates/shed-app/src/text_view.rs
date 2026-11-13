@@ -53,6 +53,8 @@ pub enum TextEvent {
     Cancel,
     /// Ctrl+S.
     Save,
+    /// Alt+Z: wrap long lines, or not.
+    ToggleWrap,
 }
 
 /// Colours per line: byte ranges of the line, each with its colour.
@@ -167,6 +169,17 @@ impl TextView {
         };
         view.buffer.set_cursor(0, false);
         view
+    }
+
+    /// Wraps long lines at the edge, or lets them run on (scrolling sideways).
+    pub fn set_wrap(&mut self, wrap: bool, cx: &mut Context<Self>) {
+        if self.options.wrap != wrap {
+            self.options.wrap = wrap;
+            self.wrapped = None;
+            self.scroll_x = px(0.0);
+            self.autoscroll = true;
+            cx.notify();
+        }
     }
 
     pub fn focus_handle(&self) -> &FocusHandle {
@@ -436,6 +449,7 @@ impl TextView {
             "h" | "r" if sec && editable && !self.options.submit_on_enter => self.open_find(true, window, cx),
             "g" if sec && self.options.auto_height.is_none() => self.open_goto(window, cx),
             "s" if sec => cx.emit(TextEvent::Save),
+            "z" if m.alt && !m.control && !m.platform && self.options.line_numbers => cx.emit(TextEvent::ToggleWrap),
             _ => match ks.key_char.as_deref() {
                 Some(text) if editable && !m.control && !m.platform && !text.chars().any(char::is_control) => {
                     self.buffer.insert(text);

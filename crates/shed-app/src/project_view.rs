@@ -280,13 +280,32 @@ impl ProjectView {
     }
 
     /// Takes new colours and font from a reloaded config.
+    /// Wraps long lines in every open file (and remembers it, `[editor] wrap`).
+    fn set_wrap(&mut self, wrap: bool, cx: &mut Context<Self>) {
+        self.settings.config.editor.wrap = wrap;
+        self.base.config.editor.wrap = wrap;
+        for f in &self.open {
+            if let Some(view) = f.view().cloned() {
+                view.update(cx, |v, cx| v.set_wrap(wrap, cx));
+            }
+        }
+        if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+            state.update(cx, |state, cx| state.set_config_value(Some("editor"), "wrap", wrap.into(), cx));
+        }
+        cx.notify();
+    }
+
     pub fn apply(&mut self, settings: &Settings, cx: &mut Context<Self>) {
         self.base = settings.clone();
         self.settings = settings.zoomed(self.zoom);
         let settings = self.settings.clone();
+        let wrap = settings.config.editor.wrap;
         for i in 0..self.open.len() {
             if let Some(view) = self.open[i].view().cloned() {
-                view.update(cx, |v, cx| v.apply(&settings, cx));
+                view.update(cx, |v, cx| {
+                    v.apply(&settings, cx);
+                    v.set_wrap(wrap, cx);
+                });
             }
             self.rehighlight(i, cx);
         }
@@ -660,7 +679,7 @@ impl ProjectView {
             return file;
         }
         let text = String::from_utf8_lossy(&bytes).into_owned();
-        let options = TextOptions { line_numbers: true, comment: lang.and_then(|l| l.comment), ..Default::default() };
+        let options = TextOptions { line_numbers: true, wrap: self.settings.config.editor.wrap, comment: lang.and_then(|l| l.comment), ..Default::default() };
         let settings = self.settings.clone();
         let view = cx.new(|cx| TextView::new(&text, options, &settings, cx));
         // Unsaved edits from before (a crash, a closed bench) come back.
@@ -683,6 +702,10 @@ impl ProjectView {
                     cx.notify();
                 }
                 TextEvent::Save => this.save(i, cx),
+                TextEvent::ToggleWrap => {
+                    let wrap = !this.settings.config.editor.wrap;
+                    this.set_wrap(wrap, cx);
+                }
                 TextEvent::Submit | TextEvent::Cancel => {}
             }
         }));
@@ -1639,6 +1662,22 @@ impl ProjectView {
                 .border_color(hsla(ui.divider))
                 .child(div().flex_1().min_w_0().truncate().child(parts.join("  ·  ")))
                 .when_some(blame_text, |d, t| d.child(div().flex_none().max_w(px(520.0)).truncate().text_color(hsla(ui.text)).child(t)))
+                // A mode: long lines wrap at the edge, or run on.
+                .child({
+                    let on = self.settings.config.editor.wrap;
+                    div()
+                        .id("wrap-toggle")
+                        .flex_none()
+                        .ml_2()
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .when(on, |d| d.bg(hsla_alpha(self.accent, 0.25)).text_color(hsla(ui.text)))
+                        .hover(|s| s.bg(hsla(ui.tab_hover)))
+                        .tooltip(menu::tooltip("Wrap long lines at the edge (Alt+Z)"))
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_wrap(!on, cx)))
+                        .child("Wrap")
+                })
                 .when(self.git.is_some(), |d| {
                     let on = self.blame_on;
                     d.child(

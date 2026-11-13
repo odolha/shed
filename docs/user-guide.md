@@ -218,8 +218,10 @@ TOML, Markdown, Python, shell, Go, C and C++, and edits as editors do:
 | Ctrl+F, Ctrl+H | Find, find and replace (Enter next, Shift+Enter back; Alt+C case, Alt+W whole word) |
 | Ctrl+G | Goes to a line (`120`, or `120:8`) |
 | Ctrl+W | Closes the file |
+| Alt+Z | Wraps long lines at the edge, or not (also **Wrap** in the status bar) |
 
-On a Mac, Cmd takes Ctrl's place.
+On a Mac, Cmd takes Ctrl's place. Wrapping applies to every open file and is
+remembered (`[editor] wrap` in `shed.toml`); a wrapped line keeps one number.
 
 **Following the disk.** When a file changes on disk (the AI edited it, Git
 switched branches, a build wrote it), an open file without unsaved changes
@@ -820,6 +822,9 @@ screen = true                  # send the text on the screen along
 [git]                          # Git in project tabs
 fetch_minutes = 5              # fetch this often while a project tab is open; 0: never
 tree = false                   # changed files by folder (the toggle in Changes)
+
+[editor]                       # the editor in project tabs
+wrap = false                   # wrap long lines at the edge (Wrap, or Alt+Z)
 
 [rack]                         # what restarts by itself when a bench opens
 auto = ["nvim", "vim", "hx", "ssh", "htop", "btop", "less", "tail -f", "cargo watch", "npm run dev"]

@@ -251,6 +251,7 @@ impl AiView {
                 }
                 // Ctrl+S keeps the message as a draft.
                 TextEvent::Save => this.save_draft(cx),
+                TextEvent::ToggleWrap => {}
             }),
             cx.observe(&filter, |_, _, cx| cx.notify()),
         ];
