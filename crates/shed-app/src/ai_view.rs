@@ -77,6 +77,18 @@ fn default_model_name(m: &Model) -> String {
     m.description.split(" · ").next().filter(|s| !s.is_empty()).unwrap_or(&m.name).to_string()
 }
 
+/// After a model's name, Claude Code's choice of its 1M-token context.
+const LARGE_CONTEXT: &str = "[1m]";
+
+/// A token count, short: `84k`, `1M`.
+fn tokens(n: u64) -> String {
+    match n {
+        1_000_000.. if n.is_multiple_of(1_000_000) => format!("{}M", n / 1_000_000),
+        1_000_000.. => format!("{:.1}M", n as f64 / 1_000_000.0),
+        _ => format!("{}k", n / 1000),
+    }
+}
+
 /// How many entries a conversation shows at first, and brings in at a time
 /// scrolling up: a long one opens as fast as a short one.
 const SHOWN_AT_FIRST: usize = 150;
@@ -1918,6 +1930,26 @@ impl AiView {
         if entries.is_empty() {
             entries.push(menu::item("Models show after the first prompt", |_, _, _| {}));
         }
+        // The larger context (`[1m]` after the model), while the model does
+        // not have it already.
+        let large = current.as_deref().is_some_and(|m| m.ends_with(LARGE_CONTEXT));
+        if large || self.status.context_max < 1_000_000 {
+            entries.push(MenuEntry::Separator);
+            let base = current.as_deref().map(|m| m.trim_end_matches(LARGE_CONTEXT).to_string());
+            let default_alias = self.models.iter().find(|m| m.value == "default").map(|d| default_model_name(d).split_whitespace().next().unwrap_or("").to_lowercase());
+            let standard = base.clone();
+            entries.push(menu::item(format!("Context: Standard{}", if large { "" } else { "  ✓" }), move |this: &mut Self, _, _| {
+                let msg = this.settings_msg(|a| a.model = standard.clone());
+                this.conn.send_msg(msg);
+            }));
+            if let Some(model) = base.or(default_alias).filter(|m| !m.is_empty()) {
+                entries.push(menu::item(format!("Context: 1M tokens{}", if large { "  ✓" } else { "" }), move |this: &mut Self, _, _| {
+                    let msg = this.settings_msg(|a| a.model = Some(format!("{model}{LARGE_CONTEXT}")));
+                    this.conn.send_msg(msg);
+                }));
+            }
+        }
+        let current = current.map(|m| m.trim_end_matches(LARGE_CONTEXT).to_string());
         let efforts = self.models.iter().find(|m| m.value == current.clone().unwrap_or_else(|| "default".into())).map(|m| m.efforts.clone()).unwrap_or_default();
         if !efforts.is_empty() {
             entries.push(MenuEntry::Separator);
@@ -1936,6 +1968,10 @@ impl AiView {
     /// The model the tab uses, by name; the default one says which it is.
     fn model_label(&self) -> String {
         match &self.ai.model {
+            Some(m) if m.ends_with(LARGE_CONTEXT) => {
+                let base = m.trim_end_matches(LARGE_CONTEXT);
+                format!("{} · 1M", self.models.iter().find(|x| x.value == base).map(|x| x.name.clone()).unwrap_or_else(|| base.to_string()))
+            }
             Some(m) => self.models.iter().find(|x| &x.value == m).map(|x| x.name.clone()).unwrap_or_else(|| m.clone()),
             None => match self.models.iter().find(|x| x.value == "default") {
                 Some(d) => format!("{} (default)", default_model_name(d)),
@@ -2460,7 +2496,11 @@ impl AiView {
                             .children(window("limit-5h", "5 h", limits.five_hour))
                             .children(window("limit-week", "week", limits.week))
                             .when(self.status.cost > 0.0, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("${:.2}", self.status.cost))))
-                            .when(self.status.context > 0, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("{}k context", self.status.context / 1000)))),
+                            .when(self.status.context > 0, |d| {
+                                let used = tokens(self.status.context);
+                                let text = if self.status.context_max > 0 { format!("{used} / {} context", tokens(self.status.context_max)) } else { format!("{used} context") };
+                                d.child(div().text_color(hsla(ui.text_dim)).child(text))
+                            }),
                     ),
             )
             .child(chips)
@@ -3141,6 +3181,11 @@ mod tests {
     /// GPUI lays out text in a block as its paragraph, leaving the text's
     /// own layout empty; in a flex box the text has one, and the mouse can
     /// be mapped to a character (what selecting needs).
+    #[test]
+    fn token_counts_are_short() {
+        assert_eq!((tokens(84_312), tokens(200_000), tokens(1_000_000), tokens(1_500_000)), ("84k".into(), "200k".into(), "1M".into(), "1.5M".into()));
+    }
+
     #[gpui::test]
     fn selectable_text_can_be_hit(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();

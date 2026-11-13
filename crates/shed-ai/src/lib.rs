@@ -147,6 +147,8 @@ pub struct Status {
     pub cost: f64,
     /// Tokens in the context at the last answer.
     pub context: u64,
+    /// How many the model's context holds, as Claude Code last said (0: not yet).
+    pub context_max: u64,
     /// When the turn under way started, Unix seconds.
     pub since: Option<u64>,
 }

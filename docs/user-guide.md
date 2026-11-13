@@ -395,7 +395,9 @@ terminal of the bench.
 - **Below the prompt**: while Claude works, three dots take turns beside what it
   is doing (the tool running, thinking, writing) and for how long. Then the model
   (the default one by name: "Opus 5.5 (default)"), its effort ("high effort";
-  click for the efforts the model offers), the mode (new AI tabs start in
+  click for the efforts the model offers; while the model's context is smaller
+  than 1M tokens, the same menu has **Context: 1M tokens**, Claude Code's
+  `[1m]` model, "· 1M" after its name), the mode (new AI tabs start in
   **Auto**), and
   the eye, which makes files Claude edits open in their project tab as it goes.
   The modes: **Ask Before Edits**; **Accept Edits** (file changes go through,
@@ -417,7 +419,8 @@ terminal of the bench.
   week as small bars (green, amber from 70 %, red from 90 %), each with the time
   left until it resets written small beneath (`2h 14m left`; hover for more),
   what the session has cost, and how full its
-  context is. **Also works in** lists the bench's other projects: click one to
+  context is ("84k / 1M context": used, and the window Claude Code reports for
+  the model). **Also works in** lists the bench's other projects: click one to
   let Claude read and change it too.
 
 Claude Code runs in the keeper, like a terminal's programs: hiding the bench or

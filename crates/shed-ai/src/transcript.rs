@@ -483,6 +483,14 @@ impl Transcript {
     fn result(&mut self, m: &Value) {
         self.status.state = State::Idle;
         self.status.since = None;
+        // The context window: the conversation's model's, else the largest.
+        if let Some(usage) = m.get("modelUsage").and_then(Value::as_object) {
+            let window = |v: &Value| v.get("contextWindow").and_then(Value::as_u64);
+            let own = self.status.model.as_ref().and_then(|model| usage.get(model)).and_then(window);
+            if let Some(max) = own.or_else(|| usage.values().filter_map(window).max()) {
+                self.status.context_max = max;
+            }
+        }
         if let Some(cost) = m.get("total_cost_usd").and_then(Value::as_f64) {
             self.status.cost = cost;
         }
@@ -645,6 +653,7 @@ mod tests {
         assert!(matches!(&t.entries[4], Entry::Assistant { text, .. } if text == "`notes.txt` has 3 lines now."));
         assert_eq!(t.status.state, State::Idle);
         assert!(t.status.cost > 0.0 && t.status.context > 0);
+        assert_eq!(t.status.context_max, 1_000_000, "the window Claude Code reported");
         assert!(t.status.session.is_some());
         assert_eq!(t.take_changes(), Some(0));
         assert_eq!(t.take_changes(), None);
