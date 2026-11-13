@@ -1809,7 +1809,7 @@ impl Keeper {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("cannot write {}: {e}", file.display()))?;
         }
-        std::fs::write(&file, edit_shell_aliases(&text, name, value)).map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+        shed_model::paths::write_whole(&file, edit_shell_aliases(&text, name, value)).map_err(|e| format!("cannot write {}: {e}", file.display()))?;
 
         // The startup files of the shell Shed runs, and of any other the user has.
         let home = &self.cfg.home;

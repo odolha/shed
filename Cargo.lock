@@ -5974,6 +5974,7 @@ dependencies = [
 name = "shed-save"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "shed-model",
  "tempfile",

@@ -35,6 +35,7 @@
 //! IDs are kept too, so a loaded tab finds its own history file and logbook
 //! scope again.
 
+pub mod backup;
 mod layout;
 
 use std::io;

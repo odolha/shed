@@ -861,8 +861,30 @@ change in Shed are in `~/.config/shed/shell-aliases.sh`.
 | What ran when Shed last closed; the order of benches | `~/.local/share/shed/session.toml`, `order.toml` |
 | The logbook (SQLite), per-tab shell history, the keeper's log | `~/.local/state/shed/` |
 | Launchers and icons for Shed and each bench (Linux) | `~/.local/share/applications/`, `~/.local/share/icons/` |
+| Backups of your setup | `~/.local/share/shed/backups/` |
 
 macOS uses the same folders under your home (`~/.config/shed/` and so on).
+
+### Backups
+
+Once a day, while Shed runs (when the keeper starts, and when the day turns),
+the keeper copies your setup into `~/.local/share/shed/backups/<date>/`:
+`shed.toml`, `aliases.toml`, `shell-aliases.sh`, your themes, every saved bench
+and `session.toml` / `order.toml` / `window.toml` (scrollback is left out). The
+last 14 backups are kept. Settings files are also always written whole (to a
+file beside them, then swapped in), so a crash never leaves one half written; a
+`shed.toml` that is a link (dotfiles) stays a link.
+
+```sh
+shed backup                  # one now
+shed backup list             # the backups there are
+shed stop                    # benches are saved first
+shed backup restore 2026-11-12
+```
+
+A restore puts that backup's files back, after backing up what is there now (a
+`…-before-restore` backup), so it can be undone. Benches saved since then and not
+in the backup stay as they are.
 
 ## Troubleshooting
 

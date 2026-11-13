@@ -1,6 +1,6 @@
 //! XDG locations for config, data, state and the keeper socket.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
@@ -67,4 +67,38 @@ pub fn lock_path() -> PathBuf {
 
 pub fn keeper_log_path() -> PathBuf {
     state_dir().join("shedd.log")
+}
+
+/// Writes a file whole: to a file beside it, then over it in one step, so a
+/// crash or a full disk never leaves it half written.
+/// A file that is a link (dotfiles) is written where it points, the link kept.
+pub fn write_whole(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = real.as_path();
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn files_are_written_whole_through_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("dotfiles-shed.toml");
+        std::fs::write(&real, "old").unwrap();
+        let link = dir.path().join("shed.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_whole(&link, "new").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link stays");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
+        write_whole(&dir.path().join("fresh.toml"), "x").unwrap();
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3, "no temporary file left");
+    }
 }

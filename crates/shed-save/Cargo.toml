@@ -10,6 +10,7 @@ serde.workspace = true
 toml.workspace = true
 zstd.workspace = true
 uuid.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

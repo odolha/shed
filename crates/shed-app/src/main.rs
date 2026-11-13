@@ -90,6 +90,15 @@ enum RemoteAction {
 }
 
 #[derive(Subcommand)]
+enum BackupAction {
+    /// Lists the backups, oldest first.
+    List,
+    /// Puts a backup's files back (what is there now is backed up first).
+    /// Shed must be stopped (`shed stop`).
+    Restore { name: String },
+}
+
+#[derive(Subcommand)]
 enum BrowserAction {
     /// Writes Shed's browser extension and registers its native host with
     /// the browsers found (Chrome, Chromium, Brave, Edge, Vivaldi).
@@ -209,6 +218,12 @@ enum Command {
     },
     /// Show whether the keeper is running, and what it holds.
     Status,
+    /// Back up your setup now (shed.toml, aliases, themes, saved benches);
+    /// Shed also does once a day. `list` and `restore NAME` too.
+    Backup {
+        #[command(subcommand)]
+        action: Option<BackupAction>,
+    },
     /// Stop the keeper and every tool it holds.
     Stop,
     /// Types text into the first bench's active pane (for testing; `\r` is Enter).
@@ -415,6 +430,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Project { dir, bench }) => project(dir, bench, false),
         Some(Command::Ai { dir, bench }) => project(dir, bench, true),
         Some(Command::Stop) => stop(),
+        Some(Command::Backup { action }) => backup(action),
         Some(Command::DebugType { text }) => debug_type(&text),
         Some(Command::DebugAi { text, model, answer }) => debug_ai(text, model, answer),
         Some(Command::Init { shell }) => match shell.as_str() {
@@ -835,5 +851,34 @@ fn tag(action: TagAction) -> anyhow::Result<()> {
     let (conn, _rx) = keeper_conn::connect(ClientKind::Cli, false)?;
     conn.send_msg(ClientMsg::SetTags { tab, tags });
     std::thread::sleep(Duration::from_millis(100));
+    Ok(())
+}
+
+fn backup(action: Option<BackupAction>) -> anyhow::Result<()> {
+    use shed_save::backup;
+    let places = backup::Places::default();
+    match action {
+        None => {
+            let made = backup::now_backup(&places)?;
+            println!("Backed up to {}", made.display());
+        }
+        Some(BackupAction::List) => {
+            let names = backup::list(&places);
+            if names.is_empty() {
+                println!("No backups yet (Shed makes one a day; `shed backup` makes one now).");
+            }
+            for n in names {
+                println!("{n}");
+            }
+            println!("in {}", places.backups.display());
+        }
+        Some(BackupAction::Restore { name }) => {
+            if std::os::unix::net::UnixStream::connect(shed_model::paths::socket_path()).is_ok() {
+                bail!("Shed is running: stop it first with `shed stop` (your benches are saved), then restore");
+            }
+            let before = backup::restore(&places, &name)?;
+            println!("Restored {name}. What was there before is in {}", before.display());
+        }
+    }
     Ok(())
 }

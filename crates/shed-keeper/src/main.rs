@@ -91,6 +91,17 @@ fn main() -> anyhow::Result<()> {
         let listener = shed_keeper::bind_socket(&socket)
             .with_context(|| format!("binding {}", socket.display()))?;
         info!(pid = std::process::id(), socket = %socket.display(), "keeper started");
+        // A backup of your setup each day (at start, and when the day turns).
+        tokio::spawn(async {
+            loop {
+                match tokio::task::spawn_blocking(|| shed_save::backup::daily(&shed_save::backup::Places::default())).await {
+                    Ok(Ok(Some(made))) => info!(backup = %made.display(), "backed up the setup"),
+                    Ok(Err(e)) => tracing::warn!("cannot back up the setup: {e}"),
+                    _ => {}
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
 
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into());
         let keeper = Keeper::new(KeeperConfig {

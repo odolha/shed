@@ -373,7 +373,7 @@ impl Config {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        std::fs::write(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
+        paths::write_whole(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Sets one value in `shed.toml` (`table` is `None` for the top level),
@@ -395,7 +395,7 @@ impl Config {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        std::fs::write(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
+        paths::write_whole(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Switches the Shed window between cards with previews and a compact
@@ -410,7 +410,7 @@ impl Config {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        std::fs::write(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
+        paths::write_whole(path, doc.to_string()).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Tags the rules give a tab whose panes run these tools in these directories.
@@ -453,7 +453,7 @@ pub fn save_aliases(path: &Path, aliases: &Aliases) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let body = toml::to_string(aliases).map_err(std::io::Error::other)?;
-    std::fs::write(path, format!("# Shed's global aliases: name = \"command\". Benches and tabs can override them.\n{body}"))
+    paths::write_whole(path, format!("# Shed's global aliases: name = \"command\". Benches and tabs can override them.\n{body}"))
 }
 
 /// The shell's own aliases as edited in Shed: `alias` and `unalias` lines,

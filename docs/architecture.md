@@ -382,6 +382,14 @@ tags, layout and panes, or for a project tab its folder (`[tabs.project]`,
 `right 0.6 (0) (down 0.5 (1) (2))`. Per pane: its folder, what was running, and its
 startup and teardown. Each pane's scrollback goes beside it, as zstd-compressed text.
 
+`shed_save::backup` copies the setup (config folder's `*.toml`/`*.sh` and
+`themes/`, the data folder's `*.toml` and `benches/*.toml`) into
+`backups/<stamp>/{config,data}/`, built in a `.part` folder and renamed into
+place. The keeper's `main.rs` runs `backup::daily` at start and hourly (one a
+day, newest 14 kept); `shed backup` makes, lists and restores them (restore only
+with no keeper running). Settings writers use `paths::write_whole` (temporary
+file, then rename; links followed).
+
 The keeper saves every running bench each minute, within a second of a change to
 setup or aliases, on rename, when closing a bench, and when it stops.
 
