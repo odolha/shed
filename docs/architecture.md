@@ -357,7 +357,10 @@ Sessions are read from Claude Code's own files
 its `ai-title` records) and by the keeper to show a session again. Pictures in a
 prompt (sent, or base64 image blocks in a saved session) are written once to
 `$XDG_STATE_HOME/shed/ai-pictures/<hash>.<ext>` (`Transcript::keep_picture`), and
-`Entry::User.pictures` carries their paths for the window to show. `shed-ai` has
+`Entry::User.pictures` carries their paths for the window to show; pictures in a
+tool's result (Claude reading a screenshot) go to `Tool.pictures` the same way,
+and Claude Code's `[Image: original …]` notes that follow them, sent as user
+messages, are not shown as prompts. `shed-ai` has
 no UI and no processes; its tests replay recorded streams
 (`crates/shed-ai/tests/streams/`), and `crates/shed-app/tests/ai_tabs.rs` runs the
 keeper against a stand-in `claude` (`SHED_CLAUDE`).

@@ -318,7 +318,8 @@ terminal of the bench.
   thumbnails above it, each with a × to leave it out. Sent pictures stay in your
   message as thumbnails (a click opens one whole), also in sessions shown again;
   Shed keeps a copy in `~/.local/state/shed/ai-pictures`, and a picture deleted
-  from there says so instead. Other dropped files show
+  from there says so instead. Screenshots and other pictures Claude reads show
+  the same way under the step that read them. Other dropped files show
   by name (the path on hover, a × to leave one out) and go as their paths, for
   Claude to read. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
   its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu

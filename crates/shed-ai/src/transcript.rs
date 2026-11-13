@@ -45,6 +45,16 @@ pub struct Transcript {
 }
 
 /// The file name a picture is kept under: its content's hash, its kind.
+/// Claude Code's own note after a tool returned a picture, sent as a user
+/// message: `[Image: original 1440x4742, displayed at …]` (one per line).
+fn is_picture_note(text: &str) -> bool {
+    let text = text.trim();
+    !text.is_empty() && text.lines().all(|l| {
+        let l = l.trim();
+        l.is_empty() || (l.starts_with("[Image: ") || l.starts_with("[Image source: ")) && l.ends_with(']')
+    })
+}
+
 fn picture_name(data: &[u8], media_type: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -168,6 +178,16 @@ impl Transcript {
             std::fs::rename(&part, &path).ok()?;
         }
         Some(path.to_string_lossy().into_owned())
+    }
+
+    /// The picture in an `image` block (base64), kept; its path.
+    fn keep_block_picture(&self, b: &Value) -> Option<String> {
+        use base64::Engine;
+        let source = b.get("source")?;
+        let media = source.get("media_type").and_then(Value::as_str).unwrap_or("image/png");
+        let data = source.get("data").and_then(Value::as_str)?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+        self.keep_picture(media, &bytes)
     }
 
     /// When the record being applied happened: its own time, else now.
@@ -325,7 +345,7 @@ impl Transcript {
                     let name = block.get("name").and_then(Value::as_str).unwrap_or("").to_string();
                     let input = block.get("input").cloned().unwrap_or(Value::Null);
                     let (summary, detail, file, diff) = summarize(&name, &input, &self.cwd);
-                    let i = self.push(Entry::Tool(Tool { id: tool_id.clone(), name, summary, detail, file, diff, result: None, error: false }));
+                    let i = self.push(Entry::Tool(Tool { id: tool_id.clone(), name, summary, detail, file, diff, result: None, error: false, pictures: Vec::new() }));
                     self.tools.insert(tool_id, i);
                 }
                 _ => {}
@@ -347,18 +367,25 @@ impl Transcript {
                         "image" => {
                             images += 1;
                             // Saved sessions keep the picture itself.
-                            use base64::Engine;
-                            let source = b.get("source");
-                            let media = source.and_then(|s| s.get("media_type")).and_then(Value::as_str).unwrap_or("image/png");
-                            if let Some(data) = source.and_then(|s| s.get("data")).and_then(Value::as_str)
-                                && let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data)
-                                && let Some(path) = self.keep_picture(media, &bytes)
-                            {
-                                pictures.push(path);
-                            }
+                            pictures.extend(self.keep_block_picture(b));
                         }
                         _ => {}
                     }
+                }
+                // Claude Code's note on a picture a tool returned is not the
+                // user's: its picture (if any) goes with that tool.
+                if is_picture_note(&text) {
+                    if let Some(i) = self.entries.iter().rposition(|e| matches!(e, Entry::Tool(_))) {
+                        if let Entry::Tool(t) = &mut self.entries[i] {
+                            for p in pictures {
+                                if !t.pictures.contains(&p) {
+                                    t.pictures.push(p);
+                                }
+                            }
+                        }
+                        self.touch(i);
+                    }
+                    return;
                 }
                 if !text.is_empty() || images > 0 {
                     self.prompt(&text, images, pictures);
@@ -371,6 +398,9 @@ impl Transcript {
     /// A user's message from a saved session: a prompt, or one of Claude
     /// Code's own notes.
     fn prompt(&mut self, text: &str, images: u32, pictures: Vec<String>) {
+        if images == 0 && is_picture_note(text) {
+            return;
+        }
         if text.starts_with("[Request interrupted") {
             return self.notice("Stopped", false);
         }
@@ -410,7 +440,17 @@ impl Transcript {
             text.truncate(cut);
             text.push_str("\n…");
         }
+        // A picture it returned (Read of a screenshot) is kept to show.
+        let pictures: Vec<String> = match b.get("content") {
+            Some(Value::Array(parts)) => parts.iter().filter(|p| p.get("type").and_then(Value::as_str) == Some("image")).filter_map(|p| self.keep_block_picture(p)).collect(),
+            _ => Vec::new(),
+        };
         if let Entry::Tool(t) = &mut self.entries[i] {
+            for p in pictures {
+                if !t.pictures.contains(&p) {
+                    t.pictures.push(p);
+                }
+            }
             t.result = Some(text);
             t.error = b.get("is_error").and_then(Value::as_bool) == Some(true);
         }
@@ -510,6 +550,33 @@ mod tests {
         let Entry::User { pictures: again, .. } = &saved.entries[0] else { panic!("{:?}", saved.entries) };
         assert_eq!(again, pictures);
         assert_eq!(std::fs::read_dir(dir.path().join("pictures")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_screenshot_claude_reads_goes_with_the_read_not_as_a_prompt() {
+        use base64::Engine;
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = Transcript::new("/tmp/shed-ai-test");
+        t.picture_dir = Some(dir.path().to_path_buf());
+        let data = base64::engine::general_purpose::STANDARD.encode(b"shot");
+        t.apply(&serde_json::json!({"type": "assistant", "message": {"id": "m1", "role": "assistant", "content": [
+            {"type": "tool_use", "id": "r1", "name": "Read", "input": {"file_path": "/tmp/shot.png"}},
+        ]}}));
+        t.apply(&serde_json::json!({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "r1", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
+            ]},
+        ]}}));
+        t.apply(&serde_json::json!({"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "[Image: original 1440x4742, displayed at 607x2000. Multiply coordinates by 2.37 to map to original image.]"},
+        ]}}));
+        assert!(!t.entries.iter().any(|e| matches!(e, Entry::User { .. })), "{:#?}", t.entries);
+        let Entry::Tool(read) = &t.entries[0] else { panic!("{:#?}", t.entries) };
+        assert_eq!(read.pictures.len(), 1);
+        assert_eq!(std::fs::read(&read.pictures[0]).unwrap(), b"shot");
+        // The user's own words with a note stay a prompt.
+        t.apply(&serde_json::json!({"type": "user", "message": {"role": "user", "content": "looks off?\n[Image: source: /tmp/a.png]"}}));
+        assert!(matches!(t.entries.last(), Some(Entry::User { .. })));
     }
 
     #[test]

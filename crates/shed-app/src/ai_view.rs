@@ -1762,31 +1762,7 @@ impl AiView {
                         self.sel_text(i, 0, &parsed, Vec::new(), cx)
                     })
                     // The pictures sent with it, small; a click opens one whole.
-                    .when(!pictures.is_empty(), |d| {
-                        let z = self.z();
-                        let dim = ui.text_dim;
-                        d.child(div().mt_2().flex().flex_wrap().gap_2().children(pictures.iter().enumerate().map(|(n, path)| {
-                            let url = format!("file://{path}");
-                            div()
-                                .id(SharedString::from(format!("picture-{i}-{n}")))
-                                .flex_none()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(hsla(ui.divider))
-                                .p_0p5()
-                                .cursor_pointer()
-                                .tooltip(menu::tooltip("Open the picture"))
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .on_click(move |_, _, cx| cx.open_url(&url))
-                                .child(
-                                    gpui::img(PathBuf::from(path))
-                                        .h(px(72.0 * z))
-                                        .max_w(px(160.0 * z))
-                                        .rounded_sm()
-                                        .with_fallback(move || div().px_2().py_1().text_size(px(11.0 * z)).text_color(hsla(dim)).child("picture no longer there").into_any_element()),
-                                )
-                        })))
-                    })
+                    .when(!pictures.is_empty(), |d| d.child(thumbnails(i, &pictures, 72.0, &ui, self.z())))
                     .when(pictures.is_empty() && images > 0, |d| d.child(div().mt_1().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{images} picture(s) attached"))))
                     .when(lines.len() > FOLD_LINES, |d| {
                         let label = if open { "Show less".to_string() } else { format!("Show all {} lines", lines.len()) };
@@ -1877,6 +1853,10 @@ impl AiView {
                             )
                         }),
                 );
+                // A screenshot it read, to see without opening it.
+                if !t.pictures.is_empty() {
+                    el = el.child(div().pl(px(20.0)).child(thumbnails(i, &t.pictures, 120.0, &ui, self.z())));
+                }
                 if open {
                     if !t.detail.is_empty() {
                         el = el.child(pre(&t.detail, &ui, &mono, None, self.z()));
@@ -2718,6 +2698,33 @@ fn until(secs: u64) -> String {
 fn secs_since(start: u64) -> String {
     let d = unix_now().saturating_sub(start);
     if d < 60 { format!("{d} s") } else { format!("{} min {} s", d / 60, d % 60) }
+}
+
+/// Pictures kept as files, small (`height` at zoom 1); a click opens one
+/// whole, and one gone since says so.
+fn thumbnails(entry: usize, pictures: &[String], height: f32, ui: &UiColors, z: f32) -> gpui::Div {
+    let dim = ui.text_dim;
+    div().mt_2().flex().flex_wrap().gap_2().children(pictures.iter().enumerate().map(|(n, path)| {
+        let url = format!("file://{path}");
+        div()
+            .id(SharedString::from(format!("picture-{entry}-{n}")))
+            .flex_none()
+            .rounded_md()
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .p_0p5()
+            .cursor_pointer()
+            .tooltip(menu::tooltip("Open the picture"))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, _, cx| cx.open_url(&url))
+            .child(
+                gpui::img(PathBuf::from(path))
+                    .h(px(height * z))
+                    .max_w(px(height * 2.5 * z))
+                    .rounded_sm()
+                    .with_fallback(move || div().px_2().py_1().text_size(px(11.0 * z)).text_color(hsla(dim)).child("picture no longer there").into_any_element()),
+            )
+    }))
 }
 
 #[cfg(test)]

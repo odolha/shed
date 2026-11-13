@@ -46,6 +46,9 @@ pub struct Tool {
     /// What the tool returned, cut if long.
     pub result: Option<String>,
     pub error: bool,
+    /// Pictures it returned (a screenshot Claude read), kept as files.
+    #[serde(default)]
+    pub pictures: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
