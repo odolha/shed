@@ -127,6 +127,9 @@ pub struct AiView {
     completion: Option<Completion>,
     /// Going back through earlier prompts with Ctrl+Up: how far back.
     history: Option<usize>,
+    /// What was in the prompt when going back through earlier prompts began:
+    /// coming back down past the newest gives it back.
+    unsent: Option<String>,
     /// The bench's project folders, offered as more folders to work in.
     pub projects: Vec<PathBuf>,
     /// Tool calls whose files were opened already, when following edits.
@@ -286,6 +289,7 @@ impl AiView {
             sessions_bar: Default::default(),
             completion: None,
             history: None,
+            unsent: None,
             projects: Vec::new(),
             followed: HashSet::new(),
             menu: None,
@@ -712,6 +716,10 @@ impl AiView {
         if self.editing.is_some() && self.status.state != AiState::Idle {
             return;
         }
+        // Sent from going back through earlier prompts: what was being
+        // written before comes back into the prompt.
+        let unsent = self.unsent.take().unwrap_or_default();
+        self.history = None;
         // Files go as their paths, for Claude to read.
         let files = std::mem::take(&mut self.files);
         if !files.is_empty() {
@@ -726,7 +734,7 @@ impl AiView {
             self.queue.push((text, images));
             self.prompt.update(cx, |p, cx| {
                 p.buffer.select_all();
-                p.buffer.insert("");
+                p.buffer.insert(&unsent);
                 cx.notify();
             });
             cx.notify();
@@ -738,10 +746,9 @@ impl AiView {
         }
         self.prompt.update(cx, |p, cx| {
             p.buffer.select_all();
-            p.buffer.insert("");
+            p.buffer.insert(&unsent);
             cx.notify();
         });
-        self.history = None;
         self.completion = None;
         self.list.scroll_to_end();
         cx.notify();
@@ -773,9 +780,12 @@ impl AiView {
         self.files.clear();
         self.change_drafts(|d| d.push(text));
         self.drafts_open = true;
+        // Kept from going back through earlier prompts: what was being written comes back.
+        let unsent = self.unsent.take().unwrap_or_default();
+        self.history = None;
         self.prompt.update(cx, |p, cx| {
             p.buffer.select_all();
-            p.buffer.insert("");
+            p.buffer.insert(&unsent);
             cx.notify();
         });
         cx.notify();
@@ -907,14 +917,21 @@ impl AiView {
                     return;
                 }
                 let back = match (self.history, ks.key.as_str()) {
-                    (None, "up") => 1,
+                    (None, "up") => {
+                        // Kept, not lost: it comes back below the newest prompt.
+                        self.unsent = Some(self.prompt.read(cx).buffer.text());
+                        1
+                    }
                     (Some(n), "up") => (n + 1).min(prompts.len()),
                     (Some(n), _) if n > 1 => n - 1,
+                    // Not going through them: nothing to come down to.
+                    (None, _) => return,
                     _ => {
                         self.history = None;
+                        let text = self.unsent.take().unwrap_or_default();
                         self.prompt.update(cx, |p, cx| {
                             p.buffer.select_all();
-                            p.buffer.insert("");
+                            p.buffer.insert(&text);
                             cx.notify();
                         });
                         cx.stop_propagation();
