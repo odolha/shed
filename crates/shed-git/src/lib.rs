@@ -258,11 +258,47 @@ impl Repo {
 
     /// Commits, newest first: hash, short hash, author, Unix time, refs, subject.
     pub fn log(&self, path: Option<&str>, limit: usize) -> Result<Vec<Commit>> {
+        match path {
+            Some(p) => self.log_of(&["--follow", "--", p], limit),
+            None => self.log_of(&[], limit),
+        }
+    }
+
+    /// Where pushing the branch goes: its upstream, else a new branch of the
+    /// same name on `origin` (as `push` does).
+    pub fn push_target(&self, branch: &Branch) -> PushTarget {
+        let head = branch.head.clone().unwrap_or_default();
+        let config = |key: String| self.run(&["config", "--get", &key]).map(|v| v.trim().to_string()).ok().filter(|v| !v.is_empty());
+        let upstream = branch.upstream.is_some().then(|| {
+            let remote = config(format!("branch.{head}.remote"));
+            let merge = config(format!("branch.{head}.merge")).map(|m| m.trim_start_matches("refs/heads/").to_string());
+            (remote, merge)
+        });
+        let (remote, remote_branch, new) = match upstream {
+            Some((Some(remote), Some(merge))) => (remote, merge, false),
+            _ => ("origin".to_string(), head.clone(), branch.upstream.is_none()),
+        };
+        let url = self.run(&["remote", "get-url", &remote]).map(|u| u.trim().to_string()).unwrap_or_default();
+        PushTarget { branch: head, remote, remote_branch, url, new }
+    }
+
+    /// The branch's commits its upstream does not have yet (newest first);
+    /// without an upstream, those on no remote branch.
+    pub fn outgoing(&self, branch: &Branch, limit: usize) -> Result<Vec<Commit>> {
+        if branch.head.is_none() {
+            return Ok(Vec::new());
+        }
+        if branch.upstream.is_some() {
+            self.log_of(&["@{upstream}..HEAD"], limit)
+        } else {
+            self.log_of(&["HEAD", "--not", "--remotes"], limit)
+        }
+    }
+
+    fn log_of(&self, extra: &[&str], limit: usize) -> Result<Vec<Commit>> {
         let n = format!("-{limit}");
         let mut args = vec!["log", &n, "--format=%H%x00%h%x00%an%x00%at%x00%D%x00%s%x00%P%x1e"];
-        if let Some(p) = path {
-            args.extend(["--follow", "--", p]);
-        }
+        args.extend_from_slice(extra);
         let out = self.run(&args)?;
         Ok(out
             .split('\x1e')
@@ -343,6 +379,20 @@ pub struct Commit {
     pub parents: Vec<String>,
 }
 
+/// Where a push goes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PushTarget {
+    /// The local branch pushed.
+    pub branch: String,
+    pub remote: String,
+    /// The branch on the remote.
+    pub remote_branch: String,
+    /// The remote's address.
+    pub url: String,
+    /// The remote branch is made by this push.
+    pub new: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +443,36 @@ mod tests {
         assert_eq!(r.blame("f.txt").unwrap().len(), 10);
         r.discard(&[], &["new.txt".into()]).unwrap();
         assert!(r.status().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn outgoing_commits_and_where_a_push_goes() {
+        let (_d, r) = repo();
+        let remote = tempfile::tempdir().unwrap();
+        Repo { root: remote.path().to_path_buf() }.run(&["init", "-q", "--bare", "-b", "main"]).unwrap();
+        r.run(&["remote", "add", "origin", &remote.path().display().to_string()]).unwrap();
+        let commit = |name: &str| {
+            std::fs::write(r.root.join(name), name).unwrap();
+            r.stage(&[name.into()]).unwrap();
+            r.commit(name, false).unwrap();
+        };
+        commit("one");
+        // No upstream yet: a new branch on origin, everything outgoing.
+        let branch = r.status().unwrap().branch;
+        let target = r.push_target(&branch);
+        assert_eq!((target.remote.as_str(), target.remote_branch.as_str(), target.new), ("origin", "main", true));
+        assert_eq!(target.url, remote.path().display().to_string());
+        assert_eq!(r.outgoing(&branch, 10).unwrap().len(), 1);
+        r.push(false, &branch).unwrap();
+        let branch = r.status().unwrap().branch;
+        assert!(r.outgoing(&branch, 10).unwrap().is_empty());
+        commit("two");
+        commit("three");
+        let branch = r.status().unwrap().branch;
+        let out: Vec<String> = r.outgoing(&branch, 10).unwrap().into_iter().map(|c| c.subject).collect();
+        assert_eq!(out, ["three", "two"]);
+        let target = r.push_target(&branch);
+        assert_eq!((target.remote_branch.as_str(), target.new), ("main", false));
     }
 
     #[test]

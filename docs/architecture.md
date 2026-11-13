@@ -208,7 +208,11 @@ after any change the folder watch reports (`.git` included, so commits and
 switches made outside Shed show) and after every action; a fetch runs every
 `fetch_minutes`. Diffs open as tabs among the files (not saved with the bench),
 drawn as a `uniform_list` of rows: hunk headers with their actions, lines with
-both numbers, or old and new side by side.
+both numbers, or old and new side by side. The outgoing commits
+(`Repo::outgoing`: `@{upstream}..HEAD`, or `HEAD --not --remotes` without an
+upstream) are read with each status; a push first reads them again with
+`Repo::push_target` (the branch's `remote` and `merge` config, else `origin`)
+into a `PushReview` the Changes panel shows until confirmed.
 
 ## Remote tabs
 

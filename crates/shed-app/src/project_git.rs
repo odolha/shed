@@ -11,7 +11,7 @@ use gpui::{
     AnyElement, Context, Entity, Focusable, MouseButton, MouseDownEvent, PromptLevel, Subscription, Task, UniformListScrollHandle,
     Window, div, prelude::*, px, svg, uniform_list,
 };
-use shed_git::{Commit, Entry as GitEntry, Hunk, LineKind, Repo, Status};
+use shed_git::{Branch, Commit, Entry as GitEntry, Hunk, LineKind, PushTarget, Repo, Status};
 use shed_model::Rgb;
 
 use super::{Content, OpenFile, Panel, ProjectView, ROW_HEIGHT};
@@ -44,8 +44,23 @@ pub(super) struct GitState {
     commit_files: HashMap<String, Vec<(char, String)>>,
     history_scroll: UniformListScrollHandle,
     new_branch: Option<(Entity<LineEditor>, Subscription)>,
+    /// Commits the upstream does not have yet, newest first.
+    pub outgoing: Vec<Commit>,
+    /// A push waiting to be confirmed.
+    push_review: Option<PushReview>,
     _message_sub: Subscription,
 }
+
+/// What a push would send, and where, shown before it runs.
+struct PushReview {
+    force: bool,
+    branch: Branch,
+    target: PushTarget,
+    commits: Vec<Commit>,
+}
+
+/// Outgoing commits read with the status (more are counted, not listed).
+const OUTGOING_LIMIT: usize = 200;
 
 /// Which two versions a diff compares.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,6 +169,8 @@ impl GitState {
             commit_files: HashMap::new(),
             history_scroll: UniformListScrollHandle::new(),
             new_branch: None,
+            outgoing: Vec::new(),
+            push_review: None,
             _message_sub: sub,
         })
     }
@@ -188,14 +205,22 @@ impl ProjectView {
         let repo = git.repo.clone();
         git.refresh = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(150)).await;
-            let status = cx.background_executor().spawn(async move { repo.status() }).await;
+            let status = cx
+                .background_executor()
+                .spawn(async move {
+                    let s = repo.status()?;
+                    let outgoing = repo.outgoing(&s.branch, OUTGOING_LIMIT).unwrap_or_default();
+                    Ok::<_, shed_git::GitError>((s, outgoing))
+                })
+                .await;
             this.update(cx, |this, cx| {
                 let mut head_moved = false;
                 if let Some(git) = &mut this.git {
                     match status {
-                        Ok(s) => {
+                        Ok((s, outgoing)) => {
                             head_moved = git.status.as_ref().is_none_or(|old| old.branch.oid != s.branch.oid);
                             git.status = Some(s);
+                            git.outgoing = outgoing;
                         }
                         Err(e) => git.error = Some(e.0),
                     }
@@ -215,6 +240,17 @@ impl ProjectView {
     /// Runs a Git command away from the UI, showing it runs; then reads the
     /// status again.
     fn git_op(&mut self, label: &str, op: impl FnOnce(&Repo) -> shed_git::Result<String> + Send + 'static, cx: &mut Context<Self>) {
+        self.git_op_then(label, op, |_, _| {}, cx);
+    }
+
+    /// `git_op`, then `then` if it worked.
+    fn git_op_then(
+        &mut self,
+        label: &str,
+        op: impl FnOnce(&Repo) -> shed_git::Result<String> + Send + 'static,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
         let Some(git) = &mut self.git else { return };
         if git.busy.is_some() {
             return;
@@ -225,12 +261,16 @@ impl ProjectView {
         git.op = Some(cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move { op(&repo) }).await;
             this.update(cx, |this, cx| {
+                let ok = result.is_ok();
                 if let Some(git) = &mut this.git {
                     git.busy = None;
                     git.error = result.err().map(|e| e.0);
                     git.log.clear();
                 }
                 this.git_refresh(cx);
+                if ok {
+                    then(this, cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -290,16 +330,9 @@ impl ProjectView {
             return;
         }
         let amend = git.amend;
-        let branch = git.status.as_ref().map(|s| s.branch.clone()).unwrap_or_default();
         let field = git.message.clone();
-        self.git_op(
-            if push { "Committing and pushing…" } else { "Committing…" },
-            move |r| {
-                let out = r.commit(&message, amend)?;
-                if push { r.push(false, &branch) } else { Ok(out) }
-            },
-            cx,
-        );
+        // With Push, what would go is shown first, as for any push.
+        self.git_op_then("Committing…", move |r| r.commit(&message, amend), move |this, cx| if push { this.push(false, cx) }, cx);
         // Cleared now; the commit's own result shows any error.
         field.update(cx, |f, cx| {
             f.buffer.select_all();
@@ -321,24 +354,47 @@ impl ProjectView {
         cx.notify();
     }
 
-    fn push(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(branch) = self.git.as_ref().and_then(|g| g.status.as_ref()).map(|s| s.branch.clone()) else { return };
-        if !force {
-            return self.git_op("Pushing…", move |r| r.push(false, &branch), cx);
-        }
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Force-push?",
-            Some("This replaces the remote branch with yours, unless someone pushed to it since you last fetched (--force-with-lease)."),
-            &["Force-Push", "Cancel"],
-            cx,
-        );
+    /// Shows what a push would send and where, to confirm (`confirm_push`).
+    fn push(&mut self, force: bool, cx: &mut Context<Self>) {
+        let Some(git) = &self.git else { return };
+        let repo = git.repo.clone();
+        self.panel = Panel::Changes;
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
-                this.update(cx, |this, cx| this.git_op("Force-pushing…", move |r| r.push(true, &branch), cx)).ok();
-            }
+            // The status as it is now (a commit may just have been made).
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    let branch = repo.status()?.branch;
+                    let commits = repo.outgoing(&branch, OUTGOING_LIMIT).unwrap_or_default();
+                    Ok::<_, shed_git::GitError>((repo.push_target(&branch), branch, commits))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(git) = &mut this.git {
+                    match read {
+                        Ok((target, branch, commits)) => git.push_review = Some(PushReview { force, branch, target, commits }),
+                        Err(e) => git.error = Some(e.0),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    fn confirm_push(&mut self, cx: &mut Context<Self>) {
+        let Some(review) = self.git.as_mut().and_then(|g| g.push_review.take()) else { return };
+        let (force, branch) = (review.force, review.branch);
+        self.git_op(if force { "Force-pushing…" } else { "Pushing…" }, move |r| r.push(force, &branch), cx);
+    }
+
+    fn cancel_push(&mut self, cx: &mut Context<Self>) {
+        if let Some(git) = &mut self.git {
+            git.push_review = None;
+        }
+        cx.notify();
     }
 
     /// Opens (or shows) a diff of a file.
@@ -475,14 +531,14 @@ impl ProjectView {
         let local = git.repo.branches().unwrap_or_default();
         let current = git.status.as_ref().and_then(|s| s.branch.head.clone());
         let others: Vec<String> = local.iter().filter(|b| Some(*b) != current.as_ref()).cloned().collect();
-        let (behind, ahead) = git.status.as_ref().map_or((0, 0), |s| (s.branch.behind, s.branch.ahead));
+        let (behind, ahead) = git.status.as_ref().map_or((0, 0), |s| (s.branch.behind, s.branch.ahead.max(git.outgoing.len() as u32)));
         let count = |n: u32| if n > 0 { format!(" ({n})") } else { String::new() };
         let mut entries = vec![
             menu::item("Fetch", |this: &mut Self, _, cx| this.git_op("Fetching…", |r| r.fetch(), cx)).icon("refresh"),
             menu::item(format!("Pull with Rebase{}", count(behind)), |this: &mut Self, _, cx| this.git_op("Pulling…", |r| r.pull_rebase(), cx)).icon("pull"),
             menu::item(format!("Pull with Merge{}", count(behind)), |this: &mut Self, _, cx| this.git_op("Pulling…", |r| r.pull_merge(), cx)).icon("pull"),
-            menu::item(format!("Push{}", count(ahead)), |this: &mut Self, window, cx| this.push(false, window, cx)).icon("push"),
-            menu::danger("Force-Push…", |this: &mut Self, window, cx| this.push(true, window, cx)),
+            menu::item(format!("Push{}", count(ahead)), |this: &mut Self, _, cx| this.push(false, cx)).icon("push"),
+            menu::danger("Force-Push…", |this: &mut Self, _, cx| this.push(true, cx)),
             MenuEntry::Separator,
             menu::item("New Branch…", |this: &mut Self, window, cx| this.start_new_branch(window, cx)).icon("plus"),
         ];
@@ -675,10 +731,13 @@ impl ProjectView {
             .child(button("git-fetch", "refresh", "Fetch".into()).on_click(cx.listener(|this, _, _, cx| this.git_op("Fetching…", |r| r.fetch(), cx))))
             .child(button("git-pull", "pull", if s.branch.behind > 0 { format!("Pull {}", s.branch.behind) } else { "Pull".into() }).on_click(cx.listener(|this, _, _, cx| this.git_op("Pulling…", |r| r.pull(), cx))))
             .child(
-                button("git-push", "push", if s.branch.ahead > 0 { format!("Push {}", s.branch.ahead) } else { "Push".into() })
-                    .on_click(cx.listener(|this, _, window, cx| this.push(false, window, cx)))
+                button("git-push", "push", {
+                    let ahead = s.branch.ahead.max(git.outgoing.len() as u32);
+                    if ahead > 0 { format!("Push {ahead}") } else { "Push".into() }
+                })
+                    .on_click(cx.listener(|this, _, _, cx| this.push(false, cx)))
                     .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                        let entries = vec![menu::danger("Force-Push…", |this: &mut Self, window, cx| this.push(true, window, cx))];
+                        let entries = vec![menu::danger("Force-Push…", |this: &mut Self, _, cx| this.push(true, cx))];
                         this.open_menu(e.position, entries, cx);
                     })),
             );
@@ -736,8 +795,16 @@ impl ProjectView {
         if s.entries.is_empty() {
             list = list.child(div().p_2().text_color(hsla(ui.text_dim)).child("Nothing changed."));
         }
+        // Commits made here and not pushed yet, each opening to its files.
+        if !git.outgoing.is_empty() {
+            list = list.child(self.section_header("Not Pushed", git.outgoing.len(), None, ui, cx));
+            for (n, c) in git.outgoing.iter().enumerate() {
+                list = list.children(self.outgoing_rows(n, c, ui, cx));
+            }
+        }
+        let review = self.render_push_review(ui, cx);
         let can_commit = !staged.is_empty() || git.amend;
-        let commit_button = |id: &'static str, label: &'static str, push: bool| {
+        let commit_button = |id: &'static str, label: String, push: bool| {
             div()
                 .id(id)
                 .px_2()
@@ -760,6 +827,7 @@ impl ProjectView {
             .p_2()
             .text_size(px(12.0 * self.z()))
             .child(sync)
+            .children(review)
             .when_some(git.new_branch.as_ref().map(|(e, _)| e.clone()), |d, e| {
                 d.child(div().flex().items_center().gap_1().child(div().text_color(hsla(ui.text_dim)).child("New branch:")).child(div().flex_1().child(e)))
             })
@@ -785,10 +853,131 @@ impl ProjectView {
                             .child("Amend"),
                     )
                     .child(div().flex_1())
-                    .child(commit_button("commit-push", "Commit and Push", true))
-                    .child(commit_button("commit", "Commit", false)),
+                    .child(commit_button("commit-push", "Commit and Push…".into(), true))
+                    .child(commit_button("commit", match staged.len() {
+                        0 => "Commit".into(),
+                        1 => "Commit 1 File".into(),
+                        n => format!("Commit {n} Files"),
+                    }, false)),
             )
             .into_any_element()
+    }
+
+    /// An outgoing commit's row, and its files when opened.
+    fn outgoing_rows(&self, n: usize, c: &Commit, ui: &UiColors, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(git) = &self.git else { return Vec::new() };
+        let open = git.expanded.contains(&c.hash);
+        let hash = c.hash.clone();
+        let row = |id: usize| div().id(("outgoing", id)).h(px(ROW_HEIGHT * self.z())).flex().items_center().gap_1p5().px_1().rounded_sm().cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover)));
+        let mut rows = vec![
+            row(n * 1000)
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_commit(hash.clone(), cx)))
+                .child(div().flex_none().w(px(10.0)).text_color(hsla(ui.text_dim)).child(if open { "▾" } else { "▸" }))
+                .child(div().flex_none().font_family(self.settings.font.family.clone()).text_color(hsla(ui.text_dim)).child(c.short.clone()))
+                .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(c.subject.clone()))
+                .child(div().flex_none().text_color(hsla(ui.text_dim)).child(short_ago(c.time)))
+                .into_any_element(),
+        ];
+        if open {
+            for (f, (code, path)) in git.commit_files.get(&c.hash).into_iter().flatten().enumerate() {
+                let (p, hash) = (path.clone(), c.hash.clone());
+                rows.push(
+                    row(n * 1000 + f + 1)
+                        .pl(px(22.0))
+                        .on_click(cx.listener(move |this, _, _, cx| this.open_diff(p.clone(), DiffSource::Commit(hash.clone()), cx)))
+                        .child(div().flex_none().w(px(12.0)).text_color(hsla(ui.text_dim)).child(code.to_string()))
+                        .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(path.clone()))
+                        .into_any_element(),
+                );
+            }
+        }
+        rows
+    }
+
+    /// A push to confirm: the branch, where it goes, and the commits it sends.
+    fn render_push_review(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let review = self.git.as_ref()?.push_review.as_ref()?;
+        let t = &review.target;
+        let tone = if review.force { ui.danger } else { self.accent };
+        let n = review.commits.len();
+        let mono = self.settings.font.family.clone();
+        const SHOWN: usize = 12;
+        let commits = review.commits.iter().take(SHOWN).map(|c| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .child(div().flex_none().font_family(mono.clone()).text_color(hsla(ui.text_dim)).child(c.short.clone()))
+                .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(c.subject.clone()))
+                .child(div().flex_none().text_color(hsla(ui.text_dim)).child(format!("{} · {}", c.author.split_whitespace().next().unwrap_or(""), short_ago(c.time))))
+        });
+        let action = |id: &'static str, label: String, color: Rgb, primary: bool| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .border_1()
+                .border_color(hsla(if primary { color } else { ui.divider }))
+                .text_color(hsla(if primary { ui.ink(color) } else { ui.text }))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hsla_alpha(color, 0.2)))
+                .child(label)
+        };
+        let what = match (n, review.force) {
+            (_, true) => "Force-Push".to_string(),
+            (0, _) => "Push".to_string(),
+            (1, _) => "Push 1 Commit".to_string(),
+            (n, _) => format!("Push {n} Commits"),
+        };
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_2()
+                .rounded_md()
+                .border_1()
+                .border_color(hsla(tone))
+                .bg(hsla_alpha(tone, 0.08))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_1()
+                        .text_color(hsla(ui.text))
+                        .child(if review.force { "Force-push" } else { "Push" })
+                        .child(div().px_1().rounded_sm().bg(hsla_alpha(self.accent, 0.2)).text_color(hsla(ui.ink(self.accent))).child(t.branch.clone()))
+                        .child("to")
+                        .child(div().px_1().rounded_sm().bg(hsla(ui.tab_hover)).child(format!("{}/{}", t.remote, t.remote_branch)))
+                        .when(t.new, |d| d.child(div().text_color(hsla(ui.text_dim)).child("(a new branch there)"))),
+                )
+                .when(!t.url.is_empty(), |d| d.child(div().truncate().text_color(hsla(ui.text_dim)).child(t.url.clone())))
+                .when(review.force, |d| {
+                    d.child(div().text_color(hsla(ui.danger)).child(format!(
+                        "This replaces {}/{} with your branch, unless someone pushed to it since you last fetched (--force-with-lease).",
+                        t.remote, t.remote_branch
+                    )))
+                })
+                .child(div().mt_1().text_color(hsla(ui.text_dim)).child(match n {
+                    0 => format!("Nothing new to send: {}/{} has every commit.", t.remote, t.remote_branch),
+                    1 => "1 commit goes:".to_string(),
+                    n if n >= OUTGOING_LIMIT => format!("{n} or more commits go:"),
+                    n => format!("{n} commits go:"),
+                }))
+                .children(commits)
+                .when(n > SHOWN, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("and {} more", n - SHOWN))))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .mt_1()
+                        .child(action("push-confirm", what, tone, true).on_click(cx.listener(|this, _, _, cx| this.confirm_push(cx))))
+                        .child(action("push-cancel", "Cancel".into(), ui.text_dim, false).on_click(cx.listener(|this, _, _, cx| this.cancel_push(cx)))),
+                )
+                .into_any_element(),
+        )
     }
 
     fn section_header(&self, title: &str, count: usize, action: Option<(&'static str, Section)>, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
@@ -863,6 +1052,30 @@ impl ProjectView {
                 Section::Staged => this.open_diff(path.clone(), DiffSource::Staged, cx),
                 Section::Unstaged => this.open_diff(path.clone(), DiffSource::Unstaged, cx),
             }))
+            // In the commit or not: ticking stages the whole file.
+            .when(section != Section::Conflict, |d| {
+                let staged = section == Section::Staged;
+                let p = e.path.clone();
+                d.child(
+                    div()
+                        .id(("include", id))
+                        .flex_none()
+                        .w(px(14.0))
+                        .cursor_pointer()
+                        .text_color(hsla(if staged { ui.ink(self.accent) } else { ui.text_dim }))
+                        .tooltip(menu::tooltip(if staged { "In the commit: click to leave it out" } else { "Not in the commit: click to add it" }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            let paths = vec![p.clone()];
+                            if staged {
+                                this.git_op("Unstaging…", move |r| r.unstage(&paths).map(|_| String::new()), cx);
+                            } else {
+                                this.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
+                            }
+                        }))
+                        .child(if staged { "☑" } else { "☐" }),
+                )
+            })
             .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(code.to_string()))
             .child(div().flex_none().text_color(hsla(ui.text)).child(name))
             .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(dir));

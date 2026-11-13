@@ -237,13 +237,18 @@ stash, pop the stash, and history. In this and every menu, an item with › open
 its submenu beside it when the mouse is over it.
 
 **Changes** (beside Files and Search) lists conflicted, staged and changed files.
-Hover a file to stage (+), unstage (−) or discard it (↺, after asking); **Stage
-All** and **Unstage All** do every file. Click a file for its diff: hunk by hunk,
-each with **Stage**, **Unstage** or **Discard…**, unified or **Side by Side**.
-Below the list, write the message and **Commit**, or **Commit and Push**; **Amend**
-changes the last commit (its message comes in to edit). **Fetch**, **Pull** and
-**Push** are above, with the counts; right-click Push to force-push (with lease,
-after asking). Git runs as in your terminal, with your credentials and SSH keys;
+Each file has a box: ticked, it goes in the next commit (it is staged); click
+the box to add or leave out a file. Hover a file to stage (+), unstage (−) or
+discard it (↺, after asking); **Stage All** and **Unstage All** do every file.
+Click a file for its diff: hunk by hunk, each with **Stage**, **Unstage** or
+**Discard…**, unified or **Side by Side**. **Not Pushed** lists the commits the
+upstream does not have yet (all of them, for a branch never pushed); click one
+for its files. Below the list, write the message and **Commit N Files**, or
+**Commit and Push…**; **Amend** changes the last commit (its message comes in to
+edit). **Fetch**, **Pull** and **Push** are above, with the counts; right-click
+Push to force-push (with lease). Every push asks first: it shows the branch, the
+remote branch it goes to (and the remote's address), and the commits it sends,
+with **Push N Commits** and **Cancel**. Git runs as in your terminal, with your credentials and SSH keys;
 when it needs a password it cannot ask for, it says so.
 
 **History** lists commits, newest first, with their branches and tags; click one
