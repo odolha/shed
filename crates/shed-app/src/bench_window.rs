@@ -990,10 +990,11 @@ impl BenchWindow {
             current = current.child(el);
         }
 
-        let tabs = tabs.child(current.child(
+        // The new-tab button stands after the trays, in no group.
+        let tabs = tabs.child(current).child(
             div()
                 .id("new-tab")
-                .h(tab_h - px(4.0 * s) - px(2.0))
+                .h(tab_h)
                 .rounded_md()
                 .flex()
                 .items_center()
@@ -1012,7 +1013,7 @@ impl BenchWindow {
                     this.open_menu(e.position, entries, cx);
                 }))
                 .child(svg().path(icon("tab-new")).size(px(16.0 * s)).text_color(hsla(ui.text_dim))),
-        ))
+        )
         .child(
             // Dropping a tab on the empty part of the bar moves it to the end.
             div()
