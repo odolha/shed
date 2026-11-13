@@ -320,6 +320,11 @@ terminal of the bench.
   Claude to read. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
   its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu
   sends a file or folder.
+- **Files Claude names** (`src/main.rs`, `src/main.rs:42`, a path from its
+  folder, the bench's projects or an absolute one) are links when they exist:
+  a click opens the file in the project tab that holds it, at that line (a
+  project tab opens for its project if none does). Tool lines that read or change
+  a file have **Open** for the same.
 - **Times**: under each of your messages and over each response, in small text,
   when it was written and how long ago (`14:32 · 5 min ago`; another day with the
   date). Sessions opened again keep their times, from Claude Code's record.

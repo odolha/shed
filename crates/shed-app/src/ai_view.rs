@@ -152,6 +152,8 @@ pub struct AiView {
     spin: usize,
     /// Answers being chosen to Claude's questions, by request.
     asks: HashMap<String, Ask>,
+    /// Whether paths Claude names are files, as found (for its links).
+    file_exists: HashMap<PathBuf, bool>,
     /// Messages written while Claude works, sent one by one as turns end.
     queue: Vec<(String, Vec<AiImage>)>,
     /// The left side shows the folder's sessions, or this one's prompts.
@@ -284,6 +286,7 @@ impl AiView {
             spin: 0,
             asks: HashMap::new(),
             queue: Vec::new(),
+            file_exists: HashMap::new(),
             show_prompts: false,
             prompts_scroll: UniformListScrollHandle::new(),
             prompts_bar: Default::default(),
@@ -381,6 +384,9 @@ impl AiView {
         self.status = status;
         if finished {
             self.load_sessions(cx);
+            // Files Claude made in the turn: links to them, now they exist.
+            self.file_exists.clear();
+            self.parsed.clear();
             // The next queued message goes now.
             if !self.queue.is_empty() {
                 let (text, images) = self.queue.remove(0);
@@ -1152,6 +1158,15 @@ impl AiView {
         .into_any_element()
     }
 
+    /// Opens a file in the bench's project tab that holds it (one is opened
+    /// for its project if none does), at `at`.
+    fn reveal_file(&mut self, path: PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) {
+        let bench = self.bench;
+        if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+            state.update(cx, |state, cx| state.reveal_file(bench, path, at, cx));
+        }
+    }
+
     /// What Claude is doing now, in a few words: the tool running, or
     /// thinking or writing.
     fn activity(&self) -> String {
@@ -1236,7 +1251,16 @@ impl AiView {
                 if let Some(p) = self.parsed.get(&i).filter(|p| p.source == *text) {
                     return p.clone();
                 }
-                let pieces = ai_text::pieces(shed_ai::markdown::parse(text));
+                let mut pieces = ai_text::pieces(shed_ai::markdown::parse(text));
+                // Files Claude names become links to them (not in code blocks).
+                let mut bases = vec![self.ai.folder.clone()];
+                bases.extend(self.ai.add_dirs.iter().cloned());
+                bases.extend(self.projects.iter().cloned());
+                let known = &mut self.file_exists;
+                let mut exists = |p: &std::path::Path| *known.entry(p.to_path_buf()).or_insert_with(|| p.is_file());
+                for piece in pieces.iter_mut().filter(|p| !matches!(p.kind, Kind::Code { .. })) {
+                    ai_text::link_files(&mut piece.text, &bases, &mut exists);
+                }
                 let palette = &self.settings.palette;
                 let code = pieces
                     .iter()
@@ -1397,7 +1421,11 @@ impl AiView {
                     && let Some(at) = text_index(&up, &p2.pieces[j].text.text, e.position)
                     && let Some(url) = ai_text::link_at(&p2.pieces[j].text, at)
                 {
-                    cx.open_url(url);
+                    match ai_text::parse_file_link(url) {
+                        // A file: in its project tab, at its line.
+                        Some((path, place)) => this.reveal_file(path, place, cx),
+                        None => cx.open_url(url),
+                    }
                 }
             }))
             .child(styled)
@@ -1733,6 +1761,7 @@ impl AiView {
                 })
                 .into_any_element(),
             Entry::Tool(t) => {
+                let open_file = t.file.clone().filter(|f| *self.file_exists.entry(PathBuf::from(f)).or_insert_with(|| std::path::Path::new(f).is_file()));
                 let (mark, color) = match (&t.result, t.error) {
                     (None, _) => ("○", ui.text_dim),
                     (Some(_), false) => ("✓", ui.ink(accent)),
@@ -1749,7 +1778,30 @@ impl AiView {
                         .hover(|s| s.bg(hsla(ui.tab_hover)))
                         .on_click(toggle)
                         .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(mark))
-                        .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_color(hsla(ui.text_dim)).child(t.summary.clone())),
+                        .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_color(hsla(ui.text_dim)).child(t.summary.clone()))
+                        // The file it read or changed, in its project tab.
+                        .when_some(open_file, |d, file| {
+                            d.child(
+                                div()
+                                    .id(("tool-open", i))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px_1p5()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .text_color(hsla(ui.ink(accent)))
+                                    .hover(|s| s.bg(hsla_alpha(accent, 0.15)))
+                                    .tooltip(menu::tooltip_text(file.clone()))
+                                    .child(svg().path(icon("file")).size(px(11.0 * self.z())).text_color(hsla(ui.ink(accent))))
+                                    .child("Open")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.reveal_file(PathBuf::from(&file), None, cx);
+                                    })),
+                            )
+                        }),
                 );
                 if open {
                     if !t.detail.is_empty() {

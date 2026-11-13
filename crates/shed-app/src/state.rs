@@ -36,6 +36,8 @@ pub struct AppState {
     pub panes: HashMap<PaneId, Entity<TerminalView>>,
     /// The view of every project tab of an open bench.
     pub projects: HashMap<TabId, Entity<ProjectView>>,
+    /// A file to show in the project tab being opened for it.
+    pending_reveal: Option<(BenchId, std::path::PathBuf, crate::ai_text::Place)>,
     /// The view of every AI tab of an open bench.
     pub ai_views: HashMap<TabId, Entity<AiView>>,
     /// Per open bench, the tabs shown most recently, newest first.
@@ -84,6 +86,7 @@ impl AppState {
             settings,
             panes: HashMap::new(),
             projects: HashMap::new(),
+            pending_reveal: None,
             ai_views: HashMap::new(),
             recent_tabs: HashMap::new(),
             windows: HashMap::new(),
@@ -280,6 +283,14 @@ impl AppState {
                         v.set_zoom(zoom, cx);
                         v
                     });
+                    // A file asked for before this tab was there.
+                    if let Some((b, path, at)) = self.pending_reveal.take() {
+                        if b == bench && path.starts_with(&project.root) {
+                            view.update(cx, |v, cx| v.open_path(path, at, cx));
+                        } else {
+                            self.pending_reveal = Some((b, path, at));
+                        }
+                    }
                     self.projects.insert(tab, view);
                 }
                 None => {}
@@ -429,6 +440,18 @@ impl AppState {
         self.conn.send_msg(ClientMsg::FocusTab { tab });
         view.update(cx, |v, cx| v.open_path(path, at, cx));
         true
+    }
+
+    /// Opens a file in the bench's project tab that holds it; with none, a
+    /// project tab opens for its project (its Git root, else its folder) and
+    /// shows the file once it is there.
+    pub fn reveal_file(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) {
+        if self.open_in_project(bench, path.clone(), at, cx) {
+            return;
+        }
+        let root = crate::project_view::project_root(path.parent().unwrap_or(&path));
+        self.conn.send_msg(ClientMsg::NewProjectTab { bench, root });
+        self.pending_reveal = Some((bench, path, at));
     }
 
     /// What should have the keyboard in a bench's window: its active tab's

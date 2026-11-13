@@ -345,3 +345,119 @@ mod tests {
         assert_eq!(word_at("ăla bun", 1), 0..4);
     }
 }
+
+/// What a link to a file says: `shed-file:LINE:COL:PATH` (0: not given).
+pub const FILE_LINK: &str = "shed-file:";
+
+/// Where in a file: a line, and maybe a column.
+pub type Place = Option<(usize, Option<usize>)>;
+
+/// A file link's path and place.
+pub fn parse_file_link(url: &str) -> Option<(std::path::PathBuf, Place)> {
+    let rest = url.strip_prefix(FILE_LINK)?;
+    let mut parts = rest.splitn(3, ':');
+    let line: usize = parts.next()?.parse().ok()?;
+    let col: usize = parts.next()?.parse().ok()?;
+    let path = std::path::PathBuf::from(parts.next()?);
+    let at = (line > 0).then(|| (line, (col > 0).then_some(col)));
+    Some((path, at))
+}
+
+/// Finds the files a text names (`src/main.rs`, `src/main.rs:42:7`, `/abs/x`,
+/// `~/x`), those that exist under one of `bases` or as written, and makes
+/// them links (`exists` answers whether a path is a file, and is cached by
+/// the caller). Text already a link is left alone.
+pub fn link_files(text: &mut Text, bases: &[std::path::PathBuf], exists: &mut dyn FnMut(&std::path::Path) -> bool) {
+    let breaks = |c: char| c.is_whitespace() || "\"'`<>|()[]{},;".contains(c);
+    let s = text.text.clone();
+    let mut found: Vec<(Range<usize>, String)> = Vec::new();
+    let mut i = 0;
+    while i < s.len() {
+        let rest = &s[i..];
+        let Some(c) = rest.chars().next() else { break };
+        if breaks(c) {
+            i += c.len_utf8();
+            continue;
+        }
+        let len = rest.find(breaks).unwrap_or(rest.len());
+        let token = &rest[..len];
+        // Trailing punctuation is the sentence's, not the path's.
+        let token = token.trim_end_matches(['.', ':', '!', '?']);
+        let (start, end) = (i, i + token.len());
+        i += len.max(1);
+        // `path`, `path:line` or `path:line:col`.
+        let mut pieces = token.splitn(3, ':');
+        let path = pieces.next().unwrap_or("");
+        let line = pieces.next().and_then(|l| l.parse::<usize>().ok()).unwrap_or(0);
+        let col = pieces.next().and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
+        let named = path.contains('/') || path.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && (1..=6).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric()));
+        if path.len() < 3 || !named || path.contains("://") || text.links.iter().any(|(r, _)| r.start < end && start < r.end) {
+            continue;
+        }
+        let expanded = match path.strip_prefix("~/") {
+            Some(rel) => std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(rel)),
+            None => Some(std::path::PathBuf::from(path)),
+        };
+        let Some(expanded) = expanded else { continue };
+        let candidates: Vec<std::path::PathBuf> = if expanded.is_absolute() { vec![expanded] } else { bases.iter().map(|b| b.join(&expanded)).collect() };
+        if let Some(abs) = candidates.into_iter().find(|p| exists(p)) {
+            found.push((start..end, format!("{FILE_LINK}{line}:{col}:{}", abs.display())));
+        }
+    }
+    for (range, url) in found {
+        mark_link(text, range.clone());
+        text.links.push((range, url));
+    }
+    text.links.sort_by_key(|(r, _)| r.start);
+}
+
+/// Sets the link style over `range`, splitting the runs it crosses.
+fn mark_link(text: &mut Text, range: Range<usize>) {
+    use shed_ai::markdown::Style;
+    let mut cuts: Vec<usize> = text.spans.iter().flat_map(|(r, _)| [r.start, r.end]).chain([range.start, range.end]).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut spans = Vec::new();
+    for pair in cuts.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let own = text.spans.iter().find(|(r, _)| r.start <= from && to <= r.end).map(|(_, s)| *s);
+        let inside = range.start <= from && to <= range.end;
+        let style = match (own, inside) {
+            (Some(s), true) => Some(Style { link: true, ..s }),
+            (Some(s), false) => Some(s),
+            (None, true) => Some(Style { link: true, ..Default::default() }),
+            (None, false) => None,
+        };
+        if let Some(style) = style {
+            spans.push((from..to, style));
+        }
+    }
+    text.spans = spans;
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+
+    #[test]
+    fn named_files_become_links() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        let mut text = shed_ai::markdown::parse("See `src/main.rs:42:7` and Cargo.toml. Not src/gone.rs, nor e.g. or https://x.org/a.rs")
+            .into_iter()
+            .find_map(|b| if let shed_ai::markdown::Block::Paragraph(t) = b { Some(t) } else { None })
+            .unwrap();
+        let mut exists = |p: &std::path::Path| p.is_file();
+        link_files(&mut text, &[dir.path().to_path_buf()], &mut exists);
+        let named: Vec<&str> = text.links.iter().map(|(r, _)| &text.text[r.clone()]).collect();
+        assert_eq!(named, ["src/main.rs:42:7", "Cargo.toml"]);
+        let (path, at) = parse_file_link(&text.links[0].1).unwrap();
+        assert_eq!((path, at), (dir.path().join("src/main.rs"), Some((42, Some(7)))));
+        assert_eq!(parse_file_link(&text.links[1].1).unwrap().1, None);
+        // The code span keeps its look and becomes a link too.
+        let style = text.spans.iter().find(|(r, _)| &text.text[r.clone()] == "src/main.rs:42:7").unwrap().1;
+        assert!(style.code && style.link);
+    }
+}
