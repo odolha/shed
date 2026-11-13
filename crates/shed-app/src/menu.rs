@@ -90,6 +90,8 @@ impl Render for Tooltip {
 pub struct Menu<V> {
     pub position: Point<Pixels>,
     pub entries: Vec<MenuEntry<V>>,
+    /// The submenu shown beside the item at this index (opened by hovering it).
+    pub sub: Option<(usize, Vec<MenuEntry<V>>)>,
 }
 
 /// A view that shows menus, one at a time.
@@ -100,18 +102,63 @@ pub trait MenuHost: Sized + 'static {
     fn menu_closed(&mut self, window: &mut Window, cx: &mut Context<Self>);
 
     fn open_menu(&mut self, position: Point<Pixels>, entries: Vec<MenuEntry<Self>>, cx: &mut Context<Self>) {
-        *self.menu_slot() = Some(Menu { position, entries });
+        *self.menu_slot() = Some(Menu { position, entries, sub: None });
         cx.stop_propagation();
         cx.notify();
     }
 }
 
+/// Rows have fixed heights, so a submenu can be put beside its item.
+const ROW: f32 = 26.0;
+const SEPARATOR: f32 = 9.0;
+const LIST_PAD: f32 = 4.0;
+const SWATCH: f32 = 20.0;
+const SWATCH_GAP: f32 = 6.0;
+const SWATCHES_PER_ROW: usize = 8;
+
+/// How far down its list the entry at `at` starts.
+fn entry_top<V>(entries: &[MenuEntry<V>], at: usize) -> Pixels {
+    let us = |n: f32| crate::theme::us(n);
+    let mut top = px(LIST_PAD);
+    for e in &entries[..at.min(entries.len())] {
+        top += match e {
+            MenuEntry::Separator => px(SEPARATOR),
+            MenuEntry::Palette(s) => {
+                let rows = s.len().div_ceil(SWATCHES_PER_ROW).max(1) as f32;
+                px(rows * SWATCH + (rows - 1.0) * SWATCH_GAP + 8.0)
+            }
+            _ => us(ROW),
+        };
+    }
+    top
+}
+
 pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -> AnyElement {
+    let main = list(&menu.entries, menu.position, true, menu.sub.as_ref().map(|(i, _)| *i), ui, cx);
+    let mut both = div()
+        .flex()
+        .items_start()
+        .on_mouse_down_out(cx.listener(|this: &mut V, _, window, cx| {
+            *this.menu_slot() = None;
+            this.menu_closed(window, cx);
+        }))
+        .child(main);
+    if let Some((at, entries)) = &menu.sub {
+        // Its first item level with the item that opened it.
+        let top = entry_top(&menu.entries, *at) - px(LIST_PAD);
+        both = both.child(div().pt(top).ml(px(-2.0)).child(list(entries, menu.position, false, None, ui, cx)));
+    }
+    deferred(anchored().position(menu.position).snap_to_window_with_margin(px(8.0)).child(both)).priority(1).into_any_element()
+}
+
+/// One list of a menu: the menu itself (`top`), or a submenu beside it.
+fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: bool, open: Option<usize>, ui: &UiColors, cx: &mut Context<V>) -> gpui::Stateful<gpui::Div> {
+    let base = if top { 0 } else { 10_000 };
     let mut list = div()
-        .id("menu")
+        .id(if top { "menu" } else { "submenu" })
         .occlude()
         .min_w(px(200.0))
-        .py_1()
+        .py(px(LIST_PAD))
         .bg(hsla(ui.tab_active))
         .border_1()
         .border_color(hsla(ui.divider))
@@ -119,35 +166,31 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
         // No drop shadow: a blurred shadow is redrawn over the whole menu on
         // every hover change, which tripled the cost of moving through it.
         .text_size(crate::theme::us(13.0))
-        .text_color(hsla(ui.text))
-        .on_mouse_down_out(cx.listener(|this: &mut V, _, window, cx| {
-            *this.menu_slot() = None;
-            this.menu_closed(window, cx);
-        }));
+        .text_color(hsla(ui.text));
     // With icons on some items, every label starts at the same place.
-    let icons = menu.entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::More { icon: Some(_), .. }));
+    let icons = entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::More { icon: Some(_), .. }));
     let lead = |glyph: &Option<&'static str>, color: Rgb| match glyph {
         Some(name) => Some(svg().path(icon(name)).size(crate::theme::us(14.0)).text_color(hsla(color)).into_any_element()),
         None if icons => Some(div().size(px(14.0)).into_any_element()),
         None => None,
     };
-    let position = menu.position;
-    for (i, entry) in menu.entries.iter().enumerate() {
+    let row = |id: usize| div().id(("menu-item", base + id)).h(crate::theme::us(ROW)).flex().items_center().gap_2().px_3().cursor_pointer();
+    for (i, entry) in entries.iter().enumerate() {
         list = list.child(match entry {
-            MenuEntry::Separator => div().my_1().h(px(1.0)).bg(hsla(ui.divider)).into_any_element(),
+            MenuEntry::Separator => div().h(px(SEPARATOR)).flex().items_center().child(div().w_full().h(px(1.0)).bg(hsla(ui.divider))).into_any_element(),
             MenuEntry::Palette(swatches) => div()
                 .flex()
                 .flex_wrap()
-                .gap_1p5()
+                .gap(px(SWATCH_GAP))
                 .px_3()
                 .py_1()
-                .max_w(px(8.0 * 26.0 + 24.0))
+                .max_w(px(SWATCHES_PER_ROW as f32 * (SWATCH + SWATCH_GAP) + 24.0))
                 .children(swatches.iter().enumerate().map(|(j, s)| {
                     let action = s.action.clone();
                     let ring = if s.current { ui.text } else { ui.tab_active };
                     div()
-                        .id(("swatch", i * 1000 + j))
-                        .size(px(20.0))
+                        .id(("swatch", base + i * 1000 + j))
+                        .size(px(SWATCH))
                         .rounded_full()
                         .border_2()
                         .border_color(hsla(ring))
@@ -163,22 +206,38 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
                 }))
                 .into_any_element(),
             MenuEntry::More { label, icon: glyph, entries } => {
-                let entries = entries.clone();
-                div()
-                    .id(("menu-item", i))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
+                let (on_hover, on_click) = (entries.clone(), entries.clone());
+                let shown = open == Some(i);
+                row(i)
+                    .when(shown, |d| d.bg(hsla(ui.tab_hover)))
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
-                    .cursor_pointer()
                     .children(lead(glyph, ui.text_dim))
                     .child(div().flex_1().child(label.clone()))
                     .child(div().text_color(hsla(ui.text_dim)).child("›"))
+                    // In the menu itself it opens beside on hover; deeper, in its place.
+                    .when(top, |d| {
+                        d.on_hover(cx.listener(move |this: &mut V, hovered: &bool, _, cx| {
+                            if !*hovered {
+                                return;
+                            }
+                            let entries = on_hover(this, cx);
+                            if let Some(menu) = this.menu_slot()
+                                && menu.sub.as_ref().is_none_or(|(at, _)| *at != i)
+                            {
+                                menu.sub = Some((i, entries));
+                                cx.notify();
+                            }
+                        }))
+                    })
                     .on_click(cx.listener(move |this: &mut V, _, _, cx| {
-                        let entries = entries(this, cx);
-                        *this.menu_slot() = Some(Menu { position, entries });
+                        let entries = on_click(this, cx);
+                        if top {
+                            if let Some(menu) = this.menu_slot() {
+                                menu.sub = Some((i, entries));
+                            }
+                        } else {
+                            *this.menu_slot() = Some(Menu { position, entries, sub: None });
+                        }
                         cx.notify();
                     }))
                     .into_any_element()
@@ -187,18 +246,22 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
                 let action = action.clone();
                 let color = if *danger { ui.danger } else { ui.text };
                 let lead = lead(glyph, if *danger { color } else { ui.text_dim });
-                div()
-                    .id(("menu-item", i))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
+                row(i)
                     .text_color(hsla(color))
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
-                    .cursor_pointer()
                     .children(lead)
                     .child(label.clone())
+                    // Moving onto another item of the menu closes a submenu.
+                    .when(top, |d| {
+                        d.on_hover(cx.listener(|this: &mut V, hovered: &bool, _, cx| {
+                            if *hovered
+                                && let Some(menu) = this.menu_slot()
+                                && menu.sub.take().is_some()
+                            {
+                                cx.notify();
+                            }
+                        }))
+                    })
                     .on_click(cx.listener(move |this: &mut V, _, window, cx| {
                         *this.menu_slot() = None;
                         action(this, window, cx);
@@ -208,5 +271,5 @@ pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -
             }
         });
     }
-    deferred(anchored().position(menu.position).snap_to_window_with_margin(px(8.0)).child(list)).priority(1).into_any_element()
+    list
 }

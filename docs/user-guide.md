@@ -230,9 +230,11 @@ Shed or the bench closes first, they come back the next time the file opens.
 far it is ahead (↑) and behind (↓) its upstream, and how many files changed; it
 turns red during a merge or rebase. Shed fetches every five minutes while the tab
 is open, so "behind" stays true (`[git] fetch_minutes` in `shed.toml`; 0 turns it
-off). Click the branch for its menu: new branch, switch (or check out a remote
+off). Click the branch for its menu: fetch, pull with rebase or with merge, push
+(and force-push, asking first), new branch, switch (or check out a remote
 branch), merge into the current branch, rebase onto another, delete (asking first),
-stash, pop the stash, and history.
+stash, pop the stash, and history. In this and every menu, an item with › opens
+its submenu beside it when the mouse is over it.
 
 **Changes** (beside Files and Search) lists conflicted, staged and changed files.
 Hover a file to stage (+), unstage (−) or discard it (↺, after asking); **Stage
@@ -337,8 +339,9 @@ terminal of the bench.
   date). Sessions opened again keep their times, from Claude Code's record.
 - **The conversation** streams in: answers drawn from their Markdown (headings,
   lists, tables, links, code blocks coloured by language), each tool Claude uses on
-  one line (click it for the command, the change as a diff, and what came back),
-  thinking folded away.
+  one line (click it for the command, the change as a diff, and what came back,
+  each in a block to select in or copy whole; hovering the line shows **Copy**
+  for the whole command), thinking folded away.
 - **Going back**: hover one of your messages for **Edit**, **Send Again** and
   **Copy** (also in its right-click menu). **Edit** puts it in the prompt field;
   sending it goes back to that message: the messages after it go, the files

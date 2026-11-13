@@ -475,7 +475,17 @@ impl ProjectView {
         let local = git.repo.branches().unwrap_or_default();
         let current = git.status.as_ref().and_then(|s| s.branch.head.clone());
         let others: Vec<String> = local.iter().filter(|b| Some(*b) != current.as_ref()).cloned().collect();
-        let mut entries = vec![menu::item("New Branch…", |this: &mut Self, window, cx| this.start_new_branch(window, cx)).icon("plus")];
+        let (behind, ahead) = git.status.as_ref().map_or((0, 0), |s| (s.branch.behind, s.branch.ahead));
+        let count = |n: u32| if n > 0 { format!(" ({n})") } else { String::new() };
+        let mut entries = vec![
+            menu::item("Fetch", |this: &mut Self, _, cx| this.git_op("Fetching…", |r| r.fetch(), cx)).icon("refresh"),
+            menu::item(format!("Pull with Rebase{}", count(behind)), |this: &mut Self, _, cx| this.git_op("Pulling…", |r| r.pull_rebase(), cx)).icon("pull"),
+            menu::item(format!("Pull with Merge{}", count(behind)), |this: &mut Self, _, cx| this.git_op("Pulling…", |r| r.pull_merge(), cx)).icon("pull"),
+            menu::item(format!("Push{}", count(ahead)), |this: &mut Self, window, cx| this.push(false, window, cx)).icon("push"),
+            menu::danger("Force-Push…", |this: &mut Self, window, cx| this.push(true, window, cx)),
+            MenuEntry::Separator,
+            menu::item("New Branch…", |this: &mut Self, window, cx| this.start_new_branch(window, cx)).icon("plus"),
+        ];
         if !others.is_empty() {
             entries.push(MenuEntry::Separator);
         }

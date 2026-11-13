@@ -165,6 +165,16 @@ impl Repo {
         self.run(&["pull"])
     }
 
+    /// Pulls, putting the branch's own commits on top of the remote's.
+    pub fn pull_rebase(&self) -> Result<String> {
+        self.run(&["pull", "--rebase"])
+    }
+
+    /// Pulls, merging the remote's commits into the branch.
+    pub fn pull_merge(&self) -> Result<String> {
+        self.run(&["pull", "--no-rebase"])
+    }
+
     /// Pushes the branch; one without an upstream gets one on `origin`.
     pub fn push(&self, force: bool, branch: &Branch) -> Result<String> {
         let mut args = vec!["push"];

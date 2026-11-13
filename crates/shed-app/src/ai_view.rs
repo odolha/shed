@@ -1302,6 +1302,28 @@ impl AiView {
                 Rc::new(Parsed::plain(shown))
             }
             Some(Entry::Thinking { text }) if self.expanded.contains(&i) => Rc::new(Parsed::plain(text.clone())),
+            // An opened step: its input (the command) and what it returned,
+            // as code blocks to select in or copy whole.
+            Some(Entry::Tool(t)) if self.expanded.contains(&i) => {
+                let mut pieces = Vec::new();
+                let mut code = Vec::new();
+                if !t.detail.is_empty() {
+                    let lang = if t.name == "Bash" { "bash" } else { "input" };
+                    code.push(code_colors(lang, &t.detail, &self.settings.palette));
+                    pieces.push(Piece { kind: Kind::Code { lang: lang.into(), depth: 0 }, text: shed_ai::markdown::Text::plain(t.detail.clone()) });
+                }
+                if let Some(result) = &t.result {
+                    let lines: Vec<&str> = result.lines().collect();
+                    let mut shown = lines[..lines.len().min(RESULT_LINES)].join("\n");
+                    if lines.len() > RESULT_LINES {
+                        shown.push_str(&format!("\n… {} more lines", lines.len() - RESULT_LINES));
+                    }
+                    code.push(None);
+                    let lang = if t.error { "error" } else { "output" };
+                    pieces.push(Piece { kind: Kind::Code { lang: lang.into(), depth: 0 }, text: shed_ai::markdown::Text::plain(shown) });
+                }
+                Rc::new(Parsed { source: String::new(), pieces, code })
+            }
             _ => Rc::new(Parsed { source: String::new(), pieces: Vec::new(), code: Vec::new() }),
         }
     }
@@ -1376,6 +1398,7 @@ impl AiView {
             .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
                 cx.write_to_clipboard(item.clone());
                 this.copied(key.clone(), cx);
             }))
@@ -1811,6 +1834,15 @@ impl AiView {
                 })
                 .into_any_element(),
             Entry::Tool(t) => {
+                // The whole command (or input) to copy, shown on hover.
+                let copy_key: SharedString = format!("copy-tool-{i}").into();
+                let copied = self.copied.as_ref().is_some_and(|(k, _)| *k == copy_key);
+                let copy = (!t.detail.is_empty()).then(|| {
+                    self.copy_button(copy_key, ClipboardItem::new_string(t.detail.clone()), &ui, cx)
+                        .flex_none()
+                        .when(!copied, |d| d.invisible().group_hover("tool-head", |s| s.visible()))
+                        .tooltip(menu::tooltip(if t.name == "Bash" { "Copy the command" } else { "Copy the input" }))
+                });
                 let open_file = t.file.clone().filter(|f| *self.file_exists.entry(PathBuf::from(f)).or_insert_with(|| std::path::Path::new(f).is_file()));
                 let (mark, color) = match (&t.result, t.error) {
                     (None, _) => ("○", ui.text_dim),
@@ -1820,6 +1852,7 @@ impl AiView {
                 let mut el = div().id(("tool", i)).flex().flex_col().text_size(px(12.0 * self.z())).child(
                     div()
                         .id(("tool-head", i))
+                        .group("tool-head")
                         .flex()
                         .items_center()
                         .gap_2()
@@ -1829,6 +1862,7 @@ impl AiView {
                         .on_click(toggle)
                         .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(mark))
                         .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_color(hsla(ui.text_dim)).child(t.summary.clone()))
+                        .children(copy)
                         // The file it read or changed, in its project tab.
                         .when_some(open_file, |d, file| {
                             d.child(
@@ -1858,19 +1892,17 @@ impl AiView {
                     el = el.child(div().pl(px(20.0)).child(thumbnails(i, &t.pictures, 120.0, &ui, self.z())));
                 }
                 if open {
+                    let parsed = self.entry_pieces(i);
+                    let mut j = 0;
                     if !t.detail.is_empty() {
-                        el = el.child(pre(&t.detail, &ui, &mono, None, self.z()));
+                        el = el.child(div().my_1().child(self.render_code(i, j, &parsed, &ui, &mono, cx)));
+                        j += 1;
                     }
                     if let Some(diff) = &t.diff {
                         el = el.child(diff_view(&diff.old, &diff.new, &ui, &mono, self.z()));
                     }
-                    if let Some(result) = &t.result {
-                        let lines: Vec<&str> = result.lines().collect();
-                        let mut shown = lines[..lines.len().min(RESULT_LINES)].join("\n");
-                        if lines.len() > RESULT_LINES {
-                            shown.push_str(&format!("\n… {} more lines", lines.len() - RESULT_LINES));
-                        }
-                        el = el.child(pre(&shown, &ui, &mono, t.error.then_some(ui.danger), self.z()));
+                    if j < parsed.pieces.len() {
+                        el = el.child(div().my_1().child(self.render_code(i, j, &parsed, &ui, &mono, cx)));
                     }
                 }
                 el.into_any_element()
