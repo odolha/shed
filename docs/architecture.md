@@ -379,6 +379,13 @@ out of it; that row, once painted, splices the next ones in (`show_from`),
 keeping the view where it was. Rows and entries map through `row` / `entry_at`;
 search, the prompt list and block jumps `reveal` an entry before scrolling to it.
 Drafts are `AiTab.drafts`, changed through `AiSettings` and saved with the bench.
+
+`list_sessions` links each session to the one it came from: the session holding
+the message its first message follows, else an older one holding its first
+prompt (Claude Code copies messages into a new file when it continues or forks
+one). Where in the parent it goes on (past every message both have) tells
+continued (at the parent's end) from branched (earlier); the list is a tree,
+each family by its most recent session.
 `shed-ai` has
 no UI and no processes; its tests replay recorded streams
 (`crates/shed-ai/tests/streams/`), and `crates/shed-app/tests/ai_tabs.rs` runs the

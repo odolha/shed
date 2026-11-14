@@ -2296,15 +2296,21 @@ impl AiView {
                 let id = s.id.clone();
                 let menu_id = s.id.clone();
                 let mut meta = vec![ago(s.modified)];
+                // Where it came from: the one above it, continued or branched off.
+                if s.parent.is_some() {
+                    meta.insert(0, if s.branched { format!("↳ branched after #{}", s.from) } else { "↳ continued".to_string() });
+                }
                 if let Some(b) = &s.branch {
                     meta.push(b.clone());
                 }
                 meta.push(format!("{} prompt{}", s.prompts, if s.prompts == 1 { "" } else { "s" }));
+                let indent = 8.0 + 14.0 * s.depth.min(4) as f32;
                 Some(
                     div()
                         .id(("session", n))
                         .h(px(44.0))
-                        .px_2()
+                        .pl(px(indent))
+                        .pr_2()
                         .flex()
                         .flex_col()
                         .justify_center()

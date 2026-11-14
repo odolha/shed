@@ -321,7 +321,11 @@ terminal of the bench.
   conversation to it, and the prompt whose turn is in view is marked.
 - **Sessions** are on the left, newest first, with Claude Code's own titles (else
   the first prompt), when they were last used, the Git branch and how many
-  prompts. Type to filter. Click one to show it and carry on with it; **New
+  prompts. A session that goes on from another is listed under it: **↳
+  continued** when Claude Code carried the conversation into a new session
+  (after a long one is compacted, say), **↳ branched after #29** when an earlier
+  message was edited and sent again from there (the session before the edit
+  stays as it was). Both keep the title. Type to filter. Click one to show it and carry on with it; **New
   Session** starts afresh. Right-click a session to continue it in a terminal
   (`claude --resume`), in Claude Code's own interface. The quick commands that the
   `> request` prompt makes are not saved as sessions, so they do not crowd the list.
