@@ -34,6 +34,10 @@ pub struct Transcript {
     last_uuid: Option<String>,
     /// The id of the record being applied.
     applying_uuid: Option<String>,
+    /// The session file being read (several make one conversation), and the
+    /// one the last message came from.
+    pub reading_session: Option<String>,
+    last_session: Option<String>,
     /// The time now (Unix seconds), set by whoever feeds live events; a
     /// saved session's records carry their own.
     pub clock: u64,
@@ -125,6 +129,9 @@ pub struct PromptMark {
     pub entry: usize,
     pub uuid: Option<String>,
     pub before: Option<String>,
+    /// The session file `before` is in, for a conversation read from several
+    /// (continued ones): going back to it resumes that one.
+    pub session: Option<String>,
 }
 
 impl Transcript {
@@ -164,7 +171,7 @@ impl Transcript {
     }
 
     fn mark_prompt(&mut self, entry: usize, uuid: Option<String>) {
-        self.prompts.push(PromptMark { entry, uuid: uuid.clone(), before: self.last_uuid.clone() });
+        self.prompts.push(PromptMark { entry, uuid: uuid.clone(), before: self.last_uuid.clone(), session: self.last_session.clone() });
         if uuid.is_some() {
             self.last_uuid = uuid;
         }
@@ -282,6 +289,7 @@ impl Transcript {
             && let Some(uuid) = self.applying_uuid.take()
         {
             self.last_uuid = Some(uuid);
+            self.last_session = self.reading_session.clone();
         }
         None
     }
@@ -701,7 +709,7 @@ mod tests {
         saved.apply(&json!({"type": "user", "uuid": "p1", "message": {"role": "user", "content": "hello"}}));
         saved.apply(&json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [{"type": "text", "text": "hi"}]}}));
         saved.apply(&json!({"type": "user", "uuid": "p2", "message": {"role": "user", "content": "again"}}));
-        assert_eq!(saved.prompt_mark(2).unwrap(), &PromptMark { entry: 2, uuid: Some("p2".into()), before: Some("a1".into()) });
+        assert_eq!(saved.prompt_mark(2).unwrap(), &PromptMark { entry: 2, uuid: Some("p2".into()), before: Some("a1".into()), session: None });
     }
 
     #[test]

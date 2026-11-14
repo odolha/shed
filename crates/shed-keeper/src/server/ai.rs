@@ -276,12 +276,26 @@ impl Keeper {
         // The session goes on from the message before (a new session that
         // starts as a copy); before the first message, a new one starts.
         rt.resume_at = mark.before.clone();
+        // A conversation read from several files: the message to go on from
+        // is in an earlier one, which is resumed instead.
+        let switch_to = mark.before.as_ref().and(mark.session.clone()).filter(|p| rt.transcript.status.session.as_ref() != Some(p));
+        if let Some(part) = &switch_to {
+            rt.transcript.status.session = Some(part.clone());
+        }
         if mark.before.is_none() {
             rt.transcript.status.session = None;
             if let Some(t) = st.tree.tab_mut(tab)
                 && let TabKind::Ai(ai) = &mut t.kind
             {
                 ai.session = None;
+            }
+            st.broadcast_tree();
+        }
+        if let Some(part) = switch_to {
+            if let Some(t) = st.tree.tab_mut(tab)
+                && let TabKind::Ai(ai) = &mut t.kind
+            {
+                ai.session = Some(part);
             }
             st.broadcast_tree();
         }

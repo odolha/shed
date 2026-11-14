@@ -77,6 +77,15 @@ fn default_model_name(m: &Model) -> String {
     m.description.split(" · ").next().filter(|s| !s.is_empty()).unwrap_or(&m.name).to_string()
 }
 
+/// A row of the sessions list.
+#[derive(Clone)]
+enum SessionRow {
+    /// A conversation, shown by its most recent file.
+    Conversation { tip: SessionInfo, root: String, parts: usize, open: bool },
+    /// One of its files, listed under it.
+    Part(SessionInfo),
+}
+
 /// After a model's name, Claude Code's choice of its 1M-token context.
 const LARGE_CONTEXT: &str = "[1m]";
 
@@ -130,6 +139,8 @@ pub struct AiView {
     /// Other files to go with the prompt: their paths are added to it.
     files: Vec<PathBuf>,
     sessions: Arc<Vec<SessionInfo>>,
+    /// Conversations whose files are listed under them.
+    open_families: HashSet<String>,
     sessions_task: Option<Task<()>>,
     filter: Entity<LineEditor>,
     sessions_scroll: UniformListScrollHandle,
@@ -294,6 +305,7 @@ impl AiView {
             previews: Vec::new(),
             files: Vec::new(),
             sessions: Arc::default(),
+            open_families: HashSet::new(),
             sessions_task: None,
             filter,
             sessions_scroll: UniformListScrollHandle::new(),
@@ -2289,22 +2301,35 @@ impl AiView {
         let ui = current_ui(cx);
         let accent = self.accent;
         let shown = self.shown_sessions(cx);
+        let z = self.z();
         range
             .filter_map(|n| {
-                let s = shown.get(n)?;
-                let current = self.ai.session.as_deref() == Some(&s.id);
+                let row = shown.get(n)?;
+                let (s, indent, toggle) = match row {
+                    SessionRow::Conversation { tip, root, parts, open } => (tip, 8.0, (*parts > 1).then(|| (root.clone(), *parts, *open))),
+                    SessionRow::Part(s) => (s, 22.0 + 14.0 * s.depth.min(4) as f32, None),
+                };
+                let current = match row {
+                    // The conversation's row stands for every file of it.
+                    SessionRow::Conversation { root, .. } => self.ai.session.as_ref().is_some_and(|id| self.family_of(id) == Some(root.as_str())),
+                    SessionRow::Part(s) => self.ai.session.as_deref() == Some(&s.id),
+                };
                 let id = s.id.clone();
                 let menu_id = s.id.clone();
                 let mut meta = vec![ago(s.modified)];
-                // Where it came from: the one above it, continued or branched off.
-                if s.parent.is_some() {
-                    meta.insert(0, if s.branched { format!("↳ branched after #{}", s.from) } else { "↳ continued".to_string() });
+                match row {
+                    SessionRow::Part(p) if p.parent.is_some() => meta.insert(0, if p.branched { format!("↳ branched after #{}", p.from) } else { "↳ continued".to_string() }),
+                    SessionRow::Part(_) => meta.insert(0, "first".to_string()),
+                    SessionRow::Conversation { .. } => {}
                 }
                 if let Some(b) = &s.branch {
                     meta.push(b.clone());
                 }
-                meta.push(format!("{} prompt{}", s.prompts, if s.prompts == 1 { "" } else { "s" }));
-                let indent = 8.0 + 14.0 * s.depth.min(4) as f32;
+                let prompts = if matches!(row, SessionRow::Conversation { .. }) { s.whole.max(s.prompts) } else { s.prompts };
+                meta.push(format!("{prompts} prompt{}", if prompts == 1 { "" } else { "s" }));
+                if let Some((_, parts, _)) = &toggle {
+                    meta.push(format!("{parts} parts"));
+                }
                 Some(
                     div()
                         .id(("session", n))
@@ -2312,8 +2337,8 @@ impl AiView {
                         .pl(px(indent))
                         .pr_2()
                         .flex()
-                        .flex_col()
-                        .justify_center()
+                        .items_center()
+                        .gap_1()
                         .rounded_sm()
                         .cursor_pointer()
                         .when(current, |d| d.bg(hsla_alpha(accent, 0.2)))
@@ -2323,12 +2348,55 @@ impl AiView {
                             let entries = this.session_menu(menu_id.clone());
                             this.open_menu(e.position, entries, cx);
                         }))
-                        .child(div().truncate().text_color(hsla(ui.text)).child(s.title.clone()))
-                        .child(div().truncate().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(meta.join(" · ")))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(div().truncate().text_color(hsla(ui.text)).child(s.title.clone()))
+                                .child(div().truncate().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(meta.join(" · "))),
+                        )
+                        // Its files, for who wants to see how it was split.
+                        .when_some(toggle, |d, (root, _, open)| {
+                            d.child(
+                                div()
+                                    .id(("session-parts", n))
+                                    .flex_none()
+                                    .px_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .text_color(hsla(ui.text_dim))
+                                    .hover(|s| s.bg(hsla(ui.divider)).text_color(hsla(ui.text)))
+                                    .tooltip(menu::tooltip("The session files it is made of"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        if !this.open_families.remove(&root) {
+                                            this.open_families.insert(root.clone());
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(if open { "▾" } else { "▸" }),
+                            )
+                        })
                         .into_any_element(),
                 )
             })
             .collect()
+    }
+
+    /// The first file of the conversation a session file belongs to.
+    fn family_of(&self, id: &str) -> Option<&str> {
+        let mut root = None;
+        for s in self.sessions.iter() {
+            if s.depth == 0 {
+                root = Some(s.id.as_str());
+            }
+            if s.id == id {
+                return root;
+            }
+        }
+        None
     }
 
     /// This session's prompts the filter lets through: (entry, number, text).
@@ -2387,9 +2455,36 @@ impl AiView {
             .collect()
     }
 
-    fn shown_sessions(&self, cx: &gpui::App) -> Vec<SessionInfo> {
+    /// The sessions list as drawn: a row per conversation (the session
+    /// files that go on from one another), and, opened, a row per file.
+    fn shown_sessions(&self, cx: &gpui::App) -> Vec<SessionRow> {
         let words: Vec<String> = self.filter.read(cx).text().split_whitespace().map(str::to_lowercase).collect();
-        self.sessions.iter().filter(|s| words.iter().all(|w| s.title.to_lowercase().contains(w))).cloned().collect()
+        let mut rows = Vec::new();
+        let mut family: Vec<SessionInfo> = Vec::new();
+        let flush = |family: &mut Vec<SessionInfo>, rows: &mut Vec<SessionRow>| {
+            let Some(root) = family.first() else { return };
+            let root = root.id.clone();
+            // The conversation goes on in its most recent file.
+            let Some(tip) = family.iter().max_by_key(|s| s.modified).cloned() else { return };
+            if !words.iter().all(|w| family.iter().any(|s| s.title.to_lowercase().contains(w))) {
+                family.clear();
+                return;
+            }
+            let open = family.len() > 1 && self.open_families.contains(&root);
+            let parts = std::mem::take(family);
+            rows.push(SessionRow::Conversation { tip, root, parts: parts.len(), open });
+            if open {
+                rows.extend(parts.into_iter().map(SessionRow::Part));
+            }
+        };
+        for s in self.sessions.iter() {
+            if s.depth == 0 {
+                flush(&mut family, &mut rows);
+            }
+            family.push(s.clone());
+        }
+        flush(&mut family, &mut rows);
+        rows
     }
 
     fn render_header(&self, ui: &UiColors, limits: Limits, cx: &mut Context<Self>) -> impl IntoElement {

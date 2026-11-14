@@ -385,7 +385,11 @@ the message its first message follows, else an older one holding its first
 prompt (Claude Code copies messages into a new file when it continues or forks
 one). Where in the parent it goes on (past every message both have) tells
 continued (at the parent's end) from branched (earlier); the list is a tree,
-each family by its most recent session.
+each family by its most recent session, and the window shows a family as one
+row. `load_session` reads a session with the files it goes on from, oldest
+first, each up to where it does, a message id once; `PromptMark.session` keeps
+which file the message before a prompt came from, and editing that prompt
+resumes that file.
 `shed-ai` has
 no UI and no processes; its tests replay recorded streams
 (`crates/shed-ai/tests/streams/`), and `crates/shed-app/tests/ai_tabs.rs` runs the

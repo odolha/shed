@@ -321,11 +321,12 @@ terminal of the bench.
   conversation to it, and the prompt whose turn is in view is marked.
 - **Sessions** are on the left, newest first, with Claude Code's own titles (else
   the first prompt), when they were last used, the Git branch and how many
-  prompts. A session that goes on from another is listed under it: **↳
-  continued** when Claude Code carried the conversation into a new session
-  (after a long one is compacted, say), **↳ branched after #29** when an earlier
-  message was edited and sent again from there (the session before the edit
-  stays as it was). Both keep the title. Type to filter. Click one to show it and carry on with it; **New
+  prompts. Claude Code sometimes carries a conversation on in a new session
+  file (after a long one is compacted, say), and editing an earlier message
+  branches one off; Shed lists such files as one conversation: one row, opening
+  the most recent, every prompt once, read back from all its files ("3 parts").
+  Its **▸** lists the files, each with **↳ continued** or **↳ branched after
+  #29**. Type to filter. Click one to show it and carry on with it; **New
   Session** starts afresh. Right-click a session to continue it in a terminal
   (`claude --resume`), in Claude Code's own interface. The quick commands that the
   `> request` prompt makes are not saved as sessions, so they do not crowd the list.

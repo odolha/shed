@@ -33,6 +33,9 @@ pub struct SessionInfo {
     pub branched: bool,
     /// How deep under its first ancestor it is listed.
     pub depth: usize,
+    /// The whole conversation's prompts, once each, with those of the
+    /// sessions it goes on from.
+    pub whole: usize,
 }
 
 /// What a session file says about where it comes from.
@@ -42,8 +45,9 @@ struct Lineage {
     started: String,
     /// The message its first message follows, in another file when continued.
     first_parent: Option<String>,
-    /// Every message id, with how many prompts were made up to it.
-    ids: std::collections::HashMap<String, usize>,
+    /// Every message id: its place among the file's messages, and how many
+    /// prompts were made up to it.
+    ids: std::collections::HashMap<String, (usize, usize)>,
     /// The prompts' message ids, in order.
     prompt_ids: Vec<String>,
 }
@@ -87,34 +91,76 @@ pub fn list_sessions(folder: &Path) -> Vec<SessionInfo> {
 /// message follows (continued), else the older one holding its first prompt
 /// (branched, with the prompts both have).
 fn link(found: Vec<(SessionInfo, Lineage)>) -> Vec<SessionInfo> {
-    let mut out = Vec::with_capacity(found.len());
-    for (i, (info, lin)) in found.iter().enumerate() {
-        let mut info = info.clone();
-        let others = || found.iter().enumerate().filter(move |(j, _)| *j != i).map(|(_, f)| f);
-        // Its parent holds the message its first one follows, or (an older
-        // one) its first prompt.
-        let parent = lin
-            .first_parent
-            .as_ref()
-            .and_then(|p| others().find(|(_, ol)| ol.ids.contains_key(p)))
-            .or_else(|| {
-                let first = lin.prompt_ids.first()?;
-                others().filter(|(_, ol)| ol.started < lin.started && ol.ids.contains_key(first)).max_by_key(|(_, ol)| lin.ids.keys().filter(|k| ol.ids.contains_key(*k)).count())
-            });
-        // Where in the parent it goes on: past every message they share, or
-        // after the one it follows. At the parent's end it continued it;
-        // earlier, it branched off (an earlier message edited).
-        if let Some((p, pl)) = parent {
-            let shared = lin.ids.keys().filter_map(|k| pl.ids.get(k)).copied().max();
-            let follows = lin.first_parent.as_ref().and_then(|f| pl.ids.get(f)).copied();
-            let at = shared.into_iter().chain(follows).max().unwrap_or(0);
-            info.parent = Some(p.id.clone());
-            info.from = at;
-            info.branched = at < p.prompts;
+    let parents = parents(&found);
+    let mut out: Vec<SessionInfo> = found
+        .iter()
+        .zip(&parents)
+        .map(|((info, _), p)| {
+            let mut info = info.clone();
+            if let Some(p) = p {
+                let parent = &found[p.parent].0;
+                info.parent = Some(parent.id.clone());
+                info.from = p.prompts;
+                info.branched = p.prompts < parent.prompts;
+            }
+            info
+        })
+        .collect();
+    // The whole conversation's prompts, once each: its own, and those of the
+    // sessions it goes on from, up to where it does.
+    for (i, info) in out.iter_mut().enumerate() {
+        let mut seen: std::collections::HashSet<&String> = found[i].1.prompt_ids.iter().collect();
+        let mut at = i;
+        let mut hops = 0;
+        while let Some(p) = &parents[at]
+            && hops < 64
+        {
+            let pl = &found[p.parent].1;
+            seen.extend(pl.prompt_ids.iter().filter(|id| pl.ids.get(*id).is_some_and(|(n, _)| *n <= p.cut)));
+            at = p.parent;
+            hops += 1;
         }
-        out.push(info);
+        info.whole = seen.len();
     }
     out
+}
+
+/// Where a session goes on from another.
+struct Joint {
+    /// Its index among the sessions read.
+    parent: usize,
+    /// The last of the parent's messages that is part of it (by place).
+    cut: usize,
+    /// How many of the parent's prompts come before it goes on.
+    prompts: usize,
+}
+
+/// Each session's parent: the one holding the message its first message
+/// follows, else an older one holding its first prompt; and where in it the
+/// session goes on (past every message both have).
+fn parents(found: &[(SessionInfo, Lineage)]) -> Vec<Option<Joint>> {
+    found
+        .iter()
+        .enumerate()
+        .map(|(i, (_, lin))| {
+            let others = || found.iter().enumerate().filter(move |(j, _)| *j != i);
+            let parent = lin
+                .first_parent
+                .as_ref()
+                .and_then(|p| others().find(|(_, (_, ol))| ol.ids.contains_key(p)))
+                .or_else(|| {
+                    let first = lin.prompt_ids.first()?;
+                    others()
+                        .filter(|(_, (_, ol))| ol.started < lin.started && ol.ids.contains_key(first))
+                        .max_by_key(|(_, (_, ol))| lin.ids.keys().filter(|k| ol.ids.contains_key(*k)).count())
+                })?;
+            let (j, (_, pl)) = parent;
+            let shared = lin.ids.keys().filter_map(|k| pl.ids.get(k)).copied();
+            let follows = lin.first_parent.as_ref().and_then(|f| pl.ids.get(f)).copied();
+            let (cut, prompts) = shared.chain(follows).max_by_key(|(n, _)| *n)?;
+            Some(Joint { parent: j, cut, prompts })
+        })
+        .collect()
 }
 
 /// Each session under the one it came from, the most recently changed
@@ -171,6 +217,7 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
     let mut branch = None;
     let mut prompts = 0;
     let mut lineage = Lineage::default();
+    let mut messages = 0;
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         // Messages (and only they) have ids: where each is, by prompt.
         if line.contains("\"uuid\"")
@@ -181,7 +228,8 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
                 lineage.started = rec.timestamp.unwrap_or_default();
                 lineage.first_parent = rec.parent;
             }
-            lineage.ids.insert(uuid, prompts);
+            lineage.ids.entry(uuid).or_insert((messages, prompts));
+            messages += 1;
         }
         // Most lines are neither: look before parsing.
         let is_title = line.contains("\"ai-title\"") || line.contains("\"summary\"");
@@ -204,7 +252,9 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
                 }
                 prompts += 1;
                 if let Some(uuid) = v.get("uuid").and_then(Value::as_str) {
-                    lineage.ids.insert(uuid.to_string(), prompts);
+                    if let Some(e) = lineage.ids.get_mut(uuid) {
+                        e.1 = prompts;
+                    }
                     lineage.prompt_ids.push(uuid.to_string());
                 }
                 if first_prompt.is_none() {
@@ -234,23 +284,70 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
 /// A saved session as a conversation; its prompts' pictures are kept in
 /// `picture_dir`, to show them.
 pub fn load_session(folder: &Path, id: &str, picture_dir: Option<std::path::PathBuf>) -> Option<Transcript> {
-    let path = sessions_dir(folder).join(format!("{id}.jsonl"));
-    let file = std::fs::File::open(path).ok()?;
+    load_from(&sessions_dir(folder), folder, id, picture_dir)
+}
+
+fn load_from(dir: &Path, folder: &Path, id: &str, picture_dir: Option<std::path::PathBuf>) -> Option<Transcript> {
+    if !dir.join(format!("{id}.jsonl")).is_file() {
+        return None;
+    }
     let mut t = Transcript::new(&folder.to_string_lossy());
     t.picture_dir = picture_dir;
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        if !(line.contains("\"user\"") || line.contains("\"assistant\"")) {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<Value>(&line) {
-            t.apply(&v);
+    // The sessions it goes on from first, each up to where it does; a
+    // message copied from one file to the next is read once.
+    let mut seen = std::collections::HashSet::new();
+    for (part, cut) in conversation(dir, id) {
+        let Ok(file) = std::fs::File::open(dir.join(format!("{part}.jsonl"))) else { continue };
+        t.reading_session = Some(part.clone());
+        // Messages counted as `read_info` counts them, so `cut` points the same.
+        let mut at = 0;
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if line.contains("\"uuid\"")
+                && let Ok(rec) = serde_json::from_str::<Record>(&line)
+                && let Some(uuid) = rec.uuid
+            {
+                if cut.is_some_and(|c| at > c) {
+                    break;
+                }
+                at += 1;
+                if !seen.insert(uuid) {
+                    continue;
+                }
+            }
+            if !(line.contains("\"user\"") || line.contains("\"assistant\"")) {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                t.apply(&v);
+            }
         }
     }
+    t.reading_session = None;
     t.status.session = Some(id.to_string());
     t.status.state = crate::State::Idle;
     t.status.since = None;
     Some(t)
 }
+
+/// The session files a conversation is read from, oldest first: each with
+/// the place of its last message that belongs (`None`: all, the last one).
+fn conversation(dir: &Path, id: &str) -> Vec<(String, Option<usize>)> {
+    let found: Vec<(SessionInfo, Lineage)> = std::fs::read_dir(dir)
+        .map(|d| d.filter_map(Result::ok).filter(|e| e.path().extension().is_some_and(|x| x == "jsonl")).filter_map(|e| read_info(&e.path())).collect())
+        .unwrap_or_default();
+    let parents = parents(&found);
+    let Some(mut at) = found.iter().position(|(s, _)| s.id == id) else { return vec![(id.to_string(), None)] };
+    let mut chain = vec![(id.to_string(), None)];
+    while let Some(p) = &parents[at]
+        && chain.len() < 64
+    {
+        chain.push((found[p.parent].0.id.clone(), Some(p.cut)));
+        at = p.parent;
+    }
+    chain.reverse();
+    chain
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -296,6 +393,18 @@ mod tests {
         assert_eq!((e.parent.as_deref(), e.from, e.branched), (Some("a"), 3, false), "copied, then went on from the end");
         assert_eq!(get("a").parent, None);
         assert_eq!(get("z").parent, None);
+        assert_eq!((get("b").whole, get("c").whole), (4, 2), "a conversation's prompts, once each");
+        // Read as one conversation: a's prompts, then b's, once each.
+        let t = load_from(d, Path::new("/tmp"), "b", None).unwrap();
+        let prompts: Vec<String> = t.entries.iter().filter_map(|e| if let crate::Entry::User { text, .. } = e { Some(text.clone()) } else { None }).collect();
+        assert_eq!(prompts, ["one", "two", "three", "four"]);
+        // Editing "four" goes back to a message of the first file: resumed from it.
+        let mark = t.prompts.iter().find(|m| m.uuid.as_deref() == Some("p4")).unwrap();
+        assert_eq!((mark.before.as_deref(), mark.session.as_deref()), (Some("r3"), Some("a")));
+        // A branch reads its own path only.
+        let t = load_from(d, Path::new("/tmp"), "c", None).unwrap();
+        let prompts: Vec<String> = t.entries.iter().filter_map(|e| if let crate::Entry::User { text, .. } = e { Some(text.clone()) } else { None }).collect();
+        assert_eq!(prompts, ["one", "two, changed"]);
         let tree = as_tree(linked);
         let order: Vec<(String, usize)> = tree.iter().map(|s| (s.id.clone(), s.depth)).collect();
         assert_eq!(order.len(), 4);
