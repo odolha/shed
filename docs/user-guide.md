@@ -424,8 +424,9 @@ terminal of the bench.
 - **Above**: the session's title. Your usage limits for the 5-hour window and
   the week are on the bench's tab bar, as small bars (green, amber from 70 %,
   red from 90 %; the last ones Claude Code reported, kept across restarts until
-  they reset, the tooltip saying how long ago when it was a while), each with the time
-  left until it resets written small beneath (`2h 14m left`; hover for more).
+  they reset, the tooltip saying how long ago when it was a while), each with its
+  name and how much is used above it and the time left until it resets written
+  small beneath (`2h 14m left`; hover for more).
   A thin line on each bar marks where a steady pace through the window would be
   now: past it, you are using it faster than that; when at that pace the limit
   would come before the reset, the time left turns amber and the tooltip says

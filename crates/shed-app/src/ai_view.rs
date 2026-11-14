@@ -3284,7 +3284,7 @@ pub fn limit_bars(limits: Limits, ui: &UiColors, palette: &shed_emu::Palette, z:
             let used = w.used.clamp(0.0, 1.0);
             let pct = (used * 100.0).round() as u32;
             let color = if pct >= 90 { ui.danger } else if pct >= 70 { amber } else { green };
-            let width = 64.0 * z;
+            let width = 68.0 * z;
             let pace = Pace::of(used, w.resets, unix_now(), length);
             let pace_text = match (pace.limit_in, pace.by_reset) {
                 (Some(secs), _) => format!("at this pace the limit comes in {} (before it resets)", short_span(secs)),
@@ -3302,20 +3302,28 @@ pub fn limit_bars(limits: Limits, ui: &UiColors, palette: &shed_emu::Palette, z:
                     until(w.resets),
                     if pace_text.is_empty() { "" } else { "\n" }
                 )))
-                .child(div().text_color(hsla(ui.text_dim)).child(label.to_string()))
-                // The bar, and how long until it resets, small beneath.
+                // What it is and how much is used above the bar, how long
+                // until it resets beneath: no wider than the bar.
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .items_center()
+                        .w(px(width))
                         .gap(px(1.0))
-                        .pt(px(3.0 * z))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .text_size(px(10.0 * z))
+                                .line_height(px(11.0 * z))
+                                .child(div().text_color(hsla(ui.text_dim)).child(label.to_string()))
+                                .child(div().text_color(hsla(if pct >= 70 { ui.ink(color) } else { ui.text_dim })).child(format!("{pct}%"))),
+                        )
                         .child(
                             div()
                                 .relative()
                                 .w(px(width))
-                                .h(px(6.0 * z))
+                                .h(px(5.0 * z))
                                 .rounded_full()
                                 .bg(hsla_alpha(ui.text_dim, 0.22))
                                 .child(div().h_full().w(px(width * used.max(0.02))).rounded_full().bg(hsla(color)))
@@ -3326,15 +3334,22 @@ pub fn limit_bars(limits: Limits, ui: &UiColors, palette: &shed_emu::Palette, z:
                                         .left(px((width * pace.elapsed - 1.0).max(0.0)))
                                         .top(px(-2.0 * z))
                                         .w(px(2.0))
-                                        .h(px(10.0 * z))
+                                        .h(px(9.0 * z))
                                         .rounded_sm()
                                         .bg(hsla_alpha(ui.text, 0.85)),
                                 ),
                         )
                         // Over the pace, the time left is in amber: the limit comes first.
-                        .child(div().text_size(px(9.5 * z)).line_height(px(11.0 * z)).text_color(hsla(if over { ui.ink(amber) } else { ui.text_dim })).child(time_left(w.resets))),
+                        .child(
+                            div()
+                                .flex()
+                                .justify_center()
+                                .text_size(px(9.5 * z))
+                                .line_height(px(11.0 * z))
+                                .text_color(hsla(if over { ui.ink(amber) } else { ui.text_dim }))
+                                .child(time_left(w.resets)),
+                        ),
                 )
-                .child(div().min_w(px(30.0 * z)).text_color(hsla(if pct >= 70 { ui.ink(color) } else { ui.text_dim })).child(format!("{pct}%")))
         })
     };
     Some(
