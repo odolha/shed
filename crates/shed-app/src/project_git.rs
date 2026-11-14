@@ -833,6 +833,8 @@ impl ProjectView {
         let _ = window;
         div()
             .size_full()
+            // Never past the panel, over the editor.
+            .overflow_hidden()
             .flex()
             .flex_col()
             .gap_1()
@@ -847,9 +849,11 @@ impl ProjectView {
             .when_some(git.error.clone(), |d, e| d.child(div().p_1().rounded_sm().bg(hsla_alpha(ui.danger, 0.15)).text_color(hsla(ui.text)).child(e)))
             .child(crate::scrollbar::with_bar(list, crate::scrollbar::Source::Handle(self.bars.git_files_scroll.clone()), &self.bars.git_files, ui).flex_1())
             .child(div().rounded_md().border_1().border_color(hsla(ui.divider)).bg(hsla(ui.tab_active)).child(git.message.clone()))
+            // In a narrow panel the buttons go onto a row of their own.
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_2()
                     .child(
