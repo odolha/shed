@@ -2401,18 +2401,29 @@ impl AiView {
         let palette = &self.settings.palette;
         let (green, amber) = (palette.ansi[2], palette.ansi[3]);
         let z = self.z();
-        let window = |id: &'static str, label: &str, w: Option<shed_ai::Window>| {
+        let window = |id: &'static str, label: &str, length: u64, w: Option<shed_ai::Window>| {
             w.map(|w| {
                 let used = w.used.clamp(0.0, 1.0);
                 let pct = (used * 100.0).round() as u32;
                 let color = if pct >= 90 { ui.danger } else if pct >= 70 { amber } else { green };
                 let width = 64.0 * z;
+                let pace = Pace::of(used, w.resets, unix_now(), length);
+                let pace_text = match (pace.limit_in, pace.by_reset) {
+                    (Some(secs), _) => format!("at this pace the limit comes in {} (before it resets)", short_span(secs)),
+                    (None, Some(end)) => format!("at this pace about {}% by the time it resets", (end * 100.0).round() as u32),
+                    _ => String::new(),
+                };
+                let over = pace.limit_in.is_some();
                 div()
                     .id(id)
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .tooltip(menu::tooltip_text(format!("{label}: {pct}% used · resets {}", until(w.resets))))
+                    .tooltip(menu::tooltip_text(format!(
+                        "{label}: {pct}% used · resets {}{}{pace_text}\nThe line on the bar: where a steady pace would be now",
+                        until(w.resets),
+                        if pace_text.is_empty() { "" } else { "\n" }
+                    )))
                     .child(div().text_color(hsla(ui.text_dim)).child(label.to_string()))
                     // The bar, and how long until it resets, small beneath.
                     .child(
@@ -2424,13 +2435,26 @@ impl AiView {
                             .pt(px(3.0 * z))
                             .child(
                                 div()
+                                    .relative()
                                     .w(px(width))
                                     .h(px(6.0 * z))
                                     .rounded_full()
                                     .bg(hsla_alpha(ui.text_dim, 0.22))
-                                    .child(div().h_full().w(px(width * used.max(0.02))).rounded_full().bg(hsla(color))),
+                                    .child(div().h_full().w(px(width * used.max(0.02))).rounded_full().bg(hsla(color)))
+                                    // Where a steady pace through the window would be now.
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left(px((width * pace.elapsed - 1.0).max(0.0)))
+                                            .top(px(-2.0 * z))
+                                            .w(px(2.0))
+                                            .h(px(10.0 * z))
+                                            .rounded_sm()
+                                            .bg(hsla_alpha(ui.text, 0.85)),
+                                    ),
                             )
-                            .child(div().text_size(px(9.5 * z)).line_height(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(time_left(w.resets))),
+                            // Over the pace, the time left is in amber: the limit comes first.
+                            .child(div().text_size(px(9.5 * z)).line_height(px(11.0 * z)).text_color(hsla(if over { ui.ink(amber) } else { ui.text_dim })).child(time_left(w.resets))),
                     )
                     .child(div().min_w(px(30.0 * z)).text_color(hsla(if pct >= 70 { ui.ink(color) } else { ui.text_dim })).child(format!("{pct}%")))
             })
@@ -2493,8 +2517,8 @@ impl AiView {
                             .gap_3()
                             .text_size(px(11.0 * self.z()))
                             .items_center()
-                            .children(window("limit-5h", "5 h", limits.five_hour))
-                            .children(window("limit-week", "week", limits.week))
+                            .children(window("limit-5h", "5 h", 5 * 3600, limits.five_hour))
+                            .children(window("limit-week", "week", 7 * 24 * 3600, limits.week))
                             .when(self.status.cost > 0.0, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("${:.2}", self.status.cost))))
                             .when(self.status.context > 0, |d| {
                                 let used = tokens(self.status.context);
@@ -3131,6 +3155,45 @@ fn until(secs: u64) -> String {
     }
 }
 
+/// How a usage window is going against a steady pace through it.
+#[derive(Debug, PartialEq)]
+struct Pace {
+    /// How much of the window has gone, 0 to 1: where a steady pace is now.
+    elapsed: f32,
+    /// At the pace so far, seconds until the limit, when that is before the reset.
+    limit_in: Option<u64>,
+    /// Otherwise, how much would be used by the reset (when it can be told).
+    by_reset: Option<f32>,
+}
+
+impl Pace {
+    fn of(used: f32, resets: u64, now: u64, length: u64) -> Pace {
+        let left = resets.saturating_sub(now).min(length);
+        let gone = length - left;
+        let elapsed = gone as f32 / length.max(1) as f32;
+        // Too early in the window to tell a pace.
+        if gone < length / 50 || used <= 0.0 {
+            return Pace { elapsed, limit_in: None, by_reset: None };
+        }
+        let rate = used / gone as f32;
+        let to_limit = ((1.0 - used).max(0.0) / rate) as u64;
+        if to_limit < left {
+            Pace { elapsed, limit_in: Some(to_limit), by_reset: None }
+        } else {
+            Pace { elapsed, limit_in: None, by_reset: Some(used + rate * left as f32) }
+        }
+    }
+}
+
+/// A span, short: `45m`, `3h 10m`, `2d 4h`.
+fn short_span(d: u64) -> String {
+    match d {
+        0..3600 => format!("{}m", d / 60),
+        3600..86400 => format!("{}h {}m", d / 3600, d % 3600 / 60),
+        _ => format!("{}d {}h", d / 86400, d % 86400 / 3600),
+    }
+}
+
 /// Time left until `secs`, short: `2h 14m left`, `3d 4h left`.
 fn time_left(secs: u64) -> String {
     let d = secs.saturating_sub(unix_now());
@@ -3181,6 +3244,22 @@ mod tests {
     /// GPUI lays out text in a block as its paragraph, leaving the text's
     /// own layout empty; in a flex box the text has one, and the mouse can
     /// be mapped to a character (what selecting needs).
+    #[test]
+    fn usage_against_a_steady_pace() {
+        let week = 7 * 24 * 3600;
+        let now = 1_000_000;
+        // Two days in, 40% used: the limit comes in 3 days, 2 before the reset.
+        let p = Pace::of(0.4, now + 5 * 86400, now, week);
+        assert!((p.elapsed - 2.0 / 7.0).abs() < 0.001);
+        assert_eq!(p.limit_in, Some(3 * 86400));
+        // Two days in, 20%: on pace for 70% by the reset.
+        let p = Pace::of(0.2, now + 5 * 86400, now, week);
+        assert_eq!(p.limit_in, None);
+        assert!((p.by_reset.unwrap() - 0.7).abs() < 0.001);
+        // Just reset: too early to tell.
+        assert_eq!(Pace::of(0.01, now + week, now, week), Pace { elapsed: 0.0, limit_in: None, by_reset: None });
+    }
+
     #[test]
     fn token_counts_are_short() {
         assert_eq!((tokens(84_312), tokens(200_000), tokens(1_000_000), tokens(1_500_000)), ("84k".into(), "200k".into(), "1M".into(), "1.5M".into()));

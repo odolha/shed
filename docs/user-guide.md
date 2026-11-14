@@ -417,7 +417,11 @@ terminal of the bench.
   reach Shed.)
 - **Above**: the session's title, your usage limits for the 5-hour window and the
   week as small bars (green, amber from 70 %, red from 90 %), each with the time
-  left until it resets written small beneath (`2h 14m left`; hover for more),
+  left until it resets written small beneath (`2h 14m left`; hover for more).
+  A thin line on each bar marks where a steady pace through the window would be
+  now: past it, you are using it faster than that; when at that pace the limit
+  would come before the reset, the time left turns amber and the tooltip says
+  when (otherwise, how much you would have used by the reset),
   what the session has cost, and how full its
   context is ("84k / 1M context": used, and the window Claude Code reports for
   the model). **Also works in** lists the bench's other projects: click one to
