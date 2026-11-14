@@ -118,6 +118,8 @@ fn tokens(n: u64) -> String {
 }
 
 #[cfg(test)]
+pub static BARS_DRAWN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
 static RENDERED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// How many entries a conversation shows at first, and brings in at a time
@@ -3275,6 +3277,8 @@ pub fn limit_bars(limits: Limits, ui: &UiColors, palette: &shed_emu::Palette, z:
     if limits.five_hour.is_none() && limits.week.is_none() {
         return None;
     }
+    #[cfg(test)]
+    BARS_DRAWN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (green, amber) = (palette.ansi[2], palette.ansi[3]);
     // Reported a while ago (Claude Code has not run since): said in the tooltips.
     let age = unix_now().saturating_sub(limits.seen);
@@ -3437,6 +3441,31 @@ mod tests {
         assert!((p.by_reset.unwrap() - 0.7).abs() < 0.001);
         // Just reset: too early to tell.
         assert_eq!(Pace::of(0.01, now + week, now, week), Pace { elapsed: 0.0, limit_in: None, by_reset: None });
+    }
+
+    struct Bars(Limits, std::rc::Rc<std::cell::Cell<gpui::Size<gpui::Pixels>>>);
+    impl Render for Bars {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let seen = self.1.clone();
+            let bars = limit_bars(self.0, &UiColors::default(), &shed_emu::Palette::default(), 1.0).expect("bars");
+            div().flex().child(div().flex().child(bars).child(gpui::canvas(move |b, _, _| seen.set(b.size), |_, _, _, _| {}).absolute().size_full()))
+        }
+    }
+
+    #[gpui::test]
+    fn limit_bars_take_room(cx: &mut gpui::TestAppContext) {
+        let now = unix_now();
+        let limits = Limits {
+            five_hour: Some(shed_ai::Window { used: 0.37, resets: now + 2 * 3600 }),
+            week: Some(shed_ai::Window { used: 0.48, resets: now + 3 * 86400 }),
+            seen: now - 60,
+        };
+        let size = std::rc::Rc::new(std::cell::Cell::new(gpui::Size::default()));
+        let seen = size.clone();
+        let (_, cx) = cx.add_window_view(|_, _| Bars(limits, seen));
+        cx.run_until_parked();
+        println!("bars: {:?}", size.get());
+        assert!(size.get().width > px(100.0) && size.get().height > px(10.0), "{:?}", size.get());
     }
 
     #[test]

@@ -177,9 +177,8 @@ impl AppState {
             }
             Frame::Keeper(KeeperMsg::AiLimits(limits)) => {
                 cx.set_global(AiLimits(limits));
-                for view in self.ai_views.values() {
-                    view.update(cx, |_, cx| cx.notify());
-                }
+                // Bench windows draw them on their tab bar (they follow this state).
+                cx.notify();
             }
             Frame::Client(_) | Frame::Input { .. } => warn!("unexpected frame from keeper"),
         }
@@ -1040,6 +1039,43 @@ fn release_freed_memory() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn usage_limits_show_on_a_bench_with_an_ai_tab(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering::Relaxed;
+        cx.update(|cx| cx.set_global(crate::prompt::CurrentUi(crate::theme::UiColors::default())));
+        let state = cx.new(|_| AppState::new(KeeperConn::detached(), Settings::default()));
+        let ai = shed_model::Tab::ai("/tmp".into());
+        let bench = shed_model::Bench {
+            id: BenchId::new(),
+            name: "work".into(),
+            color: shed_model::BenchColor::Blue,
+            badge: None,
+            cwd: "/".into(),
+            active_tab: ai.id,
+            tabs: vec![ai],
+            aliases: Default::default(),
+            closing: false,
+            started: false,
+            launcher: "work".into(),
+            window: None,
+            links: Vec::new(),
+        };
+        let id = bench.id;
+        let tree = Shed { benches: vec![bench], ..Default::default() };
+        state.update(cx, |s, cx| s.handle(Frame::Keeper(KeeperMsg::TreeChanged(tree)), cx));
+        let tracker = crate::window_place::PlaceTracker::new(Some(id), KeeperConn::detached(), gpui::WindowBounds::Windowed(gpui::Bounds::default()), None);
+        let st = state.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| crate::bench_window::BenchWindow::new(id, st, tracker, window, cx));
+        cx.run_until_parked();
+        let before = crate::ai_view::BARS_DRAWN.load(Relaxed);
+        // The keeper passes on what Claude Code reported.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let limits = shed_ai::Limits { five_hour: Some(shed_ai::Window { used: 0.37, resets: now + 3600 }), week: None, seen: now };
+        state.update(cx, |s, cx| s.handle(Frame::Keeper(KeeperMsg::AiLimits(limits)), cx));
+        cx.run_until_parked();
+        assert!(crate::ai_view::BARS_DRAWN.load(Relaxed) > before, "the bench window drew the limits");
+    }
 
     #[test]
     fn a_project_holds_its_files_through_links() {
