@@ -57,6 +57,11 @@ cargo clippy --all-targets
   It applies to the process that owns the windows, so use a separate
   `SHED_RUNTIME_DIR`. Per-process GPU time is in `/proc/<pid>/fdinfo/*`
   (`drm-engine-render`).
+- An AI tab's frame cost with a long conversation, headless (no window):
+  `SHED_PERF_SESSION=<folder>:<session id> cargo test --release -p shed-app --bins
+  perf_long -- --ignored --nocapture` loads that Claude Code session and prints
+  the time per frame (a full redraw, a hover in one entry, a change to the
+  conversation) and how many entries each frame draws.
 
 ## Rules worth knowing
 

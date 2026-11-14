@@ -373,6 +373,13 @@ and Claude Code's `[Image: original …]` notes that follow them, sent as user
 messages, are not shown as prompts. The keeper deletes pictures there unseen for
 60 days (`prune_pictures`, by modification time, which `keep_picture` renews).
 
+Each entry the conversation list draws is an `EntryView` of its own (it asks
+the `AiView` to draw it, and follows the `AiView`'s notifications), so its layout
+is kept apart and a hover change inside one entry notifies that entry's view.
+GPUI still marks the `AiView` dirty as its ancestor, and the entry views read
+it, so they are all drawn again; moving the conversation's state into a model
+of its own would let the others be reused.
+
 The window's conversation list starts at `AiView::first` (the last
 `SHOWN_AT_FIRST` entries), with one row above the entries while earlier ones are
 out of it; that row, once painted, splices the next ones in (`show_from`),

@@ -77,6 +77,25 @@ fn default_model_name(m: &Model) -> String {
     m.description.split(" · ").next().filter(|s| !s.is_empty()).unwrap_or(&m.name).to_string()
 }
 
+/// One entry of the conversation, drawn by the AI view, in a view of its own:
+/// a hover change inside it (a step's line, a copy button) draws it alone,
+/// while every other entry is kept as it was.
+pub struct EntryView {
+    ai: gpui::WeakEntity<AiView>,
+    entry: usize,
+    _follow: Subscription,
+}
+
+impl Render for EntryView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let i = self.entry;
+        match self.ai.upgrade() {
+            Some(ai) => ai.update(cx, |ai, cx| ai.render_entry(i, cx)),
+            None => div().into_any_element(),
+        }
+    }
+}
+
 /// A row of the sessions list.
 #[derive(Clone)]
 enum SessionRow {
@@ -97,6 +116,9 @@ fn tokens(n: u64) -> String {
         _ => format!("{}k", n / 1000),
     }
 }
+
+#[cfg(test)]
+static RENDERED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// How many entries a conversation shows at first, and brings in at a time
 /// scrolling up: a long one opens as fast as a short one.
@@ -141,6 +163,9 @@ pub struct AiView {
     sessions: Arc<Vec<SessionInfo>>,
     /// Conversations whose files are listed under them.
     open_families: HashSet<String>,
+    /// A view per entry drawn, so a hover change inside one redraws only it
+    /// (the others are kept as they were drawn); each follows this view.
+    entry_views: HashMap<usize, Entity<EntryView>>,
     sessions_task: Option<Task<()>>,
     filter: Entity<LineEditor>,
     sessions_scroll: UniformListScrollHandle,
@@ -306,6 +331,7 @@ impl AiView {
             files: Vec::new(),
             sessions: Arc::default(),
             open_families: HashSet::new(),
+            entry_views: HashMap::new(),
             sessions_task: None,
             filter,
             sessions_scroll: UniformListScrollHandle::new(),
@@ -2028,6 +2054,8 @@ impl AiView {
     }
 
     fn render_entry(&mut self, i: usize, cx: &mut Context<Self>) -> AnyElement {
+        #[cfg(test)]
+        RENDERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ui = current_ui(cx);
         let accent = self.accent;
         let mono = self.settings.font.family.clone();
@@ -2383,6 +2411,26 @@ impl AiView {
                 )
             })
             .collect()
+    }
+
+    /// The view that draws entry `i`, made the first time it is drawn.
+    fn entry_view(&mut self, i: usize, cx: &mut Context<Self>) -> Entity<EntryView> {
+        if self.entry_views.len() > self.entries.len() {
+            let n = self.entries.len();
+            self.entry_views.retain(|k, _| *k < n);
+        }
+        let ai = cx.entity();
+        self.entry_views
+            .entry(i)
+            .or_insert_with(|| {
+                cx.new(|cx| EntryView {
+                    ai: ai.downgrade(),
+                    entry: i,
+                    // Whatever changes in the conversation draws it again.
+                    _follow: cx.observe(&ai, |_, _, cx| cx.notify()),
+                })
+            })
+            .clone()
     }
 
     /// The first file of the conversation a session file belongs to.
@@ -3041,7 +3089,7 @@ impl Render for AiView {
                 list(
                     self.list.clone(),
                     cx.processor(|this, row, _, cx| match this.entry_at(row) {
-                        Some(i) => this.render_entry(i, cx),
+                        Some(i) => this.entry_view(i, cx).into_any_element(),
                         None => this.render_earlier(cx),
                     }),
                 )
@@ -3364,6 +3412,71 @@ mod tests {
     #[test]
     fn token_counts_are_short() {
         assert_eq!((tokens(84_312), tokens(200_000), tokens(1_000_000), tokens(1_500_000)), ("84k".into(), "200k".into(), "1M".into(), "1.5M".into()));
+    }
+
+    /// Frame time with a long real conversation (measurement, not a check):
+    /// SHED_PERF_SESSION=<folder>:<id> cargo test -p shed-app --bins perf_long -- --ignored --nocapture
+    #[gpui::test]
+    #[ignore]
+    fn perf_long_conversation(cx: &mut gpui::TestAppContext) {
+        let spec = std::env::var("SHED_PERF_SESSION").expect("SHED_PERF_SESSION=<folder>:<id>");
+        let (folder, id) = spec.rsplit_once(':').unwrap();
+        let t = shed_ai::load_session(std::path::Path::new(folder), id, None).unwrap();
+        let entries = t.entries.clone();
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let ai = shed_model::AiTab { folder: folder.into(), ..Default::default() };
+            AiView::new(BenchId::new(), TabId::new(), ai, Rgb::hex(0xFF8A57), crate::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default(), cx)
+        });
+        cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+        view.update(cx, |v, cx| v.update(0, entries, Status::default(), cx));
+        cx.run_until_parked();
+        let frame = |cx: &mut gpui::VisualTestContext, label: &str, n: u32| {
+            RENDERED.store(0, std::sync::atomic::Ordering::Relaxed);
+            let started = std::time::Instant::now();
+            for _ in 0..n {
+                cx.update(|window, _| window.refresh());
+                cx.run_until_parked();
+            }
+            let rendered = RENDERED.load(std::sync::atomic::Ordering::Relaxed) as u32 / n;
+            println!("{label}: {:?} per frame, {rendered} entries drawn per frame", started.elapsed() / n);
+        };
+        frame(cx, "first frames", 3);
+        frame(cx, "steady", 30);
+        let all = view.update(cx, |v, _| v.entries.clone());
+        view.update(cx, |v, cx| v.update(0, Vec::new(), Status::default(), cx));
+        frame(cx, "empty conversation", 30);
+        view.update(cx, |v, cx| v.update(0, all, Status::default(), cx));
+        frame(cx, "back (first)", 3);
+        frame(cx, "back (steady)", 30);
+        // What a hover does: one entry's view notified; and a change to the
+        // conversation: the AI view notified.
+        let timed = |cx: &mut gpui::VisualTestContext, label: &str, poke: &dyn Fn(&mut gpui::VisualTestContext)| {
+            RENDERED.store(0, std::sync::atomic::Ordering::Relaxed);
+            let started = std::time::Instant::now();
+            for _ in 0..30 {
+                poke(cx);
+                cx.run_until_parked();
+            }
+            println!("{label}: {:?} per frame, {} entries drawn per frame", started.elapsed() / 30, RENDERED.load(std::sync::atomic::Ordering::Relaxed) / 30);
+        };
+        let one = view.update(cx, |v, _| v.entry_views.iter().max_by_key(|(k, _)| **k).map(|(_, e)| e.clone())).unwrap();
+        timed(cx, "hover in one entry", &|cx| one.update(cx, |_, cx| cx.notify()));
+        timed(cx, "conversation changed", &|cx| view.update(cx, |_, cx| cx.notify()));
+        // Every step on screen opened.
+        view.update(cx, |v, _| {
+            for i in 0..v.entries.len() {
+                if matches!(v.entries[i], Entry::Tool(_)) {
+                    v.expanded.insert(i);
+                }
+            }
+            v.list.remeasure();
+        });
+        frame(cx, "steps opened (first)", 3);
+        frame(cx, "steps opened (steady)", 30);
     }
 
     #[gpui::test]

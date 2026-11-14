@@ -38,6 +38,13 @@ impl KeeperConn {
     pub fn send_msg(&self, msg: ClientMsg) {
         self.send(Frame::Client(msg));
     }
+
+    /// A connection to nothing: what is sent goes nowhere (for tests).
+    #[cfg(test)]
+    pub fn detached() -> KeeperConn {
+        let (tx, _rx) = mpsc::channel();
+        KeeperConn { tx, keeper_pid: None }
+    }
 }
 
 /// Connects to the keeper, starting `shedd` if its socket is missing or dead.
