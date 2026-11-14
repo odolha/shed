@@ -1032,29 +1032,27 @@ impl BenchWindow {
         // teardown when closed only if its startup ran.
         let has_startup = bench.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.startup.is_empty());
         let has_teardown = bench.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.teardown.is_empty());
-        let run = |id: &'static str, glyph: &'static str, label: &'static str, tip: &'static str| {
+        // A small icon like the bar's others, in the bench's colour; what it
+        // does in its tooltip.
+        let run = |id: &'static str, glyph: &'static str, tip: &'static str| {
             div()
                 .id(id)
                 .flex()
                 .items_center()
-                .gap_1()
                 .px_2()
                 .cursor_pointer()
-                .text_size(px(12.0 * s))
-                .text_color(hsla(ui.ink(accent)))
                 .hover(|st| st.bg(hsla(ui.tab_hover)))
                 .tooltip(menu::tooltip(tip))
-                .child(svg().path(icon(glyph)).size(px(14.0 * s)).text_color(hsla(ui.ink(accent))))
-                .child(label)
+                .child(svg().path(icon(glyph)).size(px(16.0 * s)).text_color(hsla(ui.ink(accent))))
         };
         let lifecycle = if bench.closing {
             None
         } else if has_startup && !bench.started {
-            Some(run("run-startup", "go", "Run Startup", "Run each pane's startup now; closing then runs the teardown").on_click(cx.listener(|this, _, _, cx| {
+            Some(run("run-startup", "go", "Run Startup: each pane's startup now; closing then runs the teardown").on_click(cx.listener(|this, _, _, cx| {
                 this.send(ClientMsg::RunStartup { bench: this.bench }, cx);
             })))
         } else if bench.started && has_teardown {
-            Some(run("run-teardown", "stop", "Run Teardown", "Stop what runs and run each pane's teardown; the bench stays open").on_click(cx.listener(|this, _, _, cx| {
+            Some(run("run-teardown", "stop", "Run Teardown: stop what runs and run each pane's teardown; the bench stays open").on_click(cx.listener(|this, _, _, cx| {
                 this.send(ClientMsg::RunTeardown { bench: this.bench }, cx);
             })))
         } else {

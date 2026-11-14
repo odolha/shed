@@ -517,9 +517,9 @@ window goes; its size and state are still kept.)
 **Opening** a closed bench rebuilds it: every tab and split, every pane in its
 folder with its old scrollback dimmed above the prompt under a "restored" line.
 That is all, by default: nothing runs, which is safer now that benches hold
-projects and AI sessions. **Run Startup** on the tab bar (shown when the bench has
-a startup that has not run) starts it whenever you like, without reopening;
-**Run Teardown** (shown once it ran) stops what runs and runs the teardown, the
+projects and AI sessions. **Run Startup** (the ▷ icon on the tab bar, shown when
+the bench has a startup that has not run) starts it whenever you like, without
+reopening; **Run Teardown** (the ■ icon, shown once it ran) stops what runs and runs the teardown, the
 bench staying open. Both are in the bench's menu too.
 
 Opened with its startup (**Open and Run Startup**, `shed load NAME --start`, or
