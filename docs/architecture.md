@@ -387,6 +387,11 @@ keeping the view where it was. Rows and entries map through `row` / `entry_at`;
 search, the prompt list and block jumps `reveal` an entry before scrolling to it.
 Drafts are `AiTab.drafts`, changed through `AiSettings` and saved with the bench.
 
+The usage limits come from Claude Code's `rate_limit_event`s; the keeper keeps
+the last ones (`state_dir/ai-limits.json`, with when they were reported), sends
+them to each window as it says hello, and drops a window once it has reset.
+Bench windows with an AI tab draw them (`ai_view::limit_bars`).
+
 `list_sessions` links each session to the one it came from: the session holding
 the message its first message follows, else an older one holding its first
 prompt (Claude Code copies messages into a new file when it continues or forks

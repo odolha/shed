@@ -167,6 +167,9 @@ pub struct Window {
 pub struct Limits {
     pub five_hour: Option<Window>,
     pub week: Option<Window>,
+    /// When Claude Code reported them, Unix seconds (0: not known).
+    #[serde(default)]
+    pub seen: u64,
 }
 
 /// A slash command or skill, for completion.
@@ -216,11 +219,20 @@ pub fn parse_initialize(reply: &serde_json::Value) -> (Vec<Command>, Vec<Model>)
 }
 
 /// The usage limits in a `rate_limit_event`.
+/// Limits read back later: a window that has reset since is not known any
+/// more (it started again from nothing), so it goes.
+pub fn still_current(mut limits: Limits, now: u64) -> Option<Limits> {
+    let keep = |w: Option<Window>| w.filter(|w| w.resets > now);
+    limits.five_hour = keep(limits.five_hour);
+    limits.week = keep(limits.week);
+    (limits.five_hour.is_some() || limits.week.is_some()).then_some(limits)
+}
+
 pub fn parse_limits(event: &serde_json::Value) -> Option<Limits> {
     let windows = event.get("rate_limit_info")?.get("unifiedWindows")?;
     let window = |k: &str| {
         let w = windows.get(k)?;
         Some(Window { used: w.get("utilization")?.as_f64()? as f32, resets: w.get("resetsAt").and_then(|r| r.as_u64()).unwrap_or(0) })
     };
-    Some(Limits { five_hour: window("five_hour"), week: window("seven_day") })
+    Some(Limits { five_hour: window("five_hour"), week: window("seven_day"), seen: 0 })
 }

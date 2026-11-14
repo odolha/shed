@@ -300,6 +300,7 @@ impl State {
 
 impl Keeper {
     pub fn new(cfg: KeeperConfig) -> Arc<Self> {
+        let limits_file = cfg.state_dir.join("ai-limits.json");
         let logbook = cfg.logbook.as_ref().and_then(|path| match Logbook::open(path) {
             Ok(book) => {
                 let (tx, rx) = std::sync::mpsc::channel::<NewEntry>();
@@ -340,7 +341,11 @@ impl Keeper {
                 shown: HashSet::new(),
                 dark: true,
                 ai: HashMap::new(),
-                ai_limits: None,
+                // The last ones Claude Code reported, while still current.
+                ai_limits: std::fs::read_to_string(&limits_file)
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<shed_ai::Limits>(&t).ok())
+                    .and_then(|l| shed_ai::still_current(l, ai::now())),
             }),
             shutdown: Notify::new(),
             stopping: AtomicBool::new(false),
@@ -577,6 +582,12 @@ impl Keeper {
                     version: PROTOCOL_VERSION,
                     keeper_pid: std::process::id(),
                 });
+                // Windows show the usage limits on benches with an AI tab.
+                if kind == ClientKind::Window
+                    && let Some(limits) = st.ai_limits.and_then(|l| shed_ai::still_current(l, ai::now()))
+                {
+                    st.send(client, KeeperMsg::AiLimits(limits));
+                }
             }
             ClientMsg::Attach { bench } => {
                 let mut st = self.lock();

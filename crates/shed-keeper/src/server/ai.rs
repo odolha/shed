@@ -108,7 +108,7 @@ impl AiRt {
     }
 }
 
-fn now() -> u64 {
+pub(super) fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
@@ -443,9 +443,15 @@ impl Keeper {
         }
         // Live events carry no time: they happened now.
         rt.transcript.clock = now();
-        if let Some(limits) = rt.transcript.apply(&v) {
+        if let Some(mut limits) = rt.transcript.apply(&v) {
+            limits.seen = now();
             st.ai_limits = Some(limits);
             st.send_windows(KeeperMsg::AiLimits(limits));
+            // Kept for after a restart, until a Claude Code reports again.
+            let file = self.cfg.state_dir.join("ai-limits.json");
+            if let Ok(text) = serde_json::to_string(&limits) {
+                let _ = shed_model::paths::write_whole(&file, text);
+            }
         }
         drop(st);
         self.ai_dirty.notify_one();

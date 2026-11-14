@@ -1019,7 +1019,9 @@ impl BenchWindow {
             div()
                 .id("tab-bar-end")
                 .flex_1()
-                .min_w(px(40.0))
+                // Never wider than what is left of the row: it never wraps
+                // onto a row of its own.
+                .min_w(px(0.0))
                 .h(tab_h)
                 .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
                     this.drop_hint = None;
@@ -1058,37 +1060,24 @@ impl BenchWindow {
         } else {
             None
         };
+        // Claude's usage limits, on benches that talk to it.
+        let limits = bench
+            .tabs
+            .iter()
+            .any(|t| t.ai_info().is_some())
+            .then(|| cx.try_global::<crate::ai_view::AiLimits>().map(|l| l.0))
+            .flatten()
+            .and_then(|l| crate::ai_view::limit_bars(l, ui, &self.state.read(cx).settings.palette, s));
+        // Setup is for terminal tabs: startup, teardown and aliases.
+        let terminal = bench.active_tab().is_some_and(|t| t.project_info().is_none() && t.ai_info().is_none());
         let controls = div()
             .flex()
             .flex_none()
             .h(row)
+            .children(limits.map(|l| l.px_2()))
             .children(lifecycle)
             .child(self.render_links(bench, cx))
-        .child(
-            div()
-                .id("hide-button")
-                .flex()
-                .items_center()
-                .px_2()
-                .cursor_pointer()
-                .hover(|s| s.bg(hsla(ui.tab_hover)))
-                .tooltip(menu::tooltip("Hide: close the window, keep the bench running"))
-                .on_click(cx.listener(|this, _, window, cx| this.hide(window, cx)))
-                .child(svg().path(icon("detach")).size(px(16.0 * s)).text_color(hsla(ui.text_dim))),
-        )
-        .child(
-            div()
-                .id("shed-button")
-                .flex()
-                .items_center()
-                .px_2()
-                .cursor_pointer()
-                .hover(|s| s.bg(hsla(ui.tab_hover)))
-                .tooltip(menu::tooltip("Show Shed: every bench"))
-                .on_click(cx.listener(|this, _, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))))
-                .child(svg().path(icon("shed")).size(px(16.0 * s)).text_color(hsla(ui.text_dim))),
-        )
-        .child(
+        .when(terminal || self.setup.is_some(), |d| d.child(
             div()
                 .id("setup-button")
                 .flex()
@@ -1100,7 +1089,7 @@ impl BenchWindow {
                 .tooltip(menu::tooltip("Setup: startup, teardown, aliases"))
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_setup(window, cx)))
                 .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if self.setup.is_some() { accent } else { ui.text_dim }))),
-        )
+        ))
             .child(self.render_bench_label(bench, cx));
         div()
             .id("tab-bar")

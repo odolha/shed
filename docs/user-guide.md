@@ -160,9 +160,10 @@ large it is drawn is a setting (**Tab bar size** in Settings).
 - **Right-click** a pane for copy, paste, split and close; a tab for rename, tags,
   setup, private, **Move to Bench** and close; the bench's name (right of the tab bar) for rename,
   badge, colours, Show Shed and Close Bench.
-- On the right of the tab bar: the bench's [links](#links), the **house** brings
-  Shed forward (or Super+Space), and the **rack** opens the Setup panel (or
-  Ctrl+Shift+S).
+- On the right of the tab bar: on a bench with an AI tab, Claude's usage
+  limits (see [AI tabs](#ai-tabs)); the bench's [links](#links); for a terminal
+  tab the **rack**, which opens the Setup panel (or Ctrl+Shift+S); and the
+  bench's name with its menu. Super+Space brings Shed forward.
 
 A new tab or pane opens in the folder of the one you were in. (Set
 `new_pane_dir = "bench"` to use the bench's folder instead.)
@@ -420,14 +421,16 @@ terminal of the bench.
   **Open**) brings the bench's window forward at that tab, opening the window if
   the bench was hidden. (On macOS the notification says it, but a click does not
   reach Shed.)
-- **Above**: the session's title, your usage limits for the 5-hour window and the
-  week as small bars (green, amber from 70 %, red from 90 %), each with the time
+- **Above**: the session's title. Your usage limits for the 5-hour window and
+  the week are on the bench's tab bar, as small bars (green, amber from 70 %,
+  red from 90 %; the last ones Claude Code reported, kept across restarts until
+  they reset, the tooltip saying how long ago when it was a while), each with the time
   left until it resets written small beneath (`2h 14m left`; hover for more).
   A thin line on each bar marks where a steady pace through the window would be
   now: past it, you are using it faster than that; when at that pace the limit
   would come before the reset, the time left turns amber and the tooltip says
-  when (otherwise, how much you would have used by the reset),
-  what the session has cost, and how full its
+  when (otherwise, how much you would have used by the reset). Beside the
+  title: what the session has cost, and how full its
   context is ("84k / 1M context": used, and the window Claude Code reports for
   the model). **Also works in** lists the bench's other projects: click one to
   let Claude read and change it too.
@@ -496,8 +499,8 @@ build beside `shed` as `shedd-x86_64-static` or `shedd-aarch64-static` (see
 
 **Hiding** a bench closes its window and nothing else. Its programs keep running,
 and opening it again shows every pane exactly as it is: the screen, the scrollback,
-even a full-screen editor mid-edit. Hide a bench with the **hide** button in its tab
-bar (beside the Shed button), from its name's menu, with Ctrl+Shift+H, or from Shed.
+even a full-screen editor mid-edit. Hide a bench from its name's menu, with
+Ctrl+Shift+H, or from Shed.
 
 **Closing** a bench saves it, then stops what runs in it: each pane gets Ctrl+C (and
 SIGTERM if that is not enough), then, if its startup ran since it opened, its

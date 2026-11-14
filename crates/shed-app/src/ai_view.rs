@@ -2535,7 +2535,7 @@ impl AiView {
         rows
     }
 
-    fn render_header(&self, ui: &UiColors, limits: Limits, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, ui: &UiColors, cx: &mut Context<Self>) -> impl IntoElement {
         let accent = self.accent;
         let folder = self.ai.folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let title = self
@@ -2545,69 +2545,6 @@ impl AiView {
             .and_then(|id| self.sessions.iter().find(|s| &s.id == id))
             .map(|s| s.title.clone())
             .unwrap_or_else(|| if self.ai.session.is_some() { "Session".into() } else { "New session".into() });
-        // Each limit as a small bar: green, amber from 70 %, red from 90 %;
-        // when it resets in its tooltip.
-        let palette = &self.settings.palette;
-        let (green, amber) = (palette.ansi[2], palette.ansi[3]);
-        let z = self.z();
-        let window = |id: &'static str, label: &str, length: u64, w: Option<shed_ai::Window>| {
-            w.map(|w| {
-                let used = w.used.clamp(0.0, 1.0);
-                let pct = (used * 100.0).round() as u32;
-                let color = if pct >= 90 { ui.danger } else if pct >= 70 { amber } else { green };
-                let width = 64.0 * z;
-                let pace = Pace::of(used, w.resets, unix_now(), length);
-                let pace_text = match (pace.limit_in, pace.by_reset) {
-                    (Some(secs), _) => format!("at this pace the limit comes in {} (before it resets)", short_span(secs)),
-                    (None, Some(end)) => format!("at this pace about {}% by the time it resets", (end * 100.0).round() as u32),
-                    _ => String::new(),
-                };
-                let over = pace.limit_in.is_some();
-                div()
-                    .id(id)
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .tooltip(menu::tooltip_text(format!(
-                        "{label}: {pct}% used · resets {}{}{pace_text}\nThe line on the bar: where a steady pace would be now",
-                        until(w.resets),
-                        if pace_text.is_empty() { "" } else { "\n" }
-                    )))
-                    .child(div().text_color(hsla(ui.text_dim)).child(label.to_string()))
-                    // The bar, and how long until it resets, small beneath.
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(1.0))
-                            .pt(px(3.0 * z))
-                            .child(
-                                div()
-                                    .relative()
-                                    .w(px(width))
-                                    .h(px(6.0 * z))
-                                    .rounded_full()
-                                    .bg(hsla_alpha(ui.text_dim, 0.22))
-                                    .child(div().h_full().w(px(width * used.max(0.02))).rounded_full().bg(hsla(color)))
-                                    // Where a steady pace through the window would be now.
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .left(px((width * pace.elapsed - 1.0).max(0.0)))
-                                            .top(px(-2.0 * z))
-                                            .w(px(2.0))
-                                            .h(px(10.0 * z))
-                                            .rounded_sm()
-                                            .bg(hsla_alpha(ui.text, 0.85)),
-                                    ),
-                            )
-                            // Over the pace, the time left is in amber: the limit comes first.
-                            .child(div().text_size(px(9.5 * z)).line_height(px(11.0 * z)).text_color(hsla(if over { ui.ink(amber) } else { ui.text_dim })).child(time_left(w.resets))),
-                    )
-                    .child(div().min_w(px(30.0 * z)).text_color(hsla(if pct >= 70 { ui.ink(color) } else { ui.text_dim })).child(format!("{pct}%")))
-            })
-        };
         let mut chips = div().flex().flex_wrap().items_center().gap_1().text_size(px(11.0 * self.z()));
         let others: Vec<PathBuf> = self.projects.iter().filter(|p| **p != self.ai.folder).cloned().collect();
         if !others.is_empty() {
@@ -2666,8 +2603,6 @@ impl AiView {
                             .gap_3()
                             .text_size(px(11.0 * self.z()))
                             .items_center()
-                            .children(window("limit-5h", "5 h", 5 * 3600, limits.five_hour))
-                            .children(window("limit-week", "week", 7 * 24 * 3600, limits.week))
                             .when(self.status.cost > 0.0, |d| d.child(div().text_color(hsla(ui.text_dim)).child(format!("${:.2}", self.status.cost))))
                             .when(self.status.context > 0, |d| {
                                 let used = tokens(self.status.context);
@@ -3030,7 +2965,6 @@ impl Render for AiView {
                 .unwrap_or_default();
             self.set_project_files(files);
         }
-        let limits = cx.try_global::<AiLimits>().map(|l| l.0).unwrap_or_default();
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
         let count = self.shown_sessions(cx).len();
         let sessions = if self.show_prompts {
@@ -3168,7 +3102,7 @@ impl Render for AiView {
                     .h_full()
                     .flex()
                     .flex_col()
-                    .child(self.render_header(&ui, limits, cx))
+                    .child(self.render_header(&ui, cx))
                     .child(if empty {
                         div()
                             .flex_1()
@@ -3332,6 +3266,87 @@ impl Pace {
             Pace { elapsed, limit_in: None, by_reset: Some(used + rate * left as f32) }
         }
     }
+}
+
+/// The account's usage limits as small bars, for a bench's top bar: green,
+/// amber from 70 %, red from 90 %; under each, the time left until it resets;
+/// a line where a steady pace would be. `None` when none is known.
+pub fn limit_bars(limits: Limits, ui: &UiColors, palette: &shed_emu::Palette, z: f32) -> Option<gpui::Div> {
+    if limits.five_hour.is_none() && limits.week.is_none() {
+        return None;
+    }
+    let (green, amber) = (palette.ansi[2], palette.ansi[3]);
+    // Reported a while ago (Claude Code has not run since): said in the tooltips.
+    let age = unix_now().saturating_sub(limits.seen);
+    let reported = if limits.seen > 0 && age >= 600 { format!("\nAs Claude Code last reported, {} ago", short_span(age)) } else { String::new() };
+        let window = |id: &'static str, label: &str, length: u64, w: Option<shed_ai::Window>| {
+        w.map(|w| {
+            let used = w.used.clamp(0.0, 1.0);
+            let pct = (used * 100.0).round() as u32;
+            let color = if pct >= 90 { ui.danger } else if pct >= 70 { amber } else { green };
+            let width = 64.0 * z;
+            let pace = Pace::of(used, w.resets, unix_now(), length);
+            let pace_text = match (pace.limit_in, pace.by_reset) {
+                (Some(secs), _) => format!("at this pace the limit comes in {} (before it resets)", short_span(secs)),
+                (None, Some(end)) => format!("at this pace about {}% by the time it resets", (end * 100.0).round() as u32),
+                _ => String::new(),
+            };
+            let over = pace.limit_in.is_some();
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .tooltip(menu::tooltip_text(format!(
+                    "{label}: {pct}% used · resets {}{}{pace_text}\nThe line on the bar: where a steady pace would be now{reported}",
+                    until(w.resets),
+                    if pace_text.is_empty() { "" } else { "\n" }
+                )))
+                .child(div().text_color(hsla(ui.text_dim)).child(label.to_string()))
+                // The bar, and how long until it resets, small beneath.
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(1.0))
+                        .pt(px(3.0 * z))
+                        .child(
+                            div()
+                                .relative()
+                                .w(px(width))
+                                .h(px(6.0 * z))
+                                .rounded_full()
+                                .bg(hsla_alpha(ui.text_dim, 0.22))
+                                .child(div().h_full().w(px(width * used.max(0.02))).rounded_full().bg(hsla(color)))
+                                // Where a steady pace through the window would be now.
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left(px((width * pace.elapsed - 1.0).max(0.0)))
+                                        .top(px(-2.0 * z))
+                                        .w(px(2.0))
+                                        .h(px(10.0 * z))
+                                        .rounded_sm()
+                                        .bg(hsla_alpha(ui.text, 0.85)),
+                                ),
+                        )
+                        // Over the pace, the time left is in amber: the limit comes first.
+                        .child(div().text_size(px(9.5 * z)).line_height(px(11.0 * z)).text_color(hsla(if over { ui.ink(amber) } else { ui.text_dim })).child(time_left(w.resets))),
+                )
+                .child(div().min_w(px(30.0 * z)).text_color(hsla(if pct >= 70 { ui.ink(color) } else { ui.text_dim })).child(format!("{pct}%")))
+        })
+    };
+    Some(
+        div()
+            .flex()
+            .flex_none()
+            .gap_3()
+            .items_center()
+            .text_size(px(11.0 * z))
+            .children(window("limit-5h", "5 h", 5 * 3600, limits.five_hour))
+            .children(window("limit-week", "week", 7 * 24 * 3600, limits.week)),
+    )
 }
 
 /// A span, short: `45m`, `3h 10m`, `2d 4h`.
