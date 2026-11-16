@@ -154,7 +154,8 @@ timer parks), wired in through
   controls set it on a hitbox, as `scrollbar.rs` does).
 - **Docs**: a visible change updates `docs/user-guide.md` (and screenshots); a
   change in how things work updates `docs/architecture.md`; build/test changes
-  update `docs/development.md`. Same commit as the code.
+  update `docs/development.md`. Same commit as the code. Something done from
+  `docs/roadmap.md` comes off it; `docs/history/` holds past plans, not updated.
 - **Commits**: a sentence-case summary of what changed for the user, no
   conventional-commit prefix; bullet details in the body.
 - **Platforms**: Linux and macOS (Windows via WSL may come later). OS-specific
