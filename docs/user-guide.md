@@ -1,8 +1,7 @@
 # Shed User Guide
 
 This guide walks through how Shed is meant to be used, from the first start to the
-settings file. Every screenshot comes from a demo setup (`tools/screenshots/`), so
-what you see is what Shed shows.
+settings file. Screenshots come from a demo setup (`tools/screenshots/`).
 
 - [The idea](#the-idea)
 - [The Shed window](#the-shed-window)
@@ -25,16 +24,27 @@ what you see is what Shed shows.
 
 ## The idea
 
-Shed has four kinds of things:
+Work on a project is spread over many things: terminals running its servers, its
+code and Git, AI sessions, shells on its servers, its pages in the browser. Shed
+puts them together, one **bench** per project or job, and keeps them running
+whether or not you are looking.
 
-- **Shed** itself: one window, with the Shed icon, that shows and manages everything.
-- **Benches**: one per project or job. A bench has its own window, colour and
-  taskbar icon, a default folder, and tabs.
-- **Tabs**, in a bench's window, and **panes**: a tab can be split into several
-  panes side by side or stacked, each with its own shell.
-- **The keeper** (`shedd`), a background process that holds every shell and
-  program. You never deal with it directly; it is why closing a window does not
-  stop anything.
+- **Shed** itself: one window, with the Shed icon, that shows and manages every
+  bench.
+- **Benches**: each has its own window, colour and taskbar icon, a default folder,
+  its links (web pages that go with its work), and tabs.
+- **Tabs**, in a bench's window, of four kinds, each with its icon:
+
+  | Kind | What it holds |
+  | --- | --- |
+  | **Terminal** | Shells, split into **panes** side by side or stacked, each with its own startup and teardown |
+  | **Project** | A folder of code: file tree, editor, search, Git |
+  | **AI** | Claude Code conversations, working in a folder of the bench |
+  | **Remote** | A shell on a server, kept there, so it outlives the bench |
+
+- **The keeper** (`shedd`), a background process that holds every shell, program
+  and Claude Code session. You never deal with it directly; it is why closing a
+  window does not stop anything.
 
 A bench is always in one of three states:
 
@@ -44,10 +54,15 @@ A bench is always in one of three states:
 | **Hidden** | Running, without a window | In Shed |
 | **Closed** | Saved, nothing running | In Shed |
 
+A bench is saved with everything needed to bring it back: its tabs and their
+layout, each pane's folder, scrollback and setup, the files open in its project
+tabs, its AI sessions with their drafts and queued messages, its links. Opening a
+closed bench brings that back **quietly**: shells in their folders, files and
+conversations as they were, and nothing started until you choose **Run Startup**.
+
 Closing **Shed** closes everything. Starting Shed again shows every bench closed,
-and nothing starts on its own: you open the benches you want, and each comes back
-as it was saved. (To have Shed reopen what was running instead, see
-[`auto_restore`](#settings-shedtoml).)
+and nothing starts on its own: you open the benches you want. (To have Shed reopen
+what was running instead, see [`auto_restore`](#settings-shedtoml).)
 
 ## The Shed window
 
@@ -334,7 +349,10 @@ terminal of the bench.
 - **The prompt** grows with what you type. Enter breaks the line; **Ctrl+Enter**
   (Cmd+Enter) or the send button sends. While Claude works, sending queues the
   message instead: queued messages show above the prompt (each with **Remove**)
-  and go one by one as turns end. **Draft** (or Ctrl+S) keeps the message for
+  and go one by one as turns end, whether the bench's window is open or not.
+  They are kept with the bench, so they wait across a restart; with Claude free
+  again, **Send Now** sends one. What you have written in the prompt is kept too,
+  and is there when the tab opens again. **Draft** (or Ctrl+S) keeps the message for
   later instead, with its files and pictures: **Drafts (N)** opens the list, and
   each draft has **Send** (queued if Claude is busy), **Edit** (back into the
   prompt) and **Delete…**. Drafts are kept with the bench, in no order. Typing `/` lists Claude Code's commands and
@@ -515,8 +533,10 @@ closed. The Shed window keeps its place too. (On Wayland the desktop decides whe
 window goes; its size and state are still kept.)
 
 **Opening** a closed bench rebuilds it: every tab and split, every pane in its
-folder with its old scrollback dimmed above the prompt under a "restored" line.
-That is all, by default: nothing runs, which is safer now that benches hold
+folder with its old scrollback dimmed above the prompt under a "restored" line;
+project tabs with the files they had open (and unsaved edits kept aside); AI tabs
+on their session, with their drafts, queued messages and unsent prompt; remote
+tabs joined to their shells on the server. That is all, by default: nothing runs, which is safer now that benches hold
 projects and AI sessions. **Run Startup** (the ▷ icon on the tab bar, shown when
 the bench has a startup that has not run) starts it whenever you like, without
 reopening; **Run Teardown** (the ■ icon, shown once it ran) stops what runs and runs the teardown, the
@@ -799,6 +819,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |
 | `shed stop` | Saves everything and stops the keeper, and every program in it |
+| `shed backup [list \| restore NAME]` | Backs up your setup now, lists the backups, or puts one back (see [Backups](#backups)) |
 | `shed init bash`, `shed init zsh` | Prints the shell integration, for a shell Shed did not start |
 
 ## Settings: shed.toml
@@ -808,7 +829,8 @@ font and its size (the size is for everything: terminals and code, AI
 conversations, project trees, menus and Shed's own windows; 14 is the usual),
 **Reset Everywhere** for zoom (every tab of every bench, open or closed, back to
 the usual size, to start alike everywhere), tab bar size, the Shed window's view, reopening benches at
-start, where new tabs open, taskbar badges and how often project tabs fetch. Each
+start, where new tabs open, taskbar badges, how often project tabs fetch, and
+the colour of each tag ([Tags](#tags-and-private-tabs)). Each
 change applies at once and is written to `shed.toml`, keeping the rest of the file
 as you wrote it (a value that does not fit is refused and said). **Open shed.toml**
 there opens the file for everything else.
@@ -907,6 +929,10 @@ change in Shed are in `~/.config/shed/shell-aliases.sh`.
 | Saved benches (`<name>.toml`, plain TOML you can edit) and their scrollback | `~/.local/share/shed/benches/` |
 | What ran when Shed last closed; the order of benches | `~/.local/share/shed/session.toml`, `order.toml` |
 | The logbook (SQLite), per-tab shell history, the keeper's log | `~/.local/state/shed/` |
+| Pictures from AI prompts and screenshots Claude read (60 days unseen); the last usage limits | `~/.local/state/shed/ai-pictures/`, `ai-limits.json` |
+| Claude Code's own sessions (Claude Code keeps them; AI tabs read them) | `~/.claude/projects/` |
+| Unsaved edits of open files, kept aside until saved | `~/.local/state/shed/recovery/` |
+| Browser extension and its native host | `~/.local/share/shed/browser-extension/`, `browser-host/` |
 | Launchers and icons for Shed and each bench (Linux) | `~/.local/share/applications/`, `~/.local/share/icons/` |
 | Backups of your setup | `~/.local/share/shed/backups/` |
 

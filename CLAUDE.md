@@ -2,11 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Shed is a GPU terminal for Linux (X11 and Wayland) and macOS, in Rust. A background keeper
-(`shedd`) owns every PTY; windows (`shed`) only draw. Work is grouped into
-**benches** (each with its own window, colour and dock icon), made of **tabs**
-made of **panes**. The Shed window itself is only the overview ("pegboard") of all
-benches. Read `docs/architecture.md` before larger changes; `docs/user-guide.md`
+Shed is a workbench for Linux (X11 and Wayland) and macOS, in Rust: per project a
+**bench** (its own window, colour and dock icon) whose **tabs** are terminals (split
+into **panes**), project folders (files, editor, search, Git), Claude Code
+conversations (AI tabs) or shells on servers (remote tabs). A background keeper
+(`shedd`) owns every PTY and Claude Code process; windows (`shed`) draw, and run a
+project tab's file and Git work themselves. The Shed window itself is only the
+overview ("pegboard") of all benches. Read `docs/architecture.md` before larger changes; `docs/user-guide.md`
 describes the product as users see it.
 
 ## Commands

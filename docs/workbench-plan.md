@@ -6,11 +6,15 @@ search and lightly edit, with Git), AI sessions, links to its web apps, and
 shells on remote servers that stay alive. It records what is feasible, the
 design choices and their reasons, and the order of work.
 
-Status: agreed 2026-11-11 (see [Decisions](#decisions)). The order may change;
-all of it is wanted in the end. Done: steps 1–9 and 11 (tab kinds, text core,
-files and editor, search, AI tabs, Git core, links with the extension, remote
-tabs, reviewing a turn's changes and notifications) and 10 (branches, history,
-blame, conflicts by marker and three ways). See the end for what is still open.
+Status: agreed 2026-11-11 (see [Decisions](#decisions)); **done** by 2026-11-16.
+Every step below is in place: tab kinds, the text core, files and the editor,
+search, AI tabs (native), Git (changes, commits, branches, history, blame,
+conflicts), links with the browser extension, remote tabs shared between PCs,
+reviewing a turn's changes, and notifications. Much grew beyond the plan along
+the way (drafts and a queue kept across restarts, sessions read whole across
+Claude Code's files, usage limits with a pace, tab groups, backups). This file
+now records how Shed got here and why; [Still open](#still-open) is what is left.
+The [User Guide](user-guide.md) describes it all as it is.
 
 ## The picture
 
@@ -323,7 +327,11 @@ Remote tabs (9) and links (8) depend on little else and can move earlier.
   Ours / Theirs / Both).
 - Blame in the editor's gutter (now: for the cursor's line, in the status bar).
 - The AI tab's prompt folding large pastes into a chip, and a prompt library.
-- Screenshots of the new tabs in the user guide.
+- Screenshots of the new tabs in the user guide (those there predate project,
+  AI and remote tabs; `tools/screenshots/take.sh` retakes them).
+- AI tab hover redraws: each entry has its own view, but they all read the
+  `AiView`, which GPUI marks dirty with any child; moving the conversation's
+  state into a model of its own would let a hover redraw one entry only.
 - A static `shedd` build for servers with an older C library (see Development).
 - A remote tab marked private still has its commands logged on the server.
 

@@ -1,15 +1,15 @@
 [Desktop Entry]
 Type=Application
 Name=Shed
-GenericName=Terminal
-Comment=A terminal whose shells outlive its windows
+GenericName=Workbench
+Comment=Terminals, code, Claude Code and servers, per project, kept running
 Exec=shed
 Icon=dev.shed
 StartupWMClass=dev.shed
 StartupNotify=false
 Terminal=false
 Categories=System;TerminalEmulator;
-Keywords=terminal;shell;prompt;command;console;bench;workspace;
+Keywords=terminal;shell;prompt;command;console;bench;workspace;editor;git;claude;ai;ssh;
 Actions=new-bench;
 
 [Desktop Action new-bench]

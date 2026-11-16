@@ -1,59 +1,69 @@
 # Shed
 
-A GPU-accelerated terminal for Linux whose shells outlive its windows, and which
-organises your work into **benches**: workspaces with their own window, colour and
-taskbar icon, saved with everything needed to bring them back.
+A workbench for each thing you work on: its terminals, its code, its Claude Code
+sessions, its servers and its web pages, in one window of its own, kept running
+by a background process and brought back, as it was, whenever you open it.
 
 ![The Shed window: every bench, open, hidden or closed, with live previews of its tabs](docs/images/shed.png)
 
 ## What it is
 
-Most terminals tie your shells to a window: close it, and everything running in it
-stops. Shed keeps every shell and program in a small background process, the
-**keeper**, so windows come and go while your dev servers, editors and SSH sessions
-keep running.
+Work on a project is spread over many things: a dev server and a shell or two, the
+code and its Git state, an AI session, a shell on a staging server, the app in the
+browser, the CI. Shed keeps them together as a **bench**: one per project or job,
+with its own window, colour and taskbar icon. A bench's tabs come in four kinds:
 
-On top of that, Shed groups your work the way you think about it:
+- **Terminal tabs**: a GPU terminal, split into panes, with each pane's startup
+  and teardown commands (`docker compose up -d`, `npm run dev`) and its history.
+- **Project tabs**: a folder of code, with a file tree, an editor, search across
+  files, and Git: changes by file or by hunk, commits and pushes (shown before
+  they go), branches, history, blame and conflicts.
+- **AI tabs**: [Claude Code](https://claude.com/claude-code) conversations with an
+  interface of their own: answers drawn from Markdown, each step on a line,
+  permissions and questions as cards, going back to an earlier message (files
+  included), drafts and a queue, and your usage limits with how fast you use them.
+- **Remote tabs**: a shell on a server, kept alive there by Shed, so it outlives
+  the bench, survives dropped connections, and can be joined from another PC.
 
-- **Benches** are workspaces, one per project or job. Each has its own window,
-  colour and taskbar icon, its tabs and split panes, its folder, and its own aliases.
-- **The Shed window** shows every bench and tab at a glance, with a live preview of
-  each, and is where you make, open, hide, close, rename and recolour them.
-- **Benches are saved** with their layout, folders and scrollback. Opening one brings
-  it back as it was: its startup commands run (`docker compose up -d`, `npm run
-  dev`), editors and watchers restart, and anything risky is typed but waits for
-  Enter. Closing one runs its teardown (`docker compose down`).
-- **The logbook** keeps every command you run, with its folder, exit status and
-  where it ran. Up walks this tab's history, Ctrl+Up the bench's, Ctrl+Shift+Up
-  everything; Ctrl+R searches it all.
+The bench's **links** (the app running locally, staging, dashboards) sit on its
+tab bar and bring forward the browser tab already showing them.
+
+Everything runs in a small background process, the **keeper**, so windows come and
+go while servers, editors, Claude Code and SSH sessions keep running. Closing a
+bench saves it (layout, folders, scrollback, open files, AI sessions, drafts) and
+runs its teardown; opening it brings it all back. **The Shed window** shows every
+bench and tab at a glance, and is where you make, open, hide and close them.
 
 ![A bench: a dev server and a shell side by side](docs/images/bench.png)
 
 ## Highlights
 
-- **Shells that outlive windows.** Close a bench's window and it keeps running,
-  hidden; open it again and every pane is exactly as you left it, screen and all.
-- **Workspaces you can reproduce.** Per pane: a folder to start in, startup
-  commands, and teardown commands, all editable in a Setup panel or by hand in a
-  plain TOML file.
-- **Distinct windows.** Sixteen bench colours (or any colour of your own), shown in
-  the tab bar, the focused pane's border and a taskbar icon per bench. Pin one to
-  your dock and it opens that bench.
-- **History across tabs and benches**, with prefix matching, a search overlay, tags
-  (`prod`, `staging`) and private tabs that keep their history to themselves.
-- **Aliases at four levels**, per tab, per bench, global and your shell's own,
-  all editable in Shed and picked up at the next prompt.
-- **Ask for a command.** Type `> start this project` and an AI (Claude Code by
-  default, or any command-line AI) looks at the folder and puts the command on
-  your prompt, for you to check and run.
-- **Light and dark**, following your desktop by default.
-- **Fast**: GPU rendering; on the machine it was measured on, it printed output
-  faster than GNOME Terminal and kitty. Kitty keyboard protocol, input methods,
-  find in scrollback, clickable links and paths, OSC 52 clipboard.
+- **Nothing stops when a window closes.** Hide a bench and it keeps running; open
+  it again and every pane, file and conversation is as you left it.
+- **Benches you can reproduce.** Per pane: a folder to start in, startup and
+  teardown commands, editable in a Setup panel or by hand in a plain TOML file.
+  Benches open quietly; **Run Startup** starts them when you want.
+- **Code without leaving the bench.** Files follow the disk as Claude or a build
+  changes them; paths in terminals and in Claude's answers open the file at its
+  line.
+- **Claude Code, made comfortable.** Select and copy anything, formatted; see the
+  screenshots it reads; keep drafts and queued messages across restarts; long
+  conversations open at once; sessions split over several files read as one.
+- **History across tabs and benches**: every command, with its folder, exit status
+  and where it ran. Up walks this tab's history, Ctrl+Up the bench's, Ctrl+Shift+Up
+  everything; Ctrl+R searches it all. Remote shells keep theirs on the server.
+- **Distinct benches.** Sixteen colours (or your own), a taskbar icon per bench,
+  tab groups, tags with colours set once for every tab.
+- **Safe with your setup.** A backup of your settings and benches every day, and
+  settings files always written whole.
+- **Fast**: GPU rendering, kitty keyboard protocol, input methods, find in
+  scrollback, clickable links and paths, OSC 52 clipboard. Light and dark,
+  following your desktop.
 
-Shed runs on Linux, under X11 or Wayland, with a Vulkan driver, and on macOS
-(new there: tried less). Its shell integration (logbook, history keys, aliases) is
-for bash and zsh.
+Shed runs on Linux, under X11 or Wayland, with a Vulkan driver, and on macOS (new
+there: tried less). Its shell integration (history, aliases) is for bash and zsh;
+AI tabs need Claude Code installed; remote tabs need Linux servers reachable over
+ssh.
 
 ## Install
 
@@ -99,16 +109,20 @@ running is the old one. Every bench is saved first.
 ## Getting started
 
 Run `shed`. The Shed window opens; make a bench with **New bench**, and it opens in a
-window of its own. From there:
+window of its own, with a terminal. Right-click the new-tab button for a **project
+tab** (a folder of code), an **AI tab** (Claude Code) or a **remote tab** (a shell
+on a server). From a terminal of the bench, `shed project` opens the repository
+you are in, and `shed ai` an AI tab working there.
 
 | Keys | |
 | --- | --- |
 | Ctrl+Shift+T / Ctrl+Shift+W | New tab / close pane |
 | Ctrl+Shift+E / Ctrl+Shift+O | Split right / split down |
+| Ctrl+P / Ctrl+Shift+F (project tab) | Open a file by name / search every file |
+| Ctrl+Enter / Ctrl+S (AI tab) | Send / keep as a draft |
 | Ctrl+Shift+S | Setup: startup, teardown and aliases |
 | Ctrl+R | Search the logbook |
 | Up / Ctrl+Up / Ctrl+Shift+Up | Walk this tab's / bench's / all history |
-| Ctrl+Shift+F | Find in scrollback |
 | Super+Space | Bring Shed forward |
 
 The [User Guide](docs/user-guide.md) walks through everything, with the full list
@@ -116,9 +130,11 @@ of keys, commands and settings.
 
 ## Documentation
 
-- [User Guide](docs/user-guide.md): how Shed is used, with screenshots.
+- [User Guide](docs/user-guide.md): how Shed is used.
 - [Architecture](docs/architecture.md): how it works inside.
 - [Development](docs/development.md): building, testing and working on Shed.
+- [The workbench plan](docs/workbench-plan.md): how Shed grew from a terminal into
+  this, the decisions taken, and what is still open.
 
 ## License
 

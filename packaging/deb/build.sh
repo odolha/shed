@@ -55,13 +55,15 @@ Recommends: bash, mesa-vulkan-drivers | vulkan-icd
 Conflicts: shed
 Section: x11
 Priority: optional
-Description: terminal whose shells outlive its windows
- Shed is a GPU-accelerated terminal for Linux. A small background process,
- the keeper, holds every shell and program, so closing a window does not
- stop them. Work is organised in benches: workspaces with their own window,
- colour and taskbar icon, saved with their layout, folders, startup and
- teardown commands, and brought back when opened. A logbook keeps every
- command, searchable per tab, per bench or everywhere.
+Description: workbench per project: terminals, code, Claude Code, servers
+ Shed keeps each project's work together as a bench, with its own window,
+ colour and taskbar icon: terminal tabs (a GPU terminal, split into panes),
+ project tabs (files, an editor, search and Git), AI tabs (Claude Code
+ conversations) and remote tabs (shells kept alive on servers). A small
+ background process, the keeper, holds every shell, program and AI session,
+ so closing a window does not stop them; benches are saved and brought back
+ as they were. A logbook keeps every command, searchable per tab, per bench
+ or everywhere.
 CONTROL
 
 dpkg-deb --root-owner-group --build "$stage" "$out" >/dev/null

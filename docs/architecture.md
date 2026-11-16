@@ -1,10 +1,11 @@
 # How Shed works
 
-This document describes Shed's moving parts: its two processes, how they talk, how a
-pane's screen survives windows coming and going, how benches are saved and brought
-back, and how the shell, the logbook and the desktop fit in. The
-[User Guide](user-guide.md) describes the product; [Development](development.md)
-covers building and testing.
+This document describes Shed's moving parts: its two processes and how they talk,
+how a pane's screen survives windows coming and going, the four kinds of tab
+(terminals, project folders, Claude Code conversations, remote shells), how benches
+are saved and brought back, and how the shell, the logbook, the browser and the
+desktop fit in. The [User Guide](user-guide.md) describes the product;
+[Development](development.md) covers building and testing.
 
 ## Two processes
 
@@ -12,21 +13,33 @@ covers building and testing.
 flowchart LR
     subgraph app["shed: the window process"]
         shedwin["Shed window<br/>(pegboard)"]
-        b1["bench window"]
-        b2["bench window"]
+        b1["bench window:<br/>terminal, project, AI, remote tabs"]
+        files["project tabs: files, editor,<br/>search, git (shed-project, shed-git)"]
     end
-    cli["shed load / list / alias …<br/>(short-lived)"]
+    cli["shed load / project / ai …<br/>(short-lived)"]
     subgraph keeper["shedd: the keeper"]
         tree["bench → tab → pane tree"]
         panes["one PTY + emulator per pane"]
-        store["saved benches, session"]
+        ai["one Claude Code per AI tab"]
+        store["saved benches, session, backups"]
         logbook["logbook writer"]
     end
     shells["bash, vim, dev servers …"]
+    claude["claude (stream-json)"]
+    remote["server: shedd holding<br/>remote shells"]
     app <-- "Unix socket" --> keeper
     cli <-- "Unix socket" --> keeper
     panes <-- "PTY" --> shells
+    ai <-- "stdin / stdout" --> claude
+    panes <-- "ssh, in a pane" --> remote
 ```
+
+Everything that must outlive a window lives in the keeper: shells and the programs
+in them, Claude Code sessions, the tree of benches and tabs, what is saved. The
+window process draws, and does the work of a project tab itself (reading files,
+watching the folder, running `git`), since none of it needs to run while the tab
+is not shown. A remote tab is a pane like any other whose program is
+`shed remote connect`, which reaches a keeper on the server over ssh.
 
 **`shedd`, the keeper**, holds everything that must outlive a window: every PTY and
 the program in it, the tree of benches, tabs and panes, and a terminal emulator per

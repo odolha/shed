@@ -43,7 +43,18 @@ cargo clippy --all-targets
 - `crates/shed-app/tests/` runs whole flows with real bash: the logbook, saving and
   loading, setup and teardown, aliases, closing Shed. `tests/zsh.rs` does the same
   with zsh when there is one (`zsh` on `PATH`, or `SHED_TEST_ZSH=/path/to/zsh`), and
-  is skipped otherwise.
+  is skipped otherwise. `ai_tabs.rs` and `ai_questions.rs` run AI tabs against a
+  stand-in `claude` (a script named by `SHED_CLAUDE` that answers the control
+  protocol and plays a recorded stream); `remote_tabs.rs` runs remote tabs against
+  a stand-in `ssh` (`SHED_SSH`) that runs the "server" locally, with its own
+  home.
+- `crates/shed-ai/tests/streams/` holds recorded Claude Code streams the
+  transcript tests replay; `shed-git`'s tests make throwaway repositories (and a
+  bare remote) with the real `git`.
+- Some window code is tested headless with GPUI's test platform
+  (`#[gpui::test]`): text layout and selection, scrollbars, the usage bars, a
+  bench window drawing the limits when they arrive. `KeeperConn::detached()`
+  stands in for the keeper there.
 
 ## Debugging
 

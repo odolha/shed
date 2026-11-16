@@ -158,7 +158,7 @@ impl Desktop {
             "[Desktop Entry]\n\
              Type=Application\n\
              Name=Shed\n\
-             Comment=A terminal whose shells outlive its windows\n\
+             Comment=Terminals, code, Claude Code and servers, per project, kept running\n\
              Exec={exe}\n\
              Icon={icon}\n\
              StartupWMClass={SHED_APP_ID}\n\
