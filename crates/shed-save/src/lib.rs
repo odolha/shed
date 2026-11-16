@@ -131,6 +131,12 @@ pub struct SavedAi {
     /// Messages kept to send later.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drafts: Vec<String>,
+    /// Messages waiting for Claude to be free.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued: Vec<shed_model::Queued>,
+    /// What was written in the prompt, not sent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unsent: String,
 }
 
 impl SavedAi {
@@ -144,6 +150,8 @@ impl SavedAi {
             effort: a.effort.clone(),
             follow: a.follow,
             drafts: a.drafts.clone(),
+            queued: a.queued.clone(),
+            unsent: a.unsent.clone(),
         }
     }
 
@@ -158,6 +166,8 @@ impl SavedAi {
             follow: self.follow,
             activity: Default::default(),
             drafts: self.drafts.clone(),
+            queued: self.queued.clone(),
+            unsent: self.unsent.clone(),
         }
     }
 }
@@ -515,7 +525,7 @@ impl SavedBench {
         let id = self.add_project_tab(folder);
         let tab = self.tab_mut(id).unwrap();
         tab.project = None;
-        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new() });
+        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new(), queued: Vec::new(), unsent: String::new() });
         id
     }
 

@@ -218,7 +218,8 @@ pub struct AiView {
     /// Whether paths Claude names are files, as found (for its links).
     file_exists: HashMap<PathBuf, bool>,
     /// Messages written while Claude works, sent one by one as turns end.
-    queue: Vec<(String, Vec<AiImage>)>,
+    /// Saving what is in the prompt, a moment after the last change.
+    unsent_save: Option<Task<()>>,
     /// The first entry the list holds: a long conversation shows its end,
     /// and earlier entries come in as they are needed (`show_from`).
     first: usize,
@@ -289,7 +290,8 @@ impl AiView {
             placeholder: Some("Ask Claude…  (Ctrl+Enter sends, Ctrl+S keeps it as a draft, Enter breaks the line, / for commands)".into()),
             ..Default::default()
         };
-        let prompt = cx.new(|cx| TextView::new("", options, &settings, cx));
+        // What was being written, kept with the tab (across restarts too).
+        let prompt = cx.new(|cx| TextView::new(&ai.unsent, options, &settings, cx));
         let filter = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint());
         let subs = vec![
             cx.subscribe(&prompt, |this, _, event: &TextEvent, cx| match event {
@@ -297,6 +299,7 @@ impl AiView {
                 TextEvent::Changed => {
                     this.warm_up();
                     this.update_completion(cx);
+                    this.save_unsent_soon(cx);
                 }
                 TextEvent::Cancel => {
                     this.completion = None;
@@ -358,7 +361,7 @@ impl AiView {
             editing: None,
             spin: 0,
             asks: HashMap::new(),
-            queue: Vec::new(),
+            unsent_save: None,
             first: 0,
             drafts_open: false,
             file_exists: HashMap::new(),
@@ -473,12 +476,6 @@ impl AiView {
             self.file_exists.clear();
             self.file_lookups.clear();
             self.parsed.clear();
-            // The next queued message goes now.
-            if !self.queue.is_empty() {
-                let (text, images) = self.queue.remove(0);
-                self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images });
-                self.list.scroll_to_end();
-            }
         }
         self.tick(cx);
         cx.notify();
@@ -781,9 +778,10 @@ impl AiView {
         self.previews.clear();
         let images = std::mem::take(&mut self.images);
         if self.status.state != AiState::Idle {
-            // Claude is busy: the message waits its turn, and goes when the
-            // turn ends. (An earlier message is only edited when it is idle.)
-            self.queue.push((text, images));
+            // Claude is busy: the keeper keeps it in the tab's queue (with
+            // the bench, so it survives a restart) and sends it when the turn
+            // ends. (An earlier message is only edited when it is idle.)
+            self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images });
             self.prompt.update(cx, |p, cx| {
                 p.buffer.select_all();
                 p.buffer.insert(&unsent);
@@ -849,10 +847,10 @@ impl AiView {
         self.change_drafts(|d| {
             d.remove(n);
         });
-        if self.status.state != AiState::Idle {
-            self.queue.push((text, Vec::new()));
-        } else {
-            self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images: Vec::new() });
+        // Busy, the keeper queues it.
+        let idle = self.status.state == AiState::Idle;
+        self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images: Vec::new() });
+        if idle {
             self.list.scroll_to_end();
         }
         cx.notify();
@@ -894,6 +892,22 @@ impl AiView {
             }
         })
         .detach();
+    }
+
+    /// Keeps what is in the prompt with the tab (saved with the bench), a
+    /// moment after the last change, so closing Shed does not lose it.
+    fn save_unsent_soon(&mut self, cx: &mut Context<Self>) {
+        self.unsent_save = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(800)).await;
+            this.update(cx, |this, cx| {
+                let text = this.prompt.read(cx).buffer.text();
+                if text != this.ai.unsent {
+                    this.ai.unsent = text;
+                    this.conn.send_msg(ClientMsg::AiSettings { tab: this.tab, settings: this.ai.clone() });
+                }
+            })
+            .ok();
+        }));
     }
 
     /// Starts Claude Code as the user starts typing, once.
@@ -2827,10 +2841,24 @@ impl AiView {
                 );
             }
         }
-        for (n, (text, images)) in self.queue.iter().enumerate() {
+        // Waiting for Claude to be free (kept by the keeper, with the bench).
+        let idle = self.status.state == AiState::Idle;
+        for (n, q) in self.ai.queued.iter().enumerate() {
             any = true;
-            let first = text.lines().next().unwrap_or("").to_string();
-            let more = if images.is_empty() { String::new() } else { format!(" (+{} picture(s))", images.len()) };
+            let first = q.text.lines().next().unwrap_or("").to_string();
+            let more = if q.pictures.is_empty() { String::new() } else { format!(" (+{} picture(s))", q.pictures.len()) };
+            let action = |id: (&'static str, usize), label: &'static str| {
+                div()
+                    .id(id)
+                    .flex_none()
+                    .px_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(hsla(ui.text_dim))
+                    .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                    .child(label)
+            };
+            let (t1, t2) = (q.text.clone(), q.text.clone());
             out = out.child(
                 div()
                     .flex()
@@ -2843,23 +2871,18 @@ impl AiView {
                     .child(svg().path(icon("send")).size(px(12.0)).flex_none().text_color(hsla(ui.ink(accent))))
                     .child(div().flex_none().text_color(hsla(ui.text_dim)).child(if n == 0 { "Next:".to_string() } else { format!("Then ({}):", n + 1) }))
                     .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(format!("{first}{more}")))
-                    .child(
-                        div()
-                            .id(("unqueue", n))
-                            .flex_none()
-                            .px_1()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .text_color(hsla(ui.text_dim))
-                            .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
-                            .child("Remove")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if n < this.queue.len() {
-                                    this.queue.remove(n);
-                                }
-                                cx.notify();
-                            })),
-                    ),
+                    // Claude free (after a restart, say): it can go now.
+                    .when(idle, |d| {
+                        d.child(action(("queued-send", n), "Send Now").on_click(cx.listener(move |this, _, _, cx| {
+                            this.conn.send_msg(ClientMsg::AiQueued { tab: this.tab, index: n as u32, text: t1.clone(), send: true });
+                            this.list.scroll_to_end();
+                            cx.notify();
+                        })))
+                    })
+                    .child(action(("unqueue", n), "Remove").on_click(cx.listener(move |this, _, _, cx| {
+                        this.conn.send_msg(ClientMsg::AiQueued { tab: this.tab, index: n as u32, text: t2.clone(), send: false });
+                        cx.notify();
+                    }))),
             );
         }
         if self.editing.is_some() {

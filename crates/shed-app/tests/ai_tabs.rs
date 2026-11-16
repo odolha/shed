@@ -41,7 +41,7 @@ fn a_prompt_comes_back_as_a_conversation() {
         &fake,
         format!(
             r#"#!/usr/bin/env python3
-import json, sys
+import json, sys, time
 log = open("{log}", "a")
 log.write("start " + " ".join(sys.argv[1:]) + "\n"); log.flush()
 for line in sys.stdin:
@@ -54,6 +54,9 @@ for line in sys.stdin:
         print(json.dumps({{"type": "control_response", "response": {{"subtype": "success", "request_id": m["request_id"], "response": {{"canRewind": True}}}}}}), flush=True)
     elif m.get("type") == "user":
         log.write("user " + m.get("uuid", "") + "\n"); log.flush()
+        # A slow turn, for messages sent meanwhile to wait.
+        if "slow" in json.dumps(m["message"]["content"]):
+            time.sleep(1.5)
         for rec in open("{stream}"):
             if '"control_response"' not in rec:
                 print(rec.strip(), flush=True)
@@ -147,6 +150,20 @@ for line in sys.stdin:
         .unwrap();
     let last_start = log.lines().rfind(|l| l.starts_with("start ")).unwrap();
     assert!(last_start.contains(&format!("--resume-session-at {last_assistant} --fork-session")), "{log}");
+
+    // Sent while Claude is busy: it waits in the tab's queue (kept with the
+    // bench), then goes when the turn ends.
+    c.msg(ClientMsg::AiSend { tab, text: "slow, please".into(), images: Vec::new() });
+    c.msg(ClientMsg::AiSend { tab, text: "and then this".into(), images: Vec::new() });
+    tree_until(&mut c, "queued", |t| {
+        t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.queued.iter().map(|q| q.text.as_str()).eq(["and then this"]))
+    });
+    tree_until(&mut c, "sent from the queue", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.queued.is_empty()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::fs::read_to_string(dir.path().join("claude.log")).unwrap().lines().filter(|l| l.starts_with("user ")).count() < 5 {
+        assert!(std::time::Instant::now() < deadline, "the queued message never reached Claude Code");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 
     // Closing the tab stops it.
     c.msg(ClientMsg::CloseTab { tab });

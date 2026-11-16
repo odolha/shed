@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 38;
+pub const PROTOCOL_VERSION: u32 = 39;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -160,6 +160,9 @@ pub enum ClientMsg {
     /// Moves a tab next to another (before or after it), into its group,
     /// in whichever bench that one is.
     MoveTabNextTo { tab: TabId, to: TabId, after: bool },
+    /// A queued message (the one at `index`, if it still has this text):
+    /// sent now (`send`), or taken out of the queue.
+    AiQueued { tab: TabId, index: u32, text: String, send: bool },
 }
 
 /// A picture sent with a prompt.

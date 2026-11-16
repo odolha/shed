@@ -749,6 +749,7 @@ impl Keeper {
             }
             ClientMsg::AiWatch { tab } => self.ai_watch(client, tab),
             ClientMsg::AiSend { tab, text, images } => self.ai_send(client, tab, text, images),
+            ClientMsg::AiQueued { tab, index, text, send } => self.ai_queued(tab, index as usize, text, send),
             ClientMsg::AiEdit { tab, entry, text, images } => self.ai_edit(client, tab, entry as usize, text, images),
             ClientMsg::AiAnswerQuestions { tab, request, answers } => self.ai_answer_questions(tab, request, answers),
             ClientMsg::ResetZoom => self.reset_zoom(client),

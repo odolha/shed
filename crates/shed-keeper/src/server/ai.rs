@@ -194,7 +194,76 @@ impl Keeper {
 
     pub(super) fn ai_send(self: &Arc<Self>, client: ClientId, tab: TabId, text: String, images: Vec<AiImage>) {
         let mut st = self.lock();
+        // Claude is busy: the message waits its turn, kept with the tab (and
+        // its pictures as files), and goes when a turn ends.
+        let busy = self.ai_rt(&mut st, tab).is_some_and(|rt| rt.transcript.status.state != AiState::Idle);
+        if busy {
+            let dir = self.picture_dir();
+            let pictures = images.iter().filter_map(|i| shed_ai::keep_picture_in(&dir, &i.media_type, &i.data)).collect();
+            self.change_queue(&mut st, tab, |q| q.push(shed_model::Queued { text, pictures }));
+            return;
+        }
         self.ai_send_locked(&mut st, client, tab, text, images);
+        drop(st);
+        self.ai_dirty.notify_one();
+    }
+
+    /// Changes a tab's queue, in the tree (windows show it) and saved.
+    fn change_queue(&self, st: &mut State, tab: TabId, change: impl FnOnce(&mut Vec<shed_model::Queued>)) {
+        if let Some(t) = st.tree.tab_mut(tab)
+            && let TabKind::Ai(ai) = &mut t.kind
+        {
+            change(&mut ai.queued);
+            st.broadcast_tree();
+            self.save_soon.notify_one();
+        }
+    }
+
+    /// Sends the first queued message, if there is one.
+    fn send_next_queued(self: &Arc<Self>, st: &mut State, tab: TabId) {
+        let Some(next) = ai_tab(st, tab).and_then(|a| a.queued.first().cloned()) else { return };
+        self.change_queue(st, tab, |q| {
+            q.remove(0);
+        });
+        self.send_queued(st, tab, next);
+    }
+
+    /// Sends a queued message, its pictures read back from their files.
+    fn send_queued(self: &Arc<Self>, st: &mut State, tab: TabId, queued: shed_model::Queued) {
+        let images = queued
+            .pictures
+            .iter()
+            .filter_map(|p| {
+                let data = std::fs::read(p).ok()?;
+                let ext = std::path::Path::new(p).extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
+                let media_type = match ext.as_str() {
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "gif" => "image/gif",
+                    "webp" => "image/webp",
+                    _ => "image/png",
+                };
+                Some(AiImage { media_type: media_type.into(), data })
+            })
+            .collect();
+        // No window asked: errors starting it go to the notice.
+        self.ai_send_locked(st, u64::MAX, tab, queued.text, images);
+    }
+
+    /// A queued message sent now, or taken out of the queue.
+    pub(super) fn ai_queued(self: &Arc<Self>, tab: TabId, index: usize, text: String, send: bool) {
+        let mut st = self.lock();
+        let Some(item) = ai_tab(&st, tab).and_then(|a| a.queued.get(index).cloned()).filter(|q| q.text == text) else { return };
+        let busy = st.ai.get(&tab).is_some_and(|rt| rt.transcript.status.state != AiState::Idle);
+        self.change_queue(&mut st, tab, |q| {
+            let item = q.remove(index);
+            // Asked to go now while Claude is busy: it goes next.
+            if send && busy {
+                q.insert(0, item);
+            }
+        });
+        if send && !busy {
+            self.send_queued(&mut st, tab, item);
+        }
         drop(st);
         self.ai_dirty.notify_one();
     }
@@ -443,7 +512,13 @@ impl Keeper {
         }
         // Live events carry no time: they happened now.
         rt.transcript.clock = now();
-        if let Some(mut limits) = rt.transcript.apply(&v) {
+        let was_busy = rt.transcript.status.state != AiState::Idle;
+        let limits = rt.transcript.apply(&v);
+        let turn_ended = was_busy && rt.transcript.status.state == AiState::Idle && kind == "result";
+        if turn_ended {
+            self.send_next_queued(&mut st, tab);
+        }
+        if let Some(mut limits) = limits {
             limits.seen = now();
             st.ai_limits = Some(limits);
             st.send_windows(KeeperMsg::AiLimits(limits));
@@ -567,6 +642,7 @@ impl Keeper {
         ai.effort = new.effort;
         ai.follow = new.follow;
         ai.drafts = new.drafts;
+        ai.unsent = new.unsent;
         let ai = ai.clone();
         st.broadcast_tree();
         if let Some(rt) = st.ai.get_mut(&tab)

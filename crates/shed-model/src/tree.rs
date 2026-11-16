@@ -325,6 +325,20 @@ pub struct AiTab {
     pub activity: AiActivity,
     /// Messages written to send some other time, in no order.
     pub drafts: Vec<String>,
+    /// Messages sent while Claude was busy: each goes when a turn ends.
+    pub queued: Vec<Queued>,
+    /// What is written in the prompt and not sent yet.
+    pub unsent: String,
+}
+
+/// A message waiting its turn: its text, and its pictures as files.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Queued {
+    pub text: String,
+    // No `skip_serializing_if`: it travels in the keeper's protocol too,
+    // which has no field names to tell a left-out field by.
+    #[serde(default)]
+    pub pictures: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
