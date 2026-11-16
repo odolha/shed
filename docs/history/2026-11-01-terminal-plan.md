@@ -1,5 +1,11 @@
 # Shed — Implementation Plan
 
+> **A record, not the current plan.** This was Shed's first plan, on
+> 2026-11-01, kept as written. Its phases were built; Shed has since grown into
+> a workbench (project, AI and remote tabs), runs on macOS too, and has remote
+> shells, all non-goals here. See [History](README.md) and the
+> [Roadmap](../roadmap.md).
+
 Nov 1, 2026 · @Ovidiu
 
 ## Overview

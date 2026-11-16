@@ -5,7 +5,8 @@ how a pane's screen survives windows coming and going, the four kinds of tab
 (terminals, project folders, Claude Code conversations, remote shells), how benches
 are saved and brought back, and how the shell, the logbook, the browser and the
 desktop fit in. The [User Guide](user-guide.md) describes the product;
-[Development](development.md) covers building and testing.
+[Development](development.md) covers building and testing; the
+[Roadmap](roadmap.md) what is still open.
 
 ## Two processes
 

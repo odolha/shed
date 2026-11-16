@@ -137,8 +137,9 @@ of keys, commands and settings.
 - [User Guide](docs/user-guide.md): how Shed is used.
 - [Architecture](docs/architecture.md): how it works inside.
 - [Development](docs/development.md): building, testing and working on Shed.
-- [The workbench plan](docs/workbench-plan.md): how Shed grew from a terminal into
-  this, the decisions taken, and what is still open.
+- [Roadmap](docs/roadmap.md): what is still open.
+- [History](docs/history/README.md): the plans Shed was built from, and the
+  decisions in them.
 
 ## License
 
