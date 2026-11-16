@@ -140,6 +140,9 @@ pub struct SavedAi {
     /// Changes marked viewed in the review: key and hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub viewed: Vec<(String, String)>,
+    /// Explanations of changes: key, hash and text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub explained: Vec<(String, String, String)>,
 }
 
 impl SavedAi {
@@ -156,6 +159,7 @@ impl SavedAi {
             queued: a.queued.clone(),
             unsent: a.unsent.clone(),
             viewed: a.viewed.clone(),
+            explained: a.explained.clone(),
         }
     }
 
@@ -173,6 +177,7 @@ impl SavedAi {
             queued: self.queued.clone(),
             unsent: self.unsent.clone(),
             viewed: self.viewed.clone(),
+            explained: self.explained.clone(),
         }
     }
 }
@@ -530,7 +535,7 @@ impl SavedBench {
         let id = self.add_project_tab(folder);
         let tab = self.tab_mut(id).unwrap();
         tab.project = None;
-        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new(), queued: Vec::new(), unsent: String::new(), viewed: Vec::new() });
+        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new(), queued: Vec::new(), unsent: String::new(), viewed: Vec::new(), explained: Vec::new() });
         id
     }
 

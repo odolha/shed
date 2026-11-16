@@ -18,6 +18,8 @@ Nothing here is promised or ordered; items move into Shed as they are wanted.
 
 - **Large pastes folded into a chip** in the prompt, and **a prompt library** of
   prompts kept to reuse.
+- **Expand** in the review: a longer explanation of a change, hunk by hunk,
+  asked aside like **Explain**.
 - **A hover redraws one entry only.** Each entry has a view of its own, but all
   of them read the `AiView`, which GPUI marks dirty whenever any child is;
   moving the conversation's state into a model of its own would let a hover

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 40;
+pub const PROTOCOL_VERSION: u32 = 41;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;

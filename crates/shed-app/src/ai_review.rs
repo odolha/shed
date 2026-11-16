@@ -86,6 +86,9 @@ pub(super) struct Review {
     error: Option<String>,
     /// More changes than were read.
     cut: bool,
+    /// Explaining these changes (their keys), aside.
+    explaining: Vec<String>,
+    explain_task: Option<Task<()>>,
     message: Entity<LineEditor>,
     _message_sub: gpui::Subscription,
     pub focus: gpui::FocusHandle,
@@ -179,6 +182,8 @@ impl AiView {
                 busy: None,
                 error: None,
                 cut: false,
+                explaining: Vec::new(),
+                explain_task: None,
                 message,
                 _message_sub: sub,
                 focus: cx.focus_handle(),
@@ -295,7 +300,7 @@ impl AiView {
     }
 
     /// Keys in the review: ↑/↓ move, Space marks viewed, N goes to the next
-    /// one not viewed, Escape closes.
+    /// one not viewed, E explains (Shift+E all), Escape closes.
     pub(super) fn review_key(&mut self, e: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(r) = &self.review else { return };
         if r.message.read(cx).focus_handle(cx).is_focused(window) {
@@ -313,6 +318,9 @@ impl AiView {
             "down" | "j" if n > 0 => self.review_select((at + 1).min(n - 1), cx),
             "up" | "k" if n > 0 => self.review_select(at.saturating_sub(1), cx),
             "space" if n > 0 => self.toggle_viewed(at, cx),
+            // E: explain this change; Shift+E: every one.
+            "e" if n > 0 && e.keystroke.modifiers.shift => self.explain((0..n).collect(), cx),
+            "e" if n > 0 => self.explain(vec![at], cx),
             "n" => {
                 let next = (1..=n).map(|d| (at + d) % n).find(|&i| !self.is_viewed(&self.review.as_ref().unwrap().changes[i]));
                 if let Some(i) = next {
@@ -322,6 +330,94 @@ impl AiView {
             _ => return,
         }
         cx.stop_propagation();
+    }
+
+    /// The explanation kept for a change: its text, and whether it is of the
+    /// change as it is now (else it was of an earlier version).
+    fn explanation(&self, c: &Change) -> Option<(String, bool)> {
+        let r = self.review.as_ref()?;
+        let key = c.key(&r.repos[c.repo].repo.root);
+        self.ai.explained.iter().rev().find(|(k, _, _)| *k == key).map(|(_, h, t)| (t.clone(), *h == c.hash))
+    }
+
+    /// Asks a copy of the session (not saved, read-only, the session itself
+    /// untouched) what changed in these files and why.
+    fn explain(&mut self, which: Vec<usize>, cx: &mut Context<Self>) {
+        let Some(r) = &self.review else { return };
+        let Some(session) = self.ai.session.clone() else { return };
+        if r.explain_task.is_some() || which.is_empty() {
+            return;
+        }
+        let several = r.repos.len() > 1;
+        let label = |c: &Change| if several { format!("{}/{}", r.repos[c.repo].name, c.path) } else { c.path.clone() };
+        let mut asked: Vec<(String, String, String)> = Vec::new();
+        let mut files = Vec::new();
+        let mut budget = 4000;
+        for i in which {
+            let Some(c) = r.changes.get(i) else { continue };
+            let state = match &c.layer {
+                Layer::Unstaged { .. } => "not staged".to_string(),
+                Layer::Staged => "staged".to_string(),
+                Layer::Committed { hash, pushed } => {
+                    let subject = r.repos[c.repo].commits.iter().find(|x| x.hash == *hash).map(|x| x.subject.clone()).unwrap_or_default();
+                    format!("{} in commit {} \u{201c}{subject}\u{201d}", if *pushed { "pushed" } else { "committed" }, &hash[..hash.len().min(8)])
+                }
+            };
+            // Its diff, cut short: the copy knows the conversation, and can read files.
+            let mut diff = String::new();
+            for line in c.hunks.iter().flat_map(|h| &h.lines).take(150.min(budget)) {
+                let sign = match line.kind {
+                    LineKind::Added => '+',
+                    LineKind::Removed => '-',
+                    LineKind::Context => ' ',
+                };
+                diff.push(sign);
+                diff.push_str(line.text.trim_end_matches('\n'));
+                diff.push('\n');
+                budget = budget.saturating_sub(1);
+            }
+            let path = label(c);
+            asked.push((path.clone(), c.key(&r.repos[c.repo].repo.root), c.hash.clone()));
+            files.push(shed_ai::aside::ToExplain { path, state, diff });
+        }
+        let keys: Vec<String> = asked.iter().map(|(_, k, _)| k.clone()).collect();
+        let (folder, model) = (self.ai.folder.clone(), self.ai.model.clone());
+        let task = cx.spawn(async move |this, cx| {
+            let answer = cx
+                .background_executor()
+                .spawn(async move { shed_ai::aside::explain_changes(&shed_ai::aside::claude_program(), &folder, &session, model.as_deref(), &files) })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(r) = &mut this.review {
+                    r.explain_task = None;
+                    r.explaining.clear();
+                    if let Err(e) = &answer {
+                        r.error = Some(format!("Could not explain: {e}"));
+                    }
+                }
+                if let Ok(found) = answer {
+                    for (n, text) in found {
+                        if let Some((_, key, hash)) = asked.get(n) {
+                            this.ai.explained.retain(|(k, _, _)| k != key);
+                            this.ai.explained.push((key.clone(), hash.clone(), text));
+                        }
+                    }
+                    if this.ai.explained.len() > 500 {
+                        let n = this.ai.explained.len() - 500;
+                        this.ai.explained.drain(..n);
+                    }
+                    this.conn.send_msg(shed_proto::ClientMsg::AiSettings { tab: this.tab, settings: this.ai.clone() });
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+        if let Some(r) = &mut self.review {
+            r.explaining = keys;
+            r.explain_task = Some(task);
+            r.error = None;
+        }
+        cx.notify();
     }
 
     fn review_commit(&mut self, message: String, cx: &mut Context<Self>) {
@@ -426,6 +522,18 @@ impl AiView {
             .child(div().flex().gap_0p5().p_0p5().rounded_md().bg(hsla(ui.tab_active)).text_size(px(12.0 * z)).child(scope_button("review-turn", "This turn", Scope::Turn)).child(scope_button("review-session", "This session", Scope::Session)))
             .child(div().flex_1())
             .when_some(r.busy.clone().or(r.loading.as_ref().map(|_| "Reading…".to_string())), |d, b| d.child(div().text_color(hsla(ui.ink(accent))).child(b)))
+            .when(!r.explaining.is_empty(), |d| d.child(div().text_color(hsla(ui.ink(accent))).child(format!("Explaining {}…", if r.explaining.len() == 1 { "1 file".to_string() } else { format!("{} files", r.explaining.len()) }))))
+            // Every change explained by a copy of the session, aside.
+            .when(self.ai.session.is_some() && !r.changes.is_empty() && r.explaining.is_empty(), |d| {
+                d.child(
+                    button("review-explain-all".into(), "Explain All", accent)
+                        .tooltip(menu::tooltip("Ask a copy of this session what changed in each file and why; the session itself is left as it is"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let n = this.review.as_ref().map_or(0, |r| r.changes.len());
+                            this.explain((0..n).collect(), cx);
+                        })),
+                )
+            })
             .when(!r.changes.is_empty(), |d| d.child(div().text_color(hsla(if viewed == r.changes.len() { ui.ink(accent) } else { ui.text_dim })).child(format!("{viewed} of {} viewed", r.changes.len()))))
             .child(
                 div()
@@ -692,6 +800,15 @@ impl AiView {
             }
             Layer::Committed { .. } => {}
         }
+        // What changed and why, asked aside.
+        let explaining = r.explaining.contains(&c.key(&r.repos[c.repo].repo.root));
+        if self.ai.session.is_some() && !explaining && r.explaining.is_empty() {
+            bar = bar.child(
+                small(format!("explain-{i}").into(), "Explain", self.accent)
+                    .tooltip(menu::tooltip("Ask a copy of this session what changed here and why; the session itself is left as it is"))
+                    .on_click(cx.listener(move |this, _, _, cx| this.explain(vec![i], cx))),
+            );
+        }
         // Changing the file itself: in its project tab.
         if !matches!(c.layer, Layer::Committed { .. }) && full.is_file() {
             bar = bar.child(small(format!("edit-file-{i}").into(), "Edit in Project", self.accent).on_click(cx.listener(move |this, _, _, cx| this.reveal_file(full.clone(), None, cx))));
@@ -762,7 +879,34 @@ impl AiView {
                 );
             }
         }
-        div().flex_1().min_w_0().h_full().flex().flex_col().child(bar).child(lines).into_any_element()
+        let why = self.explanation(c).map(|(text, current)| {
+            div()
+                .flex_none()
+                .mx_3()
+                .mt_2()
+                .px_2()
+                .py_1p5()
+                .rounded_md()
+                .border_l_2()
+                .border_color(hsla(if current { self.accent } else { ui.divider }))
+                .bg(hsla_alpha(self.accent, if current { 0.08 } else { 0.03 }))
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(div().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(if current { "Why" } else { "Why (of an earlier version: the change differs since)" }))
+                .child(div().text_color(hsla(if current { ui.text } else { ui.text_dim })).child(text))
+        });
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(bar)
+            .children(why)
+            .when(explaining, |d| d.child(div().mx_3().mt_2().text_size(px(12.0 * z)).text_color(hsla(ui.ink(self.accent))).child("Asking what changed here and why…")))
+            .child(lines)
+            .into_any_element()
     }
 }
 

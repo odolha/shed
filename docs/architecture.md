@@ -411,6 +411,13 @@ committed, pushed), each with its diff. Its actions are Git commands
 `revert --no-commit`). Viewed marks are `AiTab.viewed`: a key per change and an
 FNV hash of its texts, so a change that differs since is not viewed.
 
+**Explain** asks aside (`shed_ai::aside`): the window runs `claude -p --resume
+<session> --fork-session --no-session-persistence` in plan mode, with Edit,
+Write and Bash disallowed and a JSON schema for the answer, giving it each
+change numbered, how far it went and its diff (cut short). The fork knows the
+conversation, so it can say why; it is not saved, so the session's file and
+context stay as they were. Answers are `AiTab.explained` (key, hash, text).
+
 The usage limits come from Claude Code's `rate_limit_event`s; the keeper keeps
 the last ones (`state_dir/ai-limits.json`, with when they were reported), sends
 them to each window as it says hello, and drops a window once it has reset.

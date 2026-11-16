@@ -454,9 +454,17 @@ terminal of the bench.
   | **Pushed**, with its commit | **Revert…**: its opposite is staged, to adjust and commit as a new commit (pushed history is never rewritten) |
 
   **Push…** sends the commits not pushed yet, after showing where and which.
+  **Explain** (or E) asks what changed in the selected file and why, **Explain
+  All** (Shift+E) for every change: a copy of the session, which knows the
+  conversation, answers in a few sentences per change, shown as **Why** above
+  its diff. The session itself never sees the question or the answer, so its
+  context does not grow: the copy is a fork Claude Code does not save, and it
+  cannot change anything. It uses the session's model and counts toward your
+  usage like a prompt. Explanations are kept with the tab; one of an earlier
+  version of a change says so.
   Each change has a **Viewed** box (Space); the header counts them ("2 of 5
   viewed"), and a change that differs since it was viewed is not viewed any
-  more. ↑ and ↓ go through the changes, N to the next one not viewed, Escape
+  more. ↑ and ↓ go through the changes, N to the next one not viewed, E / Shift+E explain, Escape
   back to the conversation. Viewed marks are kept with the tab. Where the branch
   was when the turn or session began comes from Git's own record (the reflog);
   further back than it goes, only what is not committed is shown.

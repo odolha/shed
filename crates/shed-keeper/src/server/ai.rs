@@ -115,17 +115,7 @@ pub(super) fn now() -> u64 {
 /// The `claude` program: on the PATH, else where its installer puts it (a
 /// keeper started from the desktop may not have `~/.local/bin` on its PATH).
 fn claude_program() -> PathBuf {
-    // Tests stand a recorded Claude Code in for the real one.
-    if let Some(program) = std::env::var_os("SHED_CLAUDE") {
-        return program.into();
-    }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    let on_path = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).map(|d| d.join("claude")).find(|c| c.is_file()))
-        .unwrap_or(None);
-    on_path
-        .or_else(|| [home.join(".local/bin/claude"), home.join(".claude/local/claude")].into_iter().find(|c| c.is_file()))
-        .unwrap_or_else(|| "claude".into())
+    shed_ai::aside::claude_program()
 }
 
 fn ai_tab(st: &State, tab: TabId) -> Option<AiTab> {
@@ -644,6 +634,7 @@ impl Keeper {
         ai.drafts = new.drafts;
         ai.unsent = new.unsent;
         ai.viewed = new.viewed;
+        ai.explained = new.explained;
         let ai = ai.clone();
         st.broadcast_tree();
         if let Some(rt) = st.ai.get_mut(&tab)

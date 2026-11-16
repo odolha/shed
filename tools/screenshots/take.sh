@@ -37,6 +37,28 @@ win() { for _ in $(seq 100); do w=$(xwininfo -root -tree | grep -F "\"$1\"" | he
 grab() { xwd -silent -id "$1" > "$demo/$2.xwd" && ffmpeg -loglevel error -y -i "$demo/$2.xwd" "$demo/$2.png" && rm "$demo/$2.xwd"; }
 xtype() { python3 "$repo/tools/screenshots/xtype.py" "$@"; }
 
+# A stand-in for Claude Code, for the review's explanations.
+cat > "$demo/claude" <<'PY'
+#!/usr/bin/env python3
+import json, re, sys
+asked = sys.stdin.read()
+why = {
+    "guides/setup.md": "Walks a new contributor from cloning to a first change, in numbered steps, because the guide only said to run ./dev.sh. The troubleshooting part covers the first-run problems you asked for, kept short.",
+    "guides/intro.md": "Says where to start reading, so the introduction leads into the setup guide.",
+}
+changes = re.findall(r"^## (\d+)\. (\S+) \((\w+)", asked, re.M)
+def explain(path, state):
+    if path == "guides/setup.md" and state == "committed":
+        return "Adds the troubleshooting section you asked for: the two first-run problems seen most, each with how to tell and the command that fixes it."
+    if path == "guides/setup.md" and state == "pushed":
+        return "The first rewrite of the guide: from one line to numbered steps, from cloning to running the app."
+    return why.get(path, "Part of the same change.")
+files = [{"number": int(n), "explanation": explain(p, s)} for n, p, s in changes]
+print(json.dumps({"type": "result", "result": "", "structured_output": {"files": files}}))
+PY
+chmod +x "$demo/claude"
+export SHED_CLAUDE=$demo/claude
+
 # Every bench runs once, so closed ones have scrollback to preview.
 (setsid "$shed" >"$demo/app.log" 2>&1 &)
 sleep 5
@@ -55,7 +77,9 @@ grab "$(win 'Shed — api')" project
 docs_win=$(win 'Shed — docs')
 grab "$docs_win" ai
 # The review of what Claude changed (Ctrl+Shift+R at the AI tab's prompt).
-xtype "$docs_win" %0.3 @Control_L+Shift_L+r %3 && grab "$docs_win" review && xtype "$docs_win" @Down @Down %0.8 && grab "$docs_win" review-commit && xtype "$docs_win" @Escape %0.5 || true
+# Explanations come from a stand-in Claude Code (SHED_CLAUDE, set before Shed
+# started), never a real one.
+xtype "$docs_win" %0.3 @Control_L+Shift_L+r %3 && xtype "$docs_win" @Shift_L+e %4 && grab "$docs_win" review && xtype "$docs_win" @Down @Down %0.8 && grab "$docs_win" review-commit && xtype "$docs_win" @Escape %0.5 || true
 "$shed" hide docs >/dev/null; sleep 4
 grab "$shed_win" shed
 echo 'theme = "shed-light"' > "$XDG_CONFIG_HOME/shed/shed.toml"; sleep 3

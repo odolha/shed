@@ -4,6 +4,7 @@
 //! processes: the keeper runs `claude`, windows draw what this builds.
 
 pub mod markdown;
+pub mod aside;
 pub mod sessions;
 mod summary;
 mod transcript;
