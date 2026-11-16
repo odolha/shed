@@ -101,6 +101,22 @@ pub struct Menu<V> {
     pub entries: Vec<MenuEntry<V>>,
     /// The submenu shown beside the item at this index (opened by hovering it).
     pub sub: Option<(usize, Vec<MenuEntry<V>>)>,
+    /// Where the menu and its submenu were drawn, and the window's size: the
+    /// submenu goes where there is room, and clicks in it do not close it.
+    drawn: Rc<Drawn>,
+}
+
+#[derive(Default)]
+struct Drawn {
+    main: std::cell::Cell<Option<gpui::Bounds<Pixels>>>,
+    sub: std::cell::Cell<Option<gpui::Bounds<Pixels>>>,
+    window: std::cell::Cell<gpui::Size<Pixels>>,
+}
+
+impl<V> Menu<V> {
+    pub fn new(position: Point<Pixels>, entries: Vec<MenuEntry<V>>) -> Self {
+        Menu { position, entries, sub: None, drawn: Rc::default() }
+    }
 }
 
 /// A view that shows menus, one at a time.
@@ -111,7 +127,7 @@ pub trait MenuHost: Sized + 'static {
     fn menu_closed(&mut self, window: &mut Window, cx: &mut Context<Self>);
 
     fn open_menu(&mut self, position: Point<Pixels>, entries: Vec<MenuEntry<Self>>, cx: &mut Context<Self>) {
-        *self.menu_slot() = Some(Menu { position, entries, sub: None });
+        *self.menu_slot() = Some(Menu::new(position, entries));
         cx.stop_propagation();
         cx.notify();
     }
@@ -143,21 +159,52 @@ fn entry_top<V>(entries: &[MenuEntry<V>], at: usize) -> Pixels {
 }
 
 pub fn render<V: MenuHost>(menu: &Menu<V>, ui: &UiColors, cx: &mut Context<V>) -> AnyElement {
-    let main = list(&menu.entries, menu.position, true, menu.sub.as_ref().map(|(i, _)| *i), ui, cx);
-    let mut both = div()
-        .flex()
-        .items_start()
-        .on_mouse_down_out(cx.listener(|this: &mut V, _, window, cx| {
+    let drawn = menu.drawn.clone();
+    let measure = |cell: fn(&Drawn) -> &std::cell::Cell<Option<gpui::Bounds<Pixels>>>| {
+        let drawn = drawn.clone();
+        gpui::canvas(
+            move |bounds, window, _| {
+                cell(&drawn).set(Some(bounds));
+                drawn.window.set(window.viewport_size());
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    };
+    let closer = drawn.clone();
+    // The menu stays where it opened, kept inside the window.
+    let main = list(&menu.entries, menu.position, true, menu.sub.as_ref().map(|(i, _)| *i), ui, cx)
+        .relative()
+        .child(measure(|d| &d.main))
+        .on_mouse_down_out(cx.listener(move |this: &mut V, e: &gpui::MouseDownEvent, window, cx| {
+            // In the submenu is not outside.
+            if closer.sub.get().is_some_and(|b| b.contains(&e.position)) {
+                return;
+            }
             *this.menu_slot() = None;
             this.menu_closed(window, cx);
-        }))
-        .child(main);
-    if let Some((at, entries)) = &menu.sub {
-        // Its first item level with the item that opened it.
-        let top = entry_top(&menu.entries, *at) - px(LIST_PAD);
-        both = both.child(div().pt(top).ml(px(-2.0)).child(list(entries, menu.position, false, None, ui, cx)));
+        }));
+    let mut out = div().child(deferred(anchored().position(menu.position).snap_to_window_with_margin(px(8.0)).child(main)).priority(1));
+    match &menu.sub {
+        Some((at, entries)) => {
+            // Beside the item that opened it, its first item level with it:
+            // on the right where there is room, else on the left; the menu
+            // itself does not move.
+            let main = drawn.main.get().unwrap_or(gpui::Bounds::new(menu.position, gpui::size(px(200.0), px(0.0))));
+            let width = drawn.sub.get().map_or(px(220.0), |b| b.size.width);
+            let room = drawn.window.get().width;
+            let x = if main.right() + width + px(8.0) <= room || room == px(0.0) { main.right() - px(2.0) } else { (main.left() - width + px(2.0)).max(px(0.0)) };
+            // (Measured inside the menu's 1px border.)
+            let y = main.top() - px(1.0) + entry_top(&menu.entries, *at) - px(LIST_PAD);
+            let sub = list(entries, menu.position, false, None, ui, cx).relative().child(measure(|d| &d.sub));
+            out = out.child(deferred(anchored().position(gpui::point(x, y)).snap_to_window_with_margin(px(8.0)).child(sub)).priority(2));
+        }
+        None => drawn.sub.set(None),
     }
-    deferred(anchored().position(menu.position).snap_to_window_with_margin(px(8.0)).child(both)).priority(1).into_any_element()
+    out.into_any_element()
 }
 
 /// One list of a menu: the menu itself (`top`), or a submenu beside it.
@@ -245,7 +292,7 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
                                 menu.sub = Some((i, entries));
                             }
                         } else {
-                            *this.menu_slot() = Some(Menu { position, entries, sub: None });
+                            *this.menu_slot() = Some(Menu::new(position, entries));
                         }
                         cx.notify();
                     }))
@@ -284,4 +331,77 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
         });
     }
     list
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Host {
+        menu: Option<Menu<Host>>,
+    }
+
+    impl MenuHost for Host {
+        fn menu_slot(&mut self) -> &mut Option<Menu<Self>> {
+            &mut self.menu
+        }
+        fn menu_closed(&mut self, _: &mut Window, _: &mut Context<Self>) {}
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let ui = UiColors::default();
+            div().size_full().children(self.menu.as_ref().map(|m| render(m, &ui, cx)))
+        }
+    }
+
+    fn entries() -> Vec<MenuEntry<Host>> {
+        vec![
+            item("One", |_: &mut Host, _, _| {}),
+            more("More", |_: &mut Host, _| vec![item("A longer item in the submenu", |_: &mut Host, _, _| {})]),
+        ]
+    }
+
+    #[gpui::test]
+    fn a_submenu_goes_where_there_is_room_and_the_menu_stays(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(crate::prompt::CurrentUi(UiColors::default())));
+        let (host, cx) = cx.add_window_view(|_, _| Host { menu: None });
+        cx.simulate_resize(gpui::size(px(800.0), px(600.0)));
+        // Opened near the right edge.
+        host.update(cx, |h, _| h.menu = Some(Menu::new(gpui::point(px(560.0), px(40.0)), entries())));
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let before = host.update(cx, |h, _| h.menu.as_ref().unwrap().drawn.main.get()).expect("drawn");
+        host.update(cx, |h, _| {
+            let menu = h.menu.as_mut().unwrap();
+            menu.sub = Some((1, vec![item("A longer item in the submenu", |_: &mut Host, _, _| {})]));
+        });
+        for _ in 0..2 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        let (main, sub) = host.update(cx, |h, _| {
+            let d = &h.menu.as_ref().unwrap().drawn;
+            (d.main.get().unwrap(), d.sub.get().unwrap())
+        });
+        assert_eq!(main.origin, before.origin, "the menu stays where it was");
+        assert!(sub.right() <= main.left() + px(4.0), "no room on the right: on the left ({sub:?} vs {main:?})");
+        // With room on the right, it goes there.
+        host.update(cx, |h, _| {
+            let mut m = Menu::new(gpui::point(px(40.0), px(40.0)), entries());
+            m.sub = Some((1, vec![item("A longer item in the submenu", |_: &mut Host, _, _| {})]));
+            h.menu = Some(m);
+        });
+        for _ in 0..3 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        let (main, sub) = host.update(cx, |h, _| {
+            let d = &h.menu.as_ref().unwrap().drawn;
+            (d.main.get().unwrap(), d.sub.get().unwrap())
+        });
+        assert!(sub.left() >= main.right() - px(4.0), "room on the right: there ({sub:?} vs {main:?})");
+        assert_eq!(sub.top(), main.top() + entry_top(&entries(), 1) - px(LIST_PAD), "level with its item");
+    }
 }

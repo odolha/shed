@@ -174,7 +174,8 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   between panes to resize; Alt+arrows move between panes.
 - **Right-click** a pane for copy, paste, split and close; a tab for rename, tags,
   setup, private, **Move to Bench** and close; the bench's name (right of the tab bar) for rename,
-  badge, colours, Show Shed and Close Bench.
+  badge, colours, **Appearance** (Auto, Light or Dark, for all of Shed), Show Shed
+  and Close Bench.
 - On the right of the tab bar: on a bench with an AI tab, Claude's usage
   limits (see [AI tabs](#ai-tabs)); the bench's [links](#links); for a terminal
   tab the **rack**, which opens the Setup panel (or Ctrl+Shift+S); and the
@@ -257,7 +258,8 @@ off). Click the branch for its menu: fetch, pull with rebase or with merge, push
 (and force-push, asking first), new branch, switch (or check out a remote
 branch), merge into the current branch, rebase onto another, delete (asking first),
 stash, pop the stash, and history. In this and every menu, an item with › opens
-its submenu beside it when the mouse is over it.
+its submenu beside it when the mouse is over it: on the right where there is
+room, else on the left, the menu itself staying where it is.
 
 **Changes** (beside Files and Search) lists conflicted, staged and changed files.
 Each file has a box: ticked, it goes in the next commit (it is staged); click

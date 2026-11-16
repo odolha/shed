@@ -814,6 +814,21 @@ impl BenchWindow {
                 .collect(),
         ));
         entries.push(item("Custom Colour…", |this, window, cx| this.start_edit(EditTarget::Color, window, cx)).icon("bench-color"));
+        // Light or dark, for all of Shed (as in Settings).
+        entries.push(
+            more("Appearance", |this: &mut Self, cx| {
+                use shed_model::config::Appearance;
+                let now = this.state.read(cx).settings.config.appearance();
+                [(Appearance::Auto, "Auto: follow the desktop", "theme-auto"), (Appearance::Light, "Light", "theme-light"), (Appearance::Dark, "Dark", "theme-dark")]
+                    .into_iter()
+                    .map(|(a, label, glyph)| {
+                        let label = if now == Some(a) { format!("{label}  ✓") } else { label.to_string() };
+                        item(label, move |this, _, cx| this.state.update(cx, |state, cx| state.set_appearance(a, cx))).icon(glyph)
+                    })
+                    .collect()
+            })
+            .icon("theme-auto"),
+        );
         entries.push(MenuEntry::Separator);
         if let Some(b) = self.bench(cx) {
             let has_startup = b.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.startup.is_empty());
