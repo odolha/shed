@@ -327,8 +327,8 @@ Remote tabs (9) and links (8) depend on little else and can move earlier.
   Ours / Theirs / Both).
 - Blame in the editor's gutter (now: for the cursor's line, in the status bar).
 - The AI tab's prompt folding large pastes into a chip, and a prompt library.
-- Screenshots of the new tabs in the user guide (those there predate project,
-  AI and remote tabs; `tools/screenshots/take.sh` retakes them).
+- The two menu screenshots (`colours.png`, `tab-menu.png`) predate the new tabs:
+  the headless `take.sh` cannot click (no XInput pointer on Xvfb).
 - AI tab hover redraws: each entry has its own view, but they all read the
   `AiView`, which GPUI marks dirty with any child; moving the conversation's
   state into a model of its own would let a hover redraw one entry only.

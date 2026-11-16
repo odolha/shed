@@ -45,9 +45,11 @@ export SHED_RUNTIME_DIR=/tmp/shed-dev XDG_CONFIG_HOME=/tmp/shed-dev/config \
 - Find dev windows by owning PID (process env `SHED_RUNTIME_DIR`), never by title.
 - Stop Shed instances with the scoped `shed stop`, not `pkill`/`kill`.
 - Don't send synthetic input or raise windows while the user is at the keyboard.
-- `tools/screenshots/take.sh` builds a demo world (fake projects, prompt `you@shed`)
-  and retakes `docs/images/*.png`; `INTERACTIVE=1` also clicks/types into its own
-  windows for menu screenshots. Screenshots must not show usernames or hostnames.
+- `tools/screenshots/take.sh` builds a demo world (fake projects, prompt `you@shed`,
+  a made-up Claude session) and retakes `docs/images/*.png` headless, on its own
+  Xvfb display (`XVFB=~/.cache/shed-dev/xvfb/root/usr/bin/Xvfb` on this machine), so
+  it is safe while the user works. Keys reach that display; mouse clicks do not.
+  Screenshots must not show usernames or hostnames.
 - Logs: `$XDG_STATE_HOME/shed/shedd.log`; `SHED_LOG=debug`; `shedd --foreground`.
 
 ## Architecture

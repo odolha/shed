@@ -189,6 +189,8 @@ A **project tab** holds a folder of code instead of terminals. It is marked with
 folder icon in the bench's colour, in the tab bar and on its card in Shed, and it
 is saved and loaded with the bench like any other tab.
 
+![A project tab: the file tree, open files, the branch and its changes](images/project.png)
+
 To open one:
 
 - right-click the **new tab** button, or the bench's name, and choose **New Project
@@ -325,6 +327,8 @@ An **AI tab** is a [Claude Code](https://claude.com/claude-code) conversation wi
 an interface of its own: Claude Code does the work, Shed shows it. It works in one
 folder (where Claude Code keeps its sessions) and can be given the bench's other
 project folders too.
+
+![An AI tab: sessions on the left, the conversation with its steps, the usage limits on the tab bar](images/ai.png)
 
 To open one: **Ask AI** in a project tab's header (it goes to that project's AI
 tab, or opens one), **New AI Tab** in the new-tab button's menu or the bench's

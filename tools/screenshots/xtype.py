@@ -22,6 +22,14 @@ xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_i
 
 d = x11.XOpenDisplay(None)
 target = int(sys.argv[1], 16)
+# On take.sh's own virtual display (no window manager, nobody else on it) the
+# window is given focus here; anywhere else it must already have it.
+import os
+x11.XSetInputFocus.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+if os.environ.get("SHED_SHOTS_DISPLAY") and os.environ.get("SHED_SHOTS_DISPLAY") == os.environ.get("DISPLAY"):
+    x11.XSetInputFocus(d, target, 2, 0)
+    x11.XFlush(d)
+    time.sleep(0.1)
 info = subprocess.run(["xwininfo", "-id", hex(target)], capture_output=True, text=True).stdout
 ox = int(re.search(r"Absolute upper-left X:\s+(-?\d+)", info).group(1))
 oy = int(re.search(r"Absolute upper-left Y:\s+(-?\d+)", info).group(1))

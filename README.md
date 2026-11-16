@@ -36,6 +36,10 @@ bench and tab at a glance, and is where you make, open, hide and close them.
 
 ![A bench: a dev server and a shell side by side](docs/images/bench.png)
 
+![An AI tab: a Claude Code conversation, its steps, and the usage limits](docs/images/ai.png)
+
+![A project tab: files, the editor, and the branch with its changes](docs/images/project.png)
+
 ## Highlights
 
 - **Nothing stops when a window closes.** Hide a bench and it keeps running; open

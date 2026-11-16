@@ -89,12 +89,18 @@ cargo clippy --all-targets
 
 ## Screenshots and icons
 
-`tools/screenshots/take.sh` (X11, `wmctrl`, `ffmpeg`) builds a demo world with a
-neutral prompt and a few benches (`demo-world.sh`), runs a separate Shed in it, and
-writes the screenshots in `docs/images/`. Run it from the repository root after
-`cargo build`; with `INTERACTIVE=1` it also opens menus and panels for their
-screenshots, clicking and typing into its own windows only (it stops if they lose
-focus).
+`tools/screenshots/take.sh` builds a demo world (`demo-world.sh`: a neutral
+prompt, a few projects with Git history and changes, benches with terminal,
+project and AI tabs, a made-up Claude Code session in the demo home, usage limits),
+runs a separate Shed in it on a virtual X display of its own (Xvfb, at 2× density,
+with Mesa's software Vulkan), and writes the screenshots in `docs/images/`. Nothing
+shows on your screen and your input is untouched, so it can run while you work.
+Panels are opened with keys sent to that display only (`xtype.py`); the mouse does
+not reach GPUI there (Xvfb has no XInput pointer of its own), so the two menu
+screenshots (`colours.png`, `tab-menu.png`) are not retaken. Needs Xvfb (`XVFB=`
+its path when not installed: `apt-get download xvfb` and `dpkg-deb -x` give one
+without root), `xrdb`, `xwininfo`, `xwd`, `ffmpeg` and Python's PIL. Run it from the
+repository root after `cargo build`.
 
 `cargo run -p shed-desktop --example icon_preview -- sheet.png [template.svg]` draws a
 sheet of the bench icon in every colour, at launcher and Dock sizes, on dark and
