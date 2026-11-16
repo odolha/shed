@@ -6,6 +6,7 @@ mod ai_view;
 mod assets;
 mod browser;
 mod bench_window;
+mod changes_ui;
 mod emoji;
 mod keeper_conn;
 mod line_editor;

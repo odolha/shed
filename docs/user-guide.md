@@ -453,7 +453,10 @@ terminal of the bench.
   | **Committed** (not pushed), with its commit | **Undo (back to staged)**: the commit, and any after it, comes out and its changes stay staged, to change and commit again; **Amend with Staged** puts what is staged into the last commit |
   | **Pushed**, with its commit | **Revert…**: its opposite is staged, to adjust and commit as a new commit (pushed history is never rewritten) |
 
-  **Push…** sends the commits not pushed yet, after showing where and which.
+  The files and diffs look and work as in a project tab's Changes: the status
+  letter in its colour, the folder button for files by folder (the same
+  `[git] tree` setting), and **Side by Side** (or S) for the diff, with line
+  numbers. **Push…** sends the commits not pushed yet, after showing where and which.
   **Explain** (or E) asks what changed in the selected file and why, **Explain
   All** (Shift+E) for every change: a copy of the session, which knows the
   conversation, answers in a few sentences per change, shown as **Why** above
@@ -464,7 +467,7 @@ terminal of the bench.
   version of a change says so.
   Each change has a **Viewed** box (Space); the header counts them ("2 of 5
   viewed"), and a change that differs since it was viewed is not viewed any
-  more. ↑ and ↓ go through the changes, N to the next one not viewed, E / Shift+E explain, Escape
+  more. ↑ and ↓ go through the changes, N to the next one not viewed, E / Shift+E explain, S side by side, Escape
   back to the conversation. Viewed marks are kept with the tab. Where the branch
   was when the turn or session began comes from Git's own record (the reflog);
   further back than it goes, only what is not committed is shown.

@@ -7,12 +7,15 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{AnyElement, Context, Entity, Focusable, PromptLevel, SharedString, Task, Window, div, prelude::*, px, svg};
+use std::collections::HashSet;
+
+use gpui::{AnyElement, Context, Entity, Focusable, PromptLevel, SharedString, Task, UniformListScrollHandle, Window, div, prelude::*, px, svg, uniform_list};
 use shed_git::{Hunk, LineKind, Repo};
 use shed_model::Rgb;
 
 use super::{AiView, Entry};
 use crate::assets::icon;
+use crate::changes_ui::{DIFF_ROW, DiffRow, FolderRow, diff_layout, folder_rows, render_diff_row, status_color};
 use crate::line_editor::{EditorEvent, LineEditor};
 use crate::menu;
 use crate::theme::{UiColors, hsla, hsla_alpha};
@@ -88,6 +91,12 @@ pub(super) struct Review {
     cut: bool,
     /// Explaining these changes (their keys), aside.
     explaining: Vec<String>,
+    /// The diff side by side, as in a project tab.
+    side: bool,
+    diff_scroll: UniformListScrollHandle,
+    diff_bar: crate::scrollbar::State,
+    /// Folders closed in the tree: (section, folder).
+    collapsed: HashSet<(String, String)>,
     explain_task: Option<Task<()>>,
     message: Entity<LineEditor>,
     _message_sub: gpui::Subscription,
@@ -184,6 +193,10 @@ impl AiView {
                 cut: false,
                 explaining: Vec::new(),
                 explain_task: None,
+                side: false,
+                diff_scroll: UniformListScrollHandle::new(),
+                diff_bar: Default::default(),
+                collapsed: HashSet::new(),
                 message,
                 _message_sub: sub,
                 focus: cx.focus_handle(),
@@ -294,13 +307,16 @@ impl AiView {
         if let Some(r) = &mut self.review
             && i < r.changes.len()
         {
+            if r.selected != Some(i) {
+                r.diff_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+            }
             r.selected = Some(i);
         }
         cx.notify();
     }
 
     /// Keys in the review: ↑/↓ move, Space marks viewed, N goes to the next
-    /// one not viewed, E explains (Shift+E all), Escape closes.
+    /// one not viewed, E explains (Shift+E all), S side by side, Escape closes.
     pub(super) fn review_key(&mut self, e: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(r) = &self.review else { return };
         if r.message.read(cx).focus_handle(cx).is_focused(window) {
@@ -318,6 +334,13 @@ impl AiView {
             "down" | "j" if n > 0 => self.review_select((at + 1).min(n - 1), cx),
             "up" | "k" if n > 0 => self.review_select(at.saturating_sub(1), cx),
             "space" if n > 0 => self.toggle_viewed(at, cx),
+            // S: side by side, or unified.
+            "s" => {
+                if let Some(r) = &mut self.review {
+                    r.side = !r.side;
+                }
+                cx.notify();
+            }
             // E: explain this change; Shift+E: every one.
             "e" if n > 0 && e.keystroke.modifiers.shift => self.explain((0..n).collect(), cx),
             "e" if n > 0 => self.explain(vec![at], cx),
@@ -418,6 +441,85 @@ impl AiView {
             r.error = None;
         }
         cx.notify();
+    }
+
+    /// Files by folder or flat, here and in project tabs' Changes (`[git] tree`).
+    fn set_review_tree(&mut self, tree: bool, cx: &mut Context<Self>) {
+        self.settings.config.git.tree = tree;
+        self.base.config.git.tree = tree;
+        if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+            state.update(cx, |state, cx| state.set_config_value(Some("git"), "tree", tree.into(), cx));
+        }
+        cx.notify();
+    }
+
+    /// The selected change's diff rows, as the review draws them.
+    fn render_review_rows(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let ui = crate::theme::current_ui(cx);
+        let (z, accent, mono) = (self.z(), self.accent, self.settings.font.family.clone());
+        let Some(r) = &self.review else { return Vec::new() };
+        let Some(i) = r.selected else { return Vec::new() };
+        let Some(c) = r.changes.get(i) else { return Vec::new() };
+        let repo = r.repos[c.repo].repo.clone();
+        let rows = diff_layout(&c.hunks, r.side);
+        let (red, green) = (Rgb::hex(0xE5534B), Rgb::hex(0x57AB5A));
+        range
+            .filter_map(|n| {
+                let row = rows.get(n)?;
+                let base = div().id(("review-drow", n)).h(px(DIFF_ROW * z)).w_full().flex().items_center().font_family(mono.clone()).text_size(px(12.0 * z)).text_color(hsla(ui.text));
+                // A hunk's own actions, as how far it went allows.
+                let actions = match row {
+                    DiffRow::Hunk(h) => {
+                        let patch = shed_git::hunk_patch(&c.path, &c.hunks[*h]);
+                        let act = |id: &'static str, label: &'static str, color: Rgb| {
+                            div()
+                                .id((id, n))
+                                .px_1()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_color(hsla(ui.ink(color)))
+                                .hover(move |s| s.bg(hsla_alpha(color, 0.2)))
+                                .child(label)
+                        };
+                        match &c.layer {
+                            Layer::Unstaged { untracked: false } => {
+                                let (p1, p2, repo1, repo2) = (patch.clone(), patch, repo.clone(), repo.clone());
+                                Some(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(act("review-stage-hunk", "Stage", green).on_click(cx.listener(move |this, _, _, cx| {
+                                            let p = p1.clone();
+                                            this.review_op("Staging…", repo1.clone(), move |r| r.apply(&p, true, false).map(|_| String::new()), cx);
+                                        })))
+                                        .child(act("review-discard-hunk", "Discard…", red).on_click(cx.listener(move |this, _, window, cx| {
+                                            let (p, repo) = (p2.clone(), repo2.clone());
+                                            this.ask_then("Discard this change?", "It is lost: Git cannot bring it back.", "Discard", window, cx, move |this, cx| {
+                                                this.review_op("Discarding…", repo, move |r| r.apply(&p, false, true).map(|_| String::new()), cx);
+                                            });
+                                        })))
+                                        .into_any_element(),
+                                )
+                            }
+                            Layer::Staged => {
+                                let repo1 = repo.clone();
+                                Some(
+                                    act("review-unstage-hunk", "Unstage", accent)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let p = patch.clone();
+                                            this.review_op("Unstaging…", repo1.clone(), move |r| r.apply(&p, true, true).map(|_| String::new()), cx);
+                                        }))
+                                        .into_any_element(),
+                                )
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                Some(render_diff_row(base, row, &c.hunks, &ui, accent, actions))
+            })
+            .collect()
     }
 
     fn review_commit(&mut self, message: String, cx: &mut Context<Self>) {
@@ -535,6 +637,19 @@ impl AiView {
                 )
             })
             .when(!r.changes.is_empty(), |d| d.child(div().text_color(hsla(if viewed == r.changes.len() { ui.ink(accent) } else { ui.text_dim })).child(format!("{viewed} of {} viewed", r.changes.len()))))
+            // A mode: files listed flat, or by folder (the same setting as Changes).
+            .child({
+                let tree = self.settings.config.git.tree;
+                div()
+                    .id("review-tree")
+                    .p_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .tooltip(menu::tooltip(if tree { "Show the files in a flat list" } else { "Show the files by folder" }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_review_tree(!tree, cx)))
+                    .child(svg().path(icon(if tree { "view-list" } else { "folder" })).size(px(13.0)).text_color(hsla(ui.text_dim)))
+            })
             .child(
                 div()
                     .id("review-close")
@@ -555,19 +670,21 @@ impl AiView {
             if r.repos.len() > 1 {
                 list = list.child(div().mt_2().px_2().text_color(hsla(ui.text)).child(repo.name.clone()));
             }
-            let row = |i: usize, c: &Change| {
+            let row = |i: usize, c: &Change, depth: Option<usize>| {
                 let selected = r.selected == Some(i);
                 let seen = self.is_viewed(c);
                 let name = Path::new(&c.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let dir = Path::new(&c.path).parent().map(|p| p.display().to_string()).unwrap_or_default();
                 div()
                     .id(("review-row", i))
+                    .h(px(24.0 * z))
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .px_2()
-                    .py_0p5()
+                    .px_1()
                     .mx_1()
+                    // In the tree, under its folder (past the folder's arrow).
+                    .when_some(depth, |d, depth| d.pl(px(4.0 + depth as f32 * 14.0 + 12.0)))
                     .rounded_sm()
                     .cursor_pointer()
                     .when(selected, |d| d.bg(hsla_alpha(accent, 0.2)))
@@ -586,20 +703,65 @@ impl AiView {
                             }))
                             .child(if seen { "☑" } else { "☐" }),
                     )
-                    .child(div().flex_none().w(px(12.0)).text_color(hsla(ui.text_dim)).child(c.code.to_string()))
+                    .child(div().flex_none().w(px(12.0)).text_color(hsla(status_color(c.code, ui))).child(c.code.to_string()))
                     .child(div().flex_none().text_color(hsla(if seen { ui.text_dim } else { ui.text })).child(name))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(dir))
+                    .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).when(depth.is_none(), |d| d.child(dir)))
+            };
+            // A section's files: a flat list, or by folder (`[git] tree`, as in Changes).
+            let tree = self.settings.config.git.tree;
+            let files = |key: String, items: Vec<(usize, &Change)>| -> Vec<AnyElement> {
+                if !tree {
+                    return items.into_iter().map(|(i, c)| row(i, c, None).into_any_element()).collect();
+                }
+                let paths: Vec<&str> = items.iter().map(|(_, c)| c.path.as_str()).collect();
+                let rows = folder_rows(&paths, |dir| r.collapsed.contains(&(key.clone(), dir.to_string())));
+                rows.into_iter()
+                    .map(|fr| match fr {
+                        FolderRow::File { index, depth } => {
+                            let (i, c) = items[index];
+                            row(i, c, Some(depth)).into_any_element()
+                        }
+                        FolderRow::Folder { path, name, depth, files, open } => {
+                            let k = (key.clone(), path.clone());
+                            div()
+                                .id(SharedString::from(format!("review-folder-{key}-{path}")))
+                                .h(px(24.0 * z))
+                                .mx_1()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .pl(px(4.0 + depth as f32 * 14.0))
+                                .pr_1()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(r) = &mut this.review
+                                        && !r.collapsed.remove(&k)
+                                    {
+                                        r.collapsed.insert(k.clone());
+                                    }
+                                    cx.notify();
+                                }))
+                                .child(div().flex_none().w(px(10.0)).text_color(hsla(ui.text_dim)).child(if open { "▾" } else { "▸" }))
+                                .child(svg().path(icon("folder")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)))
+                                .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(name))
+                                .child(div().flex_none().text_color(hsla(ui.text_dim)).child(files.len().to_string()))
+                                .into_any_element()
+                        }
+                    })
+                    .collect()
             };
             let mine = |pick: &dyn Fn(&Layer) -> bool| r.changes.iter().enumerate().filter(|(_, c)| c.repo == ri && pick(&c.layer)).collect::<Vec<_>>();
             let unstaged = mine(&|l| matches!(l, Layer::Unstaged { .. }));
             if !unstaged.is_empty() {
                 list = list.child(section(format!("NOT STAGED ({})", unstaged.len()), grey));
-                list = list.children(unstaged.into_iter().map(|(i, c)| row(i, c)));
+                list = list.children(files(format!("{ri}|worktree"), unstaged));
             }
             let staged = mine(&|l| *l == Layer::Staged);
             if !staged.is_empty() {
                 list = list.child(section(format!("STAGED ({})", staged.len()), blue));
-                list = list.children(staged.into_iter().map(|(i, c)| row(i, c)));
+                list = list.children(files(format!("{ri}|index"), staged));
             }
             for (ci, commit) in repo.commits.iter().enumerate() {
                 let color = if commit.pushed { red } else { amber };
@@ -663,8 +825,8 @@ impl AiView {
                     );
                 }
                 list = list.child(actions);
-                let files = mine(&|l| matches!(l, Layer::Committed { hash: h, .. } if *h == hash));
-                list = list.children(files.into_iter().map(|(i, c)| row(i, c)));
+                let in_commit = mine(&|l| matches!(l, Layer::Committed { hash: h, .. } if *h == hash));
+                list = list.children(files(format!("{ri}|{hash}"), in_commit));
             }
             if repo.base.is_none() && self.review_since(r.scope).is_some() {
                 list = list.child(div().mt_2().px_2().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child("Git's record does not go back to the start of this; commits are not shown."));
@@ -814,71 +976,35 @@ impl AiView {
             bar = bar.child(small(format!("edit-file-{i}").into(), "Edit in Project", self.accent).on_click(cx.listener(move |this, _, _, cx| this.reveal_file(full.clone(), None, cx))));
         }
 
-        let mut lines = div().id(("review-diff", i)).flex_1().min_h_0().overflow_y_scroll().font_family(mono.to_string()).text_size(px(12.0 * z)).py_1();
-        if c.hunks.is_empty() {
-            lines = lines.child(div().p_3().text_color(hsla(ui.text_dim)).child("No differences in the text (a binary file, or only its mode)."));
-        }
-        let mut shown = 0;
-        for (h, hunk) in c.hunks.iter().enumerate() {
-            if shown > 3000 {
-                lines = lines.child(div().p_2().text_color(hsla(ui.text_dim)).child("… the rest is not shown"));
-                break;
-            }
-            let patch = shed_git::hunk_patch(&c.path, hunk);
-            let mut head = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .mt_1()
-                .px_3()
-                .bg(hsla_alpha(ui.divider, 0.5))
+        // The diff, as in a project tab: unified or side by side.
+        let count = diff_layout(&c.hunks, r.side).len();
+        let lines = if c.hunks.is_empty() {
+            div().flex_1().p_3().text_color(hsla(ui.text_dim)).child("No differences in the text (a binary file, or only its mode).").into_any_element()
+        } else {
+            let list = uniform_list("review-diff", count, cx.processor(|this, range, _, cx| this.render_review_rows(range, cx))).track_scroll(&r.diff_scroll).flex_1().min_h_0();
+            crate::scrollbar::with_bar(list, crate::scrollbar::Source::uniform(&r.diff_scroll), &r.diff_bar, ui).flex_1().into_any_element()
+        };
+        let side = r.side;
+        bar = bar.child(
+            div()
+                .id("review-side")
+                .flex_none()
+                .px_1p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(hsla(ui.divider))
+                .cursor_pointer()
+                .text_size(px(11.0 * z))
                 .text_color(hsla(ui.text_dim))
-                .child(format!("@@ -{},{} +{},{} @@", hunk.old_start, hunk.old_len, hunk.new_start, hunk.new_len))
-                .child(div().flex_1());
-            match &c.layer {
-                Layer::Unstaged { untracked: false } => {
-                    let (p1, p2, repo1, repo2) = (patch.clone(), patch.clone(), repo.clone(), repo.clone());
-                    head = head
-                        .child(small(format!("stage-hunk-{i}-{h}").into(), "Stage", green).on_click(cx.listener(move |this, _, _, cx| {
-                            let p = p1.clone();
-                            this.review_op("Staging…", repo1.clone(), move |r| r.apply(&p, true, false).map(|_| String::new()), cx);
-                        })))
-                        .child(small(format!("discard-hunk-{i}-{h}").into(), "Discard…", red).on_click(cx.listener(move |this, _, window, cx| {
-                            let (p, repo) = (p2.clone(), repo2.clone());
-                            this.ask_then("Discard this change?", "It is lost: Git cannot bring it back.", "Discard", window, cx, move |this, cx| {
-                                this.review_op("Discarding…", repo, move |r| r.apply(&p, false, true).map(|_| String::new()), cx);
-                            });
-                        })));
-                }
-                Layer::Staged => {
-                    let (p1, repo1) = (patch.clone(), repo.clone());
-                    head = head.child(small(format!("unstage-hunk-{i}-{h}").into(), "Unstage", ui.text_dim).on_click(cx.listener(move |this, _, _, cx| {
-                        let p = p1.clone();
-                        this.review_op("Unstaging…", repo1.clone(), move |r| r.apply(&p, true, true).map(|_| String::new()), cx);
-                    })));
-                }
-                _ => {}
-            }
-            lines = lines.child(head);
-            for line in &hunk.lines {
-                shown += 1;
-                let (sign, bg) = match line.kind {
-                    LineKind::Added => ("+", Some(green)),
-                    LineKind::Removed => ("-", Some(red)),
-                    LineKind::Context => (" ", None),
-                };
-                lines = lines.child(
-                    div()
-                        .flex()
-                        .px_3()
-                        .min_h(px(16.0 * z))
-                        .when_some(bg, |d, bg| d.bg(hsla_alpha(bg, 0.15)))
-                        .text_color(hsla(ui.text))
-                        .child(div().flex_none().w(px(14.0)).text_color(hsla(ui.text_dim)).child(sign))
-                        .child(div().flex_1().min_w_0().child(line.text.trim_end_matches('\n').to_string())),
-                );
-            }
-        }
+                .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(r) = &mut this.review {
+                        r.side = !side;
+                    }
+                    cx.notify();
+                }))
+                .child(if side { "Unified" } else { "Side by Side" }),
+        );
         let why = self.explanation(c).map(|(text, current)| {
             div()
                 .flex_none()

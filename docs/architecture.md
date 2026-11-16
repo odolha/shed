@@ -401,7 +401,10 @@ keeping the view where it was. Rows and entries map through `row` / `entry_at`;
 search, the prompt list and block jumps `reveal` an entry before scrolling to it.
 Drafts are `AiTab.drafts`, changed through `AiSettings` and saved with the bench.
 
-The review (`ai_review.rs`, a child module of the AI view) reads, off the UI
+`changes_ui.rs` is what a project tab's Changes and the review share: diff
+rows (unified, or side by side with removed lines facing the added ones) and
+their drawing, status letter colours, and changed files by folder
+(`folder_rows`). The review (`ai_review.rs`, a child module of the AI view) reads, off the UI
 thread, each repository the tab works in: `Repo::head_at` finds in the reflog
 where HEAD was when the turn's (or session's) first prompt was sent,
 `commits_since` the commits after it and which the upstream has; with the

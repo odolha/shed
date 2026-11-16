@@ -79,7 +79,9 @@ grab "$docs_win" ai
 # The review of what Claude changed (Ctrl+Shift+R at the AI tab's prompt).
 # Explanations come from a stand-in Claude Code (SHED_CLAUDE, set before Shed
 # started), never a real one.
-xtype "$docs_win" %0.3 @Control_L+Shift_L+r %3 && xtype "$docs_win" @Shift_L+e %4 && grab "$docs_win" review && xtype "$docs_win" @Down @Down %0.8 && grab "$docs_win" review-commit && xtype "$docs_win" @Escape %0.5 || true
+xtype "$docs_win" %0.3 @Control_L+Shift_L+r %3 && xtype "$docs_win" @Shift_L+e %4 && grab "$docs_win" review && xtype "$docs_win" @Down @Down %0.8 && grab "$docs_win" review-commit && xtype "$docs_win" s %0.8 && grab "$docs_win" review-side && xtype "$docs_win" s %0.3 \
+  && printf 'theme = "shed-dark"\n[git]\ntree = true\n' > "$XDG_CONFIG_HOME/shed/shed.toml" && sleep 2.5 && grab "$docs_win" review-tree \
+  && echo 'theme = "shed-dark"' > "$XDG_CONFIG_HOME/shed/shed.toml" && sleep 1.5 && xtype "$docs_win" @Escape %0.5 || true
 "$shed" hide docs >/dev/null; sleep 4
 grab "$shed_win" shed
 echo 'theme = "shed-light"' > "$XDG_CONFIG_HOME/shed/shed.toml"; sleep 3
