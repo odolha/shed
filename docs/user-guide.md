@@ -440,6 +440,28 @@ terminal of the bench.
 - **After a turn**, the files it changed are listed above the prompt: click one to
   see its diff in its project tab, ready to stage or throw away. When Claude keeps
   a task list, it shows there too.
+- **Review** (**Review…** beside those files, **Review Changes** in the **⋯**
+  menu, or Ctrl+Shift+R) shows, in place of the conversation, everything that
+  changed in the repositories the tab works in, during **This turn** or **This
+  session**, whatever did it: Claude may have staged, committed or even pushed
+  some of it. Each change is marked by how far it went, with what fits it:
+
+  | Marked | What you can do |
+  | --- | --- |
+  | **Not staged** | Stage or discard it, whole or hunk by hunk; **Edit in Project** to change it |
+  | **Staged** | Unstage it, whole or by hunk; **Commit Staged** with a message, below |
+  | **Committed** (not pushed), with its commit | **Undo (back to staged)**: the commit, and any after it, comes out and its changes stay staged, to change and commit again; **Amend with Staged** puts what is staged into the last commit |
+  | **Pushed**, with its commit | **Revert…**: its opposite is staged, to adjust and commit as a new commit (pushed history is never rewritten) |
+
+  **Push…** sends the commits not pushed yet, after showing where and which.
+  Each change has a **Viewed** box (Space); the header counts them ("2 of 5
+  viewed"), and a change that differs since it was viewed is not viewed any
+  more. ↑ and ↓ go through the changes, N to the next one not viewed, Escape
+  back to the conversation. Viewed marks are kept with the tab. Where the branch
+  was when the turn or session began comes from Git's own record (the reflog);
+  further back than it goes, only what is not committed is shown.
+
+  ![Reviewing a turn: not staged, staged, committed and pushed changes](images/review.png)
 - **Notifications**: when Claude finishes or needs your answer while you are not
   looking at its tab, the desktop says so. Clicking the notification (or its
   **Open**) brings the bench's window forward at that tab, opening the window if
@@ -775,7 +797,7 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 In a **project tab**: Ctrl+P opens a file by name, Ctrl+Shift+F searches every
 file, Ctrl+Shift+A sends the selection (or the file) to the AI tab, Ctrl+W closes
 the file, and the editor's own keys are listed under [Project tabs](#project-tabs).
-In an **AI tab**: Ctrl+Enter sends (or queues while Claude works), Enter breaks the line, Ctrl+Up and Ctrl+Down
+In an **AI tab**: Ctrl+Shift+R opens the review, Ctrl+Enter sends (or queues while Claude works), Enter breaks the line, Ctrl+Up and Ctrl+Down
 go through earlier prompts, Escape stops a turn, Ctrl+F finds in the conversation.
 `new_project_tab` can be bound to a key in `[keys]`. On macOS, Cmd takes Ctrl's
 place in these.

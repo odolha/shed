@@ -102,6 +102,20 @@ printf '[package]\nname = "api"\nversion = "0.4.0"\nedition = "2024"\n' > "$api/
   printf '\n/// A board archived: hidden from lists, kept for history.\npub async fn archive_board(Path(id): Path<u64>, pool: Pool) -> Option<()> {\n    pool.archive(id).await\n}\n' >> src/routes.rs &&
   printf 'pub fn archive(&self, id: u64) {}\n' >> src/db.rs && touch src/archive.rs )
 printf '# Setup\n\nInstall the tools, then run `./dev.sh`.\n' > "$docs/guides/setup.md"
+# The docs as Claude left them after the session: from before it, a pushed
+# commit; in it, one pushed and one not, a staged change and one not staged
+# (for the review). Git's record of the first is backdated to before the session.
+mkdir -p "$root/remotes" && git init -q --bare -b main "$root/remotes/docs.git"
+printf '# Introduction\n\nWhat the board is, and who it is for.\n' > "$docs/guides/intro.md"
+( cd "$docs" && git init -q -b main && git config user.email you@shed && git config user.name you &&
+  git remote add origin "$root/remotes/docs.git" && git add -A && git commit -qm "Guides" && git push -q -u origin main 2>/dev/null &&
+  old=$(( $(date +%s) - 7200 )) && sed -i -E "s/> [0-9]+ ([+-][0-9]{4})/> $old \1/" .git/logs/HEAD .git/logs/refs/heads/main &&
+  printf '# Setup\n\n## 1. Get the code\n\n```sh\ngit clone git@example.com:you/board.git\n```\n\n## 2. Install the tools\n\nNode 22 and Rust, pinned in `rust-toolchain.toml`.\n\n## 3. Run it\n\n`./dev.sh` starts the API and the web app.\n' > guides/setup.md &&
+  git commit -qam "Walk new contributors through the setup" && git push -q 2>/dev/null &&
+  printf '\n## Troubleshooting\n\n- **Port 5173 in use**: `lsof -i :5173`, then stop it.\n- **Old Node**: `node -v` should say 22.\n' >> guides/setup.md &&
+  git commit -qam "Add troubleshooting to the setup guide" &&
+  printf '# Introduction\n\nWhat the board is, who it is for, and where to start.\n' > guides/intro.md && git add guides/intro.md &&
+  printf '\n## 4. Make a first change\n\nA small one, with the tests run before pushing.\n' >> guides/setup.md )
 
 # A Claude Code session for the docs bench's AI tab, as Claude Code keeps them
 # (in this demo home, so no real session is touched).

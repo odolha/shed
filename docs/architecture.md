@@ -401,6 +401,16 @@ keeping the view where it was. Rows and entries map through `row` / `entry_at`;
 search, the prompt list and block jumps `reveal` an entry before scrolling to it.
 Drafts are `AiTab.drafts`, changed through `AiSettings` and saved with the bench.
 
+The review (`ai_review.rs`, a child module of the AI view) reads, off the UI
+thread, each repository the tab works in: `Repo::head_at` finds in the reflog
+where HEAD was when the turn's (or session's) first prompt was sent,
+`commits_since` the commits after it and which the upstream has; with the
+status, every change goes into one of four layers (not staged, staged,
+committed, pushed), each with its diff. Its actions are Git commands
+(`apply` for hunks, `undo_commits` = `reset --soft`, `revert_staged` =
+`revert --no-commit`). Viewed marks are `AiTab.viewed`: a key per change and an
+FNV hash of its texts, so a change that differs since is not viewed.
+
 The usage limits come from Claude Code's `rate_limit_event`s; the keeper keeps
 the last ones (`state_dir/ai-limits.json`, with when they were reported), sends
 them to each window as it says hello, and drops a window once it has reset.

@@ -105,6 +105,9 @@ enum SessionRow {
     Part(SessionInfo),
 }
 
+#[path = "ai_review.rs"]
+mod review;
+
 /// After a model's name, Claude Code's choice of its 1M-token context.
 const LARGE_CONTEXT: &str = "[1m]";
 
@@ -168,6 +171,8 @@ pub struct AiView {
     /// A view per entry drawn, so a hover change inside one redraws only it
     /// (the others are kept as they were drawn); each follows this view.
     entry_views: HashMap<usize, Entity<EntryView>>,
+    /// Reviewing what Claude changed, in place of the conversation.
+    review: Option<review::Review>,
     sessions_task: Option<Task<()>>,
     filter: Entity<LineEditor>,
     sessions_scroll: UniformListScrollHandle,
@@ -337,6 +342,7 @@ impl AiView {
             sessions: Arc::default(),
             open_families: HashSet::new(),
             entry_views: HashMap::new(),
+            review: None,
             sessions_task: None,
             filter,
             sessions_scroll: UniformListScrollHandle::new(),
@@ -693,6 +699,7 @@ impl AiView {
         let conversation = self.transcript_markdown();
         let prompt = self.prompt.read(cx).buffer.text();
         vec![
+            menu::item("Review Changes", |this: &mut Self, window, cx| this.open_review(review::Scope::Turn, window, cx)).icon("branch"),
             menu::item("Find in the Conversation…", |this: &mut Self, window, cx| this.open_find(window, cx)).icon("search"),
             menu::item("Insert a File's Text…", |this: &mut Self, _, cx| this.insert_file(cx)).icon("file"),
             menu::item("Save the Prompt…", move |this: &mut Self, _, cx| this.save_as("prompt.md", prompt.clone(), cx)),
@@ -976,6 +983,8 @@ impl AiView {
             "escape" if self.editing.is_some() => self.cancel_edit(cx),
             "escape" if self.status.state != AiState::Idle => self.stop(),
             "f" if sec => self.open_find(window, cx),
+            // Ctrl+Shift+R: the review of what changed.
+            "r" if sec && ks.modifiers.shift => self.open_review(review::Scope::Turn, window, cx),
             // (Ctrl+Shift+arrows go from message to message.)
             "up" | "down" if sec && !ks.modifiers.shift => {
                 let prompts: Vec<&String> = self.entries.iter().filter_map(|e| if let Entry::User { text, .. } = e { Some(text) } else { None }).collect();
@@ -2943,6 +2952,24 @@ impl AiView {
         if !changed.is_empty() {
             any = true;
             let mut row = div().flex().flex_wrap().items_center().gap_1().child(div().text_color(hsla(ui.text_dim)).child("Changed, to review:"));
+            // The whole turn's changes, staged and committed ones too, in a view of their own.
+            row = row.child(
+                div()
+                    .id("review-open")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_1p5()
+                    .rounded_sm()
+                    .bg(hsla_alpha(accent, 0.2))
+                    .text_color(hsla(ui.ink(accent)))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hsla_alpha(accent, 0.3)))
+                    .tooltip(menu::tooltip("Every change of this turn or the session: not staged, staged, committed, pushed"))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_review(review::Scope::Turn, window, cx)))
+                    .child(svg().path(icon("branch")).size(px(12.0)).text_color(hsla(ui.ink(accent))))
+                    .child("Review…"),
+            );
             for (n, file) in changed.into_iter().enumerate() {
                 let name = std::path::Path::new(&file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 row = row.child(
@@ -3127,8 +3154,9 @@ impl Render for AiView {
                     .h_full()
                     .flex()
                     .flex_col()
-                    .child(self.render_header(&ui, cx))
-                    .child(if empty {
+                    .when(self.review.is_some(), |d| d.child(self.render_review(&ui, cx)))
+                    .when(self.review.is_none(), |d| d.child(self.render_header(&ui, cx)))
+                    .when(self.review.is_none(), |d| d.child(if empty {
                         div()
                             .flex_1()
                             .flex()
@@ -3142,11 +3170,13 @@ impl Render for AiView {
                             .into_any_element()
                     } else {
                         transcript.into_any_element()
+                    }))
+                    .when(self.review.is_none(), |d| {
+                        d.children(self.render_extras(&ui, cx))
+                            .children(self.render_completion(&ui, cx))
+                            .children(self.render_attachments(&ui, cx))
                     })
-                    .children(self.render_extras(&ui, cx))
-                    .children(self.render_completion(&ui, cx))
-                    .children(self.render_attachments(&ui, cx))
-                    .child(
+                    .when(self.review.is_none(), |d| d.child(
                         div()
                             .mx_3()
                             .mt_1()
@@ -3157,8 +3187,8 @@ impl Render for AiView {
                             .capture_key_down(cx.listener(Self::prompt_key))
                             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.on_drop(paths, cx)))
                             .child(self.prompt.clone()),
-                    )
-                    .child(self.render_footer(&ui, cx)),
+                    ))
+                    .when(self.review.is_none(), |d| d.child(self.render_footer(&ui, cx))),
             )
             .children(menu)
     }

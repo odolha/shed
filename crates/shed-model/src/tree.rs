@@ -329,6 +329,9 @@ pub struct AiTab {
     pub queued: Vec<Queued>,
     /// What is written in the prompt and not sent yet.
     pub unsent: String,
+    /// Changes marked viewed in the review: each change's key, and a hash
+    /// of what was viewed (a change that differs since is not viewed).
+    pub viewed: Vec<(String, String)>,
 }
 
 /// A message waiting its turn: its text, and its pictures as files.

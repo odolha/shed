@@ -317,6 +317,56 @@ impl Repo {
             .collect())
     }
 
+    /// Where HEAD was at `time` (Unix seconds), by the reflog: the last move
+    /// at or before it. `None` when the reflog does not reach that far back
+    /// (or there is no commit yet).
+    pub fn head_at(&self, time: u64) -> Option<String> {
+        let out = self.run(&["log", "-g", "--format=%H %gd", "--date=unix", "HEAD"]).ok()?;
+        // Newest first: `<hash> HEAD@{<unix time>}`.
+        let moves: Vec<(String, u64)> = out
+            .lines()
+            .filter_map(|l| {
+                let (hash, at) = l.split_once(' ')?;
+                let t = at.strip_prefix("HEAD@{")?.strip_suffix('}')?.parse().ok()?;
+                Some((hash.to_string(), t))
+            })
+            .collect();
+        moves.iter().find(|(_, t)| *t <= time).map(|(h, _)| h.clone())
+    }
+
+    /// The commits after `base` up to HEAD (newest first), each with whether
+    /// its upstream has it already (pushed).
+    pub fn commits_since(&self, base: &str) -> Result<Vec<(Commit, bool)>> {
+        let commits = self.log_of(&[&format!("{base}..HEAD")], 500)?;
+        let pushed: std::collections::HashSet<String> = self
+            .run(&["rev-list", &format!("{base}..@{{upstream}}")])
+            .map(|o| o.lines().map(String::from).collect())
+            .unwrap_or_default();
+        Ok(commits.into_iter().map(|c| {
+            let on_upstream = pushed.contains(&c.hash);
+            (c, on_upstream)
+        }).collect())
+    }
+
+    /// A file as it is in a commit (`""` when it is not there).
+    pub fn show_at(&self, rev: &str, path: &str) -> String {
+        self.run(&["show", &format!("{rev}:{path}")]).unwrap_or_default()
+    }
+
+    /// Takes the commits after `to` back out of the branch, their changes
+    /// kept staged (only for commits not pushed).
+    pub fn undo_commits(&self, to: &str) -> Result<String> {
+        self.run(&["reset", "--soft", to])
+    }
+
+    /// Puts the opposite of these commits in the index and the working folder,
+    /// not committed: reviewed, changed if need be, then committed anew.
+    pub fn revert_staged(&self, commits: &[String]) -> Result<String> {
+        let mut args = vec!["revert", "--no-commit"];
+        args.extend(commits.iter().map(String::as_str));
+        self.run(&args)
+    }
+
     /// The files a commit changed, with their status letter.
     pub fn commit_files(&self, hash: &str) -> Result<Vec<(char, String)>> {
         let out = self.run(&["show", "--format=", "--name-status", "-z", hash])?;
@@ -473,6 +523,42 @@ mod tests {
         assert_eq!(out, ["three", "two"]);
         let target = r.push_target(&branch);
         assert_eq!((target.remote_branch.as_str(), target.new), ("main", false));
+    }
+
+    #[test]
+    fn what_a_turn_did_from_the_reflog() {
+        let (_d, r) = repo();
+        let remote = tempfile::tempdir().unwrap();
+        Repo { root: remote.path().to_path_buf() }.run(&["init", "-q", "--bare", "-b", "main"]).unwrap();
+        r.run(&["remote", "add", "origin", &remote.path().display().to_string()]).unwrap();
+        let commit = |name: &str| {
+            std::fs::write(r.root.join(name), format!("{name}\n")).unwrap();
+            r.stage(&[name.into()]).unwrap();
+            r.commit(name, false).unwrap();
+        };
+        commit("one");
+        r.push(false, &r.status().unwrap().branch).unwrap();
+        let start = r.run(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        // The turn starts a moment later: what HEAD was then.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let turn = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(r.head_at(turn).as_deref(), Some(start.as_str()));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        commit("two");
+        r.push(false, &r.status().unwrap().branch).unwrap();
+        commit("three");
+        let base = r.head_at(turn).unwrap();
+        let done: Vec<(String, bool)> = r.commits_since(&base).unwrap().into_iter().map(|(c, p)| (c.subject, p)).collect();
+        assert_eq!(done, [("three".to_string(), false), ("two".to_string(), true)]);
+        assert_eq!(r.show_at(&base, "two"), "");
+        // Not pushed: taken back, its change kept staged.
+        let two = r.run(&["rev-parse", "HEAD~1"]).unwrap().trim().to_string();
+        r.undo_commits(&two).unwrap();
+        assert!(r.status().unwrap().entries.iter().any(|e| e.path == "three" && e.index == 'A'));
+        r.commit("three", false).unwrap();
+        // Pushed: its opposite staged, to commit anew.
+        r.revert_staged(&[two]).unwrap();
+        assert!(r.status().unwrap().entries.iter().any(|e| e.path == "two" && e.index == 'D'));
     }
 
     #[test]

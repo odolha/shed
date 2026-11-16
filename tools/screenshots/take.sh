@@ -52,7 +52,10 @@ sleep 12
 shed_win=$(win Shed)
 grab "$(win 'Shed — board')" bench
 grab "$(win 'Shed — api')" project
-grab "$(win 'Shed — docs')" ai
+docs_win=$(win 'Shed — docs')
+grab "$docs_win" ai
+# The review of what Claude changed (Ctrl+Shift+R at the AI tab's prompt).
+xtype "$docs_win" %0.3 @Control_L+Shift_L+r %3 && grab "$docs_win" review && xtype "$docs_win" @Down @Down %0.8 && grab "$docs_win" review-commit && xtype "$docs_win" @Escape %0.5 || true
 "$shed" hide docs >/dev/null; sleep 4
 grab "$shed_win" shed
 echo 'theme = "shed-light"' > "$XDG_CONFIG_HOME/shed/shed.toml"; sleep 3
@@ -75,7 +78,7 @@ def scaled(im, factor):
     return im.resize((int(im.width * factor), int(im.height * factor)), Image.LANCZOS)
 # (colours.png and tab-menu.png need right-clicks, which do not reach GPUI on
 # Xvfb: they stay as they were.)
-for name in ["shed", "bench", "shed-light", "project", "ai", "setup", "logbook", "find"]:
+for name in ["shed", "bench", "shed-light", "project", "ai", "review", "setup", "logbook", "find"]:
     path = f"{demo}/{name}.png"
     if os.path.exists(path):
         im = Image.open(path).convert("RGB")

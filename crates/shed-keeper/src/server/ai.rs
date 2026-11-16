@@ -643,6 +643,7 @@ impl Keeper {
         ai.follow = new.follow;
         ai.drafts = new.drafts;
         ai.unsent = new.unsent;
+        ai.viewed = new.viewed;
         let ai = ai.clone();
         st.broadcast_tree();
         if let Some(rt) = st.ai.get_mut(&tab)
