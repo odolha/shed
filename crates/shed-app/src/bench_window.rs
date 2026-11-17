@@ -117,6 +117,41 @@ pub fn known_tags(cx: &gpui::App, state: &crate::state::AppState) -> Vec<(String
     found.into_iter().map(|(label, (color, n))| (label.clone(), if config.tag_colors.contains_key(&label) { config.tag_color_of(&label) } else { color }, n)).collect()
 }
 
+/// About how wide the tab bar's two parts would be on one row, at scale
+/// `s`: the tabs (by their titles, tags and zoom, in their groups), the
+/// controls, and the widest control (the narrowest the controls can get).
+/// Text is not measured before it is laid out, so this goes by characters.
+fn bar_widths(bench: &Bench, s: f32, limits: bool, lifecycle: bool, setup: bool) -> (f32, f32, f32) {
+    let ch = 7.4 * s;
+    let tab = |t: &Tab| {
+        let tags: f32 = t.all_tags().map(|g| g.label.chars().count() as f32 * 6.5 * s + 16.0 * s).sum();
+        24.0 * s + 22.0 * s + t.display_title().chars().count() as f32 * ch + tags + if t.zoom != 0.0 { 44.0 * s } else { 0.0 }
+    };
+    let mut tabs = 8.0 * s + 34.0 * s;
+    for (i, t) in bench.tabs.iter().enumerate() {
+        // A new group: its tray's edge, and the gap between trays.
+        if i == 0 || t.divider != TabDivider::None {
+            tabs += 6.0 * s + if i == 0 { 0.0 } else { 10.0 * s };
+        }
+        tabs += tab(t) + 2.0 * s;
+    }
+    let mut items = Vec::new();
+    if limits {
+        items.push(176.0 * s);
+    }
+    if lifecycle {
+        items.push(32.0 * s);
+    }
+    if setup {
+        items.push(32.0 * s);
+    }
+    items.push(bench.name.chars().count() as f32 * 8.0 * s + 54.0 * s);
+    items.extend(bench.links.iter().map(|l| l.name.chars().count().min(22) as f32 * 7.0 * s + 40.0 * s));
+    let controls = items.iter().sum::<f32>() + 4.0 * s * items.len() as f32 + 8.0 * s;
+    let widest = items.iter().copied().fold(0.0, f32::max);
+    (tabs, controls, widest)
+}
+
 fn item(label: impl Into<SharedString>, action: impl Fn(&mut BenchWindow, &mut Window, &mut Context<BenchWindow>) + 'static) -> MenuEntry<BenchWindow> {
     menu::item(label, action)
 }
@@ -847,7 +882,7 @@ impl BenchWindow {
         self.editing.as_ref().filter(|(t, _, _)| *t == target).map(|(_, e, _)| e.clone())
     }
 
-    fn render_tab_bar(&self, bench: &Bench, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_tab_bar(&self, bench: &Bench, width: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let s = self.bar_scale(cx);
         let ui = &self.ui;
         let accent = bench.color.accent();
@@ -1083,16 +1118,29 @@ impl BenchWindow {
             .and_then(|l| crate::ai_view::limit_bars(l, ui, &self.state.read(cx).settings.palette, s));
         // Setup is for terminal tabs: startup, teardown and aliases.
         let terminal = bench.active_tab().is_some_and(|t| t.project_info().is_none() && t.ai_info().is_none());
+        // The controls on the right: one row when the tabs leave room for it;
+        // when the tabs need more rows, a narrower block of rows of their own
+        // (right-aligned, each as tall as a tab row), so the tabs get the width.
+        let (tabs_w, controls_w, widest) = bar_widths(bench, s, limits.is_some(), has_startup && !bench.started || bench.started && has_teardown, terminal);
+        let room = f32::from(width);
+        let stacked = tabs_w + controls_w > room;
+        let controls_max = if stacked { widest.max(room * 0.28).min(controls_w) } else { controls_w.max(room) };
         let controls = div()
             .flex()
             .flex_none()
-            .h(row)
-            .children(limits.map(|l| l.px_2()))
-            .children(lifecycle)
-            .child(self.render_links(bench, cx))
+            .flex_wrap()
+            .justify_end()
+            .items_center()
+            .gap_x(px(4.0 * s))
+            .gap_y(pad)
+            .p(pad)
+            .max_w(px(controls_max + f32::from(pad) * 2.0 + 2.0))
+            .children(limits.map(|l| l.h(tab_h).px_1()))
+            .children(lifecycle.map(|l| l.h(tab_h)))
         .when(terminal || self.setup.is_some(), |d| d.child(
             div()
                 .id("setup-button")
+                .h(tab_h)
                 .flex()
                 .items_center()
                 .px_2()
@@ -1103,7 +1151,9 @@ impl BenchWindow {
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_setup(window, cx)))
                 .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if self.setup.is_some() { accent } else { ui.text_dim }))),
         ))
-            .child(self.render_bench_label(bench, cx));
+            .child(div().h(tab_h).flex().items_center().child(self.render_bench_label(bench, cx)))
+            // Links last: stacked, they take the rows below.
+            .children(self.render_links(bench, cx).into_iter().map(|l| div().h(tab_h).flex().items_center().child(l)));
         div()
             .id("tab-bar")
             .flex()
@@ -1126,10 +1176,10 @@ impl BenchWindow {
         self.state.read(cx).settings.config.window.tab_bar_scale.clamp(0.7, 2.0) * crate::theme::ui_scale()
     }
 
-    fn render_links(&self, bench: &Bench, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_links(&self, bench: &Bench, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let accent = bench.color.accent();
         let links = bench.links.clone();
-        div().flex().flex_none().items_center().gap_1().px_1().children(bench.links.iter().enumerate().map(|(i, link)| {
+        bench.links.iter().enumerate().map(|(i, link)| {
             let url = link.url.clone();
             let links = links.clone();
             crate::links::chip(format!("link-{i}"), link, accent, &self.ui)
@@ -1145,7 +1195,9 @@ impl BenchWindow {
                     );
                     this.open_menu(e.position, entries, cx);
                 }))
-        }))
+                .into_any_element()
+        })
+        .collect()
     }
 
     fn render_bench_label(&self, bench: &Bench, cx: &mut Context<Self>) -> AnyElement {
@@ -1290,7 +1342,8 @@ impl MenuHost for BenchWindow {
 }
 
 impl Render for BenchWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let width = window.viewport_size().width;
         if crate::terminal_view::perf::enabled() {
             crate::terminal_view::perf::WINDOW_RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -1381,7 +1434,7 @@ impl Render for BenchWindow {
                 }
             }))
             .child(div().h(px(3.0)).w_full().flex_none().bg(hsla(accent)))
-            .child(self.render_tab_bar(&bench, cx))
+            .child(self.render_tab_bar(&bench, width, cx))
             .child(
                 // The panel lies over the panes rather than beside them, so opening it
                 // does not resize every terminal in the tab.

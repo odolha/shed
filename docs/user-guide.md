@@ -160,8 +160,11 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   (terminal, program running, project, AI, remote), or, in the bench's colour,
   that it is working or that a command is [waiting for Enter](#opening-hiding-closing).
 - **New tab**: the button after the last tab, or Ctrl+Shift+T. When the tabs do
-  not fit on one row they wrap onto more, the bar growing to hold them; the
-  buttons on the right stay on the first row.
+  not fit on one row they wrap onto more, the bar growing to hold them. The
+  controls on the right (usage limits, Run Startup, Setup, the bench's name and
+  its links) stay on one row when there is room; when the tabs need more rows,
+  they stack into a narrower block of rows of their own, each level with a row
+  of tabs, so the tabs get the width.
 - **Groups**: right-click a tab, **Divider Before**: **Space** starts a group
   there (each group sits on a tray of its own, a gap between, and a bench without dividers is one group on one tray, the new-tab button after the trays; a group goes onto the next row whole, and wraps inside
   only when it alone is wider than the bar), **New Row** starts its group on a row
