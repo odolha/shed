@@ -1195,6 +1195,7 @@ impl AiView {
             if self.status.state == AiState::Idle {
                 entries.push(menu::item("Edit and Send Again…", move |this: &mut Self, window, cx| this.edit_prompt(i, window, cx)).icon("pencil"));
                 entries.push(menu::item("Send Again", move |this: &mut Self, window, cx| this.resend(i, window, cx)).icon("refresh"));
+                entries.push(menu::danger("Revert to Here…", move |this: &mut Self, window, cx| this.revert_to(i, window, cx)).icon("discard"));
                 entries.push(MenuEntry::Separator);
             }
         } else {
@@ -1532,6 +1533,39 @@ impl AiView {
         let target = self.focus_target(cx);
         window.focus(&target, cx);
         cx.notify();
+    }
+
+    /// Goes back to before one of the user's messages, sending nothing: it
+    /// and everything after leave the conversation (the old session is kept
+    /// in the list), after asking; the files Claude changed since go back
+    /// too, or stay as they are.
+    fn revert_to(&mut self, entry: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.entries.get(entry), Some(Entry::User { .. })) {
+            return;
+        }
+        let later = self.entries[entry..].iter().filter(|e| matches!(e, Entry::User { .. })).count();
+        let detail = format!(
+            "This message{} leave the conversation, and Claude goes on from just before it, with what you send next. \
+             The conversation as it is now stays in the sessions list.\n\n\
+             The files Claude changed since can go back as they were, or stay as they are now.",
+            if later > 1 { format!(" and the {} after it", later - 1) } else { " and Claude's answer to it".to_string() }
+        );
+        let answer = window.prompt(gpui::PromptLevel::Warning, "Revert to before this message?", Some(&detail), &["Revert, Files Too", "Revert the Conversation Only", "Cancel"], cx);
+        let (conn, tab) = (self.conn.clone(), self.tab);
+        cx.spawn(async move |this, cx| {
+            let files = match answer.await {
+                Ok(0) => true,
+                Ok(1) => false,
+                _ => return,
+            };
+            conn.send_msg(ClientMsg::AiRevert { tab, entry: entry as u32, files });
+            this.update(cx, |this, cx| {
+                this.selection = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Sends a prompt again as it was (a new answer); one before the last
@@ -2125,6 +2159,12 @@ impl AiView {
                     .when(idle, |d| {
                         d.child(action("edit", "pencil", "Edit").on_click(cx.listener(move |this, _, window, cx| this.edit_prompt(i, window, cx))))
                             .child(action("resend", "refresh", "Send Again").on_click(cx.listener(move |this, _, window, cx| this.resend(i, window, cx))))
+                            .child(
+                                action("revert", "discard", "Revert…")
+                                    .text_color(hsla(ui.danger))
+                                    .tooltip(menu::tooltip("Go back to before this message: it and what follows leave the conversation"))
+                                    .on_click(cx.listener(move |this, _, window, cx| this.revert_to(i, window, cx))),
+                            )
                     })
                     .child(self.copy_button(format!("copy-prompt-{i}").into(), ClipboardItem::new_string(text.clone()), &ui, cx));
                 let editing = self.editing == Some(i);

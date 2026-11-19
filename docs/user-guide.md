@@ -405,6 +405,12 @@ terminal of the bench.
   gets a new answer. **Send Again** does the same with the message as it was (for
   the last message at once; for an earlier one Shed asks first). Esc cancels an
   edit. The earlier conversation is kept as its own session in the list.
+  **Revert…** (in red, also **Revert to Here…** in the right-click menu) goes
+  back to before a message without sending anything: that message and
+  everything after it leave the conversation, and Claude goes on from there
+  with what you send next. Shed asks first, with **Revert, Files Too** (the
+  files Claude changed since are put back) or **Revert the Conversation Only**
+  (the files stay as they are); the conversation as it was stays in the list.
 - **Copying**: drag over the text to select it (double-click a word, triple-click
   a paragraph, Shift+click to extend), then Ctrl+C. Each answer has a **Copy**
   button when the mouse is over it (on the last part of a response with tools in

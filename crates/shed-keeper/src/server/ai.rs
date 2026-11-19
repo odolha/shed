@@ -60,6 +60,8 @@ struct Edit {
     entry: usize,
     text: String,
     images: Vec<AiImage>,
+    /// Sent once back there (an edit); not for a revert.
+    send: bool,
 }
 
 impl AiRt {
@@ -293,6 +295,17 @@ impl Keeper {
     /// goes back to before it (as a new session, the old one is kept), and
     /// the new text goes out.
     pub(super) fn ai_edit(self: &Arc<Self>, client: ClientId, tab: TabId, entry: usize, text: String, images: Vec<AiImage>) {
+        self.ai_go_back(client, tab, Edit { request: String::new(), entry, text, images, send: true }, true);
+    }
+
+    /// Goes back to before a message, sending nothing; with `files`, the
+    /// files Claude changed since go back too.
+    pub(super) fn ai_revert(self: &Arc<Self>, client: ClientId, tab: TabId, entry: usize, files: bool) {
+        self.ai_go_back(client, tab, Edit { request: String::new(), entry, text: String::new(), images: Vec::new(), send: false }, files);
+    }
+
+    fn ai_go_back(self: &Arc<Self>, client: ClientId, tab: TabId, edit: Edit, files: bool) {
+        let entry = edit.entry;
         let mut st = self.lock();
         let Some(rt) = self.ai_rt(&mut st, tab) else { return };
         if rt.transcript.status.state != AiState::Idle || rt.editing.is_some() {
@@ -300,9 +313,15 @@ impl Keeper {
             return;
         }
         let Some(mark) = rt.transcript.prompt_mark(entry).cloned() else {
-            st.send(client, KeeperMsg::Error("this message cannot be sent again: Claude Code's record of it is not known".into()));
+            st.send(client, KeeperMsg::Error("cannot go back to this message: Claude Code's record of it is not known".into()));
             return;
         };
+        // The conversation only: no files to ask Claude Code about.
+        if !files {
+            drop(st);
+            self.ai_edit_go_back(tab, edit, None);
+            return;
+        }
         if rt.input.is_none()
             && let Err(e) = self.ai_spawn(&mut st, tab)
         {
@@ -312,10 +331,10 @@ impl Keeper {
         let rt = st.ai.get_mut(&tab).unwrap();
         let uuid = mark.uuid.clone().unwrap_or_default();
         match rt.control_id(json!({"subtype": "rewind_files", "user_message_id": uuid})) {
-            Some(request) => rt.editing = Some(Edit { request, entry, text, images }),
+            Some(request) => rt.editing = Some(Edit { request, ..edit }),
             None => {
                 drop(st);
-                self.ai_edit_go_back(tab, Edit { request: String::new(), entry, text, images }, Some("Claude Code is not running".into()));
+                self.ai_edit_go_back(tab, edit, Some("Claude Code is not running".into()));
             }
         }
     }
@@ -328,8 +347,12 @@ impl Keeper {
         let Some(mark) = rt.transcript.prompt_mark(edit.entry).cloned() else { return };
         rt.stop();
         rt.transcript.truncate(edit.entry);
+        // An edit (or a revert with files) asked for the files; a revert of
+        // the conversation only did not.
+        let files_asked = edit.send || !edit.request.is_empty() || files_problem.is_some();
         match files_problem {
-            None => rt.transcript.notice("Went back to before this message; the files Claude changed since are as they were", false),
+            None if files_asked => rt.transcript.notice("Went back to before this message; the files Claude changed since are as they were", false),
+            None => rt.transcript.notice("Went back to before this message; the files are as they are now", false),
             Some(why) => rt.transcript.notice(format!("Went back to before this message; files not put back: {why}"), true),
         }
         // The session goes on from the message before (a new session that
@@ -358,9 +381,12 @@ impl Keeper {
             }
             st.broadcast_tree();
         }
-        // No window asked: errors starting it again go to the notice.
-        let client: ClientId = u64::MAX;
-        self.ai_send_locked(&mut st, client, tab, edit.text, edit.images);
+        // No window asked: errors starting it again go to the notice. A
+        // revert sends nothing: the next prompt goes on from here.
+        if edit.send {
+            let client: ClientId = u64::MAX;
+            self.ai_send_locked(&mut st, client, tab, edit.text, edit.images);
+        }
         drop(st);
         self.save_soon.notify_one();
         self.ai_dirty.notify_one();

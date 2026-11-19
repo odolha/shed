@@ -165,6 +165,35 @@ for line in sys.stdin:
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
+    // Reverted to before the last message, files left alone: it and its
+    // answer go, nothing is sent, and the next prompt goes on from there.
+    let mut entries: Vec<Entry> = Vec::new();
+    c.msg(ClientMsg::AiWatch { tab });
+    // (Once the queued message's turn is over: no going back while Claude works.)
+    c.until("the conversation, idle", |f, _| match f {
+        Frame::Keeper(KeeperMsg::AiUpdate { tab: t, from, entries: e, status, .. }) if *t == tab => {
+            entries.truncate(*from as usize);
+            entries.extend(e.iter().cloned());
+            (status.state == shed_ai::State::Idle).then_some(())
+        }
+        _ => None,
+    });
+    let last = entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap();
+    let users_before = std::fs::read_to_string(dir.path().join("claude.log")).unwrap().lines().filter(|l| l.starts_with("user ")).count();
+    c.msg(ClientMsg::AiRevert { tab, entry: last as u32, files: false });
+    c.until("reverted", |f, _| match f {
+        Frame::Keeper(KeeperMsg::AiUpdate { tab: t, from, entries: e, .. }) if *t == tab => {
+            entries.truncate(*from as usize);
+            entries.extend(e.iter().cloned());
+            (entries.len() <= last + 1 && entries.iter().any(|x| matches!(x, Entry::Notice { text, .. } if text.contains("files are as they are now")))).then_some(())
+        }
+        _ => None,
+    });
+    assert!(!entries.iter().skip(last).any(|e| matches!(e, Entry::User { .. })), "{:?}", &entries[last.saturating_sub(1)..]);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let users_after = std::fs::read_to_string(dir.path().join("claude.log")).unwrap().lines().filter(|l| l.starts_with("user ")).count();
+    assert_eq!(users_after, users_before, "a revert sends nothing");
+
     // Closing the tab stops it.
     c.msg(ClientMsg::CloseTab { tab });
     tree_until(&mut c, "closed", |t| t.tab(tab).is_none());
