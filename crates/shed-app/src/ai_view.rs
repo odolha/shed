@@ -22,7 +22,7 @@ use shed_proto::{AiImage, ClientMsg};
 
 use crate::ai_text::{self, Copy, Kind, Piece, Point, Selection};
 use crate::assets::icon;
-use crate::keeper_conn::KeeperConn;
+use shed_client::keeper_conn::KeeperConn;
 use crate::line_editor::{EditorEvent, LineEditor};
 use crate::menu::{self, Menu, MenuEntry, MenuHost};
 use crate::settings::Settings;
@@ -3828,7 +3828,7 @@ mod tests {
         });
         let (view, cx) = cx.add_window_view(|_, cx| {
             let ai = shed_model::AiTab { folder: folder.into(), ..Default::default() };
-            AiView::new(BenchId::new(), TabId::new(), ai, Rgb::hex(0xFF8A57), crate::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default(), cx)
+            AiView::new(BenchId::new(), TabId::new(), ai, Rgb::hex(0xFF8A57), shed_client::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default(), cx)
         });
         cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
         view.update(cx, |v, cx| v.update(0, entries, Status::default(), cx));

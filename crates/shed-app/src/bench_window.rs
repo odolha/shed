@@ -218,8 +218,8 @@ pub struct BenchWindow {
 }
 
 enum RemoteShells {
-    Looking(Vec<crate::remote::RemoteShell>),
-    Found(Vec<crate::remote::RemoteShell>),
+    Looking(Vec<shed_client::remote::RemoteShell>),
+    Found(Vec<shed_client::remote::RemoteShell>),
     Failed(String),
 }
 
@@ -412,7 +412,7 @@ impl BenchWindow {
 
     /// Servers for a new remote tab: those in `~/.ssh/config`, or one to type.
     fn remote_host_menu(&mut self, _: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
-        let mut entries: Vec<MenuEntry<Self>> = crate::remote::known_hosts()
+        let mut entries: Vec<MenuEntry<Self>> = shed_client::remote::known_hosts()
             .into_iter()
             .map(|host| more(host.clone(), move |this: &mut Self, cx| this.remote_shell_menu(&host, cx)).icon("server"))
             .collect();
@@ -432,7 +432,7 @@ impl BenchWindow {
         let h = host.to_string();
         cx.spawn(async move |this, cx| {
             let asked = h.clone();
-            let found = cx.background_executor().spawn(async move { crate::remote::list_shells(&asked) }).await;
+            let found = cx.background_executor().spawn(async move { shed_client::remote::list_shells(&asked) }).await;
             this.update(cx, |this, cx| {
                 let shells = match found {
                     Ok(list) => RemoteShells::Found(list),
@@ -472,7 +472,7 @@ impl BenchWindow {
                     any = true;
                     let (h, id) = (host.to_string(), shell.id.clone());
                     entries.push(
-                        item(crate::remote::describe(shell), move |this, _, cx| {
+                        item(shed_client::remote::describe(shell), move |this, _, cx| {
                             this.send(ClientMsg::NewRemoteTab { bench: this.bench, host: h.clone(), join: Some(id.clone()) }, cx)
                         })
                         .icon("terminal"),

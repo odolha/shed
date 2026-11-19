@@ -20,7 +20,7 @@ use shed_project::{Excluder, Lang, Style, Watch};
 use shed_proto::ClientMsg;
 
 use crate::assets::icon;
-use crate::keeper_conn::KeeperConn;
+use shed_client::keeper_conn::KeeperConn;
 
 #[path = "project_git.rs"]
 mod git;

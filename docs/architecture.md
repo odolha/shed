@@ -612,6 +612,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-project` | A project's file list, folder watching, ranking files by name, colouring |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists |
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts |
+| `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, remote shells over ssh |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 
 `browser/chrome/` is the browser extension (built into `shed`, written out by

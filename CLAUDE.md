@@ -76,6 +76,10 @@ Crates (`crates/`), lowest first:
 - `shed-git`: Git through the `git` program (status, diffs, hunk patches,
   commits, branches, log); the UI is `shed-app/src/project_git.rs`.
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.
+- `shed-client`: talking to the keeper without GPUI: `keeper_conn.rs` (socket
+  connection; starts `shedd` if needed; version check), `cli.rs` (blocking
+  `request`, the CLI's keeper commands: status, list, stop, …), `remote.rs`
+  (remote shells over ssh).
 - `shed-app`: `shed` binary: GPUI windows and the CLI.
 
 ### How a change flows
@@ -105,8 +109,8 @@ produces replay on attach); each window runs its own emulator per visible pane
 ### shed-app map
 
 - `main.rs`: CLI (clap) and app start; the window process is single-instance
-  (a second `shed` asks the keeper to `Show` something instead).
-- `keeper_conn.rs`: socket connection; starts `shedd` if needed; version check.
+  (a second `shed` asks the keeper to `Show` something instead). The keeper
+  connection and the CLI's keeper commands are in `shed-client`.
 - `state.rs`: `AppState`: tree, settings, per-pane `TerminalView`s, window handles,
   notices; handles every `KeeperMsg`.
 - `shed_window.rs` hosts `pegboard.rs` (the overview: bench rows, tab cards,
@@ -159,7 +163,7 @@ timer parks), wired in through
 - **Commits**: a sentence-case summary of what changed for the user, no
   conventional-commit prefix; bullet details in the body.
 - **Platforms**: Linux and macOS (Windows via WSL may come later). OS-specific
-  code is kept to `shed-keeper/src/procinfo.rs`, `keeper_conn.rs` (peer pid),
+  code is kept to `shed-keeper/src/procinfo.rs`, `shed-client/src/keeper_conn.rs` (peer pid),
   `shed-model/src/paths.rs`, `shed-desktop` (Linux desktop entries),
   `shed-app/src/macos.rs` (menus, Dock) and `cfg!`s for keys, fonts and the
   primary selection. Keep `tools/mac-check.sh` clean; CI runs both.

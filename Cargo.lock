@@ -5843,6 +5843,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shed-ai",
+ "shed-client",
  "shed-desktop",
  "shed-emu",
  "shed-git",
@@ -5860,6 +5861,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "x11rb",
+]
+
+[[package]]
+name = "shed-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "libc",
+ "shed-model",
+ "shed-proto",
+ "shed-save",
 ]
 
 [[package]]

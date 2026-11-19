@@ -13,7 +13,7 @@ use tracing::{error, warn};
 
 use crate::ai_view::{AiLimits, AiView};
 use crate::bench_window::BenchWindow;
-use crate::keeper_conn::KeeperConn;
+use shed_client::keeper_conn::KeeperConn;
 use crate::pegboard::PegboardData;
 use crate::project_view::ProjectView;
 use crate::shed_window::ShedWindow;

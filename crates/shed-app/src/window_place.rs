@@ -9,7 +9,7 @@ use gpui::{App, Bounds, Context, Pixels, Size, Subscription, Task, Window, Windo
 use shed_model::{BenchId, WindowPlace, WindowState};
 use shed_proto::ClientMsg;
 
-use crate::keeper_conn::KeeperConn;
+use shed_client::keeper_conn::KeeperConn;
 
 /// How long a window must keep still before its place is recorded; also
 /// skips the in-between sizes of maximizing on X11.

@@ -87,11 +87,11 @@ impl LogbookSearch {
         this.fetching = Some(cx.spawn(async move |this, cx| {
             let fetched = cx
                 .background_spawn(async move {
-                    let shells = crate::remote::list_shells(&host)?;
+                    let shells = shed_client::remote::list_shells(&host)?;
                     let here = shells.iter().find(|s| s.id == shell).and_then(|s| {
                         Some(Here { tab: shed_model::TabId(s.tab.parse().ok()?), bench: shed_model::BenchId(s.bench.parse().ok()?) })
                     });
-                    let any = crate::remote::fetch_logbook(&host, &path)?;
+                    let any = shed_client::remote::fetch_logbook(&host, &path)?;
                     anyhow::Ok((here, any))
                 })
                 .await;

@@ -9,7 +9,6 @@ mod picture;
 mod bench_window;
 mod changes_ui;
 mod emoji;
-mod keeper_conn;
 mod line_editor;
 mod links;
 mod logbook;
@@ -21,7 +20,6 @@ mod notify;
 mod pegboard;
 mod project_view;
 mod prompt;
-mod remote;
 mod scrollbar;
 #[cfg(target_os = "linux")]
 mod selection;
@@ -43,6 +41,9 @@ use clap::{Parser, Subcommand};
 use gpui::{App, AppContext, QuitMode};
 use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, PROTOCOL_VERSION, ShowTarget};
 use tracing_subscriber::EnvFilter;
+
+use shed_client::cli::{recv_timeout, request};
+use shed_client::{cli, keeper_conn, remote};
 
 use crate::state::AppState;
 
@@ -329,36 +330,8 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Load { name, quiet: true, .. }) => run_app(ShowTarget::LoadQuiet { name }),
         Some(Command::Load { name, start: true, .. }) => run_app(ShowTarget::LoadAndStart { name }),
         Some(Command::Load { name, .. }) => run_app(ShowTarget::Load { name }),
-        Some(Command::Hide { name }) => {
-            let tree = request(ClientMsg::Status, |m| match m {
-                KeeperMsg::Status(s) => Some(s.tree),
-                _ => None,
-            })?;
-            let Some(bench) = tree.benches.iter().find(|b| b.name == name).map(|b| b.id) else {
-                bail!("no running bench named {name:?}");
-            };
-            let done = request(ClientMsg::Hide { bench }, |m| match m {
-                KeeperMsg::Done(text) => Some(text),
-                _ => None,
-            })?;
-            println!("{done}");
-            Ok(())
-        }
-        Some(Command::Save { name, as_name }) => {
-            let tree = request(ClientMsg::Status, |m| match m {
-                KeeperMsg::Status(s) => Some(s.tree),
-                _ => None,
-            })?;
-            let Some(bench) = tree.benches.iter().find(|b| b.name == name).map(|b| b.id) else {
-                bail!("no running bench named {name:?}");
-            };
-            let done = request(ClientMsg::SaveBench { bench, as_name }, |m| match m {
-                KeeperMsg::Done(text) => Some(text),
-                _ => None,
-            })?;
-            println!("{done}");
-            Ok(())
-        }
+        Some(Command::Hide { name }) => cli::hide(&name),
+        Some(Command::Save { name, as_name }) => cli::save(&name, as_name),
         Some(Command::Delete { name, yes }) => {
             if !yes {
                 eprint!("Delete the bench {name:?}, stopping its tools and removing its saved file? [y/N] ");
@@ -393,7 +366,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Some(Command::List) => list(),
+        Some(Command::List) => cli::list(),
         Some(Command::Setup { edit: false }) => setup_cli::show_setup(),
         Some(Command::Setup { edit: true }) => setup_cli::edit_setup(),
         Some(Command::Alias { action: None }) => setup_cli::list_aliases(),
@@ -401,11 +374,11 @@ fn main() -> anyhow::Result<()> {
             setup_cli::change_alias(&name, Some(&command), level.level())
         }
         Some(Command::Alias { action: Some(AliasAction::Rm { name, level }) }) => setup_cli::change_alias(&name, None, level.level()),
-        Some(Command::Status) => status(),
+        Some(Command::Status) => cli::status(),
         Some(Command::Tag { action }) => tag(action),
         Some(Command::BrowserHost { .. }) => Ok(browser::host()?),
         Some(Command::Remote { action: RemoteAction::Connect { host, id } }) => remote::connect(&host, &id),
-        Some(Command::Remote { action: RemoteAction::New { host, bench, join } }) => remote_new(host, bench, join),
+        Some(Command::Remote { action: RemoteAction::New { host, bench, join } }) => cli::remote_new(host, bench, join),
         Some(Command::Remote { action: RemoteAction::List { host } }) => {
             for shell in remote::list_shells(&host)? {
                 println!("{}  {}", shell.id, remote::describe(&shell));
@@ -431,9 +404,9 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Command::Project { dir, bench }) => project(dir, bench, false),
         Some(Command::Ai { dir, bench }) => project(dir, bench, true),
-        Some(Command::Stop) => stop(),
+        Some(Command::Stop) => cli::stop(),
         Some(Command::Backup { action }) => backup(action),
-        Some(Command::DebugType { text }) => debug_type(&text),
+        Some(Command::DebugType { text }) => cli::debug_type(&text),
         Some(Command::DebugAi { text, model, answer }) => debug_ai(text, model, answer),
         Some(Command::Init { shell }) => match shell.as_str() {
             "bash" => {
@@ -502,9 +475,7 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
     if windows > 0 {
         conn.send_msg(ClientMsg::Show(target));
         // Errors come back at once; silence means the window process has it.
-        if let Ok(Ok(Frame::Keeper(KeeperMsg::Error(e)))) =
-            futures_lite_timeout(&rx, Duration::from_millis(300))
-        {
+        if let Some(Ok(Frame::Keeper(KeeperMsg::Error(e)))) = recv_timeout(&rx, Duration::from_millis(300)) {
             bail!("keeper: {e}");
         }
         return Ok(());
@@ -549,101 +520,6 @@ fn run_app(target: ShowTarget) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Waits up to `timeout` for the next frame.
-fn futures_lite_timeout(
-    rx: &async_channel::Receiver<Frame>,
-    timeout: Duration,
-) -> Result<Result<Frame, async_channel::RecvError>, ()> {
-    let deadline = std::time::Instant::now() + timeout;
-    while std::time::Instant::now() < deadline {
-        match rx.try_recv() {
-            Ok(f) => return Ok(Ok(f)),
-            Err(async_channel::TryRecvError::Closed) => return Ok(Err(async_channel::RecvError)),
-            Err(async_channel::TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(10)),
-        }
-    }
-    Err(())
-}
-
-/// Sends one message and waits for the first reply `pick` accepts.
-fn request<T>(msg: ClientMsg, mut pick: impl FnMut(KeeperMsg) -> Option<T>) -> anyhow::Result<T> {
-    let (conn, rx) = keeper_conn::connect(ClientKind::Cli, false)?;
-    conn.send_msg(msg);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        match rx.recv_blocking() {
-            Ok(Frame::Keeper(KeeperMsg::Error(e))) => bail!("keeper: {e}"),
-            Ok(Frame::Keeper(msg)) => {
-                if let Some(v) = pick(msg) {
-                    return Ok(v);
-                }
-            }
-            Ok(_) => {}
-            Err(_) => bail!("the keeper closed the connection"),
-        }
-    }
-    bail!("the keeper did not answer")
-}
-
-fn status() -> anyhow::Result<()> {
-    let s = match request(ClientMsg::Status, |m| match m {
-        KeeperMsg::Status(s) => Some(s),
-        _ => None,
-    }) {
-        Ok(s) => s,
-        Err(_) => {
-            println!("keeper: not running");
-            return Ok(());
-        }
-    };
-    println!(
-        "keeper: running, pid {}, version {}, up {}s, {} client(s), {} window process(es)",
-        s.pid, s.version, s.uptime_secs, s.clients, s.windows
-    );
-    if !s.stored.is_empty() {
-        println!("closed (saved): {}", s.stored.join(", "));
-    }
-    for bench in &s.tree.benches {
-        let color = bench.color.name().unwrap_or("custom");
-        let state = if s.open.contains(&bench.id) { "open" } else { "hidden" };
-        println!("bench {} ({color}, {state}), {} tab(s)", bench.name, bench.tabs.len());
-        for tab in &bench.tabs {
-            let tools: Vec<String> = tab.panes.iter().filter_map(|p| p.tool.as_ref()).map(|t| t.display()).collect();
-            let tools = if tools.is_empty() { String::new() } else { format!(", running {}", tools.join(", ")) };
-            println!("  tab {}: {} pane(s){tools}", tab.display_title(), tab.panes.len());
-        }
-    }
-    Ok(())
-}
-
-fn list() -> anyhow::Result<()> {
-    let status = request(ClientMsg::Status, |m| match m {
-        KeeperMsg::Status(s) => Some(s),
-        _ => None,
-    })
-    .ok();
-    let saved = shed_save::Store::default().list();
-    let mut rows: Vec<(String, String, String)> = Vec::new();
-    if let Some(s) = &status {
-        for b in &s.tree.benches {
-            let state = if s.open.contains(&b.id) { "open" } else { "hidden" };
-            rows.push((b.name.clone(), state.into(), format!("{} tab(s)", b.tabs.len())));
-        }
-    }
-    for b in saved {
-        if !rows.iter().any(|r| r.0 == b.name) {
-            rows.push((b.name, "closed".into(), format!("{} tab(s), saved {}", b.tabs, b.saved.replace('T', " "))));
-        }
-    }
-    if rows.is_empty() {
-        println!("No benches.");
-    }
-    for (name, state, detail) in rows {
-        println!("{name:<20} {state:<9} {detail}");
-    }
-    Ok(())
-}
-
 /// From a terminal, asks to restart a keeper from another version of Shed;
 /// returns whether it was stopped.
 fn offer_restart(error: &str) -> anyhow::Result<bool> {
@@ -660,81 +536,8 @@ fn offer_restart(error: &str) -> anyhow::Result<bool> {
     if !answer.trim().eq_ignore_ascii_case("y") {
         return Ok(false);
     }
-    stop()?;
+    cli::stop()?;
     Ok(true)
-}
-
-/// Stops the keeper, whatever version of Shed it is from. It is asked
-/// first; a keeper from another version may not understand the request
-/// (messages travel by position), so if it is still running after a while
-/// it gets SIGTERM, on which a keeper saves its benches and exits too.
-fn stop() -> anyhow::Result<()> {
-    let (conn, rx) = match keeper_conn::connect(ClientKind::Cli, false) {
-        Ok(c) => c,
-        Err(_) => {
-            println!("keeper: not running");
-            return Ok(());
-        }
-    };
-    conn.send_msg(ClientMsg::Shutdown);
-    let Some(pid) = conn.keeper_pid else {
-        // No process to watch: the keeper closes the connection as it exits.
-        return match futures_lite_timeout(&rx, Duration::from_secs(5)) {
-            Ok(Err(_)) => {
-                println!("keeper: stopped");
-                Ok(())
-            }
-            _ => bail!("the keeper did not stop"),
-        };
-    };
-    let gone = |timeout: Duration| {
-        let deadline = std::time::Instant::now() + timeout;
-        while keeper_conn::alive(pid) {
-            if std::time::Instant::now() > deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        true
-    };
-    // Another version says so at once; it would not understand the request.
-    let mut other_version = false;
-    while let Ok(Ok(frame)) = futures_lite_timeout(&rx, Duration::from_millis(300)) {
-        if let Frame::Keeper(KeeperMsg::Error(e)) = frame
-            && keeper_conn::is_other_version(&e)
-        {
-            other_version = true;
-            break;
-        }
-    }
-    if other_version || !gone(Duration::from_secs(5)) {
-        let why = if other_version { "is from another version of Shed" } else { "did not answer" };
-        eprintln!("keeper: pid {pid} {why}; stopping it with SIGTERM");
-        // SAFETY: kill(2) has no memory effects; `pid` is the keeper at the
-        // other end of the socket, still running a moment ago.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-        if !gone(Duration::from_secs(10)) {
-            bail!("the keeper (pid {pid}) did not stop");
-        }
-    }
-    drop(rx);
-    println!("keeper: stopped");
-    Ok(())
-}
-
-fn debug_type(text: &str) -> anyhow::Result<()> {
-    let tree = request(ClientMsg::Status, |m| match m {
-        KeeperMsg::Status(s) => Some(s.tree),
-        _ => None,
-    })?;
-    let Some(pane) = tree.benches.first().and_then(|b| b.active_tab()).map(|t| t.active_pane) else {
-        bail!("no panes");
-    };
-    let (conn, _rx) = keeper_conn::connect(ClientKind::Cli, false)?;
-    conn.send(Frame::Input { pane, bytes: text.replace("\\r", "\r").replace("\\e", "\x1b").into_bytes() });
-    // Give the writer thread a moment to flush before exiting.
-    std::thread::sleep(Duration::from_millis(100));
-    Ok(())
 }
 
 fn project(dir: Option<std::path::PathBuf>, bench: Option<String>, ai: bool) -> anyhow::Result<()> {
@@ -750,17 +553,7 @@ fn project(dir: Option<std::path::PathBuf>, bench: Option<String>, ai: bool) -> 
         KeeperMsg::Status(s) => Some(s.tree),
         _ => None,
     })?;
-    let bench = match bench {
-        Some(name) => tree.benches.iter().find(|b| b.name == name).map(|b| b.id).ok_or_else(|| anyhow::anyhow!("no running bench named {name:?}"))?,
-        None => {
-            let Some(id) = std::env::var("SHED_BENCH").ok().and_then(|b| b.parse().ok()).map(shed_model::BenchId) else {
-                bail!("not inside a Shed tab ($SHED_BENCH is not set); name a bench with --bench");
-            };
-            // The tab may have moved to another bench since its shell started.
-            let tab = std::env::var("SHED_TAB").ok().and_then(|t| t.parse().ok()).map(shed_model::TabId);
-            tab.and_then(|t| tree.bench_of_tab(t)).unwrap_or(id)
-        }
-    };
+    let bench = cli::bench_named_or_here(&tree, bench)?;
     let msg = if ai { ClientMsg::NewAiTab { bench, folder: root } } else { ClientMsg::NewProjectTab { bench, root } };
     let done = request(msg, |m| match m {
         KeeperMsg::Done(text) => Some(text),
@@ -789,29 +582,6 @@ fn debug_ai(text: String, model: Option<String>, answer: Option<String>) -> anyh
     }
     conn.send_msg(ClientMsg::AiSend { tab, text, images: Vec::new() });
     std::thread::sleep(Duration::from_millis(200));
-    Ok(())
-}
-
-fn remote_new(host: String, bench: Option<String>, join: Option<String>) -> anyhow::Result<()> {
-    let tree = request(ClientMsg::Status, |m| match m {
-        KeeperMsg::Status(s) => Some(s.tree),
-        _ => None,
-    })?;
-    let bench = match bench {
-        Some(name) => tree.benches.iter().find(|b| b.name == name).map(|b| b.id).ok_or_else(|| anyhow::anyhow!("no running bench named {name:?}"))?,
-        None => {
-            let Some(id) = std::env::var("SHED_BENCH").ok().and_then(|b| b.parse().ok()).map(shed_model::BenchId) else {
-                bail!("not inside a Shed tab ($SHED_BENCH is not set); name a bench with --bench");
-            };
-            let tab = std::env::var("SHED_TAB").ok().and_then(|t| t.parse().ok()).map(shed_model::TabId);
-            tab.and_then(|t| tree.bench_of_tab(t)).unwrap_or(id)
-        }
-    };
-    let done = request(ClientMsg::NewRemoteTab { bench, host, join }, |m| match m {
-        KeeperMsg::Done(text) => Some(text),
-        _ => None,
-    })?;
-    println!("{done}");
     Ok(())
 }
 

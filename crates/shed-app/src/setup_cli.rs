@@ -9,7 +9,7 @@ use shed_model::{Aliases, BenchId, PaneId, PaneSetup, Shed, TabId};
 use shed_proto::{AliasTarget, ClientKind, ClientMsg, Frame, KeeperMsg};
 use shed_save::{expand_home, home_relative};
 
-use crate::keeper_conn;
+use shed_client::keeper_conn;
 
 /// The tab and bench this process runs in.
 fn here() -> anyhow::Result<(TabId, BenchId)> {
@@ -22,7 +22,7 @@ fn here() -> anyhow::Result<(TabId, BenchId)> {
 }
 
 fn tree() -> anyhow::Result<Shed> {
-    crate::request(ClientMsg::Status, |m| match m {
+    shed_client::cli::request(ClientMsg::Status, |m| match m {
         KeeperMsg::Status(s) => Some(s.tree),
         _ => None,
     })
@@ -224,7 +224,7 @@ pub fn list_aliases() -> anyhow::Result<()> {
 pub fn change_alias(name: &str, value: Option<&str>, level: Option<Level>) -> anyhow::Result<()> {
     if let Some(Level::Shell) = level {
         let msg = ClientMsg::SetShellAlias { name: name.to_string(), value: value.map(str::to_string) };
-        let done = crate::request(msg, |m| match m {
+        let done = shed_client::cli::request(msg, |m| match m {
             KeeperMsg::Done(text) => Some(text),
             _ => None,
         })?;

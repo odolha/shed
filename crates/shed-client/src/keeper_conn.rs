@@ -1,4 +1,4 @@
-//! The window's connection to the keeper, starting the keeper if needed.
+//! A connection to the keeper (a window's, the CLI's), starting the keeper if needed.
 
 use std::io::{BufReader, BufWriter, Write};
 use std::os::fd::AsRawFd;
@@ -40,7 +40,6 @@ impl KeeperConn {
     }
 
     /// A connection to nothing: what is sent goes nowhere (for tests).
-    #[cfg(test)]
     pub fn detached() -> KeeperConn {
         let (tx, _rx) = mpsc::channel();
         KeeperConn { tx, keeper_pid: None }

@@ -1,0 +1,15 @@
+[package]
+name = "shed-client"
+description = "Talking to the keeper without a window: the connection, blocking requests, the CLI's keeper commands, remote shells"
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shed-model.workspace = true
+shed-proto.workspace = true
+shed-save.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+async-channel.workspace = true

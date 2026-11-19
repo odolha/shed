@@ -53,7 +53,7 @@ use shed_model::{AiState, Held, PaneId};
 use shed_proto::{ClientMsg, Frame};
 
 use crate::actions::{Copy, OpenLogbook, Paste, ScrollPageDown, ScrollPageUp, SearchScrollback, ZoomIn, ZoomOut, ZoomReset};
-use crate::keeper_conn::KeeperConn;
+use shed_client::keeper_conn::KeeperConn;
 use crate::line_editor::{EditorEvent, LineEditor};
 use crate::logbook_view::{LogbookSearch, SearchEvent};
 use crate::settings::Settings;
