@@ -5955,6 +5955,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "image",
  "notify",
  "nucleo-matcher",
  "regex",

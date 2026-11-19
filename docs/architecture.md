@@ -335,9 +335,9 @@ address starts with the link's (origin and path), or opens one, and answers the
 same way. No socket, or no answer within three seconds, means no extension: the
 link opens with the desktop's opener.
 
-Pictures (`shed-app/src/picture.rs`) are drawn from their bytes
-(`gpui::Image`, keyed by a hash of them), not from their path, which GPUI
-caches: a picture changed on disk reloads with the open file. Their diffs
+Pictures are read as data (bytes, kind, size: `shed_project::picture`) and
+drawn (`shed-app/src/picture.rs`) from their bytes (`gpui::Image`, keyed by a
+hash of them), not from their path, which GPUI caches: a picture changed on disk reloads with the open file. Their diffs
 (project tab's Changes, the AI review) read both versions' bytes
 (`Repo::show_bytes`, or the file) and show them side by side in place of hunks.
 
@@ -611,7 +611,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-logbook` | The logbook database, where it is, searches as typed (`tag:`), and the bash and zsh hooks |
 | `shed-desktop` | Bench and app icons, desktop entries |
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
-| `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, unsaved edits kept aside |
+| `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, pictures as data, unsaved edits kept aside |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists |
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows |
 | `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, remote shells over ssh |

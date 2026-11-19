@@ -33,6 +33,8 @@ tree-sitter-typescript.workspace = true
 tree-sitter-xml.workspace = true
 tree-sitter-yaml.workspace = true
 tracing.workspace = true
+# Pictures' kinds and sizes. The app's GPUI uses the same version with more formats.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 
 [dev-dependencies]
 tempfile.workspace = true

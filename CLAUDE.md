@@ -72,7 +72,8 @@ Crates (`crates/`), lowest first:
 - `shed-text`: an editable text buffer (rope, selection, undo, editor edits, reload).
 - `shed-project`: a project's file list, folder watching, fuzzy file ranking,
   tree-sitter colouring, search in files, a folder's entries and project roots
-  (`folder.rs`), unsaved edits kept aside (`recovery.rs`).
+  (`folder.rs`), pictures as data (`picture.rs`), unsaved edits kept aside
+  (`recovery.rs`).
 - `shed-ai`: Claude Code conversations from its stream-json events and session
   files; the keeper runs `claude` per AI tab (`shed-keeper/src/server/ai.rs`).
 - `shed-git`: Git through the `git` program (status, diffs, hunk patches,
