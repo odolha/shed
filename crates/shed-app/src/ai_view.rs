@@ -103,6 +103,8 @@ enum SessionRow {
     Conversation { tip: SessionInfo, root: String, parts: usize, open: bool },
     /// One of its files, listed under it.
     Part(SessionInfo),
+    /// Drafts written in a new session, nothing sent yet.
+    Draft(shed_model::DraftSession),
 }
 
 #[path = "ai_review.rs"]
@@ -828,7 +830,7 @@ impl AiView {
 
     /// Changes the drafts here at once (a second change before the keeper
     /// answers builds on the first), and in the keeper.
-    fn change_drafts(&mut self, change: impl FnOnce(&mut Vec<String>)) {
+    fn change_drafts(&mut self, change: impl FnOnce(&mut Vec<shed_model::Draft>)) {
         change(&mut self.ai.drafts);
         self.conn.send_msg(ClientMsg::AiSettings { tab: self.tab, settings: self.ai.clone() });
     }
@@ -850,7 +852,17 @@ impl AiView {
         self.images.clear();
         self.previews.clear();
         self.files.clear();
-        self.change_drafts(|d| d.push(text));
+        // The session's; in a new session, the first draft makes it a draft
+        // session, listed with the others.
+        let session = match self.ai.session_key() {
+            Some(key) => key.to_string(),
+            None => {
+                let key = AiTab::new_draft_key();
+                self.ai.draft_session = Some(key.clone());
+                key
+            }
+        };
+        self.change_drafts(|d| d.push(shed_model::Draft { session, text }));
         self.drafts_open = true;
         // Kept from going back through earlier prompts: what was being written comes back.
         let unsent = self.unsent.take().unwrap_or_default();
@@ -865,7 +877,7 @@ impl AiView {
 
     /// Sends a draft now (after the current turn, when Claude is busy).
     fn send_draft(&mut self, n: usize, cx: &mut Context<Self>) {
-        let Some(text) = self.ai.drafts.get(n).cloned() else { return };
+        let Some(text) = self.ai.drafts.get(n).map(|d| d.text.clone()) else { return };
         self.change_drafts(|d| {
             d.remove(n);
         });
@@ -880,7 +892,7 @@ impl AiView {
 
     /// Puts a draft back in the prompt to change it (after what is there).
     fn edit_draft(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = self.ai.drafts.get(n).cloned() else { return };
+        let Some(text) = self.ai.drafts.get(n).map(|d| d.text.clone()) else { return };
         self.change_drafts(|d| {
             d.remove(n);
         });
@@ -896,14 +908,14 @@ impl AiView {
     }
 
     fn delete_draft(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = self.ai.drafts.get(n).cloned() else { return };
-        let first: String = text.lines().next().unwrap_or("").chars().take(80).collect();
+        let Some(draft) = self.ai.drafts.get(n).cloned() else { return };
+        let first: String = draft.text.lines().next().unwrap_or("").chars().take(80).collect();
         let answer = window.prompt(gpui::PromptLevel::Warning, "Delete this draft?", Some(&first), &["Delete Draft", "Cancel"], cx);
         cx.spawn(async move |this, cx| {
             if matches!(answer.await, Ok(0)) {
                 this.update(cx, |this, cx| {
                     // Still there, where it was (another window may have changed the list).
-                    if this.ai.drafts.get(n) == Some(&text) {
+                    if this.ai.drafts.get(n) == Some(&draft) {
                         this.change_drafts(|d| {
                             d.remove(n);
                         });
@@ -2446,11 +2458,13 @@ impl AiView {
                 let (s, indent, toggle) = match row {
                     SessionRow::Conversation { tip, root, parts, open } => (tip, 8.0, (*parts > 1).then(|| (root.clone(), *parts, *open))),
                     SessionRow::Part(s) => (s, 22.0 + 14.0 * s.depth.min(4) as f32, None),
+                    SessionRow::Draft(d) => return Some(self.render_draft_session(n, d, &ui, cx)),
                 };
                 let current = match row {
                     // The conversation's row stands for every file of it.
                     SessionRow::Conversation { root, .. } => self.ai.session.as_ref().is_some_and(|id| self.family_of(id) == Some(root.as_str())),
                     SessionRow::Part(s) => self.ai.session.as_deref() == Some(&s.id),
+                    SessionRow::Draft(_) => false,
                 };
                 let id = s.id.clone();
                 let menu_id = s.id.clone();
@@ -2458,7 +2472,7 @@ impl AiView {
                 match row {
                     SessionRow::Part(p) if p.parent.is_some() => meta.insert(0, if p.branched { format!("↳ branched after #{}", p.from) } else { "↳ continued".to_string() }),
                     SessionRow::Part(_) => meta.insert(0, "first".to_string()),
-                    SessionRow::Conversation { .. } => {}
+                    SessionRow::Conversation { .. } | SessionRow::Draft(_) => {}
                 }
                 if let Some(b) = &s.branch {
                     meta.push(b.clone());
@@ -2467,6 +2481,10 @@ impl AiView {
                 meta.push(format!("{prompts} prompt{}", if prompts == 1 { "" } else { "s" }));
                 if let Some((_, parts, _)) = &toggle {
                     meta.push(format!("{parts} parts"));
+                }
+                let drafts = self.ai.drafts.iter().filter(|d| d.session == s.id).count();
+                if drafts > 0 {
+                    meta.push(format!("{drafts} draft{}", if drafts == 1 { "" } else { "s" }));
                 }
                 Some(
                     div()
@@ -2627,9 +2645,78 @@ impl AiView {
 
     /// The sessions list as drawn: a row per conversation (the session
     /// files that go on from one another), and, opened, a row per file.
+    /// A draft session's row: its title from its first draft, and how many.
+    fn render_draft_session(&self, n: usize, d: &shed_model::DraftSession, ui: &UiColors, cx: &mut Context<Self>) -> AnyElement {
+        let current = self.ai.draft_session.as_deref() == Some(d.key.as_str());
+        let meta = format!("Draft · {} message{} kept, nothing sent", d.drafts, if d.drafts == 1 { "" } else { "s" });
+        let (open, delete) = (d.key.clone(), d.key.clone());
+        div()
+            .id(("session", n))
+            .h(px(44.0))
+            .pl(px(8.0))
+            .pr_2()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .rounded_sm()
+            .cursor_pointer()
+            .when(current, |e| e.bg(hsla_alpha(self.accent, 0.2)))
+            .hover(|st| st.bg(hsla(ui.tab_hover)))
+            .tooltip(menu::tooltip_text(format!("{}\n{meta}", d.title)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.open_session(Some(open.clone()));
+                this.drafts_open = true;
+                cx.notify();
+            }))
+            .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                let key = delete.clone();
+                let entries = vec![menu::danger("Delete Draft Session…", move |this: &mut Self, window, cx| this.delete_draft_session(key.clone(), window, cx)).icon("trash")];
+                this.open_menu(e.position, entries, cx);
+            }))
+            .child(svg().path(icon("pencil")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(div().truncate().text_color(hsla(ui.text)).child(d.title.clone()))
+                    .child(div().truncate().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(meta)),
+            )
+            .into_any_element()
+    }
+
+    /// Deletes a draft session's drafts (after asking); shown, the tab goes
+    /// to a new session.
+    fn delete_draft_session(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) {
+        let n = self.ai.drafts.iter().filter(|d| d.session == key).count();
+        let detail = format!("Its {n} draft{} go too.", if n == 1 { "" } else { "s" });
+        let answer = window.prompt(gpui::PromptLevel::Warning, "Delete this draft session?", Some(&detail), &["Delete", "Cancel"], cx);
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                this.update(cx, |this, cx| {
+                    if this.ai.draft_session.as_deref() == Some(key.as_str()) {
+                        this.open_session(None);
+                        this.ai.draft_session = None;
+                    }
+                    this.change_drafts(|d| d.retain(|d| d.session != key));
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     fn shown_sessions(&self, cx: &gpui::App) -> Vec<SessionRow> {
         let words: Vec<String> = self.filter.read(cx).text().split_whitespace().map(str::to_lowercase).collect();
-        let mut rows = Vec::new();
+        let mut rows: Vec<SessionRow> = self
+            .ai
+            .draft_sessions()
+            .into_iter()
+            .filter(|d| words.iter().all(|w| d.title.to_lowercase().contains(w)))
+            .map(SessionRow::Draft)
+            .collect();
         let mut family: Vec<SessionInfo> = Vec::new();
         let flush = |family: &mut Vec<SessionInfo>, rows: &mut Vec<SessionRow>| {
             let Some(root) = family.first() else { return };
@@ -2666,6 +2753,10 @@ impl AiView {
             .as_ref()
             .and_then(|id| self.sessions.iter().find(|s| &s.id == id))
             .map(|s| s.title.clone())
+            .or_else(|| {
+                let key = self.ai.draft_session.as_deref()?;
+                self.ai.draft_sessions().into_iter().find(|d| d.key == key).map(|d| format!("{} (draft)", d.title))
+            })
             .unwrap_or_else(|| if self.ai.session.is_some() { "Session".into() } else { "New session".into() });
         let mut chips = div().flex().flex_wrap().items_center().gap_1().text_size(px(11.0 * self.z()));
         let others: Vec<PathBuf> = self.projects.iter().filter(|p| **p != self.ai.folder).cloned().collect();
@@ -2856,8 +2947,8 @@ impl AiView {
                     .child(svg().path(icon("globe")).size(px(14.0)).text_color(hsla(if self.ai.browser { ui.ink(accent) } else { ui.text_dim }))),
             )
             // Drafts: how many, opening their list; and keeping the prompt as one.
-            .when(!self.ai.drafts.is_empty(), |d| {
-                let n = self.ai.drafts.len();
+            .when(self.ai.shown_drafts().next().is_some(), |d| {
+                let n = self.ai.shown_drafts().count();
                 d.child(
                     chip("ai-drafts", format!("Drafts ({n})"))
                         .when(self.drafts_open, |d| d.bg(hsla_alpha(accent, 0.2)))
@@ -3007,10 +3098,10 @@ impl AiView {
         let accent = self.accent;
         let mut out = div().flex().flex_col().gap_1().mx_3().text_size(px(12.0 * self.z()));
         let mut any = false;
-        if self.drafts_open && !self.ai.drafts.is_empty() {
+        if self.drafts_open && self.ai.shown_drafts().next().is_some() {
             any = true;
-            out = out.child(div().text_color(hsla(ui.text_dim)).child("Drafts: sent only when you choose, in any order"));
-            for (n, text) in self.ai.drafts.iter().enumerate() {
+            out = out.child(div().text_color(hsla(ui.text_dim)).child("This session's drafts: sent only when you choose, in any order"));
+            for (n, text) in self.ai.shown_drafts().map(|(n, d)| (n, &d.text)) {
                 let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
                 let more = text.lines().count().saturating_sub(1);
                 let action = |id: (&'static str, usize), label: &'static str, color: Rgb| {

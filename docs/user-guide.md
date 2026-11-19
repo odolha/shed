@@ -379,9 +379,16 @@ terminal of the bench.
   They are kept with the bench, so they wait across a restart; with Claude free
   again, **Send Now** sends one. What you have written in the prompt is kept too,
   and is there when the tab opens again. **Draft** (or Ctrl+S) keeps the message for
-  later instead, with its files and pictures: **Drafts (N)** opens the list, and
-  each draft has **Send** (queued if Claude is busy), **Edit** (back into the
-  prompt) and **Delete…**. Drafts are kept with the bench, in no order. Typing `/` lists Claude Code's commands and
+  later instead, with its files and pictures. Drafts belong to their session:
+  **Drafts (N)** opens this session's, and each has **Send** (queued if Claude
+  is busy), **Edit** (back into the prompt) and **Delete…**; in the sessions
+  list, a session with drafts says how many. A draft kept in a new session, before
+  anything is sent, makes it a **draft session**: listed first with the sessions
+  (a pencil, titled by its first line, "Draft · N messages kept"), to come back
+  to and add to. Sending from it starts the session, and its drafts stay with it;
+  right-click it to delete it with its drafts. Drafts follow the conversation
+  when Claude Code makes a copy of it (editing or reverting a message). They are
+  kept with the bench, in no order. Typing `/` lists Claude Code's commands and
   skills to complete (Tab or Enter picks one). Ctrl+Up and Ctrl+Down go through earlier prompts; what you were writing is kept, and comes back below the newest one (or after sending an earlier one). Paste a
   screenshot with Ctrl+V, or drop pictures, and they go with the prompt: small
   thumbnails above it, each with a × to leave it out. Sent pictures stay in your

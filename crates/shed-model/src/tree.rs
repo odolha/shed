@@ -323,8 +323,9 @@ pub struct AiTab {
     pub follow: bool,
     /// Where the conversation is, for the tab bar.
     pub activity: AiActivity,
-    /// Messages written to send some other time, in no order.
-    pub drafts: Vec<String>,
+    /// Messages written to send some other time, in no order, each with
+    /// the session it belongs to.
+    pub drafts: Vec<Draft>,
     /// Messages sent while Claude was busy: each goes when a turn ends.
     pub queued: Vec<Queued>,
     /// What is written in the prompt and not sent yet.
@@ -338,6 +339,81 @@ pub struct AiTab {
     /// Its Claude Code may use the browser (Claude in Chrome); at most one AI
     /// tab at a time.
     pub browser: bool,
+    /// The draft session shown (one with drafts and no Claude Code session
+    /// yet), when `session` is `None`: its key.
+    pub draft_session: Option<String>,
+}
+
+/// A message kept to send later, and the session it belongs to: Claude
+/// Code's session id, or a draft session's key (`draft-…`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Draft {
+    pub session: String,
+    pub text: String,
+}
+
+/// A draft session: drafts written in a new session before anything was
+/// sent, listed with the sessions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DraftSession {
+    pub key: String,
+    /// From its first draft's first line.
+    pub title: String,
+    pub drafts: usize,
+}
+
+impl AiTab {
+    /// Draft sessions' keys start with it.
+    pub const DRAFT_SESSION: &'static str = "draft-";
+
+    /// A key for a new draft session.
+    pub fn new_draft_key() -> String {
+        format!("{}{}", Self::DRAFT_SESSION, uuid::Uuid::new_v4())
+    }
+
+    pub fn is_draft_key(key: &str) -> bool {
+        key.starts_with(Self::DRAFT_SESSION)
+    }
+
+    /// The key the shown session's drafts go by: Claude Code's session id,
+    /// or the draft session's; `None` for a new session with neither.
+    pub fn session_key(&self) -> Option<&str> {
+        self.session.as_deref().or(self.draft_session.as_deref())
+    }
+
+    /// The drafts of the session shown, with their places in `drafts`.
+    pub fn shown_drafts(&self) -> impl Iterator<Item = (usize, &Draft)> {
+        let key = self.session_key().map(str::to_string);
+        self.drafts.iter().enumerate().filter(move |(_, d)| key.as_deref() == Some(d.session.as_str()))
+    }
+
+    /// The drafts of session `from` belong to `to` from now on (Claude Code
+    /// gave the conversation a new id: its first one, or a copy's).
+    pub fn move_drafts(&mut self, from: &str, to: &str) {
+        for d in self.drafts.iter_mut().filter(|d| d.session == from) {
+            d.session = to.to_string();
+        }
+    }
+
+    /// The draft sessions, newest first (the order their first drafts were kept, reversed).
+    pub fn draft_sessions(&self) -> Vec<DraftSession> {
+        let mut out: Vec<DraftSession> = Vec::new();
+        for d in self.drafts.iter().filter(|d| Self::is_draft_key(&d.session)) {
+            match out.iter_mut().find(|s| s.key == d.session) {
+                Some(s) => s.drafts += 1,
+                None => {
+                    let first = d.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                    let mut title: String = first.chars().take(60).collect();
+                    if first.chars().count() > 60 {
+                        title.push('…');
+                    }
+                    out.push(DraftSession { key: d.session.clone(), title, drafts: 1 });
+                }
+            }
+        }
+        out.reverse();
+        out
+    }
 }
 
 /// A message waiting its turn: its text, and its pictures as files.

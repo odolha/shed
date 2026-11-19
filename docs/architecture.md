@@ -419,7 +419,14 @@ The window's conversation list starts at `AiView::first` (the last
 out of it; that row, once painted, splices the next ones in (`show_from`),
 keeping the view where it was. Rows and entries map through `row` / `entry_at`;
 search, the prompt list and block jumps `reveal` an entry before scrolling to it.
-Drafts are `AiTab.drafts`, changed through `AiSettings` and saved with the bench.
+Drafts are `AiTab.drafts`, changed through `AiSettings` and saved with the bench;
+each names its session (`Draft.session`): Claude Code's session id, or a draft
+session's key (`draft-…`, `AiTab.draft_session` while one is shown, opened with
+`AiOpenSession` like a session). When Claude Code reports a session id the tab
+did not have (the first one, or a fork's after an edit or a revert), the keeper
+moves the drafts of the tab's previous key to it (`AiTab::move_drafts`); a
+revert to before the first message makes them a draft session again. Older
+files' plain `drafts` go to the tab's session when read.
 
 `changes_ui.rs` is what a project tab's Changes and the review share: diff
 rows (unified, or side by side with removed lines facing the added ones) and

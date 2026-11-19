@@ -82,6 +82,19 @@ for line in sys.stdin:
 
     c.msg(ClientMsg::AiWatch { tab });
     c.until("empty conversation", |f, _| matches!(f, Frame::Keeper(KeeperMsg::AiUpdate { from: 0, entries, .. }) if entries.is_empty()).then_some(()));
+    // A draft kept in the new session makes it a draft session; the first
+    // message sent gives it Claude Code's session, and the draft goes with it.
+    let mut ai = c.tree.tab(tab).and_then(|t| t.ai_info()).cloned().unwrap();
+    let key = shed_model::AiTab::new_draft_key();
+    ai.draft_session = Some(key.clone());
+    ai.drafts = vec![shed_model::Draft { session: key.clone(), text: "ask about the cache later".into() }];
+    c.msg(ClientMsg::AiSettings { tab, settings: ai });
+    tree_until(&mut c, "draft session", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.draft_session.as_ref() == Some(&key) && a.draft_sessions().len() == 1));
+    c.msg(ClientMsg::AiOpenSession { tab, session: None });
+    tree_until(&mut c, "left the draft session", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.draft_session.is_none()));
+    c.msg(ClientMsg::AiOpenSession { tab, session: Some(key.clone()) });
+    tree_until(&mut c, "back in the draft session", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.session.is_none() && a.draft_session.as_ref() == Some(&key)));
+    c.msg(ClientMsg::AiWatch { tab });
     c.msg(ClientMsg::AiSend { tab, text: "count the lines".into(), images: Vec::new() });
     let mut entries: Vec<Entry> = Vec::new();
     // The conversation may start coming before the commands do: keep it.
@@ -113,7 +126,9 @@ for line in sys.stdin:
     let tree = tree_until(&mut c, "session kept", |t| {
         t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.session.is_some() && a.activity == AiActivity::Idle)
     });
-    assert!(tree.tab(tab).unwrap().ai_info().unwrap().session.is_some());
+    let a = tree.tab(tab).unwrap().ai_info().unwrap();
+    assert_eq!((a.draft_session.as_ref(), a.drafts[0].session.as_str()), (None, a.session.as_deref().unwrap()), "the draft went with the session");
+    assert!(a.draft_sessions().is_empty());
 
     // A second prompt, then edited: the files go back to before it, and
     // Claude Code starts again from the message before it, as a new session.

@@ -128,9 +128,16 @@ pub struct SavedAi {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub follow: bool,
-    /// Messages kept to send later.
+    /// Messages kept to send later, from before they had sessions: they go
+    /// to the tab's session when read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drafts: Vec<String>,
+    /// Messages kept to send later, each with its session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_drafts: Vec<shed_model::Draft>,
+    /// The draft session shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_session: Option<String>,
     /// Messages waiting for Claude to be free.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queued: Vec<shed_model::Queued>,
@@ -158,7 +165,9 @@ impl SavedAi {
             mode: a.mode.clone(),
             effort: a.effort.clone(),
             follow: a.follow,
-            drafts: a.drafts.clone(),
+            drafts: Vec::new(),
+            session_drafts: a.drafts.clone(),
+            draft_session: a.draft_session.clone(),
             queued: a.queued.clone(),
             unsent: a.unsent.clone(),
             viewed: a.viewed.clone(),
@@ -168,6 +177,17 @@ impl SavedAi {
     }
 
     fn to_ai(&self) -> shed_model::AiTab {
+        // Drafts from before sessions had them: the tab's session's (a draft
+        // session's, when it has none).
+        let mut draft_session = self.draft_session.clone().filter(|_| self.session.is_none());
+        let mut drafts = self.session_drafts.clone();
+        if !self.drafts.is_empty() {
+            let key = match (&self.session, &draft_session) {
+                (Some(s), _) | (None, Some(s)) => s.clone(),
+                (None, None) => draft_session.insert(shed_model::AiTab::new_draft_key()).clone(),
+            };
+            drafts.extend(self.drafts.iter().map(|text| shed_model::Draft { session: key.clone(), text: text.clone() }));
+        }
         shed_model::AiTab {
             folder: expand_home(&self.folder),
             add_dirs: self.add_dirs.iter().map(|d| expand_home(d)).collect(),
@@ -177,7 +197,8 @@ impl SavedAi {
             effort: self.effort.clone(),
             follow: self.follow,
             activity: Default::default(),
-            drafts: self.drafts.clone(),
+            drafts,
+            draft_session,
             queued: self.queued.clone(),
             unsent: self.unsent.clone(),
             viewed: self.viewed.clone(),
@@ -540,7 +561,7 @@ impl SavedBench {
         let id = self.add_project_tab(folder);
         let tab = self.tab_mut(id).unwrap();
         tab.project = None;
-        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new(), queued: Vec::new(), unsent: String::new(), viewed: Vec::new(), explained: Vec::new(), browser: false });
+        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new(), session_drafts: Vec::new(), draft_session: None, queued: Vec::new(), unsent: String::new(), viewed: Vec::new(), explained: Vec::new(), browser: false });
         id
     }
 
@@ -1031,15 +1052,30 @@ mod tests {
     fn ai_drafts_are_kept() {
         let mut bench = sample();
         let mut ai = Tab::ai("/tmp".into());
+        let draft = |session: &str, text: &str| shed_model::Draft { session: session.into(), text: text.into() };
         if let TabKind::Ai(a) = &mut ai.kind {
-            a.drafts = vec!["ask about the cache\nlater".into(), "and the docs".into()];
+            a.session = Some("s1".into());
+            a.drafts = vec![draft("s1", "ask about the cache\nlater"), draft("draft-x", "and the docs")];
         }
         bench.tabs.push(ai);
         let text = SavedBench::from_bench(&bench, |_| PaneExtras::default()).to_toml();
         let (back, _) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
         let drafts = back.tabs.last().and_then(|t| t.ai_info()).map(|a| a.drafts.clone()).unwrap();
-        assert_eq!(drafts, ["ask about the cache\nlater", "and the docs"]);
+        assert_eq!(drafts, [draft("s1", "ask about the cache\nlater"), draft("draft-x", "and the docs")]);
         assert!(!SavedBench::from_bench(&sample(), |_| PaneExtras::default()).to_toml().contains("drafts"));
+        // Drafts from before they had sessions go to the tab's session, or
+        // to a draft session of their own when it has none.
+        let old = text.replace("[[tabs.ai.session_drafts]]", "[[tabs.ai.ignored]]");
+        let old = old.replace("session = \"s1\"\n", "session = \"s1\"\ndrafts = [\"from before\"]\n");
+        let (back, _) = SavedBench::from_toml(&old).unwrap().to_bench().unwrap();
+        let a = back.tabs.last().and_then(|t| t.ai_info()).unwrap();
+        assert!(a.drafts.contains(&draft("s1", "from before")), "{:?}", a.drafts);
+        let none = old.replace("session = \"s1\"\n", "");
+        let (back, _) = SavedBench::from_toml(&none).unwrap().to_bench().unwrap();
+        let a = back.tabs.last().and_then(|t| t.ai_info()).unwrap();
+        let key = a.draft_session.clone().expect("a draft session for them");
+        assert!(a.drafts.contains(&draft(&key, "from before")) && shed_model::AiTab::is_draft_key(&key));
+        assert_eq!(a.draft_sessions()[0].title, "from before");
     }
 
     #[test]

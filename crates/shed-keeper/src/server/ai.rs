@@ -385,15 +385,24 @@ impl Keeper {
             if let Some(t) = st.tree.tab_mut(tab)
                 && let TabKind::Ai(ai) = &mut t.kind
             {
-                ai.session = None;
+                // Back to before the first message: its drafts stay with it,
+                // as a draft session.
+                if let Some(old) = ai.session.take()
+                    && ai.drafts.iter().any(|d| d.session == old)
+                {
+                    let key = AiTab::new_draft_key();
+                    ai.move_drafts(&old, &key);
+                    ai.draft_session = Some(key);
+                }
             }
             st.broadcast_tree();
         }
         if let Some(part) = switch_to {
             if let Some(t) = st.tree.tab_mut(tab)
                 && let TabKind::Ai(ai) = &mut t.kind
+                && let Some(old) = ai.session.replace(part.clone())
             {
-                ai.session = Some(part);
+                ai.move_drafts(&old, &part);
             }
             st.broadcast_tree();
         }
@@ -645,7 +654,12 @@ impl Keeper {
         let mut st = self.lock();
         let Some(t) = st.tree.tab_mut(tab) else { return };
         let TabKind::Ai(ai) = &mut t.kind else { return };
-        ai.session = session;
+        // A draft session has no Claude Code session yet: a new one starts
+        // with its first message.
+        (ai.session, ai.draft_session) = match session {
+            Some(key) if AiTab::is_draft_key(&key) => (None, Some(key)),
+            other => (other, None),
+        };
         ai.activity = AiActivity::Idle;
         let ai = ai.clone();
         if let Some(mut rt) = st.ai.remove(&tab) {
@@ -680,6 +694,10 @@ impl Keeper {
         ai.effort = new.effort;
         ai.follow = new.follow;
         ai.drafts = new.drafts;
+        // (A draft session only while no Claude Code session is shown.)
+        if ai.session.is_none() {
+            ai.draft_session = new.draft_session;
+        }
         ai.unsent = new.unsent;
         ai.viewed = new.viewed;
         ai.explained = new.explained;
@@ -757,7 +775,13 @@ impl Keeper {
                         ai.activity = activity;
                         tree_changed = true;
                     }
-                    if session.is_some() && ai.session != session {
+                    if let Some(new) = session.as_ref().filter(|s| ai.session.as_ref() != Some(*s)) {
+                        // The drafts go with the conversation: from the draft
+                        // session it started from, or to the copy an edit makes.
+                        if let Some(old) = ai.session.clone().or(ai.draft_session.take()) {
+                            ai.move_drafts(&old, new);
+                        }
+                        ai.draft_session = None;
                         ai.session = session;
                         tree_changed = true;
                         self.save_soon.notify_one();
