@@ -627,7 +627,7 @@ impl ProjectView {
 
     /// Shows what changed in a file: its diff where Git can say, else the file.
     pub fn review(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let rel = self.git.as_ref().and_then(|g| path.strip_prefix(&g.repo.root).ok().map(|r| r.display().to_string()));
+        let rel = self.git.as_ref().and_then(|g| path.strip_prefix(&g.session.repo.root).ok().map(|r| r.display().to_string()));
         match rel {
             Some(rel) => self.open_diff(rel, DiffSource::Unstaged, cx),
             None => self.open_path(path, None, cx),
@@ -1400,7 +1400,7 @@ impl ProjectView {
         }
         let to_ai = path.to_path_buf();
         if let Some(git) = &self.git
-            && let Ok(rel) = path.strip_prefix(&git.repo.root)
+            && let Ok(rel) = path.strip_prefix(&git.session.repo.root)
         {
             let (a, b) = (rel.display().to_string(), rel.display().to_string());
             entries.push(menu::item("Show Changes", move |this: &mut Self, _, cx| this.open_diff(a.clone(), DiffSource::Unstaged, cx)).icon("branch"));
@@ -1767,8 +1767,8 @@ impl ProjectView {
         if self.blame.as_ref().is_some_and(|(p, _)| *p == path) || self.blame_task.as_ref().is_some_and(|(p, _)| *p == path) {
             return;
         }
-        let Ok(rel) = path.strip_prefix(&git.repo.root) else { return };
-        let (repo, rel, p) = (git.repo.clone(), rel.display().to_string(), path.clone());
+        let Ok(rel) = path.strip_prefix(&git.session.repo.root) else { return };
+        let (repo, rel, p) = (git.session.repo.clone(), rel.display().to_string(), path.clone());
         let task = cx.spawn(async move |this, cx| {
             let lines = cx.background_executor().spawn(async move { repo.blame(&rel).unwrap_or_default() }).await;
             this.update(cx, |this, cx| {

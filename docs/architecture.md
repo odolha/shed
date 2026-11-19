@@ -226,7 +226,12 @@ upstream, ahead/behind and every changed file, `log` with NUL-separated fields,
 as hunks; staging, unstaging or discarding one hunk applies that hunk as a patch
 (`git apply --cached`, `-R`).
 
-In a project tab (`project_git.rs`, a child module of `project_view.rs`), every
+What a Git panel knows and does is `shed_git::session`, without a UI: a
+`GitSession` (the repository, its status and outgoing commits, the history,
+commits' files, amend, a `PushReview` waiting) and operations that run Git and
+block (`refresh`, `load_diff` from a `DiffSource`, `hunk_action`, `commit`,
+`PushReview::read`/`confirm`, `history`, `BranchOp::run`, `conflicts_in`). In a
+project tab (`project_git.rs`, a child module of `project_view.rs`), every
 Git command runs on the background executor. The status is read again 150 ms
 after any change the folder watch reports (`.git` included, so commits and
 switches made outside Shed show) and after every action; a fetch runs every
@@ -624,7 +629,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
 | `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, pictures as data, unsaved edits kept aside |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists |
-| `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows |
+| `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows; a Git panel's data and operations (`session`) |
 | `shed-review` | An AI tab's review as data: changes since a turn or the session by how far they went, their keys and fingerprints, Viewed marks, explanations and the request for them |
 | `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, bench edits routed to running or closed benches, the pegboard's list, remote shells over ssh |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |

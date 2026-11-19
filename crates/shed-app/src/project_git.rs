@@ -3,7 +3,7 @@
 //! or by hunk; diffs; commit, fetch, pull, push; branches; history; and
 //! conflicts. Every Git command runs off the UI thread, through `shed-git`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -11,7 +11,8 @@ use gpui::{
     AnyElement, Context, Entity, Focusable, MouseButton, MouseDownEvent, PromptLevel, Subscription, Task, UniformListScrollHandle,
     Window, div, prelude::*, px, svg, uniform_list,
 };
-use shed_git::{Branch, Commit, Entry as GitEntry, Hunk, PushTarget, Repo, Status};
+use shed_git::session::{self as gs, BranchOp, DiffContent, GitSession, HunkAction, OUTGOING_LIMIT, PushReview};
+use shed_git::{Commit, Entry as GitEntry, Hunk, Repo};
 use shed_model::Rgb;
 
 use super::{Content, OpenFile, Panel, ProjectView, ROW_HEIGHT};
@@ -25,9 +26,12 @@ use crate::theme::{UiColors, current_ui, hsla, hsla_alpha};
 use crate::changes_ui::{DIFF_ROW, DiffRow, FolderRow, folder_rows, status_color};
 use crate::picture::Picture;
 
+pub(super) use shed_git::session::DiffSource;
+
+/// A project tab's Git: the repository and what is known of it
+/// (`GitSession`), and what runs and is shown here.
 pub(super) struct GitState {
-    pub repo: Repo,
-    pub status: Option<Status>,
+    pub session: GitSession,
     /// What runs now (`Pushing…`), if anything.
     pub busy: Option<String>,
     pub error: Option<String>,
@@ -35,45 +39,14 @@ pub(super) struct GitState {
     op: Option<Task<()>>,
     _fetcher: Option<Task<()>>,
     pub message: Entity<TextView>,
-    pub amend: bool,
-    log: Vec<Commit>,
-    /// The file the history is for, if not the whole repository.
-    log_for: Option<String>,
     log_task: Option<Task<()>>,
-    /// Commits opened to their files, and those files.
+    /// Commits opened to their files.
     expanded: HashSet<String>,
-    commit_files: HashMap<String, Vec<(char, String)>>,
     history_scroll: UniformListScrollHandle,
     new_branch: Option<(Entity<LineEditor>, Subscription)>,
-    /// Commits the upstream does not have yet, newest first.
-    pub outgoing: Vec<Commit>,
     /// Folders closed in the tree of changed files, per section.
     collapsed: HashSet<(Section, String)>,
-    /// A push waiting to be confirmed.
-    push_review: Option<PushReview>,
     _message_sub: Subscription,
-}
-
-/// What a push would send, and where, shown before it runs.
-struct PushReview {
-    force: bool,
-    branch: Branch,
-    target: PushTarget,
-    commits: Vec<Commit>,
-}
-
-/// Outgoing commits read with the status (more are counted, not listed).
-const OUTGOING_LIMIT: usize = 200;
-
-/// Which two versions a diff compares.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum DiffSource {
-    /// The index against the working folder.
-    Unstaged,
-    /// HEAD against the index.
-    Staged,
-    /// A commit against its first parent.
-    Commit(String),
 }
 
 pub(super) struct DiffView {
@@ -111,7 +84,7 @@ impl GitState {
     }
 
     pub fn new(root: &Path, settings: &Settings, cx: &mut Context<ProjectView>) -> Option<Self> {
-        let repo = Repo::find(root)?;
+        let session = GitSession::open(root)?;
         let options = TextOptions { wrap: true, auto_height: Some((3, 10)), placeholder: Some("Commit message".into()), ..Default::default() };
         let message = cx.new(|cx| TextView::new("", options, settings, cx));
         let sub = cx.subscribe(&message, |this, _, event: &TextEvent, cx| {
@@ -124,25 +97,18 @@ impl GitState {
             }
         });
         Some(Self {
-            repo,
-            status: None,
+            session,
             busy: None,
             error: None,
             refresh: None,
             op: None,
             _fetcher: None,
             message,
-            amend: false,
-            log: Vec::new(),
-            log_for: None,
             log_task: None,
             expanded: HashSet::new(),
-            commit_files: HashMap::new(),
             history_scroll: UniformListScrollHandle::new(),
             new_branch: None,
-            outgoing: Vec::new(),
             collapsed: HashSet::new(),
-            push_review: None,
             _message_sub: sub,
         })
     }
@@ -157,7 +123,7 @@ impl ProjectView {
             git._fetcher = None;
             return;
         }
-        let repo = git.repo.clone();
+        let repo = git.session.repo.clone();
         git._fetcher = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(minutes * 60)).await;
@@ -174,32 +140,21 @@ impl ProjectView {
     /// Reads the status again, a moment after changes settle.
     pub(super) fn git_refresh(&mut self, cx: &mut Context<Self>) {
         let Some(git) = &mut self.git else { return };
-        let repo = git.repo.clone();
+        let repo = git.session.repo.clone();
         git.refresh = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(150)).await;
-            let status = cx
-                .background_executor()
-                .spawn(async move {
-                    let s = repo.status()?;
-                    let outgoing = repo.outgoing(&s.branch, OUTGOING_LIMIT).unwrap_or_default();
-                    Ok::<_, shed_git::GitError>((s, outgoing))
-                })
-                .await;
+            let status = cx.background_executor().spawn(async move { gs::refresh(&repo) }).await;
             this.update(cx, |this, cx| {
                 let mut head_moved = false;
                 if let Some(git) = &mut this.git {
                     match status {
-                        Ok((s, outgoing)) => {
-                            head_moved = git.status.as_ref().is_none_or(|old| old.branch.oid != s.branch.oid);
-                            git.status = Some(s);
-                            git.outgoing = outgoing;
-                        }
+                        Ok(refreshed) => head_moved = git.session.apply_refresh(refreshed),
                         Err(e) => git.error = Some(e.0),
                     }
                 }
                 // New commits (here or outside Shed) show in an open history.
                 if head_moved && this.panel == Panel::History {
-                    let path = this.git.as_ref().and_then(|g| g.log_for.clone());
+                    let path = this.git.as_ref().and_then(|g| g.session.log_for.clone());
                     this.open_history(path, cx);
                 }
                 this.refresh_diffs(cx);
@@ -229,7 +184,7 @@ impl ProjectView {
         }
         git.busy = Some(label.to_string());
         git.error = None;
-        let repo = git.repo.clone();
+        let repo = git.session.repo.clone();
         git.op = Some(cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move { op(&repo) }).await;
             this.update(cx, |this, cx| {
@@ -237,7 +192,7 @@ impl ProjectView {
                 if let Some(git) = &mut this.git {
                     git.busy = None;
                     git.error = result.err().map(|e| e.0);
-                    git.log.clear();
+                    git.session.log.clear();
                 }
                 this.git_refresh(cx);
                 if ok {
@@ -255,13 +210,13 @@ impl ProjectView {
     }
 
     fn stage_all(&mut self, cx: &mut Context<Self>) {
-        let Some(s) = self.git.as_ref().and_then(|g| g.status.clone()) else { return };
+        let Some(s) = self.git.as_ref().and_then(|g| g.session.status.clone()) else { return };
         let paths = Self::entry_paths(&s.unstaged().collect::<Vec<_>>());
         self.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
     }
 
     fn unstage_all(&mut self, cx: &mut Context<Self>) {
-        let Some(s) = self.git.as_ref().and_then(|g| g.status.clone()) else { return };
+        let Some(s) = self.git.as_ref().and_then(|g| g.session.status.clone()) else { return };
         let paths = Self::entry_paths(&s.staged().collect::<Vec<_>>());
         self.git_op("Unstaging…", move |r| r.unstage(&paths).map(|_| String::new()), cx);
     }
@@ -297,14 +252,14 @@ impl ProjectView {
         let Some(git) = &self.git else { return };
         let message = git.message.read(cx).buffer.text();
         if message.trim().is_empty() {
-            self.git.as_mut().unwrap().error = Some("Write a commit message first.".into());
+            self.git.as_mut().unwrap().error = Some(gs::NO_MESSAGE.into());
             cx.notify();
             return;
         }
-        let amend = git.amend;
+        let amend = git.session.amend;
         let field = git.message.clone();
         // With Push, what would go is shown first, as for any push.
-        self.git_op_then("Committing…", move |r| r.commit(&message, amend), move |this, cx| if push { this.push(false, cx) }, cx);
+        self.git_op_then("Committing…", move |r| gs::commit(r, &message, amend), move |this, cx| if push { this.push(false, cx) }, cx);
         // Cleared now; the commit's own result shows any error.
         field.update(cx, |f, cx| {
             f.buffer.select_all();
@@ -312,15 +267,15 @@ impl ProjectView {
             cx.notify();
         });
         if let Some(git) = &mut self.git {
-            git.amend = false;
+            git.session.amend = false;
         }
     }
 
     fn toggle_amend(&mut self, cx: &mut Context<Self>) {
         let Some(git) = &mut self.git else { return };
-        git.amend = !git.amend;
-        if git.amend && git.message.read(cx).buffer.len_chars() == 0 {
-            let last = git.repo.last_message();
+        git.session.amend = !git.session.amend;
+        if git.session.amend && git.message.read(cx).buffer.len_chars() == 0 {
+            let last = git.session.repo.last_message();
             git.message.update(cx, |m, cx| m.paste_text(&last, cx));
         }
         cx.notify();
@@ -329,22 +284,15 @@ impl ProjectView {
     /// Shows what a push would send and where, to confirm (`confirm_push`).
     fn push(&mut self, force: bool, cx: &mut Context<Self>) {
         let Some(git) = &self.git else { return };
-        let repo = git.repo.clone();
+        let repo = git.session.repo.clone();
         self.panel = Panel::Changes;
         cx.spawn(async move |this, cx| {
             // The status as it is now (a commit may just have been made).
-            let read = cx
-                .background_executor()
-                .spawn(async move {
-                    let branch = repo.status()?.branch;
-                    let commits = repo.outgoing(&branch, OUTGOING_LIMIT).unwrap_or_default();
-                    Ok::<_, shed_git::GitError>((repo.push_target(&branch), branch, commits))
-                })
-                .await;
+            let read = cx.background_executor().spawn(async move { PushReview::read(&repo, force) }).await;
             this.update(cx, |this, cx| {
                 if let Some(git) = &mut this.git {
                     match read {
-                        Ok((target, branch, commits)) => git.push_review = Some(PushReview { force, branch, target, commits }),
+                        Ok(review) => git.session.push_review = Some(review),
                         Err(e) => git.error = Some(e.0),
                     }
                 }
@@ -357,21 +305,20 @@ impl ProjectView {
     }
 
     fn confirm_push(&mut self, cx: &mut Context<Self>) {
-        let Some(review) = self.git.as_mut().and_then(|g| g.push_review.take()) else { return };
-        let (force, branch) = (review.force, review.branch);
-        self.git_op(if force { "Force-pushing…" } else { "Pushing…" }, move |r| r.push(force, &branch), cx);
+        let Some(review) = self.git.as_mut().and_then(|g| g.session.push_review.take()) else { return };
+        self.git_op(review.busy_label(), move |r| review.confirm(r), cx);
     }
 
     fn cancel_push(&mut self, cx: &mut Context<Self>) {
         if let Some(git) = &mut self.git {
-            git.push_review = None;
+            git.session.push_review = None;
         }
         cx.notify();
     }
 
     /// Opens (or shows) a diff of a file.
     pub(super) fn open_diff(&mut self, path: String, source: DiffSource, cx: &mut Context<Self>) {
-        let full = self.git.as_ref().map(|g| g.repo.root.join(&path)).unwrap_or_default();
+        let full = self.git.as_ref().map(|g| g.session.repo.root.join(&path)).unwrap_or_default();
         let existing = self.open.iter().position(|f| matches!(&f.content, Content::Diff(d) if d.path == path && d.source == source));
         let i = match existing {
             Some(i) => i,
@@ -399,33 +346,19 @@ impl ProjectView {
     fn load_diff(&mut self, i: usize, cx: &mut Context<Self>) {
         let Some(git) = &self.git else { return };
         let Some(Content::Diff(d)) = self.open.get(i).map(|f| &f.content) else { return };
-        let (repo, path, source) = (git.repo.clone(), d.path.clone(), d.source.clone());
-        let untracked = git.status.as_ref().is_some_and(|s| s.entries.iter().any(|e| e.path == path && e.untracked));
+        let (repo, path, source) = (git.session.repo.clone(), d.path.clone(), d.source.clone());
+        let untracked = git.session.is_untracked(&path);
         cx.spawn(async move |this, cx| {
             let (hunks, pictures) = cx
                 .background_executor()
                 .spawn(async move {
-                    if crate::picture::is_picture(Path::new(&path)) {
-                        let (old, new) = match &source {
-                            DiffSource::Unstaged => {
-                                let old = if untracked { Vec::new() } else { repo.show_bytes("", &path) };
-                                (old, std::fs::read(repo.root.join(&path)).unwrap_or_default())
-                            }
-                            DiffSource::Staged => (repo.show_bytes("HEAD", &path), repo.show_bytes("", &path)),
-                            DiffSource::Commit(h) => (repo.show_bytes(&format!("{h}^"), &path), repo.show_bytes(h, &path)),
-                        };
-                        let at = Path::new(&path);
-                        return (Vec::new(), Some((crate::picture::from_bytes(at, old), crate::picture::from_bytes(at, new))));
-                    }
-                    let (old, new) = match &source {
-                        DiffSource::Unstaged => {
-                            let old = if untracked { String::new() } else { repo.show("", &path) };
-                            (old, std::fs::read_to_string(repo.root.join(&path)).unwrap_or_default())
+                    match gs::load_diff(&repo, &path, &source, untracked, crate::picture::is_picture(Path::new(&path))) {
+                        DiffContent::Hunks(hunks) => (hunks, None),
+                        DiffContent::Pictures { old, new } => {
+                            let at = Path::new(&path);
+                            (Vec::new(), Some((crate::picture::from_bytes(at, old), crate::picture::from_bytes(at, new))))
                         }
-                        DiffSource::Staged => (repo.show("HEAD", &path), repo.show("", &path)),
-                        DiffSource::Commit(h) => (repo.show(&format!("{h}^"), &path), repo.show(h, &path)),
-                    };
-                    (shed_git::diff_texts(&old, &new, 3), None)
+                    }
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -455,20 +388,17 @@ impl ProjectView {
     fn hunk_action(&mut self, i: usize, h: usize, action: HunkAction, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Content::Diff(d)) = self.open.get(i).map(|f| &f.content) else { return };
         let Some(hunk) = d.hunks.get(h) else { return };
-        let path = d.path.clone();
-        if d.untracked {
-            let paths = vec![path];
-            return self.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
-        }
-        let patch = shed_git::hunk_patch(&path, hunk);
+        let (path, hunk, untracked) = (d.path.clone(), hunk.clone(), d.untracked);
+        let run = move |r: &Repo| gs::hunk_action(r, &path, &hunk, action, untracked).map(|_| String::new());
         match action {
-            HunkAction::Stage => self.git_op("Staging…", move |r| r.apply(&patch, true, false).map(|_| String::new()), cx),
-            HunkAction::Unstage => self.git_op("Unstaging…", move |r| r.apply(&patch, true, true).map(|_| String::new()), cx),
+            _ if untracked => self.git_op("Staging…", run, cx),
+            HunkAction::Stage => self.git_op("Staging…", run, cx),
+            HunkAction::Unstage => self.git_op("Unstaging…", run, cx),
             HunkAction::Discard => {
                 let answer = window.prompt(PromptLevel::Warning, "Discard this change?", Some("It is lost from the working folder."), &["Discard", "Cancel"], cx);
                 cx.spawn(async move |this, cx| {
                     if matches!(answer.await, Ok(0)) {
-                        this.update(cx, |this, cx| this.git_op("Discarding…", move |r| r.apply(&patch, false, true).map(|_| String::new()), cx)).ok();
+                        this.update(cx, |this, cx| this.git_op("Discarding…", run, cx)).ok();
                     }
                 })
                 .detach();
@@ -478,16 +408,15 @@ impl ProjectView {
 
     pub(super) fn open_history(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         let Some(git) = &mut self.git else { return };
-        git.log_for = path.clone();
-        git.log.clear();
+        git.session.start_history(path.clone());
         git.expanded.clear();
-        let repo = git.repo.clone();
+        let repo = git.session.repo.clone();
         git.log_task = Some(cx.spawn(async move |this, cx| {
-            let log = cx.background_executor().spawn(async move { repo.log(path.as_deref(), 400) }).await;
+            let log = cx.background_executor().spawn(async move { gs::history(&repo, path.as_deref()) }).await;
             this.update(cx, |this, cx| {
                 if let Some(git) = &mut this.git {
                     match log {
-                        Ok(l) => git.log = l,
+                        Ok(l) => git.session.log = l,
                         Err(e) => git.error = Some(e.0),
                     }
                 }
@@ -502,26 +431,26 @@ impl ProjectView {
     fn toggle_commit(&mut self, hash: String, cx: &mut Context<Self>) {
         let Some(git) = &mut self.git else { return };
         if !git.expanded.remove(&hash) {
-            git.expanded.insert(hash.clone());
-            if !git.commit_files.contains_key(&hash) {
-                let files = git.repo.commit_files(&hash).unwrap_or_default();
-                git.commit_files.insert(hash, files);
-            }
+            git.session.commit_files(&hash);
+            git.expanded.insert(hash);
         }
         cx.notify();
     }
 
+    /// Runs a branch, stash or remote operation.
+    fn branch_op(&mut self, op: BranchOp, cx: &mut Context<Self>) {
+        self.git_op(op.label(), move |r| op.run(r), cx);
+    }
+
     fn branch_menu(&mut self, _: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
         let Some(git) = &self.git else { return Vec::new() };
-        let local = git.repo.branches().unwrap_or_default();
-        let current = git.status.as_ref().and_then(|s| s.branch.head.clone());
-        let others: Vec<String> = local.iter().filter(|b| Some(*b) != current.as_ref()).cloned().collect();
-        let (behind, ahead) = git.status.as_ref().map_or((0, 0), |s| (s.branch.behind, s.branch.ahead.max(git.outgoing.len() as u32)));
+        let others = git.session.branches().others;
+        let (behind, ahead) = git.session.behind_ahead();
         let count = |n: u32| if n > 0 { format!(" ({n})") } else { String::new() };
         let mut entries = vec![
-            menu::item("Fetch", |this: &mut Self, _, cx| this.git_op("Fetching…", |r| r.fetch(), cx)).icon("refresh"),
-            menu::item(format!("Pull with Rebase{}", count(behind)), |this: &mut Self, _, cx| this.git_op("Pulling…", |r| r.pull_rebase(), cx)).icon("pull"),
-            menu::item(format!("Pull with Merge{}", count(behind)), |this: &mut Self, _, cx| this.git_op("Pulling…", |r| r.pull_merge(), cx)).icon("pull"),
+            menu::item("Fetch", |this: &mut Self, _, cx| this.branch_op(BranchOp::Fetch, cx)).icon("refresh"),
+            menu::item(format!("Pull with Rebase{}", count(behind)), |this: &mut Self, _, cx| this.branch_op(BranchOp::PullRebase, cx)).icon("pull"),
+            menu::item(format!("Pull with Merge{}", count(behind)), |this: &mut Self, _, cx| this.branch_op(BranchOp::PullMerge, cx)).icon("pull"),
             menu::item(format!("Push{}", count(ahead)), |this: &mut Self, _, cx| this.push(false, cx)).icon("push"),
             menu::danger("Force-Push…", |this: &mut Self, _, cx| this.push(true, cx)),
             MenuEntry::Separator,
@@ -532,22 +461,16 @@ impl ProjectView {
         }
         for b in others.iter().take(12) {
             let name = b.clone();
-            entries.push(menu::item(format!("Switch to {b}"), move |this: &mut Self, _, cx| {
-                let n = name.clone();
-                this.git_op("Switching…", move |r| r.switch(&n), cx)
-            }).icon("branch"));
+            entries.push(menu::item(format!("Switch to {b}"), move |this: &mut Self, _, cx| this.branch_op(BranchOp::Switch(name.clone()), cx)).icon("branch"));
         }
         entries.push(menu::more("Remote Branches", |this: &mut Self, _| {
-            let remote = this.git.as_ref().map(|g| g.repo.remote_branches().unwrap_or_default()).unwrap_or_default();
+            let remote = this.git.as_ref().map(|g| g.session.repo.remote_branches().unwrap_or_default()).unwrap_or_default();
             remote
                 .into_iter()
                 .take(30)
                 .map(|b| {
                     let label = format!("Check out {b}");
-                    menu::item(label, move |this: &mut Self, _, cx| {
-                        let n = b.clone();
-                        this.git_op("Checking out…", move |r| r.switch(&n), cx)
-                    })
+                    menu::item(label, move |this: &mut Self, _, cx| this.branch_op(BranchOp::CheckOut(b.clone()), cx))
                 })
                 .collect()
         }));
@@ -557,19 +480,13 @@ impl ProjectView {
             entries.push(menu::more("Merge into Current", move |_, _| {
                 m.iter().map(|b| {
                     let n = b.clone();
-                    menu::item(b.clone(), move |this: &mut Self, _, cx| {
-                        let n = n.clone();
-                        this.git_op("Merging…", move |r| r.merge(&n), cx)
-                    })
+                    menu::item(b.clone(), move |this: &mut Self, _, cx| this.branch_op(BranchOp::Merge(n.clone()), cx))
                 }).collect()
             }));
             entries.push(menu::more("Rebase Current onto", move |_, _| {
                 r.iter().map(|b| {
                     let n = b.clone();
-                    menu::item(b.clone(), move |this: &mut Self, _, cx| {
-                        let n = n.clone();
-                        this.git_op("Rebasing…", move |r| r.rebase(&n), cx)
-                    })
+                    menu::item(b.clone(), move |this: &mut Self, _, cx| this.branch_op(BranchOp::Rebase(n.clone()), cx))
                 }).collect()
             }));
             entries.push(menu::more("Delete Branch", move |_, _| {
@@ -580,8 +497,8 @@ impl ProjectView {
             }));
         }
         entries.push(MenuEntry::Separator);
-        entries.push(menu::item("Stash Changes", |this: &mut Self, _, cx| this.git_op("Stashing…", |r| r.stash(), cx)));
-        entries.push(menu::item("Pop Stash", |this: &mut Self, _, cx| this.git_op("Popping the stash…", |r| r.stash_pop(), cx)));
+        entries.push(menu::item("Stash Changes", |this: &mut Self, _, cx| this.branch_op(BranchOp::Stash, cx)));
+        entries.push(menu::item("Pop Stash", |this: &mut Self, _, cx| this.branch_op(BranchOp::StashPop, cx)));
         entries.push(menu::item("History", |this: &mut Self, _, cx| this.open_history(None, cx)).icon("history"));
         entries
     }
@@ -600,7 +517,7 @@ impl ProjectView {
                 Ok(1) => true,
                 _ => return,
             };
-            this.update(cx, |this, cx| this.git_op("Deleting the branch…", move |r| r.delete_branch(&name, force), cx)).ok();
+            this.update(cx, |this, cx| this.branch_op(BranchOp::Delete { name, force }, cx)).ok();
         })
         .detach();
     }
@@ -616,8 +533,7 @@ impl ProjectView {
             if let EditorEvent::Submit(name) = event
                 && !name.is_empty()
             {
-                let name = name.replace(' ', "-");
-                this.git_op("Creating the branch…", move |r| r.create_branch(&name), cx);
+                this.branch_op(BranchOp::Create(name.clone()), cx);
             }
             cx.notify();
         });
@@ -628,24 +544,13 @@ impl ProjectView {
 
     /// The branch and how it stands, in a few words: for Shed's cards.
     pub fn branch_label(&self) -> Option<String> {
-        let s = self.git.as_ref()?.status.as_ref()?;
-        let mut label = s.branch.head.clone().unwrap_or_else(|| s.branch.oid.clone());
-        if s.branch.ahead > 0 {
-            label.push_str(&format!(" ↑{}", s.branch.ahead));
-        }
-        if s.branch.behind > 0 {
-            label.push_str(&format!(" ↓{}", s.branch.behind));
-        }
-        if !s.entries.is_empty() {
-            label.push_str(&format!(" · {} changed", s.entries.len()));
-        }
-        Some(label)
+        self.git.as_ref()?.session.branch_label()
     }
 
     /// The branch, how it stands, and what changed: for the header.
     pub(super) fn render_branch_chip(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
         let git = self.git.as_ref()?;
-        let s = git.status.as_ref()?;
+        let s = git.session.status.as_ref()?;
         let head = s.branch.head.clone().unwrap_or_else(|| format!("detached at {}", s.branch.oid));
         let mut label = head;
         if s.branch.ahead > 0 {
@@ -691,7 +596,7 @@ impl ProjectView {
             return div().p_3().text_color(hsla(ui.text_dim)).child("Not a Git repository.").into_any_element();
         };
         let accent = self.accent;
-        let Some(s) = git.status.clone() else { return div().p_3().text_color(hsla(ui.text_dim)).child("Reading…").into_any_element() };
+        let Some(s) = git.session.status.clone() else { return div().p_3().text_color(hsla(ui.text_dim)).child("Reading…").into_any_element() };
         let button = |id: &'static str, glyph: &'static str, label: String| {
             div()
                 .id(id)
@@ -717,7 +622,7 @@ impl ProjectView {
             .child(button("git-pull", "pull", if s.branch.behind > 0 { format!("Pull {}", s.branch.behind) } else { "Pull".into() }).on_click(cx.listener(|this, _, _, cx| this.git_op("Pulling…", |r| r.pull(), cx))))
             .child(
                 button("git-push", "push", {
-                    let ahead = s.branch.ahead.max(git.outgoing.len() as u32);
+                    let ahead = s.branch.ahead.max(git.session.outgoing.len() as u32);
                     if ahead > 0 { format!("Push {ahead}") } else { "Push".into() }
                 })
                     .on_click(cx.listener(|this, _, _, cx| this.push(false, cx)))
@@ -790,14 +695,14 @@ impl ProjectView {
             list = list.child(div().p_2().text_color(hsla(ui.text_dim)).child("Nothing changed."));
         }
         // Commits made here and not pushed yet, each opening to its files.
-        if !git.outgoing.is_empty() {
-            list = list.child(self.section_header("Not Pushed", git.outgoing.len(), None, ui, cx));
-            for (n, c) in git.outgoing.iter().enumerate() {
+        if !git.session.outgoing.is_empty() {
+            list = list.child(self.section_header("Not Pushed", git.session.outgoing.len(), None, ui, cx));
+            for (n, c) in git.session.outgoing.iter().enumerate() {
                 list = list.children(self.outgoing_rows(n, c, ui, cx));
             }
         }
         let review = self.render_push_review(ui, cx);
-        let can_commit = !staged.is_empty() || git.amend;
+        let can_commit = !staged.is_empty() || git.session.amend;
         let commit_button = |id: &'static str, label: String, push: bool| {
             div()
                 .id(id)
@@ -845,9 +750,9 @@ impl ProjectView {
                             .items_center()
                             .gap_1()
                             .cursor_pointer()
-                            .text_color(hsla(if git.amend { ui.text } else { ui.text_dim }))
+                            .text_color(hsla(if git.session.amend { ui.text } else { ui.text_dim }))
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_amend(cx)))
-                            .child(if git.amend { "☑" } else { "☐" })
+                            .child(if git.session.amend { "☑" } else { "☐" })
                             .child("Amend"),
                     )
                     .child(div().flex_1())
@@ -877,7 +782,7 @@ impl ProjectView {
                 .into_any_element(),
         ];
         if open {
-            for (f, (code, path)) in git.commit_files.get(&c.hash).into_iter().flatten().enumerate() {
+            for (f, (code, path)) in git.session.commit_files.get(&c.hash).into_iter().flatten().enumerate() {
                 let (p, hash) = (path.clone(), c.hash.clone());
                 rows.push(
                     row(n * 1000 + f + 1)
@@ -894,7 +799,7 @@ impl ProjectView {
 
     /// A push to confirm: the branch, where it goes, and the commits it sends.
     fn render_push_review(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let review = self.git.as_ref()?.push_review.as_ref()?;
+        let review = self.git.as_ref()?.session.push_review.as_ref()?;
         let t = &review.target;
         let tone = if review.force { ui.danger } else { self.accent };
         let n = review.commits.len();
@@ -922,12 +827,7 @@ impl ProjectView {
                 .hover(move |s| s.bg(hsla_alpha(color, 0.2)))
                 .child(label)
         };
-        let what = match (n, review.force) {
-            (_, true) => "Force-Push".to_string(),
-            (0, _) => "Push".to_string(),
-            (1, _) => "Push 1 Commit".to_string(),
-            (n, _) => format!("Push {n} Commits"),
-        };
+        let what = review.action_label();
         Some(
             div()
                 .flex()
@@ -1123,7 +1023,7 @@ impl ProjectView {
             .when_some(depth, |d, depth| d.pl(px(4.0 + depth as f32 * 14.0 + 12.0)))
             .on_click(cx.listener(move |this, _, _, cx| match section {
                 Section::Conflict => {
-                    let full = this.git.as_ref().map(|g| g.repo.root.join(&path)).unwrap_or_default();
+                    let full = this.git.as_ref().map(|g| g.session.repo.root.join(&path)).unwrap_or_default();
                     this.open_path(full, None, cx);
                 }
                 Section::Staged => this.open_diff(path.clone(), DiffSource::Staged, cx),
@@ -1157,7 +1057,7 @@ impl ProjectView {
             .child(div().flex_none().text_color(hsla(ui.text)).child(name))
             .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).when(depth.is_none(), |d| d.child(dir)));
         // Where the file is in the project (not for one deleted).
-        if let Some(full) = self.git.as_ref().map(|g| g.repo.root.join(&e.path)).filter(|_| code != 'D') {
+        if let Some(full) = self.git.as_ref().map(|g| g.session.repo.root.join(&e.path)).filter(|_| code != 'D') {
             row = row.child(action(("go-to", id), "file", "Go to File").on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 this.go_to_file(full.clone(), cx);
@@ -1201,7 +1101,7 @@ impl ProjectView {
         let Some(git) = &self.git else { return div().into_any_element() };
         let rows = self.history_rows();
         let count = rows.len();
-        let title = match &git.log_for {
+        let title = match &git.session.log_for {
             Some(p) => format!("History of {p}"),
             None => "History".into(),
         };
@@ -1222,7 +1122,7 @@ impl ProjectView {
                     .flex()
                     .items_center()
                     .child(div().flex_1().text_color(hsla(ui.text_dim)).child(title))
-                    .when(git.log_for.is_some(), |d| {
+                    .when(git.session.log_for.is_some(), |d| {
                         d.child(div().id("history-all").cursor_pointer().text_color(hsla(ui.ink(self.accent))).on_click(cx.listener(|this, _, _, cx| this.open_history(None, cx))).child("All"))
                     }),
             )
@@ -1233,10 +1133,10 @@ impl ProjectView {
     fn history_rows(&self) -> Vec<(usize, Option<usize>)> {
         let Some(git) = &self.git else { return Vec::new() };
         let mut rows = Vec::new();
-        for (i, c) in git.log.iter().enumerate() {
+        for (i, c) in git.session.log.iter().enumerate() {
             rows.push((i, None));
             if git.expanded.contains(&c.hash) {
-                let n = git.commit_files.get(&c.hash).map_or(0, Vec::len);
+                let n = git.session.commit_files.get(&c.hash).map_or(0, Vec::len);
                 rows.extend((0..n).map(|f| (i, Some(f))));
             }
         }
@@ -1251,7 +1151,7 @@ impl ProjectView {
         range
             .filter_map(|n| {
                 let (i, file) = *rows.get(n)?;
-                let c = git.log.get(i)?;
+                let c = git.session.log.get(i)?;
                 let hash = c.hash.clone();
                 let row = div().id(("hist", n)).h(px(ROW_HEIGHT * self.z())).flex().items_center().gap_1p5().px_1().rounded_sm().cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover)));
                 Some(match file {
@@ -1266,7 +1166,7 @@ impl ProjectView {
                             .into_any_element()
                     }
                     Some(f) => {
-                        let (code, path) = git.commit_files.get(&c.hash)?.get(f)?.clone();
+                        let (code, path) = git.session.commit_files.get(&c.hash)?.get(f)?.clone();
                         let p = path.clone();
                         row.pl(px(22.0))
                             .on_click(cx.listener(move |this, _, _, cx| this.open_diff(p.clone(), DiffSource::Commit(hash.clone()), cx)))
@@ -1301,7 +1201,7 @@ impl ProjectView {
             DiffSource::Commit(h) => format!("Commit {}", &h[..h.len().min(10)]),
         };
         let path = d.path.clone();
-        let full = self.git.as_ref().map(|g| g.repo.root.join(&path)).unwrap_or_default();
+        let full = self.git.as_ref().map(|g| g.session.repo.root.join(&path)).unwrap_or_default();
         let source = d.source.clone();
         let bar = div()
             .flex()
@@ -1400,24 +1300,7 @@ impl ProjectView {
     /// separator, end (from 0).
     fn conflicts_in(&self, view: &Entity<TextView>, cx: &gpui::App) -> Vec<(usize, usize, usize)> {
         let b = &view.read(cx).buffer;
-        let mut blocks = Vec::new();
-        let mut start = None;
-        let mut sep = None;
-        for l in 0..b.len_lines() {
-            let line = b.line(l);
-            if line.starts_with("<<<<<<<") {
-                start = Some(l);
-                sep = None;
-            } else if line.starts_with("=======") && start.is_some() {
-                sep = Some(l);
-            } else if line.starts_with(">>>>>>>")
-                && let (Some(s), Some(m)) = (start, sep)
-            {
-                blocks.push((s, m, l));
-                start = None;
-            }
-        }
-        blocks
+        gs::conflicts_in((0..b.len_lines()).map(|l| b.line(l)))
     }
 
     /// A bar for a file with conflict markers: take ours, theirs or both at
@@ -1426,7 +1309,7 @@ impl ProjectView {
         let file = self.open.get(i)?;
         let view = file.view()?.clone();
         let blocks = self.conflicts_in(&view, cx);
-        let in_conflict = self.git.as_ref().and_then(|g| g.status.as_ref()).is_some_and(|s| s.conflicts().any(|e| g_path(&self.git, &e.path) == file.path));
+        let in_conflict = self.git.as_ref().and_then(|g| g.session.status.as_ref()).is_some_and(|s| s.conflicts().any(|e| g_path(&self.git, &e.path) == file.path));
         if blocks.is_empty() && !in_conflict {
             return None;
         }
@@ -1469,7 +1352,7 @@ impl ProjectView {
         };
         let (t0, t1, t2) = (take.clone(), take.clone(), take);
         let path = file.path.clone();
-        let rel = self.git.as_ref().map(|g| file.path.strip_prefix(&g.repo.root).unwrap_or(&file.path).display().to_string()).unwrap_or_default();
+        let rel = self.git.as_ref().map(|g| file.path.strip_prefix(&g.session.repo.root).unwrap_or(&file.path).display().to_string()).unwrap_or_default();
         let rel2 = rel.clone();
         let next_view = file.view()?.clone();
         Some(
@@ -1530,10 +1413,10 @@ impl ProjectView {
             return cx.notify();
         }
         let Some(git) = &self.git else { return };
-        let Ok(rel) = file.path.strip_prefix(&git.repo.root) else { return };
+        let Ok(rel) = file.path.strip_prefix(&git.session.repo.root) else { return };
         let rel = rel.display().to_string();
         // Index stages: 2 is ours, 3 theirs, during a merge or rebase.
-        let (ours, theirs) = (git.repo.show(":2", &rel), git.repo.show(":3", &rel));
+        let (ours, theirs) = (git.session.repo.show(":2", &rel), git.session.repo.show(":3", &rel));
         let options = TextOptions { read_only: true, line_numbers: true, comment: file.lang.and_then(|l| l.comment), ..Default::default() };
         let settings = self.settings.clone();
         let o = options.clone();
@@ -1592,7 +1475,7 @@ impl ProjectView {
 }
 
 fn g_path(git: &Option<GitState>, rel: &str) -> PathBuf {
-    git.as_ref().map(|g| g.repo.root.join(rel)).unwrap_or_default()
+    git.as_ref().map(|g| g.session.repo.root.join(rel)).unwrap_or_default()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -1600,13 +1483,6 @@ enum Section {
     Conflict,
     Staged,
     Unstaged,
-}
-
-#[derive(Clone, Copy)]
-enum HunkAction {
-    Stage,
-    Unstage,
-    Discard,
 }
 
 fn short_ago(secs: u64) -> String {

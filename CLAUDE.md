@@ -79,8 +79,9 @@ Crates (`crates/`), lowest first:
 - `shed-ai`: Claude Code conversations from its stream-json events and session
   files; the keeper runs `claude` per AI tab (`shed-keeper/src/server/ai.rs`).
 - `shed-git`: Git through the `git` program (status, diffs, hunk patches,
-  commits, branches, log), diff rows and changed files by folder (`layout.rs`);
-  the UI is `shed-app/src/project_git.rs`.
+  commits, branches, log), diff rows and changed files by folder (`layout.rs`),
+  a Git panel's data and blocking operations (`session.rs`); the UI is
+  `shed-app/src/project_git.rs`.
 - `shed-review`: an AI tab's review as data (changes by layer, keys, Viewed,
   explain requests); the UI is `shed-app/src/ai_review.rs`.
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.

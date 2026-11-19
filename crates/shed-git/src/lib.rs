@@ -4,6 +4,7 @@
 
 mod diff;
 pub mod layout;
+pub mod session;
 mod status;
 
 use std::io::Write;
