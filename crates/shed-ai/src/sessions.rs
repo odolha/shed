@@ -214,6 +214,9 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
     let file = std::fs::File::open(path).ok()?;
     let mut first_prompt: Option<String> = None;
     let mut title: Option<String> = None;
+    // A name given to it (Claude Code's /rename, or Shed's Rename), which
+    // wins over the title Claude Code makes up; the last one counts.
+    let mut custom: Option<String> = None;
     let mut branch = None;
     let mut prompts = 0;
     let mut lineage = Lineage::default();
@@ -232,7 +235,7 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
             messages += 1;
         }
         // Most lines are neither: look before parsing.
-        let is_title = line.contains("\"ai-title\"") || line.contains("\"summary\"");
+        let is_title = line.contains("\"ai-title\"") || line.contains("\"summary\"") || line.contains("\"custom-title\"");
         let is_user = line.contains("\"user\"") && !line.contains("\"tool_result\"");
         if !is_title && !is_user {
             continue;
@@ -240,6 +243,7 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
         let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
         match v.get("type").and_then(Value::as_str) {
             Some("ai-title") => title = v.get("aiTitle").and_then(Value::as_str).map(String::from),
+            Some("custom-title") => custom = v.get("customTitle").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map(String::from),
             Some("summary") => title = title.or_else(|| v.get("summary").and_then(Value::as_str).map(String::from)),
             Some("user") if v.get("isSidechain").and_then(Value::as_bool) != Some(true) && v.get("isMeta").and_then(Value::as_bool) != Some(true) => {
                 let text = match v.get("message").and_then(|m| m.get("content")) {
@@ -269,7 +273,7 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
     if first.starts_with(SHED_PROMPT_PREAMBLE) {
         return None;
     }
-    let title = title.unwrap_or_else(|| {
+    let title = custom.or(title).unwrap_or_else(|| {
         let line = first.lines().next().unwrap_or("").trim();
         let mut short: String = line.chars().take(80).collect();
         if line.chars().count() > 80 {
@@ -280,7 +284,32 @@ fn read_info(path: &Path) -> Option<(SessionInfo, Lineage)> {
     Some((SessionInfo { id, title, modified, branch, prompts, ..Default::default() }, lineage))
 }
 
-/// A saved session as a conversation, to show it again.
+/// Names a session, as Claude Code's `/rename` does: a `custom-title`
+/// record at its end, so Claude Code shows the name too. An empty name goes
+/// back to the title Claude Code made up.
+pub fn rename_session(folder: &Path, id: &str, name: &str) -> std::io::Result<()> {
+    rename_session_in(&sessions_dir(folder), id, name)
+}
+
+fn rename_session_in(dir: &Path, id: &str, name: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let path = dir.join(format!("{id}.jsonl"));
+    if !path.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such session"));
+    }
+    let record = serde_json::json!({"type": "custom-title", "customTitle": name.trim(), "sessionId": id});
+    // On a line of its own, even after a last line with no line break.
+    let ends_clean = {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(&path)?;
+        let len = f.metadata()?.len();
+        let mut last = [0u8; 1];
+        len == 0 || (f.seek(SeekFrom::End(-1)).is_ok() && f.read_exact(&mut last).is_ok() && last[0] == b'\n')
+    };
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+    file.write_all(format!("{}{record}\n", if ends_clean { "" } else { "\n" }).as_bytes())
+}
+
 /// A saved session as a conversation; its prompts' pictures are kept in
 /// `picture_dir`, to show them.
 pub fn load_session(folder: &Path, id: &str, picture_dir: Option<std::path::PathBuf>) -> Option<Transcript> {
@@ -405,6 +434,15 @@ mod tests {
         let t = load_from(d, Path::new("/tmp"), "c", None).unwrap();
         let prompts: Vec<String> = t.entries.iter().filter_map(|e| if let crate::Entry::User { text, .. } = e { Some(text.clone()) } else { None }).collect();
         assert_eq!(prompts, ["one", "two, changed"]);
+        // Renamed (as Claude Code's /rename does): the name wins, the last one
+        // counts, and an empty one gives the made-up title back.
+        let named = |name: &str| {
+            rename_session_in(d, "a", name).unwrap();
+            read_info(&d.join("a.jsonl")).unwrap().0.title
+        };
+        assert_eq!(named("Board rework"), "Board rework");
+        assert_eq!(named("Board rework, part 2"), "Board rework, part 2");
+        assert_eq!(named(""), "Apartments");
         let tree = as_tree(linked);
         let order: Vec<(String, usize)> = tree.iter().map(|s| (s.id.clone(), s.depth)).collect();
         assert_eq!(order.len(), 4);

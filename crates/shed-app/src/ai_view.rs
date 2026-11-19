@@ -23,7 +23,7 @@ use shed_proto::{AiImage, ClientMsg};
 use crate::ai_text::{self, Copy, Kind, Piece, Point, Selection};
 use crate::assets::icon;
 use crate::keeper_conn::KeeperConn;
-use crate::line_editor::LineEditor;
+use crate::line_editor::{EditorEvent, LineEditor};
 use crate::menu::{self, Menu, MenuEntry, MenuHost};
 use crate::settings::Settings;
 use crate::text_view::{TextEvent, TextOptions, TextView};
@@ -173,6 +173,8 @@ pub struct AiView {
     entry_views: HashMap<usize, Entity<EntryView>>,
     /// Reviewing what Claude changed, in place of the conversation.
     review: Option<review::Review>,
+    /// A session being renamed: its id, and the field with its name.
+    renaming: Option<(String, Entity<LineEditor>, Subscription)>,
     sessions_task: Option<Task<()>>,
     filter: Entity<LineEditor>,
     sessions_scroll: UniformListScrollHandle,
@@ -343,6 +345,7 @@ impl AiView {
             open_families: HashSet::new(),
             entry_views: HashMap::new(),
             review: None,
+            renaming: None,
             sessions_task: None,
             filter,
             sessions_scroll: UniformListScrollHandle::new(),
@@ -1163,10 +1166,32 @@ impl AiView {
         self.conn.send_msg(ClientMsg::NewCommandTab { bench: self.bench, cwd: self.ai.folder.clone(), command });
     }
 
+    /// Names a session (or gives Claude Code's own title back, when the name
+    /// is emptied), in an editor in place of its title.
+    fn start_rename(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.sessions.iter().find(|s| s.id == id).map(|s| s.title.clone()).unwrap_or_default();
+        let editor = cx.new(|cx| LineEditor::selected(title, cx));
+        let sub = cx.subscribe(&editor, |this, _, e: &EditorEvent, cx| {
+            let Some((id, _, _)) = this.renaming.take() else { return };
+            if let EditorEvent::Submit(name) = e {
+                if let Err(e) = shed_ai::rename_session(&this.ai.folder, &id, name) {
+                    tracing::warn!("cannot rename the session: {e}");
+                }
+                this.load_sessions(cx);
+            }
+            cx.notify();
+        });
+        let focus = editor.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        self.renaming = Some((id, editor, sub));
+        cx.notify();
+    }
+
     fn session_menu(&self, id: String) -> Vec<MenuEntry<Self>> {
-        let (a, b) = (id.clone(), id.clone());
+        let (a, b, c) = (id.clone(), id.clone(), id.clone());
         vec![
             menu::item("Open", move |this: &mut Self, _, _| this.open_session(Some(a.clone()))).icon("go"),
+            menu::item("Rename…", move |this: &mut Self, window, cx| this.start_rename(c.clone(), window, cx)).icon("pencil"),
             menu::item("Continue in a Terminal", move |this: &mut Self, _, _| this.continue_in_terminal(&b)).icon("terminal"),
             menu::item("Copy Session ID", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(id.clone()))),
         ]
@@ -2436,7 +2461,16 @@ impl AiView {
                         .cursor_pointer()
                         .when(current, |d| d.bg(hsla_alpha(accent, 0.2)))
                         .hover(|st| st.bg(hsla(ui.tab_hover)))
-                        .on_click(cx.listener(move |this, _, _, _| this.open_session(Some(id.clone()))))
+                        // Its whole title, and more, on hover.
+                        .tooltip(menu::tooltip_text(format!("{}\n{}", s.title, meta.join(" · "))))
+                        // A double click renames it.
+                        .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                            if e.click_count() >= 2 {
+                                this.start_rename(id.clone(), window, cx);
+                            } else {
+                                this.open_session(Some(id.clone()));
+                            }
+                        }))
                         .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                             let entries = this.session_menu(menu_id.clone());
                             this.open_menu(e.position, entries, cx);
@@ -2447,7 +2481,10 @@ impl AiView {
                                 .min_w_0()
                                 .flex()
                                 .flex_col()
-                                .child(div().truncate().text_color(hsla(ui.text)).child(s.title.clone()))
+                                .child(match self.renaming.as_ref().filter(|(r, _, _)| *r == s.id) {
+                                    Some((_, editor, _)) => div().child(editor.clone()).into_any_element(),
+                                    None => div().truncate().text_color(hsla(ui.text)).child(s.title.clone()).into_any_element(),
+                                })
                                 .child(div().truncate().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(meta.join(" · "))),
                         )
                         // Its files, for who wants to see how it was split.
@@ -2659,7 +2696,29 @@ impl AiView {
                     .items_center()
                     .gap_2()
                     .child(svg().path(icon("ai")).size(px(16.0)).flex_none().text_color(hsla(ui.ink(accent))))
-                    .child(div().flex_none().text_size(px(14.0 * self.z())).text_color(hsla(ui.text)).child(title))
+                    .child(match (self.ai.session.clone(), self.renaming.as_ref().filter(|(r, _, _)| Some(r) == self.ai.session.as_ref())) {
+                        (_, Some((_, editor, _))) => div().w(px(360.0)).text_size(px(14.0 * self.z())).child(editor.clone()).into_any_element(),
+                        (session, None) => {
+                            let full = title.clone();
+                            div()
+                                .id("session-title")
+                                .flex_shrink(1.0)
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(14.0 * self.z()))
+                                .text_color(hsla(ui.text))
+                                .tooltip(menu::tooltip_text(format!("{full}\n(double-click to rename)")))
+                                .when_some(session, |d, id| {
+                                    d.cursor_pointer().on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                                        if e.click_count() >= 2 {
+                                            this.start_rename(id.clone(), window, cx);
+                                        }
+                                    }))
+                                })
+                                .child(title)
+                                .into_any_element()
+                        }
+                    })
                     .child(div().flex_1().min_w_0().truncate().text_size(px(12.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{folder} · {}", shed_save::home_relative(&self.ai.folder))))
                     .child(
                         div()

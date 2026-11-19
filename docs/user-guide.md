@@ -351,7 +351,11 @@ terminal of the bench.
   branches one off; Shed lists such files as one conversation: one row, opening
   the most recent, every prompt once, read back from all its files ("3 parts").
   Its **▸** lists the files, each with **↳ continued** or **↳ branched after
-  #29**. Type to filter. Click one to show it and carry on with it; **New
+  #29**. Hover a session for its whole title. **Rename…** in its right-click
+  menu, or a double-click on it (or on the title above the conversation),
+  names it: Enter keeps the name, Escape leaves it, and an empty name gives
+  Claude Code's own title back. The name is Claude Code's too (its `/rename`):
+  it shows in `claude --resume`. Type to filter. Click one to show it and carry on with it; **New
   Session** starts afresh. Right-click a session to continue it in a terminal
   (`claude --resume`), in Claude Code's own interface. The quick commands that the
   `> request` prompt makes are not saved as sessions, so they do not crowd the list.
