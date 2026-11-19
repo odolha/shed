@@ -162,6 +162,8 @@ The keeper writes it from a thread of its own; windows and the CLI open it read-
 Each entry records the command, folder, exit status, start and duration, and the
 pane, tab and bench it ran in, so the three scopes (tab, bench, everything) are only
 filters on one table. Commands from private tabs are kept with the tab only.
+A search as typed (`tag:prod deploy`) is split into text and tag by
+`shed_logbook::parse_query`, so every client reads it the same way.
 
 ## Tab kinds
 
@@ -606,7 +608,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-emu` | The `Emulator` trait and its `alacritty_terminal` backend, replay, key and mouse encoding, shell-mark parsing |
 | `shed-keeper` | `shedd`: PTYs, the socket server, saving, closing, the shell marks |
 | `shed-save` | Saved bench files, layouts as text, rack rules, scrollback, the session |
-| `shed-logbook` | The logbook database, and the bash and zsh hooks |
+| `shed-logbook` | The logbook database, where it is, searches as typed (`tag:`), and the bash and zsh hooks |
 | `shed-desktop` | Bench and app icons, desktop entries |
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
 | `shed-project` | A project's file list, folder watching, ranking files by name, colouring |

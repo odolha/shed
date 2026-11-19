@@ -64,9 +64,9 @@ Crates (`crates/`), lowest first:
   key/mouse encoding (xterm and kitty), OSC 133/7/7777 shell-mark parsing.
 - `shed-save`: saved bench TOML (`SavedBench`), layouts as text, rack rules,
   zstd scrollback, `session.toml`.
-- `shed-logbook`: SQLite command history; embeds the shell hooks `shell/shed.bash`
-  and `shell/shed.zsh` (keep them doing the same things; the keeper writes them to
-  the runtime dir and points bash/zsh at them).
+- `shed-logbook`: SQLite command history (its paths, `tag:` queries); embeds the
+  shell hooks `shell/shed.bash` and `shell/shed.zsh` (keep them doing the same
+  things; the keeper writes them to the runtime dir and points bash/zsh at them).
 - `shed-desktop`: bench icons (SVG template recoloured, resvg) and desktop entries.
 - `shed-text`: an editable text buffer (rope, selection, undo, editor edits, reload).
 - `shed-project`: a project's file list, folder watching, fuzzy file ranking,

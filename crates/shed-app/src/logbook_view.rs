@@ -6,10 +6,9 @@ use gpui::{
     Context, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Task, Window, div,
     prelude::*, px,
 };
-use shed_logbook::{Context as Here, Entry, Logbook, Scope};
+use shed_logbook::{Context as Here, Entry, Logbook, Scope, age};
 use shed_model::Rgb;
 
-use crate::logbook::age;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
 /// How many results are fetched, and how many rows are shown.
@@ -78,8 +77,7 @@ impl LogbookSearch {
     /// shell, from any PC, and everything else run there. A copy fetched
     /// earlier shows at once; the fresh one replaces it when it comes.
     pub fn remote(host: String, shell: String, ui: UiColors, accent: Rgb, mono: SharedString, cx: &mut Context<Self>) -> Self {
-        let safe: String = host.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.@".contains(c) { c } else { '_' }).collect();
-        let path = shed_model::paths::runtime_dir().join(format!("logbook-{safe}.sqlite"));
+        let path = shed_logbook::remote_copy_path(&host);
         // Until the server says which of its tabs this is, nothing is "this tab".
         let unknown = Here { tab: shed_model::TabId::new(), bench: shed_model::BenchId::new() };
         let mut this = Self::new(unknown, path.clone(), ui, accent, mono, cx);
@@ -121,26 +119,12 @@ impl LogbookSearch {
 
     /// Runs the query off the UI thread; a newer query replaces an older one.
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let (path, scope, here) = (self.path.clone(), self.scope, self.here);
-        // `tag:prod rest of query`
-        let mut tag = None;
-        let words: Vec<&str> = self
-            .query
-            .split_whitespace()
-            .filter(|w| match w.strip_prefix("tag:") {
-                Some(t) if !t.is_empty() => {
-                    tag = Some(t.to_string());
-                    false
-                }
-                _ => true,
-            })
-            .collect();
-        let text = words.join(" ");
+        let (path, scope, here, query) = (self.path.clone(), self.scope, self.here, self.query.clone());
         self.pending = Some(cx.spawn(async move |this, cx| {
             let found = cx
                 .background_spawn(async move {
                     let book = Logbook::open_readonly(&path)?;
-                    book.search(scope, here, &text, tag.as_deref(), FETCH)
+                    book.search_typed(scope, here, &query, FETCH)
                 })
                 .await;
             this.update(cx, |this, cx| {

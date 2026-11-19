@@ -27,6 +27,55 @@ pub fn default_path() -> PathBuf {
     paths::state_dir().join("logbook.sqlite")
 }
 
+/// The logbook the keeper writes: `$SHED_STATE_DIR` (set in Shed's panes) or the default.
+pub fn path_from_env() -> PathBuf {
+    match std::env::var_os("SHED_STATE_DIR") {
+        Some(dir) => PathBuf::from(dir).join("logbook.sqlite"),
+        None => default_path(),
+    }
+}
+
+/// Where the copy of a server's logbook (fetched over ssh) is kept.
+pub fn remote_copy_path(host: &str) -> PathBuf {
+    let safe: String = host.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.@".contains(c) { c } else { '_' }).collect();
+    paths::runtime_dir().join(format!("logbook-{safe}.sqlite"))
+}
+
+/// The tab and bench this process runs in, from the variables Shed sets.
+pub fn context_from_env() -> Option<Context> {
+    let tab = std::env::var("SHED_TAB").ok()?.parse().ok().map(TabId)?;
+    let bench = std::env::var("SHED_BENCH").ok()?.parse().ok().map(BenchId)?;
+    Some(Context { tab, bench })
+}
+
+/// A search as typed: `tag:prod rest of query` is the text `rest of query`
+/// among commands tagged `prod` (the last `tag:` wins).
+pub fn parse_query(query: &str) -> (String, Option<String>) {
+    let mut tag = None;
+    let words: Vec<&str> = query
+        .split_whitespace()
+        .filter(|w| match w.strip_prefix("tag:") {
+            Some(t) if !t.is_empty() => {
+                tag = Some(t.to_string());
+                false
+            }
+            _ => true,
+        })
+        .collect();
+    (words.join(" "), tag)
+}
+
+/// A short age like `5m`, `3h` or `2d`.
+pub fn age(ms: i64) -> String {
+    let s = ms.max(0) / 1000;
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m", s / 60),
+        3600..86400 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86400),
+    }
+}
+
 /// A command to record.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NewEntry {
@@ -266,6 +315,12 @@ impl Logbook {
         })?;
         rows.collect()
     }
+
+    /// `search` for a query as typed, which may name a tag (`parse_query`).
+    pub fn search_typed(&self, scope: Scope, cx: Context, query: &str, limit: usize) -> Result<Vec<Entry>, Error> {
+        let (text, tag) = parse_query(query);
+        self.search(scope, cx, &text, tag.as_deref(), limit)
+    }
 }
 
 /// The named parameters that `sql` refers to; SQLite rejects any others.
@@ -286,6 +341,34 @@ fn scope_filter(scope: Scope) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_queries_name_a_tag() {
+        let q = |s: &str| parse_query(s);
+        assert_eq!(q(""), (String::new(), None));
+        assert_eq!(q("cargo  build"), ("cargo build".into(), None));
+        assert_eq!(q("tag:prod deploy"), ("deploy".into(), Some("prod".into())));
+        assert_eq!(q("deploy tag:prod now"), ("deploy now".into(), Some("prod".into())));
+        // The last tag wins; an empty one is text.
+        assert_eq!(q("tag:a tag:b"), (String::new(), Some("b".into())));
+        assert_eq!(q("tag: x"), ("tag: x".into(), None));
+        assert_eq!(q("notag:x"), ("notag:x".into(), None));
+    }
+
+    #[test]
+    fn ages_are_short() {
+        assert_eq!(age(-5), "0s");
+        assert_eq!(age(59_999), "59s");
+        assert_eq!(age(60_000), "1m");
+        assert_eq!(age(3_600_000), "1h");
+        assert_eq!(age(86_400_000 * 3), "3d");
+    }
+
+    #[test]
+    fn remote_copies_have_safe_names() {
+        let p = remote_copy_path("me@host:22/x");
+        assert_eq!(p.file_name().unwrap(), "logbook-me@host_22_x.sqlite");
+    }
 
     struct Fixture {
         _dir: tempfile::TempDir,
