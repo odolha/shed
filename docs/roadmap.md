@@ -6,6 +6,11 @@ here, and why, is in [History](history/README.md).
 
 Nothing here is promised or ordered; items move into Shed as they are wanted.
 
+## Shed from anywhere
+
+- **A nexus, web and Android apps, and a server workspace with a TUI**: being
+  planned and built, see [the plan](nexus-plan.md).
+
 ## Projects and Git
 
 - **A merge view that lines up the three versions** and moves single changes
