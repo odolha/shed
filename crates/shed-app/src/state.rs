@@ -430,7 +430,7 @@ impl AppState {
     pub fn open_in_project(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, files: bool, cx: &mut Context<Self>) -> bool {
         let Some(b) = self.tree.bench(bench) else { return false };
         let roots: Vec<(TabId, std::path::PathBuf)> = b.tabs.iter().filter_map(|t| Some((t.id, t.project_info()?.root.clone()))).collect();
-        let Some((tab, path)) = project_holding(&path, &roots) else { return false };
+        let Some((tab, path)) = shed_project::project_holding(&path, &roots) else { return false };
         let Some(view) = self.projects.get(&tab).cloned() else { return false };
         self.conn.send_msg(ClientMsg::FocusTab { tab });
         view.update(cx, |v, cx| v.show_path(path, at, files, cx));
@@ -444,7 +444,7 @@ impl AppState {
         if self.open_in_project(bench, path.clone(), at, files, cx) {
             return;
         }
-        let root = crate::project_view::project_root(path.parent().unwrap_or(&path));
+        let root = shed_project::project_root(path.parent().unwrap_or(&path));
         self.conn.send_msg(ClientMsg::NewProjectTab { bench, root });
         self.pending_reveal = Some((bench, path, at, files));
     }
@@ -934,23 +934,6 @@ pub fn close_tab(conn: &KeeperConn, tab: &Tab, bench: BenchRef, window: &mut gpu
     .detach();
 }
 
-/// The project (of `roots`) that holds `path`, the innermost, and the path
-/// as that project knows it. Compared with links resolved: a project open as
-/// ~/Workspace/x holds ~/Work/x/f when ~/Work links to ~/Workspace.
-pub fn project_holding(path: &std::path::Path, roots: &[(TabId, std::path::PathBuf)]) -> Option<(TabId, std::path::PathBuf)> {
-    let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let real_path = real(path);
-    roots
-        .iter()
-        .filter_map(|(id, root)| {
-            let real_root = real(root);
-            let rel = real_path.strip_prefix(&real_root).ok()?.to_path_buf();
-            Some((*id, real_root.as_os_str().len(), root.join(rel)))
-        })
-        .max_by_key(|(_, len, _)| *len)
-        .map(|(id, _, p)| (id, p))
-}
-
 /// The app state, for views that reach across benches (a terminal's
 /// Ctrl+click opening a file in a project tab).
 pub struct AppHandle(pub gpui::WeakEntity<AppState>);
@@ -1077,20 +1060,5 @@ mod tests {
         state.update(cx, |s, cx| s.handle(Frame::Keeper(KeeperMsg::AiLimits(limits)), cx));
         cx.run_until_parked();
         assert!(crate::ai_view::BARS_DRAWN.load(Relaxed) > before, "the bench window drew the limits");
-    }
-
-    #[test]
-    fn a_project_holds_its_files_through_links() {
-        let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("Workspace/app");
-        std::fs::create_dir_all(real.join("docs")).unwrap();
-        std::fs::write(real.join("docs/guide.md"), "").unwrap();
-        std::os::unix::fs::symlink(dir.path().join("Workspace"), dir.path().join("Work")).unwrap();
-        let (outer, inner) = (TabId::new(), TabId::new());
-        let roots = vec![(outer, dir.path().join("Workspace")), (inner, real.clone())];
-        // Named through the link, held by the innermost project.
-        let (tab, path) = project_holding(&dir.path().join("Work/app/docs/guide.md"), &roots).unwrap();
-        assert_eq!((tab, path), (inner, real.join("docs/guide.md")));
-        assert!(project_holding(&dir.path().join("elsewhere.md"), &roots).is_none());
     }
 }

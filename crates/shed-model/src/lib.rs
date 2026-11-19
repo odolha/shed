@@ -6,6 +6,7 @@
 mod color;
 pub mod config;
 mod ids;
+pub mod links;
 pub mod paths;
 mod tree;
 

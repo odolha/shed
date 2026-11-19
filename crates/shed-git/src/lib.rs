@@ -3,6 +3,7 @@
 //! machine formats; nothing here has a UI or holds state.
 
 mod diff;
+pub mod layout;
 mod status;
 
 use std::io::Write;

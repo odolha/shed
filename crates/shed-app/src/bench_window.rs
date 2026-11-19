@@ -492,7 +492,7 @@ impl BenchWindow {
     /// Opens the project a pane is in (its Git repository, else its folder).
     fn open_pane_project(&mut self, pane: PaneId, cx: &mut Context<Self>) {
         let Some(cwd) = self.state.read(cx).tree.pane(pane).map(|p| p.cwd.clone()) else { return };
-        let root = crate::project_view::project_root(&cwd);
+        let root = shed_project::project_root(&cwd);
         self.send(ClientMsg::NewProjectTab { bench: self.bench, root }, cx);
     }
 

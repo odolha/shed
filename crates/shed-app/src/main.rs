@@ -544,7 +544,7 @@ fn project(dir: Option<std::path::PathBuf>, bench: Option<String>, ai: bool) -> 
     let here = std::env::current_dir()?;
     let root = match dir {
         Some(d) => std::fs::canonicalize(here.join(d))?,
-        None => project_view::project_root(&here),
+        None => shed_project::project_root(&here),
     };
     if !root.is_dir() {
         bail!("{} is not a folder", root.display());

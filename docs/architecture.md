@@ -208,8 +208,8 @@ Following the disk: watch batches reach `ProjectView::on_disk_change`, which
 updates the file list and tree and, for an open file, reloads it if it has no
 unsaved edits or flags the conflict if it has. Saving writes the file; the watch
 event that follows finds the text unchanged and does nothing. Unsaved edits are
-written to `$XDG_STATE_HOME/shed/recovery/` 1.5 s after typing pauses and read
-back when the file next opens. A terminal's Ctrl+click on a path asks `AppState`
+written to `$XDG_STATE_HOME/shed/recovery/` (`shed_project::recovery`) 1.5 s
+after typing pauses and read back when the file next opens. A terminal's Ctrl+click on a path asks `AppState`
 (through the `AppHandle` global) to open it in the bench's project tab.
 
 ## Git
@@ -431,9 +431,9 @@ revert to before the first message makes them a draft session again. Older
 files' plain `drafts` go to the tab's session when read.
 
 `changes_ui.rs` is what a project tab's Changes and the review share: diff
-rows (unified, or side by side with removed lines facing the added ones) and
-their drawing, status letter colours, and changed files by folder
-(`folder_rows`). The review (`ai_review.rs`, a child module of the AI view) reads, off the UI
+rows (laid out by `shed_git::layout`: unified, or side by side with removed
+lines facing the added ones) and their drawing, status letter colours, and
+changed files by folder (`folder_rows`, also in `shed_git::layout`). The review (`ai_review.rs`, a child module of the AI view) reads, off the UI
 thread, each repository the tab works in: `Repo::head_at` finds in the reflog
 where HEAD was when the turn's (or session's) first prompt was sent,
 `commits_since` the commits after it and which the upstream has; with the
@@ -603,7 +603,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 
 | Crate | What it holds |
 | --- | --- |
-| `shed-model` | The bench → tab → pane tree, ids, colours, settings and themes, XDG paths |
+| `shed-model` | The bench → tab → pane tree, ids, colours, settings and themes, XDG paths, a bench's links as typed |
 | `shed-proto` | The socket messages and framing |
 | `shed-emu` | The `Emulator` trait and its `alacritty_terminal` backend, replay, key and mouse encoding, shell-mark parsing |
 | `shed-keeper` | `shedd`: PTYs, the socket server, saving, closing, the shell marks |
@@ -611,9 +611,9 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-logbook` | The logbook database, where it is, searches as typed (`tag:`), and the bash and zsh hooks |
 | `shed-desktop` | Bench and app icons, desktop entries |
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
-| `shed-project` | A project's file list, folder watching, ranking files by name, colouring |
+| `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, unsaved edits kept aside |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists |
-| `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts |
+| `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows |
 | `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, remote shells over ssh |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 

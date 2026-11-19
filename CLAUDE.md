@@ -57,7 +57,8 @@ export SHED_RUNTIME_DIR=/tmp/shed-dev XDG_CONFIG_HOME=/tmp/shed-dev/config \
 Crates (`crates/`), lowest first:
 
 - `shed-model`: the tree (`Shed` → `Bench` → `Tab` → `PaneNode`/`Pane`), ids,
-  `BenchColor`, settings (`config.rs`: `shed.toml`, themes, aliases), XDG paths.
+  `BenchColor`, settings (`config.rs`: `shed.toml`, themes, aliases), XDG paths,
+  a bench's links as typed (`links.rs`).
   Built-in themes are `crates/shed-model/themes/*.toml`.
 - `shed-proto`: socket framing and messages (`ClientMsg`, `KeeperMsg`, `Frame`).
 - `shed-emu`: `Emulator` trait over vendored `alacritty_terminal`, replay snapshot,
@@ -70,11 +71,13 @@ Crates (`crates/`), lowest first:
 - `shed-desktop`: bench icons (SVG template recoloured, resvg) and desktop entries.
 - `shed-text`: an editable text buffer (rope, selection, undo, editor edits, reload).
 - `shed-project`: a project's file list, folder watching, fuzzy file ranking,
-  tree-sitter colouring, search in files.
+  tree-sitter colouring, search in files, a folder's entries and project roots
+  (`folder.rs`), unsaved edits kept aside (`recovery.rs`).
 - `shed-ai`: Claude Code conversations from its stream-json events and session
   files; the keeper runs `claude` per AI tab (`shed-keeper/src/server/ai.rs`).
 - `shed-git`: Git through the `git` program (status, diffs, hunk patches,
-  commits, branches, log); the UI is `shed-app/src/project_git.rs`.
+  commits, branches, log), diff rows and changed files by folder (`layout.rs`);
+  the UI is `shed-app/src/project_git.rs`.
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.
 - `shed-client`: talking to the keeper without GPUI: `keeper_conn.rs` (socket
   connection; starts `shedd` if needed; version check), `cli.rs` (blocking

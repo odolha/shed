@@ -706,7 +706,7 @@ impl ProjectView {
         let settings = self.settings.clone();
         let view = cx.new(|cx| TextView::new(&text, options, &settings, cx));
         // Unsaved edits from before (a crash, a closed bench) come back.
-        if let Some(saved) = read_recovery(&path)
+        if let Some(saved) = shed_project::recovery::read(&path)
             && saved != text
         {
             view.update(cx, |v, _| {
@@ -773,9 +773,9 @@ impl ProjectView {
             cx.background_executor().timer(RECOVERY_DELAY).await;
             let (dirty, text) = view.read_with(cx, |v, _| (v.buffer.is_dirty(), v.buffer.text()));
             if dirty {
-                write_recovery(&path, &text);
+                shed_project::recovery::write(&path, &text);
             } else {
-                remove_recovery(&path);
+                shed_project::recovery::remove(&path);
             }
         }));
     }
@@ -792,7 +792,7 @@ impl ProjectView {
                 });
                 file.disk = Disk::Same;
                 file.restored = false;
-                remove_recovery(&file.path);
+                shed_project::recovery::remove(&file.path);
                 self.notice = None;
                 self.blame = None;
             }
@@ -829,7 +829,7 @@ impl ProjectView {
                         this.drop_file(i, cx);
                     }
                     Ok(1) => {
-                        remove_recovery(&path);
+                        shed_project::recovery::remove(&path);
                         this.drop_file(i, cx);
                     }
                     _ => {}
@@ -872,7 +872,7 @@ impl ProjectView {
         }
         file.disk = Disk::Same;
         file.restored = false;
-        remove_recovery(&file.path);
+        shed_project::recovery::remove(&file.path);
         cx.notify();
     }
 
@@ -2059,52 +2059,12 @@ pub fn syntax_color(style: Style, p: &shed_emu::Palette) -> Rgb {
     }
 }
 
-/// Where a file's unsaved edits are kept aside.
-fn recovery_file(path: &Path) -> PathBuf {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    path.hash(&mut h);
-    shed_model::paths::state_dir().join("recovery").join(format!("{:016x}", h.finish()))
-}
-
-fn write_recovery(path: &Path, text: &str) {
-    let file = recovery_file(path);
-    let _ = std::fs::create_dir_all(file.parent().unwrap());
-    let _ = std::fs::write(file, format!("{}\n{text}", path.display()));
-}
-
-fn read_recovery(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(recovery_file(path)).ok()?;
-    let (first, rest) = text.split_once('\n')?;
-    (Path::new(first) == path).then(|| rest.to_string())
-}
-
-fn remove_recovery(path: &Path) {
-    let _ = std::fs::remove_file(recovery_file(path));
-}
-
-/// A folder's entries, folders first, each group by name; `.git` is left out.
+/// A folder's entries as tree rows at `depth`.
 fn read_folder(dir: &Path, depth: usize) -> Vec<Row> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut rows: Vec<Row> = entries
-        .filter_map(Result::ok)
-        .filter(|e| e.file_name() != ".git")
-        .map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            // Through symlinks, so a linked folder opens like a folder.
-            let dir = e.path().is_dir();
-            Row { hidden: name.starts_with('.'), name: name.into(), path: e.path(), depth, dir }
-        })
-        .collect();
-    rows.sort_by_cached_key(|r| (!r.dir, r.name.to_lowercase()));
-    rows
-}
-
-/// A link typed as `name url`, or just a URL (named by its host).
-/// The project a folder belongs to: the nearest folder above it (or itself)
-/// with a `.git`, else the folder itself.
-pub fn project_root(dir: &Path) -> PathBuf {
-    dir.ancestors().find(|d| d.join(".git").exists()).unwrap_or(dir).to_path_buf()
+    shed_project::read_folder(dir)
+        .into_iter()
+        .map(|e| Row { hidden: e.hidden, name: e.name.into(), path: e.path, depth, dir: e.dir })
+        .collect()
 }
 
 impl MenuHost for ProjectView {
@@ -2219,21 +2179,6 @@ impl Render for ProjectView {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn folders_come_first_and_git_is_left_out() {
-        let dir = tempfile::tempdir().unwrap();
-        for d in ["src", ".git", "Docs"] {
-            std::fs::create_dir(dir.path().join(d)).unwrap();
-        }
-        for f in ["b.rs", "A.md", ".env"] {
-            std::fs::write(dir.path().join(f), "").unwrap();
-        }
-        let names: Vec<String> = read_folder(dir.path(), 0).iter().map(|r| r.name.to_string()).collect();
-        assert_eq!(names, ["Docs", "src", ".env", "A.md", "b.rs"]);
-        std::fs::create_dir_all(dir.path().join("src/deep")).unwrap();
-        assert_eq!(project_root(&dir.path().join("src/deep")), dir.path());
-    }
 
     #[gpui::test]
     fn new_files_and_folders(cx: &mut gpui::TestAppContext) {
