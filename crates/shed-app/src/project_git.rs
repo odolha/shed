@@ -23,6 +23,7 @@ use crate::text_view::{TextEvent, TextOptions, TextView};
 use crate::theme::{UiColors, current_ui, hsla, hsla_alpha};
 
 use crate::changes_ui::{DIFF_ROW, DiffRow, FolderRow, folder_rows, status_color};
+use crate::picture::Picture;
 
 pub(super) struct GitState {
     pub repo: Repo,
@@ -84,6 +85,8 @@ pub(super) struct DiffView {
     side: bool,
     scroll: UniformListScrollHandle,
     untracked: bool,
+    /// For a picture: its two versions, shown side by side in place of hunks.
+    pictures: Option<(Option<Picture>, Option<Picture>)>,
 }
 
 impl DiffView {
@@ -373,7 +376,7 @@ impl ProjectView {
         let i = match existing {
             Some(i) => i,
             None => {
-                let view = DiffView { path, source, hunks: Vec::new(), rows: Vec::new(), side: false, scroll: UniformListScrollHandle::new(), untracked: false };
+                let view = DiffView { path, source, hunks: Vec::new(), rows: Vec::new(), side: false, scroll: UniformListScrollHandle::new(), untracked: false, pictures: None };
                 self.open.push(OpenFile {
                     path: full,
                     content: Content::Diff(Box::new(view)),
@@ -399,9 +402,21 @@ impl ProjectView {
         let (repo, path, source) = (git.repo.clone(), d.path.clone(), d.source.clone());
         let untracked = git.status.as_ref().is_some_and(|s| s.entries.iter().any(|e| e.path == path && e.untracked));
         cx.spawn(async move |this, cx| {
-            let hunks = cx
+            let (hunks, pictures) = cx
                 .background_executor()
                 .spawn(async move {
+                    if crate::picture::is_picture(Path::new(&path)) {
+                        let (old, new) = match &source {
+                            DiffSource::Unstaged => {
+                                let old = if untracked { Vec::new() } else { repo.show_bytes("", &path) };
+                                (old, std::fs::read(repo.root.join(&path)).unwrap_or_default())
+                            }
+                            DiffSource::Staged => (repo.show_bytes("HEAD", &path), repo.show_bytes("", &path)),
+                            DiffSource::Commit(h) => (repo.show_bytes(&format!("{h}^"), &path), repo.show_bytes(h, &path)),
+                        };
+                        let at = Path::new(&path);
+                        return (Vec::new(), Some((crate::picture::from_bytes(at, old), crate::picture::from_bytes(at, new))));
+                    }
                     let (old, new) = match &source {
                         DiffSource::Unstaged => {
                             let old = if untracked { String::new() } else { repo.show("", &path) };
@@ -410,13 +425,14 @@ impl ProjectView {
                         DiffSource::Staged => (repo.show("HEAD", &path), repo.show("", &path)),
                         DiffSource::Commit(h) => (repo.show(&format!("{h}^"), &path), repo.show(h, &path)),
                     };
-                    shed_git::diff_texts(&old, &new, 3)
+                    (shed_git::diff_texts(&old, &new, 3), None)
                 })
                 .await;
             this.update(cx, |this, cx| {
                 let Some(file) = this.open.get_mut(i) else { return };
                 if let Content::Diff(d) = &mut file.content {
                     d.hunks = hunks;
+                    d.pictures = pictures;
                     d.untracked = untracked;
                     d.layout();
                 }
@@ -1140,6 +1156,13 @@ impl ProjectView {
             .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(code.to_string()))
             .child(div().flex_none().text_color(hsla(ui.text)).child(name))
             .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).when(depth.is_none(), |d| d.child(dir)));
+        // Where the file is in the project (not for one deleted).
+        if let Some(full) = self.git.as_ref().map(|g| g.repo.root.join(&e.path)).filter(|_| code != 'D') {
+            row = row.child(action(("go-to", id), "file", "Go to File").on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.go_to_file(full.clone(), cx);
+            })));
+        }
         row = match section {
             Section::Unstaged => row
                 .child(action(("discard", id), "discard", "Discard changes…").on_click(cx.listener(move |this, _, window, cx| {
@@ -1291,15 +1314,30 @@ impl ProjectView {
             .border_b_1()
             .border_color(hsla(ui.divider))
             .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(format!("{what} · {path}")))
-            .child(bar_button("diff-side", if d.side { "Unified" } else { "Side by Side" }).on_click(cx.listener(move |this, _, _, cx| {
+            .when(d.pictures.is_none(), |bar| bar.child(bar_button("diff-side", if d.side { "Unified" } else { "Side by Side" }).on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(Content::Diff(d)) = this.open.get_mut(i).map(|f| &mut f.content) {
                     d.side = !d.side;
                     d.layout();
                 }
                 cx.notify();
-            })))
-            .child(bar_button("diff-open", "Open File").on_click(cx.listener(move |this, _, _, cx| this.open_path(full.clone(), None, cx))))
+            }))))
+            .when(full.is_file(), |bar| {
+                bar.child(
+                    bar_button("diff-open", "Go to File")
+                        .tooltip(menu::tooltip("Open the file, and show where it is in Files"))
+                        .on_click(cx.listener(move |this, _, _, cx| this.go_to_file(full.clone(), cx))),
+                )
+            })
             .child(bar_button("diff-history", "History").on_click(cx.listener(move |this, _, _, cx| this.open_history(Some(path.clone()), cx))));
+        if let Some((old, new)) = &d.pictures {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(bar)
+                .child(div().flex_1().min_h_0().bg(hsla(ui.background)).child(crate::picture::pair(&format!("diff-picture-{i}"), old.as_ref(), new.as_ref(), ui, 12.0 * self.z())))
+                .into_any_element();
+        }
         let empty = d.rows.is_empty();
         let list = uniform_list(("diff", i), d.rows.len(), cx.processor(move |this, range, _, cx| this.render_diff_rows(i, range, cx)))
             .track_scroll(&d.scroll)

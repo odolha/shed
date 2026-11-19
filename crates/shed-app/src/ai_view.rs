@@ -1541,7 +1541,15 @@ impl AiView {
     fn reveal_file(&mut self, path: PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) {
         let bench = self.bench;
         if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
-            state.update(cx, |state, cx| state.reveal_file(bench, path, at, cx));
+            state.update(cx, |state, cx| state.reveal_file(bench, path, at, false, cx));
+        }
+    }
+
+    /// Opens a file in its project tab and shows it in that tab's Files.
+    pub(super) fn go_to_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let bench = self.bench;
+        if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
+            state.update(cx, |state, cx| state.reveal_file(bench, path, None, true, cx));
         }
     }
 

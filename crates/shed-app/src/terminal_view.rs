@@ -712,7 +712,7 @@ impl TerminalView {
                     {
                         let at = links::position_at(&text, index);
                         let file = std::fs::canonicalize(&expanded).unwrap_or(expanded.clone());
-                        if state.update(cx, |state, cx| state.open_in_project(bench, file, at, cx)) {
+                        if state.update(cx, |state, cx| state.open_in_project(bench, file, at, false, cx)) {
                             return None;
                         }
                     }

@@ -245,6 +245,12 @@ TOML, Markdown, Python, shell, Go, C and C++, and edits as editors do:
 On a Mac, Cmd takes Ctrl's place. Wrapping applies to every open file and is
 remembered (`[editor] wrap` in `shed.toml`); a wrapped line keeps one number.
 
+**Pictures** (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, TIFF) open as pictures,
+with their size in pixels and bytes above: **Fit** shows the whole picture
+(never enlarged), **100%** one pixel per point, **−** and **+** (or Ctrl+wheel)
+zoom out and in, scrolling when it is larger than the space. A picture changed
+on disk shows as it is now.
+
 **Following the disk.** When a file changes on disk (the AI edited it, Git
 switched branches, a build wrote it), an open file without unsaved changes
 reloads at once: the changed lines flash, and the cursor stays with its text. The
@@ -273,7 +279,10 @@ leave out every file under it. The list button goes back to the flat list; the
 choice is remembered (`[git] tree`). Hover a file to stage (+), unstage (−) or
 discard it (↺, after asking); **Stage All** and **Unstage All** do every file.
 Click a file for its diff: hunk by hunk, each with **Stage**, **Unstage** or
-**Discard…**, unified or **Side by Side**. **Not Pushed** lists the commits the
+**Discard…**, unified or **Side by Side**; a picture's diff is its two
+versions side by side, **Before** and **After**, each with its size. **Go to
+File** (above the diff, or the file icon when you hover a file in the list)
+opens the file itself and shows where it is in **Files**. **Not Pushed** lists the commits the
 upstream does not have yet (all of them, for a branch never pushed); click one
 for its files. Below the list, write the message and **Commit N Files**, or
 **Commit and Push…**; **Amend** changes the last commit (its message comes in to
@@ -473,7 +482,7 @@ terminal of the bench.
 
   | Marked | What you can do |
   | --- | --- |
-  | **Not staged** | Stage or discard it, whole or hunk by hunk; **Edit in Project** to change it |
+  | **Not staged** | Stage or discard it, whole or hunk by hunk |
   | **Staged** | Unstage it, whole or by hunk; **Commit Staged** with a message, below |
   | **Committed** (not pushed), with its commit | **Undo (back to staged)**: the commit, and any after it, comes out and its changes stay staged, to change and commit again; **Amend with Staged** puts what is staged into the last commit |
   | **Pushed**, with its commit | **Revert…**: its opposite is staged, to adjust and commit as a new commit (pushed history is never rewritten) |
@@ -481,7 +490,8 @@ terminal of the bench.
   The files and diffs look and work as in a project tab's Changes: the status
   letter in its colour, the folder button for files by folder (the same
   `[git] tree` setting), and **Side by Side** (or S) for the diff, with line
-  numbers. **Push…** sends the commits not pushed yet, after showing where and which.
+  numbers; pictures as their two versions side by side. **Go to File** opens
+  the file in its project tab and shows it in that tab's **Files**. **Push…** sends the commits not pushed yet, after showing where and which.
   **Explain** (or E) asks what changed in the selected file and why, **Explain
   All** (Shift+E) for every change: a copy of the session, which knows the
   conversation, answers in a few sentences per change, shown as **Why** above

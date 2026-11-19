@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use gpui::{
     ClipboardItem, Context, Entity, FocusHandle, Focusable, HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, PromptLevel, ScrollStrategy, SharedString, StyledText, Subscription, Task, UniformListScrollHandle,
-    Window, div, img, prelude::*, px, svg, uniform_list,
+    Window, div, prelude::*, px, svg, uniform_list,
 };
 use shed_model::{BenchId, Project, Rgb, TabId};
 use shed_project::search::{FileHits, Query};
@@ -71,7 +71,8 @@ enum Content {
     Text(Entity<TextView>),
     /// Two versions of a file compared (Git).
     Diff(Box<git::DiffView>),
-    Image,
+    /// A picture, at a zoom; `None` when it could not be read.
+    Picture(Option<crate::picture::Picture>, crate::picture::Zoom),
     Binary,
     TooLarge(u64),
 }
@@ -460,6 +461,11 @@ impl ProjectView {
     /// unsaved edits, it says so and waits.
     fn follow_disk(&mut self, i: usize, cx: &mut Context<Self>) {
         let path = self.open[i].path.clone();
+        if let Content::Picture(p, _) = &mut self.open[i].content {
+            *p = crate::picture::read(&path);
+            self.open[i].disk = if path.exists() { Disk::Same } else { Disk::Deleted };
+            return;
+        }
         let Some(view) = self.open[i].view().cloned() else { return };
         let Ok(text) = std::fs::read_to_string(&path) else {
             if !path.exists() {
@@ -641,6 +647,20 @@ impl ProjectView {
         self.reveal(&path, cx);
     }
 
+    /// Opens a file and shows where it is: the Files panel, its folders
+    /// open down to it, it selected.
+    pub fn go_to_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.show_path(path, None, true, cx);
+    }
+
+    /// `open_path`, and with `files` the Files panel shows it.
+    pub fn show_path(&mut self, path: PathBuf, at: Option<(usize, Option<usize>)>, files: bool, cx: &mut Context<Self>) {
+        if files {
+            self.panel = Panel::Files;
+        }
+        self.open_path(path, at, cx);
+    }
+
     fn open_file(&mut self, path: PathBuf, at: Option<(usize, Option<usize>)>, focus: bool, cx: &mut Context<Self>) -> usize {
         let i = match self.open.iter().position(|f| f.path == path && !matches!(f.content, Content::Diff(_))) {
             Some(i) => i,
@@ -666,8 +686,8 @@ impl ProjectView {
         let lang = shed_project::detect(&path);
         let mut file = OpenFile { path: path.clone(), content: Content::Binary, lang, disk: Disk::Same, restored: false, highlight: None, recovery: None, _sub: None };
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        if is_image(&path) {
-            file.content = Content::Image;
+        if crate::picture::is_picture(&path) {
+            file.content = Content::Picture(crate::picture::read(&path), crate::picture::Zoom::Fit);
             return file;
         }
         if size > MAX_OPEN {
@@ -1727,6 +1747,86 @@ impl ProjectView {
         )
     }
 
+    /// Changes an open picture's zoom: `None` fits it, else a step in or out
+    /// (from fitted, as large as it shows in about this window).
+    fn zoom_picture(&mut self, i: usize, to: Option<crate::picture::Zoom>, inward: bool, window: &Window, cx: &mut Context<Self>) {
+        let Some(Content::Picture(p, zoom)) = self.open.get_mut(i).map(|f| &mut f.content) else { return };
+        *zoom = match to {
+            Some(z) => z,
+            None => {
+                let fitted = p.as_ref().and_then(|p| p.size).map_or(1.0, |(w, h)| {
+                    let room = window.viewport_size();
+                    (f32::from(room.width) * 0.6 / w as f32).min(f32::from(room.height) * 0.8 / h as f32).min(1.0)
+                });
+                zoom.step(inward, fitted)
+            }
+        };
+        cx.notify();
+    }
+
+    /// An open picture: its size and the zoom above it, then the picture.
+    /// Ctrl+wheel zooms too.
+    fn render_picture(&self, i: usize, p: &crate::picture::Picture, zoom: crate::picture::Zoom, ui: &UiColors, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use crate::picture::Zoom;
+        let button = |id: &'static str, label: &'static str, on: bool| {
+            div()
+                .id(id)
+                .px_1p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(hsla(ui.divider))
+                .cursor_pointer()
+                .text_color(hsla(if on { ui.ink(self.accent) } else { ui.text_dim }))
+                .when(on, |d| d.bg(hsla_alpha(self.accent, 0.2)))
+                .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                .child(label)
+        };
+        let scale = match zoom {
+            Zoom::Fit => String::new(),
+            Zoom::Scale(s) => format!("{:.0}%", s * 100.0),
+        };
+        let has_size = p.size.is_some();
+        let bar = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .text_size(px(12.0 * self.z()))
+            .border_b_1()
+            .border_color(hsla(ui.divider))
+            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(crate::picture::describe(p)))
+            .when(has_size, |d| {
+                d.child(div().text_color(hsla(ui.text_dim)).child(scale))
+                    .child(button("picture-out", "−", false).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, None, false, window, cx))))
+                    .child(button("picture-in", "+", false).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, None, true, window, cx))))
+                    .child(button("picture-fit", "Fit", zoom == Zoom::Fit).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, Some(Zoom::Fit), false, window, cx))))
+                    .child(button("picture-actual", "100%", zoom == Zoom::Scale(1.0)).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, Some(Zoom::Scale(1.0)), false, window, cx))))
+            });
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(bar)
+            .child(
+                div()
+                    .id("picture")
+                    .flex_1()
+                    .min_h_0()
+                    .bg(hsla(ui.background))
+                    .on_scroll_wheel(cx.listener(move |this, e: &gpui::ScrollWheelEvent, window, cx| {
+                        if e.modifiers.control || e.modifiers.platform {
+                            let up = f32::from(e.delta.pixel_delta(px(16.0)).y) > 0.0;
+                            this.zoom_picture(i, None, up, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(crate::picture::view(("picture-view", i), p, zoom, true, ui)),
+            )
+            .into_any_element()
+    }
+
     fn render_content(&self, ui: &UiColors, cx: &mut Context<Self>) -> gpui::AnyElement {
         let empty = |label: String| {
             div()
@@ -1751,7 +1851,8 @@ impl ProjectView {
                 _ => view.clone().into_any_element(),
             },
             Content::Diff(_) => self.render_diff(self.active.unwrap_or(0), ui, cx),
-            Content::Image => div().size_full().p_4().flex().items_center().justify_center().child(img(file.path.clone()).max_w_full().max_h_full()).into_any_element(),
+            Content::Picture(Some(p), zoom) => self.render_picture(self.active.unwrap_or(0), p, *zoom, ui, cx),
+            Content::Picture(None, _) => empty(format!("{} could not be read as a picture", file.name())),
             Content::Binary => empty(format!("{} is not text", file.name())),
             Content::TooLarge(size) => empty(format!("{} is too large to open here ({} MB)", file.name(), size / (1024 * 1024))),
         }
@@ -1833,11 +1934,6 @@ pub fn syntax_color(style: Style, p: &shed_emu::Palette) -> Rgb {
         Style::Heading => p.ansi[4],
         Style::Punctuation => p.foreground,
     }
-}
-
-fn is_image(path: &Path) -> bool {
-    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico"))
 }
 
 /// Where a file's unsaved edits are kept aside.

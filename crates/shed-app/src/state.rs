@@ -37,7 +37,8 @@ pub struct AppState {
     /// The view of every project tab of an open bench.
     pub projects: HashMap<TabId, Entity<ProjectView>>,
     /// A file to show in the project tab being opened for it.
-    pending_reveal: Option<(BenchId, std::path::PathBuf, crate::ai_text::Place)>,
+    /// (With `true`: shown in its Files too.)
+    pending_reveal: Option<(BenchId, std::path::PathBuf, crate::ai_text::Place, bool)>,
     /// The view of every AI tab of an open bench.
     pub ai_views: HashMap<TabId, Entity<AiView>>,
     /// Per open bench, the tabs shown most recently, newest first.
@@ -283,11 +284,11 @@ impl AppState {
                         v
                     });
                     // A file asked for before this tab was there.
-                    if let Some((b, path, at)) = self.pending_reveal.take() {
+                    if let Some((b, path, at, files)) = self.pending_reveal.take() {
                         if b == bench && path.starts_with(&project.root) {
-                            view.update(cx, |v, cx| v.open_path(path, at, cx));
+                            view.update(cx, |v, cx| v.show_path(path, at, files, cx));
                         } else {
-                            self.pending_reveal = Some((b, path, at));
+                            self.pending_reveal = Some((b, path, at, files));
                         }
                     }
                     self.projects.insert(tab, view);
@@ -424,27 +425,28 @@ impl AppState {
     }
 
     /// Opens a file in the project tab of `bench` whose folder holds it, at
-    /// a line and column (from 1). False if no project tab holds it.
-    pub fn open_in_project(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) -> bool {
+    /// a line and column (from 1); with `files`, shown in its Files panel
+    /// too. False if no project tab holds it.
+    pub fn open_in_project(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, files: bool, cx: &mut Context<Self>) -> bool {
         let Some(b) = self.tree.bench(bench) else { return false };
         let roots: Vec<(TabId, std::path::PathBuf)> = b.tabs.iter().filter_map(|t| Some((t.id, t.project_info()?.root.clone()))).collect();
         let Some((tab, path)) = project_holding(&path, &roots) else { return false };
         let Some(view) = self.projects.get(&tab).cloned() else { return false };
         self.conn.send_msg(ClientMsg::FocusTab { tab });
-        view.update(cx, |v, cx| v.open_path(path, at, cx));
+        view.update(cx, |v, cx| v.show_path(path, at, files, cx));
         true
     }
 
     /// Opens a file in the bench's project tab that holds it; with none, a
     /// project tab opens for its project (its Git root, else its folder) and
     /// shows the file once it is there.
-    pub fn reveal_file(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, cx: &mut Context<Self>) {
-        if self.open_in_project(bench, path.clone(), at, cx) {
+    pub fn reveal_file(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, files: bool, cx: &mut Context<Self>) {
+        if self.open_in_project(bench, path.clone(), at, files, cx) {
             return;
         }
         let root = crate::project_view::project_root(path.parent().unwrap_or(&path));
         self.conn.send_msg(ClientMsg::NewProjectTab { bench, root });
-        self.pending_reveal = Some((bench, path, at));
+        self.pending_reveal = Some((bench, path, at, files));
     }
 
     /// What should have the keyboard in a bench's window: its active tab's

@@ -96,6 +96,16 @@ impl Repo {
         self.run(&["show", &format!("{rev}:{path}")]).unwrap_or_default()
     }
 
+    /// A file's bytes as they are in a revision or the index (`""`), for
+    /// pictures; empty if it is not there.
+    pub fn show_bytes(&self, rev: &str, path: &str) -> Vec<u8> {
+        let out = self.git().args(["show", &format!("{rev}:{path}")]).stderr(Stdio::null()).output();
+        match out {
+            Ok(o) if o.status.success() => o.stdout,
+            _ => Vec::new(),
+        }
+    }
+
     pub fn stage(&self, paths: &[String]) -> Result<()> {
         let mut args = vec!["add", "--"];
         args.extend(paths.iter().map(String::as_str));

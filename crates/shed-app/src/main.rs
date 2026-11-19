@@ -5,6 +5,7 @@ mod ai_text;
 mod ai_view;
 mod assets;
 mod browser;
+mod picture;
 mod bench_window;
 mod changes_ui;
 mod emoji;

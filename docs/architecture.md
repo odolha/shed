@@ -333,6 +333,12 @@ address starts with the link's (origin and path), or opens one, and answers the
 same way. No socket, or no answer within three seconds, means no extension: the
 link opens with the desktop's opener.
 
+Pictures (`shed-app/src/picture.rs`) are drawn from their bytes
+(`gpui::Image`, keyed by a hash of them), not from their path, which GPUI
+caches: a picture changed on disk reloads with the open file. Their diffs
+(project tab's Changes, the AI review) read both versions' bytes
+(`Repo::show_bytes`, or the file) and show them side by side in place of hunks.
+
 ## AI tabs
 
 An AI tab (`TabKind::Ai`: folder, extra folders, session id, model, mode, effort,

@@ -48,6 +48,8 @@ struct Change {
     hunks: Vec<Hunk>,
     /// Of what it is now, to tell whether what was viewed is still it.
     hash: String,
+    /// For a picture: its two versions, shown side by side in place of hunks.
+    pictures: Option<(Option<crate::picture::Picture>, Option<crate::picture::Picture>)>,
 }
 
 impl Change {
@@ -138,8 +140,18 @@ fn read(dirs: Vec<PathBuf>, since: Option<u64>) -> Found {
                 cut = true;
                 return;
             }
-            let hunks = shed_git::diff_texts(&old, &new, 3);
-            changes.push(Change { repo: index, layer, path, code, hash: fingerprint(&old, &new), hunks });
+            let at = Path::new(&path);
+            let (hunks, pictures) = if crate::picture::is_picture(at) {
+                let (before, after) = match &layer {
+                    Layer::Unstaged { untracked } => (if *untracked { Vec::new() } else { repo.show_bytes("", &path) }, std::fs::read(repo.root.join(&path)).unwrap_or_default()),
+                    Layer::Staged => (repo.show_bytes("HEAD", &path), repo.show_bytes("", &path)),
+                    Layer::Committed { hash, .. } => (repo.show_bytes(&format!("{hash}^"), &path), repo.show_bytes(hash, &path)),
+                };
+                (Vec::new(), Some((crate::picture::from_bytes(at, before), crate::picture::from_bytes(at, after))))
+            } else {
+                (shed_git::diff_texts(&old, &new, 3), None)
+            };
+            changes.push(Change { repo: index, layer, path, code, hash: fingerprint(&old, &new), hunks, pictures });
         };
         if let Ok(status) = repo.status() {
             for e in status.entries.iter().filter(|e| !e.conflict) {
@@ -971,21 +983,29 @@ impl AiView {
                     .on_click(cx.listener(move |this, _, _, cx| this.explain(vec![i], cx))),
             );
         }
-        // Changing the file itself: in its project tab.
-        if !matches!(c.layer, Layer::Committed { .. }) && full.is_file() {
-            bar = bar.child(small(format!("edit-file-{i}").into(), "Edit in Project", self.accent).on_click(cx.listener(move |this, _, _, cx| this.reveal_file(full.clone(), None, cx))));
+        // The file itself: open in its project tab, shown in its Files.
+        if full.is_file() {
+            bar = bar.child(
+                small(format!("edit-file-{i}").into(), "Go to File", self.accent)
+                    .tooltip(crate::menu::tooltip("Open the file in its project tab, and show where it is in Files"))
+                    .on_click(cx.listener(move |this, _, _, cx| this.go_to_file(full.clone(), cx))),
+            );
         }
 
-        // The diff, as in a project tab: unified or side by side.
+        // The diff, as in a project tab: unified or side by side; a
+        // picture's two versions side by side.
         let count = diff_layout(&c.hunks, r.side).len();
-        let lines = if c.hunks.is_empty() {
+        let lines = if let Some((old, new)) = &c.pictures {
+            div().flex_1().min_h_0().bg(hsla(ui.background)).child(crate::picture::pair(&format!("review-picture-{i}"), old.as_ref(), new.as_ref(), ui, 11.0 * z)).into_any_element()
+        } else if c.hunks.is_empty() {
             div().flex_1().p_3().text_color(hsla(ui.text_dim)).child("No differences in the text (a binary file, or only its mode).").into_any_element()
         } else {
             let list = uniform_list("review-diff", count, cx.processor(|this, range, _, cx| this.render_review_rows(range, cx))).track_scroll(&r.diff_scroll).flex_1().min_h_0();
             crate::scrollbar::with_bar(list, crate::scrollbar::Source::uniform(&r.diff_scroll), &r.diff_bar, ui).flex_1().into_any_element()
         };
         let side = r.side;
-        bar = bar.child(
+        let pictures = c.pictures.is_some();
+        bar = bar.when(!pictures, |bar| bar.child(
             div()
                 .id("review-side")
                 .flex_none()
@@ -1004,7 +1024,7 @@ impl AiView {
                     cx.notify();
                 }))
                 .child(if side { "Unified" } else { "Side by Side" }),
-        );
+        ));
         let why = self.explanation(c).map(|(text, current)| {
             div()
                 .flex_none()
