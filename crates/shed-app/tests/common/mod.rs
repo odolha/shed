@@ -26,6 +26,12 @@ pub struct Client {
 
 impl Client {
     pub fn connect(socket: &Path) -> Self {
+        Self::connect_as(socket, ClientKind::Window)
+    }
+
+    /// Connects as another kind of client (a link, a CLI).
+    #[allow(dead_code)]
+    pub fn connect_as(socket: &Path, kind: ClientKind) -> Self {
         let deadline = Instant::now() + Duration::from_secs(5);
         let stream = loop {
             match UnixStream::connect(socket) {
@@ -44,7 +50,7 @@ impl Client {
             }
         });
         let mut c = Client { write: stream, frames, tree: Shed::default(), seen: Default::default(), prompted: Default::default(), read: Default::default() };
-        c.msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Window });
+        c.msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind });
         c
     }
 

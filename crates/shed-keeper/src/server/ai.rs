@@ -16,7 +16,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use shed_ai::{State as AiState, Transcript};
 use shed_model::{AiActivity, AiTab, TabId, TabKind};
-use shed_proto::{AiImage, ClientKind, Frame, KeeperMsg};
+use shed_proto::{AiChange, AiImage, Frame, KeeperMsg};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
@@ -27,6 +27,9 @@ use super::{ClientId, Keeper, State};
 const FLUSH_EVERY: Duration = Duration::from_millis(40);
 
 const INIT_REQUEST: &str = "shed-init";
+/// How many changes marked viewed, and explanations, an AI tab keeps.
+const VIEWED_KEPT: usize = 2000;
+const EXPLAINED_KEPT: usize = 500;
 
 /// A conversation's process and what it said.
 pub(super) struct AiRt {
@@ -141,10 +144,10 @@ fn ai_tab(st: &State, tab: TabId) -> Option<AiTab> {
 }
 
 impl State {
-    /// Every window client, which shows any bench's AI tab.
+    /// Every window (and link) client, which shows any bench's AI tab.
     fn send_windows(&self, msg: KeeperMsg) {
         let frame: Arc<[u8]> = Frame::Keeper(msg).encode().into();
-        for c in self.clients.values().filter(|c| c.kind == ClientKind::Window) {
+        for c in self.clients.values().filter(|c| c.kind.follows_tree()) {
             let _ = c.tx.send(frame.clone());
         }
     }
@@ -684,24 +687,107 @@ impl Keeper {
     }
 
     pub(super) fn ai_settings(&self, tab: TabId, new: AiTab) {
+        self.ai_edit_tab(tab, |ai| {
+            ai.add_dirs = new.add_dirs;
+            ai.model = new.model;
+            ai.mode = new.mode;
+            ai.effort = new.effort;
+            ai.follow = new.follow;
+            ai.drafts = new.drafts;
+            // (A draft session only while no Claude Code session is shown.)
+            if ai.session.is_none() {
+                ai.draft_session = new.draft_session;
+            }
+            ai.unsent = new.unsent;
+            ai.viewed = new.viewed;
+            ai.explained = new.explained;
+            ai.browser = new.browser;
+        });
+    }
+
+    /// Changes one thing of an AI tab's (`AiChange`), leaving the rest.
+    pub(super) fn ai_change(&self, tab: TabId, change: AiChange) {
+        self.ai_edit_tab(tab, |ai| match change {
+            AiChange::Settings { model, mode, effort, follow, browser, add_dirs } => {
+                if let Some(model) = model {
+                    ai.model = model;
+                }
+                if let Some(mode) = mode {
+                    ai.mode = mode;
+                }
+                if let Some(effort) = effort {
+                    ai.effort = effort;
+                }
+                if let Some(follow) = follow {
+                    ai.follow = follow;
+                }
+                if let Some(browser) = browser {
+                    ai.browser = browser;
+                }
+                if let Some(dirs) = add_dirs {
+                    ai.add_dirs = dirs;
+                }
+            }
+            AiChange::Unsent(text) => ai.unsent = text,
+            AiChange::AddDraft { session, text } => {
+                let session = match session.or_else(|| ai.session_key().map(str::to_string)) {
+                    // A new session's first draft, under a key chosen by the client.
+                    Some(s) if AiTab::is_draft_key(&s) && ai.session.is_none() && ai.draft_session.is_none() => {
+                        ai.draft_session = Some(s.clone());
+                        s
+                    }
+                    Some(s) => s,
+                    None => {
+                        // The first draft of a new session makes it a draft session.
+                        let key = AiTab::new_draft_key();
+                        ai.draft_session = Some(key.clone());
+                        key
+                    }
+                };
+                ai.drafts.push(shed_model::Draft { session, text });
+            }
+            AiChange::RemoveDraft { index, session, text } => {
+                let i = index as usize;
+                if ai.drafts.get(i).is_some_and(|d| d.session == session && d.text == text) {
+                    ai.drafts.remove(i);
+                }
+            }
+            AiChange::Viewed { key, hash, viewed } => {
+                ai.viewed.retain(|(k, _)| *k != key);
+                if viewed {
+                    ai.viewed.push((key, hash));
+                }
+                // Old marks of changes long gone do not pile up.
+                if ai.viewed.len() > VIEWED_KEPT {
+                    let n = ai.viewed.len() - VIEWED_KEPT;
+                    ai.viewed.drain(..n);
+                }
+            }
+            AiChange::Explained(found) => {
+                for (key, hash, text) in found {
+                    ai.explained.retain(|(k, _, _)| *k != key);
+                    ai.explained.push((key, hash, text));
+                }
+                if ai.explained.len() > EXPLAINED_KEPT {
+                    let n = ai.explained.len() - EXPLAINED_KEPT;
+                    ai.explained.drain(..n);
+                }
+            }
+        });
+    }
+
+    /// Applies `edit` to an AI tab, then does what the change asks of its
+    /// Claude Code (model, mode, browser, a restart for folders or effort),
+    /// tells the windows and saves soon.
+    fn ai_edit_tab(&self, tab: TabId, edit: impl FnOnce(&mut AiTab)) {
         let mut st = self.lock();
         let Some(t) = st.tree.tab_mut(tab) else { return };
         let TabKind::Ai(ai) = &mut t.kind else { return };
         let old = ai.clone();
-        ai.add_dirs = new.add_dirs;
-        ai.model = new.model;
-        ai.mode = if new.mode.is_empty() { "default".into() } else { new.mode };
-        ai.effort = new.effort;
-        ai.follow = new.follow;
-        ai.drafts = new.drafts;
-        // (A draft session only while no Claude Code session is shown.)
-        if ai.session.is_none() {
-            ai.draft_session = new.draft_session;
+        edit(ai);
+        if ai.mode.is_empty() {
+            ai.mode = "default".into();
         }
-        ai.unsent = new.unsent;
-        ai.viewed = new.viewed;
-        ai.explained = new.explained;
-        ai.browser = new.browser;
         let ai = ai.clone();
         // One AI tab at a time uses the browser: connecting this one lets go
         // of any other, in any bench.

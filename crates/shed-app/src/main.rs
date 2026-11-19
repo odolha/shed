@@ -775,7 +775,7 @@ fn debug_ai(text: String, model: Option<String>, answer: Option<String>) -> anyh
         KeeperMsg::Status(s) => Some(s.tree),
         _ => None,
     })?;
-    let Some((tab, ai)) = tree.benches.iter().flat_map(|b| &b.tabs).find_map(|t| Some((t.id, t.ai_info()?.clone()))) else {
+    let Some(tab) = tree.benches.iter().flat_map(|b| &b.tabs).find_map(|t| t.ai_info().map(|_| t.id)) else {
         bail!("no AI tab");
     };
     let (conn, _rx) = keeper_conn::connect(ClientKind::Cli, false)?;
@@ -785,7 +785,8 @@ fn debug_ai(text: String, model: Option<String>, answer: Option<String>) -> anyh
         return Ok(());
     }
     if let Some(model) = model {
-        conn.send_msg(ClientMsg::AiSettings { tab, settings: shed_model::AiTab { model: Some(model), ..ai } });
+        let change = shed_proto::AiChange::Settings { model: Some(Some(model)), mode: None, effort: None, follow: None, browser: None, add_dirs: None };
+        conn.send_msg(ClientMsg::AiChange { tab, change });
     }
     conn.send_msg(ClientMsg::AiSend { tab, text, images: Vec::new() });
     std::thread::sleep(Duration::from_millis(200));

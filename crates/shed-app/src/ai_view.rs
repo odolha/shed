@@ -18,7 +18,7 @@ use gpui::{
 };
 use shed_ai::{Command, Entry, Limits, Model, SessionInfo, State as AiState, Status};
 use shed_model::{AiTab, BenchId, Rgb, TabId};
-use shed_proto::{AiImage, ClientMsg};
+use shed_proto::{AiChange, AiImage, ClientMsg};
 
 use crate::ai_text::{self, Copy, Kind, Piece, Point, Selection};
 use crate::assets::icon;
@@ -770,10 +770,23 @@ impl AiView {
         }));
     }
 
+    /// The message that changes the settings `change` changes, and only
+    /// those (another window may be changing others).
     fn settings_msg(&self, change: impl FnOnce(&mut AiTab)) -> ClientMsg {
         let mut ai = self.ai.clone();
         change(&mut ai);
-        ClientMsg::AiSettings { tab: self.tab, settings: ai }
+        let old = &self.ai;
+        ClientMsg::AiChange {
+            tab: self.tab,
+            change: AiChange::Settings {
+                model: (ai.model != old.model).then_some(ai.model),
+                mode: (ai.mode != old.mode).then_some(ai.mode),
+                effort: (ai.effort != old.effort).then_some(ai.effort),
+                follow: (ai.follow != old.follow).then_some(ai.follow),
+                browser: (ai.browser != old.browser).then_some(ai.browser),
+                add_dirs: (ai.add_dirs != old.add_dirs).then_some(ai.add_dirs),
+            },
+        }
     }
 
     fn send(&mut self, cx: &mut Context<Self>) {
@@ -828,11 +841,27 @@ impl AiView {
         cx.notify();
     }
 
-    /// Changes the drafts here at once (a second change before the keeper
-    /// answers builds on the first), and in the keeper.
-    fn change_drafts(&mut self, change: impl FnOnce(&mut Vec<shed_model::Draft>)) {
-        change(&mut self.ai.drafts);
-        self.conn.send_msg(ClientMsg::AiSettings { tab: self.tab, settings: self.ai.clone() });
+    /// Keeps a draft, here at once (a second change before the keeper
+    /// answers builds on the first) and in the keeper.
+    fn add_draft(&mut self, session: String, text: String) {
+        self.ai.drafts.push(shed_model::Draft { session: session.clone(), text: text.clone() });
+        self.conn.send_msg(ClientMsg::AiChange { tab: self.tab, change: AiChange::AddDraft { session: Some(session), text } });
+    }
+
+    /// Takes out the drafts at `indices`, here and in the keeper (which takes
+    /// out only those still as they were).
+    fn remove_drafts(&mut self, mut indices: Vec<usize>) {
+        indices.sort_unstable();
+        indices.dedup();
+        for n in indices.into_iter().rev() {
+            if n < self.ai.drafts.len() {
+                let d = self.ai.drafts.remove(n);
+                self.conn.send_msg(ClientMsg::AiChange {
+                    tab: self.tab,
+                    change: AiChange::RemoveDraft { index: n as u32, session: d.session, text: d.text },
+                });
+            }
+        }
     }
 
     /// Keeps what is in the prompt as a draft, to send some other time:
@@ -862,7 +891,7 @@ impl AiView {
                 key
             }
         };
-        self.change_drafts(|d| d.push(shed_model::Draft { session, text }));
+        self.add_draft(session, text);
         self.drafts_open = true;
         // Kept from going back through earlier prompts: what was being written comes back.
         let unsent = self.unsent.take().unwrap_or_default();
@@ -878,9 +907,7 @@ impl AiView {
     /// Sends a draft now (after the current turn, when Claude is busy).
     fn send_draft(&mut self, n: usize, cx: &mut Context<Self>) {
         let Some(text) = self.ai.drafts.get(n).map(|d| d.text.clone()) else { return };
-        self.change_drafts(|d| {
-            d.remove(n);
-        });
+        self.remove_drafts(vec![n]);
         // Busy, the keeper queues it.
         let idle = self.status.state == AiState::Idle;
         self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images: Vec::new() });
@@ -893,9 +920,7 @@ impl AiView {
     /// Puts a draft back in the prompt to change it (after what is there).
     fn edit_draft(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = self.ai.drafts.get(n).map(|d| d.text.clone()) else { return };
-        self.change_drafts(|d| {
-            d.remove(n);
-        });
+        self.remove_drafts(vec![n]);
         self.prompt.update(cx, |p, cx| {
             let had = p.buffer.text();
             p.buffer.select_all();
@@ -916,9 +941,7 @@ impl AiView {
                 this.update(cx, |this, cx| {
                     // Still there, where it was (another window may have changed the list).
                     if this.ai.drafts.get(n) == Some(&draft) {
-                        this.change_drafts(|d| {
-                            d.remove(n);
-                        });
+                        this.remove_drafts(vec![n]);
                     }
                     cx.notify();
                 })
@@ -936,8 +959,8 @@ impl AiView {
             this.update(cx, |this, cx| {
                 let text = this.prompt.read(cx).buffer.text();
                 if text != this.ai.unsent {
-                    this.ai.unsent = text;
-                    this.conn.send_msg(ClientMsg::AiSettings { tab: this.tab, settings: this.ai.clone() });
+                    this.ai.unsent = text.clone();
+                    this.conn.send_msg(ClientMsg::AiChange { tab: this.tab, change: AiChange::Unsent(text) });
                 }
             })
             .ok();
@@ -2699,7 +2722,8 @@ impl AiView {
                         this.open_session(None);
                         this.ai.draft_session = None;
                     }
-                    this.change_drafts(|d| d.retain(|d| d.session != key));
+                    let gone = this.ai.drafts.iter().enumerate().filter(|(_, d)| d.session == key).map(|(i, _)| i).collect();
+                    this.remove_drafts(gone);
                     cx.notify();
                 })
                 .ok();

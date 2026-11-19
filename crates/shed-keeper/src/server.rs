@@ -266,7 +266,7 @@ impl State {
 
     fn broadcast_tree(&self) {
         let frame: Arc<[u8]> = Frame::Keeper(KeeperMsg::TreeChanged(self.tree.clone())).encode().into();
-        for c in self.clients.values().filter(|c| c.kind == ClientKind::Window) {
+        for c in self.clients.values().filter(|c| c.kind.follows_tree()) {
             let _ = c.tx.send(frame.clone());
         }
     }
@@ -583,7 +583,7 @@ impl Keeper {
                     keeper_pid: std::process::id(),
                 });
                 // Windows show the usage limits on benches with an AI tab.
-                if kind == ClientKind::Window
+                if kind.follows_tree()
                     && let Some(limits) = st.ai_limits.and_then(|l| shed_ai::still_current(l, ai::now()))
                 {
                     st.send(client, KeeperMsg::AiLimits(limits));
@@ -752,6 +752,7 @@ impl Keeper {
             ClientMsg::AiQueued { tab, index, text, send } => self.ai_queued(tab, index as usize, text, send),
             ClientMsg::AiEdit { tab, entry, text, images } => self.ai_edit(client, tab, entry as usize, text, images),
             ClientMsg::AiRevert { tab, entry, files } => self.ai_revert(client, tab, entry as usize, files),
+            ClientMsg::AiChange { tab, change } => self.ai_change(tab, change),
             ClientMsg::AiAnswerQuestions { tab, request, answers } => self.ai_answer_questions(tab, request, answers),
             ClientMsg::ResetZoom => self.reset_zoom(client),
             ClientMsg::SetTabDivider { tab, divider } => self.edit_tab(tab, |t| t.divider = divider),
