@@ -8,7 +8,8 @@ use gpui::{
 };
 use shed_model::config::{AliasLevel, resolve_aliases};
 use shed_model::{Aliases, Bench, BenchId, Pane, PaneId, PaneSetup, Rgb, Tab, TabId};
-use shed_proto::{AliasTarget, ClientMsg, SavedEdit};
+use shed_client::BenchEdit;
+use shed_proto::{AliasTarget, BenchRef, ClientMsg};
 use shed_save::{expand_home, home_relative};
 
 use crate::assets::icon;
@@ -68,6 +69,11 @@ fn parse_alias(text: &str) -> Option<Option<(String, String)>> {
     ok.then(|| Some((name.to_string(), value.to_string())))
 }
 
+/// A bench as edits address it: a running one by id, a closed one by name.
+fn bench_ref(bench: &Bench, running: bool) -> BenchRef {
+    if running { BenchRef::Running(bench.id) } else { BenchRef::Saved(bench.name.clone()) }
+}
+
 fn shown_tab(bench: &Bench, pinned: Option<TabId>) -> Option<&Tab> {
     match pinned {
         Some(id) => bench.tabs.iter().find(|t| t.id == id),
@@ -75,11 +81,12 @@ fn shown_tab(bench: &Bench, pinned: Option<TabId>) -> Option<&Tab> {
     }
 }
 
-/// Where an alias change goes: to the keeper for a running bench, into the
-/// saved file for a closed one.
+/// Where an alias change goes: Shed's own, or a bench's (`tab: None`) or a
+/// tab's of it, through the keeper for a running bench, into the saved file
+/// for a closed one.
 enum AliasDest {
-    Live(AliasTarget),
-    Saved { name: String, tab: Option<TabId> },
+    Global,
+    Bench { bench: BenchRef, tab: Option<TabId> },
 }
 
 pub struct SetupPanel {
@@ -126,10 +133,13 @@ impl SetupPanel {
         self.state.read(cx).conn.send_msg(msg);
     }
 
-    /// A closed bench changes in its saved file; Shed then shows the change.
-    fn send_saved(&self, name: String, edit: SavedEdit, cx: &Context<Self>) {
-        self.send(ClientMsg::EditSaved { name, edit }, cx);
-        self.send(ClientMsg::Pegboard, cx);
+    /// A running bench changes through the keeper; a closed one in its saved
+    /// file, and Shed then shows the change.
+    fn send_edit(&self, bench: BenchRef, edit: BenchEdit, cx: &Context<Self>) {
+        self.send(edit.to_msg(&bench), cx);
+        if let BenchRef::Saved(_) = bench {
+            self.send(ClientMsg::Pegboard, cx);
+        }
     }
 
     fn set_setup(&self, pane: PaneId, edit: impl FnOnce(&mut PaneSetup), cx: &Context<Self>) {
@@ -140,31 +150,25 @@ impl SetupPanel {
         if setup == p.setup {
             return;
         }
-        if running {
-            self.send(ClientMsg::SetPaneSetup { pane, setup }, cx);
-        } else {
-            self.send_saved(bench.name, SavedEdit::PaneSetup { pane, setup }, cx);
-        }
+        self.send_edit(bench_ref(&bench, running), BenchEdit::PaneSetup { pane, setup }, cx);
     }
 
     fn aliases_at(&self, level: AliasLevel, cx: &Context<Self>) -> Option<(AliasDest, Aliases)> {
         let (bench, running) = self.bench(cx)?;
         let tab = shown_tab(&bench, self.pinned)?;
-        let saved = |tab: Option<TabId>| AliasDest::Saved { name: bench.name.clone(), tab };
+        let at = |tab: Option<TabId>| AliasDest::Bench { bench: bench_ref(&bench, running), tab };
         Some(match level {
-            AliasLevel::Global => (AliasDest::Live(AliasTarget::Global), self.state.read(cx).tree.aliases.clone()),
-            AliasLevel::Bench if running => (AliasDest::Live(AliasTarget::Bench(bench.id)), bench.aliases.clone()),
-            AliasLevel::Bench => (saved(None), bench.aliases.clone()),
-            AliasLevel::Tab if running => (AliasDest::Live(AliasTarget::Tab(tab.id)), tab.aliases.clone()),
-            AliasLevel::Tab => (saved(Some(tab.id)), tab.aliases.clone()),
+            AliasLevel::Global => (AliasDest::Global, self.state.read(cx).tree.aliases.clone()),
+            AliasLevel::Bench => (at(None), bench.aliases.clone()),
+            AliasLevel::Tab => (at(Some(tab.id)), tab.aliases.clone()),
             AliasLevel::Shell => return None,
         })
     }
 
     fn send_aliases(&self, dest: AliasDest, aliases: Aliases, cx: &Context<Self>) {
         match dest {
-            AliasDest::Live(level) => self.send(ClientMsg::SetAliases { level, aliases }, cx),
-            AliasDest::Saved { name, tab } => self.send_saved(name, SavedEdit::Aliases { tab, aliases }, cx),
+            AliasDest::Global => self.send(ClientMsg::SetAliases { level: AliasTarget::Global, aliases }, cx),
+            AliasDest::Bench { bench, tab } => self.send_edit(bench, BenchEdit::Aliases { tab, aliases }, cx),
         }
     }
 

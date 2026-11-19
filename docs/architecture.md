@@ -498,7 +498,8 @@ A closed bench is changed in its file: Shed sends the keeper an edit (`EditSaved
 rename, colour, badge, a tab's name, tags or place, a new or removed tab, a pane's
 setup, aliases), which loads the file, applies it and saves it back, leaving the
 scrollback as it was. A running bench is changed in the tree instead, and the keeper
-refuses file edits to it.
+refuses file edits to it. Clients say what changes (`shed_client::BenchEdit`) and
+`BenchEdit::to_msg` picks the message for a running or a closed bench.
 
 The Shed window asks the keeper for the closed benches and every card's preview
 (`Pegboard`) four times a second while it is the active window, once a second
@@ -614,7 +615,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, pictures as data, unsaved edits kept aside |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists |
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows |
-| `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, remote shells over ssh |
+| `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, bench edits routed to running or closed benches, the pegboard's list, remote shells over ssh |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 
 `browser/chrome/` is the browser extension (built into `shed`, written out by

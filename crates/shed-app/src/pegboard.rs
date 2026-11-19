@@ -12,7 +12,9 @@ use gpui::{
     PromptLevel, SharedString, Subscription, TextAlign, TextRun, Window, canvas, div, point, prelude::*, px, svg,
 };
 use shed_model::{Bench, BenchColor, BenchId, PaneId, Rgb, Tab, TabId};
-use shed_proto::{BenchRef, ClientMsg, PegboardInfo, SavedEdit, ShowTarget};
+use shed_client::BenchEdit;
+use shed_client::pegboard::{BenchStatus as Status, ListedBench as Entry, flat};
+use shed_proto::{BenchRef, ClientMsg, PegboardInfo, ShowTarget};
 use shed_save::home_relative;
 
 use crate::assets::icon;
@@ -39,50 +41,6 @@ pub struct PegboardData(pub PegboardInfo);
 
 impl gpui::Global for PegboardData {}
 
-#[derive(Clone, Copy, PartialEq)]
-enum Status {
-    /// Running, with a window.
-    Open,
-    /// Running, without a window.
-    Hidden,
-    /// Only saved.
-    Closed,
-}
-
-#[derive(Clone)]
-struct Entry {
-    bench: Bench,
-    status: Status,
-    saved: Option<String>,
-    /// The tabs the filter lets through.
-    tabs: Vec<TabId>,
-}
-
-impl Entry {
-    fn key(&self) -> BenchKey {
-        match self.status {
-            Status::Closed => BenchKey::Closed(self.bench.name.clone()),
-            Status::Open | Status::Hidden => BenchKey::Running(self.bench.id),
-        }
-    }
-}
-
-/// A bench as edits address it: a running one by id, a closed one by name.
-#[derive(Clone, PartialEq)]
-enum BenchKey {
-    Running(BenchId),
-    Closed(String),
-}
-
-impl BenchKey {
-    fn to_ref(&self) -> BenchRef {
-        match self {
-            BenchKey::Running(id) => BenchRef::Running(*id),
-            BenchKey::Closed(name) => BenchRef::Saved(name.clone()),
-        }
-    }
-}
-
 /// The payload of a bench being dragged by its grip.
 #[derive(Clone)]
 struct DraggedBench {
@@ -106,28 +64,21 @@ impl Render for DraggedBench {
     }
 }
 
-/// What can change about a tab, whether its bench runs or not.
-enum TabChange {
-    Rename(Option<String>),
-    Tags(Vec<shed_model::Tag>),
-    Private(bool),
-}
-
 /// What the inline text field is editing.
 #[derive(Clone, PartialEq)]
 enum Edit {
-    BenchName(BenchKey),
-    Badge(BenchKey),
+    BenchName(BenchRef),
+    Badge(BenchRef),
     TabName(TabId),
     AddTag(TabId),
     /// A colour of one's own: `#rrggbb` or a colour's name.
-    Color(BenchKey),
+    Color(BenchRef),
     /// A new link for the bench: `name url`.
-    AddLink(BenchKey),
+    AddLink(BenchRef),
     /// The bench's link at this index.
-    ChangeLink(BenchKey, usize),
+    ChangeLink(BenchRef, usize),
     /// The name of the bench's link at this index.
-    RenameLink(BenchKey, usize),
+    RenameLink(BenchRef, usize),
 }
 
 fn menu_item(label: impl Into<SharedString>, action: impl Fn(&mut Pegboard, &mut Window, &mut Context<Pegboard>) + 'static) -> MenuEntry<Pegboard> {
@@ -229,39 +180,25 @@ impl Pegboard {
     }
 
     /// A tab and its bench, running or closed.
-    fn find_tab(&self, tab: TabId, cx: &Context<Self>) -> Option<(BenchKey, Tab)> {
+    fn find_tab(&self, tab: TabId, cx: &Context<Self>) -> Option<(BenchRef, Tab)> {
         let state = self.state.read(cx);
         for b in &state.tree.benches {
             if let Some(t) = b.tabs.iter().find(|t| t.id == tab) {
-                return Some((BenchKey::Running(b.id), t.clone()));
+                return Some((BenchRef::Running(b.id), t.clone()));
             }
         }
         let stored = cx.try_global::<PegboardData>()?;
         stored.0.stored.iter().filter(|s| state.tree.bench(s.bench.id).is_none()).find_map(|s| {
             let t = s.bench.tabs.iter().find(|t| t.id == tab)?;
-            Some((BenchKey::Closed(s.bench.name.clone()), t.clone()))
+            Some((BenchRef::Saved(s.bench.name.clone()), t.clone()))
         })
     }
 
-    /// Changes a tab: through the keeper if its bench runs, in its saved file if not.
-    fn change_tab(&mut self, tab: TabId, change: TabChange, cx: &mut Context<Self>) {
+    /// Changes a tab (`edit` names it): through the keeper if its bench
+    /// runs, in its saved file if not.
+    fn change_tab(&mut self, tab: TabId, edit: BenchEdit, cx: &mut Context<Self>) {
         let Some((key, _)) = self.find_tab(tab, cx) else { return };
-        let msg = match key {
-            BenchKey::Running(_) => match change {
-                TabChange::Rename(name) => ClientMsg::RenameTab { tab, name },
-                TabChange::Tags(tags) => ClientMsg::SetTags { tab, tags },
-                TabChange::Private(private) => ClientMsg::SetPrivate { tab, private },
-            },
-            BenchKey::Closed(name) => ClientMsg::EditSaved {
-                name,
-                edit: match change {
-                    TabChange::Rename(name) => SavedEdit::RenameTab { tab, name },
-                    TabChange::Tags(tags) => SavedEdit::TabTags { tab, tags },
-                    TabChange::Private(private) => SavedEdit::TabPrivate { tab, private },
-                },
-            },
-        };
-        self.send(msg, cx);
+        self.send(edit.to_msg(&key), cx);
         self.refresh(cx);
     }
 
@@ -269,22 +206,18 @@ impl Pegboard {
     fn close_tab(&mut self, tab: TabId, window: &mut Window, cx: &mut Context<Self>) {
         let Some((key, t)) = self.find_tab(tab, cx) else { return };
         let conn = self.state.read(cx).conn.clone();
-        crate::state::close_tab(&conn, &t, key.to_ref(), window, cx);
+        crate::state::close_tab(&conn, &t, key, window, cx);
     }
 
     /// Asks for a folder and adds it to a bench as a project tab.
-    fn new_project_tab(&mut self, key: &BenchKey, cx: &mut Context<Self>) {
+    fn new_project_tab(&mut self, key: &BenchRef, cx: &mut Context<Self>) {
         let picked = crate::state::pick_folder(cx);
         let key = key.clone();
         cx.spawn(async move |this, cx| {
             let picked = picked.await;
             this.update(cx, |this, cx| match picked {
                 Ok(Some(root)) => {
-                    let msg = match key {
-                        BenchKey::Running(bench) => ClientMsg::NewProjectTab { bench, root },
-                        BenchKey::Closed(name) => ClientMsg::EditSaved { name, edit: SavedEdit::NewProjectTab { root } },
-                    };
-                    this.send(msg, cx);
+                    this.send(BenchEdit::NewProjectTab { root }.to_msg(&key), cx);
                     this.refresh(cx);
                 }
                 Ok(None) => {}
@@ -298,27 +231,21 @@ impl Pegboard {
         .detach();
     }
 
-    fn new_tab(&mut self, key: &BenchKey, cx: &mut Context<Self>) {
-        self.send(
-            match key {
-                BenchKey::Running(bench) => ClientMsg::NewTab { bench: *bench, cwd: None },
-                BenchKey::Closed(name) => ClientMsg::EditSaved { name: name.clone(), edit: SavedEdit::NewTab },
-            },
-            cx,
-        );
+    fn new_tab(&mut self, key: &BenchRef, cx: &mut Context<Self>) {
+        self.send(BenchEdit::NewTab.to_msg(key), cx);
         self.refresh(cx);
     }
 
     /// Puts a tab at `index` in a bench. Between running benches it moves with
     /// whatever runs in it; a closed bench's tabs move within it.
-    fn move_tab(&mut self, tab: TabId, to: &BenchKey, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn move_tab(&mut self, tab: TabId, to: &BenchRef, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some((from, t)) = self.find_tab(tab, cx) else { return };
         let to_name = match to {
-            BenchKey::Running(id) => self.state.read(cx).tree.bench(*id).map(|b| b.name.clone()).unwrap_or_default(),
-            BenchKey::Closed(name) => name.clone(),
+            BenchRef::Running(id) => self.state.read(cx).tree.bench(*id).map(|b| b.name.clone()).unwrap_or_default(),
+            BenchRef::Saved(name) => name.clone(),
         };
         let conn = self.state.read(cx).conn.clone();
-        crate::state::move_tab(&conn, tab, &t.display_title(), from.to_ref(), to.to_ref(), &to_name, index, window, cx);
+        crate::state::move_tab(&conn, tab, &t.display_title(), from, to.clone(), &to_name, index, window, cx);
     }
 
     /// Every other bench, to move a tab to.
@@ -326,13 +253,10 @@ impl Pegboard {
         let Some((from, _)) = self.find_tab(tab, cx) else { return Vec::new() };
         let state = self.state.read(cx);
         state
-            .tab_destinations(&from.to_ref(), cx)
+            .tab_destinations(&from, cx)
             .into_iter()
             .map(|d| {
-                let key = match d.to {
-                    BenchRef::Running(id) => BenchKey::Running(id),
-                    BenchRef::Saved(name) => BenchKey::Closed(name),
-                };
+                let key = d.to;
                 let label = if d.closed { format!("{}  (closed)", d.name) } else { d.name };
                 menu_item(label, move |this, window, cx| this.move_tab(tab, &key, usize::MAX, window, cx)).icon("bench")
             })
@@ -363,34 +287,10 @@ impl Pegboard {
     /// Every bench in order, each with the tabs the filter matches.
     fn entries(&self, cx: &Context<Self>) -> Vec<Entry> {
         let state = self.state.read(cx);
-        let live = state.tree.benches.iter().map(|b| {
-            let status = if state.has_window(b.id) { Status::Open } else { Status::Hidden };
-            (b.clone(), status, None)
-        });
-        let stored = cx.try_global::<PegboardData>().map(|d| d.0.stored.as_slice()).unwrap_or_default();
-        let stored = stored.iter().filter(|s| state.tree.bench(s.bench.id).is_none());
-        let stored = stored.map(|s| (s.bench.clone(), Status::Closed, Some(s.saved.clone())));
-        let mut all: Vec<(Bench, Status, Option<String>)> = live.chain(stored).collect();
-        // In the order the user arranged; the rest by name. Either way a
-        // bench stays where it is as it opens and closes.
-        let order = cx.try_global::<PegboardData>().map(|d| d.0.order.as_slice()).unwrap_or_default();
-        all.sort_by_key(|(b, _, _)| (order.iter().position(|id| *id == b.id).unwrap_or(usize::MAX), b.name.to_lowercase()));
-
-        let words: Vec<String> = self.query.split_whitespace().map(str::to_lowercase).collect();
-        let matches = |text: &str| {
-            let text = text.to_lowercase();
-            words.iter().all(|w| text.contains(w.as_str()))
-        };
-        all.into_iter()
-            .filter_map(|(bench, status, saved)| {
-                let tabs: Vec<TabId> = if matches(&bench.name) {
-                    bench.tabs.iter().map(|t| t.id).collect()
-                } else {
-                    bench.tabs.iter().filter(|t| matches(&format!("{} {}", bench.name, haystack(t)))).map(|t| t.id).collect()
-                };
-                (!tabs.is_empty()).then_some(Entry { bench, status, saved, tabs })
-            })
-            .collect()
+        let data = cx.try_global::<PegboardData>().map(|d| &d.0);
+        let stored = data.map(|d| d.stored.as_slice()).unwrap_or_default();
+        let order = data.map(|d| d.order.as_slice()).unwrap_or_default();
+        shed_client::pegboard::list(&state.tree, |b| state.has_window(b), stored, order, &self.query)
     }
 
     /// Opens a bench, at `tab` if given: raises its window, gives a hidden
@@ -447,14 +347,8 @@ impl Pegboard {
         );
     }
 
-    fn set_color(&mut self, key: &BenchKey, color: BenchColor, cx: &mut Context<Self>) {
-        self.send(
-            match key {
-                BenchKey::Running(bench) => ClientMsg::SetBenchColor { bench: *bench, color },
-                BenchKey::Closed(name) => ClientMsg::EditSaved { name: name.clone(), edit: SavedEdit::Color(color) },
-            },
-            cx,
-        );
+    fn set_color(&mut self, key: &BenchRef, color: BenchColor, cx: &mut Context<Self>) {
+        self.send(BenchEdit::Color(color).to_msg(key), cx);
         self.refresh(cx);
     }
 
@@ -481,22 +375,17 @@ impl Pegboard {
     fn submit(&mut self, edit: Edit, text: String, cx: &mut Context<Self>) {
         let msg = match edit {
             Edit::BenchName(_) if text.is_empty() => return,
-            Edit::BenchName(BenchKey::Running(bench)) => ClientMsg::RenameBench { bench, name: text },
-            Edit::BenchName(BenchKey::Closed(name)) => ClientMsg::EditSaved { name, edit: SavedEdit::Rename(text) },
+            Edit::BenchName(key) => BenchEdit::Rename(text).to_msg(&key),
             Edit::Badge(key) => {
                 let badge: String = text.chars().filter(|c| !c.is_whitespace()).take(2).collect();
-                let badge = (!badge.is_empty()).then_some(badge);
-                match key {
-                    BenchKey::Running(bench) => ClientMsg::SetBadge { bench, badge },
-                    BenchKey::Closed(name) => ClientMsg::EditSaved { name, edit: SavedEdit::Badge(badge) },
-                }
+                BenchEdit::Badge((!badge.is_empty()).then_some(badge)).to_msg(&key)
             }
             // Empty goes back to the title the shell sets.
-            Edit::TabName(tab) => return self.change_tab(tab, TabChange::Rename((!text.is_empty()).then_some(text)), cx),
+            Edit::TabName(tab) => return self.change_tab(tab, BenchEdit::RenameTab { tab, name: (!text.is_empty()).then_some(text) }, cx),
             Edit::AddTag(tab) => {
                 let Some((_, t)) = self.find_tab(tab, cx) else { return };
                 let Some(tags) = with_tag(&t.tags, &text, &self.state.read(cx).settings.config) else { return };
-                return self.change_tab(tab, TabChange::Tags(tags), cx);
+                return self.change_tab(tab, BenchEdit::TabTags { tab, tags }, cx);
             }
             Edit::AddLink(key) => return self.submit_link(key, None, &text, cx),
             Edit::ChangeLink(key, i) => return self.submit_link(key, Some(i), &text, cx),
@@ -521,7 +410,7 @@ impl Pegboard {
         self.refresh(cx);
     }
 
-    fn submit_link(&mut self, key: BenchKey, at: Option<usize>, text: &str, cx: &mut Context<Self>) {
+    fn submit_link(&mut self, key: BenchRef, at: Option<usize>, text: &str, cx: &mut Context<Self>) {
         if let Some(link) = crate::links::parse(text) {
             let links = crate::links::with(&self.links_of(&key, cx), link, at);
             self.set_links(&key, links, cx);
@@ -529,29 +418,25 @@ impl Pegboard {
     }
 
     /// A bench's links, running or closed.
-    fn links_of(&self, key: &BenchKey, cx: &Context<Self>) -> Vec<shed_model::ProjectLink> {
+    fn links_of(&self, key: &BenchRef, cx: &Context<Self>) -> Vec<shed_model::ProjectLink> {
         match key {
-            BenchKey::Running(id) => self.state.read(cx).tree.bench(*id).map(|b| b.links.clone()).unwrap_or_default(),
-            BenchKey::Closed(name) => cx
+            BenchRef::Running(id) => self.state.read(cx).tree.bench(*id).map(|b| b.links.clone()).unwrap_or_default(),
+            BenchRef::Saved(name) => cx
                 .try_global::<PegboardData>()
                 .and_then(|d| d.0.stored.iter().find(|s| s.bench.name == *name).map(|s| s.bench.links.clone()))
                 .unwrap_or_default(),
         }
     }
 
-    fn set_links(&mut self, key: &BenchKey, links: Vec<shed_model::ProjectLink>, cx: &mut Context<Self>) {
-        let msg = match key {
-            BenchKey::Running(bench) => ClientMsg::SetBenchLinks { bench: *bench, links },
-            BenchKey::Closed(name) => ClientMsg::EditSaved { name: name.clone(), edit: SavedEdit::Links(links) },
-        };
-        self.send(msg, cx);
+    fn set_links(&mut self, key: &BenchRef, links: Vec<shed_model::ProjectLink>, cx: &mut Context<Self>) {
+        self.send(BenchEdit::Links(links).to_msg(key), cx);
         self.refresh(cx);
     }
 
     /// A bench's links as chips (click opens, right-click for more), and the
     /// field for one being added or changed.
     fn render_links(&self, entry: &Entry, ui: &UiColors, cx: &mut Context<Self>) -> gpui::Div {
-        let key = entry.key();
+        let key = entry.bench_ref();
         let accent = entry.bench.color.accent();
         let links = entry.bench.links.clone();
         let id = entry.bench.id;
@@ -609,7 +494,7 @@ impl Pegboard {
     }
 
     fn bench_menu(&self, entry: &Entry) -> Vec<MenuEntry<Self>> {
-        let key = entry.key();
+        let key = entry.bench_ref();
         let bench = &entry.bench;
         let mut entries = Vec::new();
         let e = entry.clone();
@@ -682,7 +567,7 @@ impl Pegboard {
         self.move_bench(id, *to, cx);
     }
 
-    fn color_entries(&self, key: &BenchKey, current: BenchColor) -> Vec<MenuEntry<Self>> {
+    fn color_entries(&self, key: &BenchRef, current: BenchColor) -> Vec<MenuEntry<Self>> {
         let palette = BenchColor::NAMED
             .into_iter()
             .map(|color| {
@@ -722,7 +607,7 @@ impl Pegboard {
                         menu_item(label.clone(), move |this, _, cx| {
                             let Some((_, t)) = this.find_tab(tab_id, cx) else { return };
                             let Some(tags) = with_tag(&t.tags, &label, &this.state.read(cx).settings.config) else { return };
-                            this.change_tab(tab_id, TabChange::Tags(tags), cx);
+                            this.change_tab(tab_id, BenchEdit::TabTags { tab: tab_id, tags }, cx);
                         })
                         .dot(color)
                     })
@@ -746,13 +631,13 @@ impl Pegboard {
                     }
                     t
                 });
-                this.change_tab(tab_id, TabChange::Tags(tags.collect()), cx);
+                this.change_tab(tab_id, BenchEdit::TabTags { tab: tab_id, tags: tags.collect() }, cx);
             }));
             entries.push(
                 menu_item(format!("Remove Tag “{label}”"), move |this, _, cx| {
                     let Some((_, t)) = this.find_tab(tab_id, cx) else { return };
                     let tags = t.tags.into_iter().filter(|t| t.label != label).collect();
-                    this.change_tab(tab_id, TabChange::Tags(tags), cx);
+                    this.change_tab(tab_id, BenchEdit::TabTags { tab: tab_id, tags }, cx);
                 })
                 .icon("close"),
             );
@@ -760,7 +645,7 @@ impl Pegboard {
         let private = tab.private;
         entries.push(
             menu_item(if private { "Private  ✓" } else { "Private" }, move |this, _, cx| {
-                this.change_tab(tab_id, TabChange::Private(!private), cx);
+                this.change_tab(tab_id, BenchEdit::TabPrivate { tab: tab_id, private: !private }, cx);
             })
             .icon("private"),
         );
@@ -844,7 +729,7 @@ impl Pegboard {
         let bench = &entry.bench;
         let accent = bench.color.accent();
         let id = bench.id;
-        let key = entry.key();
+        let key = entry.bench_ref();
         // State at a glance: a coloured badge, and what it means beside it.
         let palette = &self.state.read(cx).settings.palette;
         let (state_color, state_label, state_note) = match entry.status {
@@ -1040,7 +925,7 @@ impl Pegboard {
         let bench = &entry.bench;
         let accent = bench.color.accent();
         let id = bench.id;
-        let key = entry.key();
+        let key = entry.bench_ref();
         let closed = entry.status == Status::Closed;
         let group = SharedString::from(format!("bench-line-{id}"));
 
@@ -1222,7 +1107,7 @@ impl Pegboard {
     /// A bench's links on its header line: an icon and a name each, in the
     /// text's colours; click opens, right-click for more.
     fn render_quiet_links(&self, entry: &Entry, ui: &UiColors, cx: &mut Context<Self>) -> gpui::Div {
-        let key = entry.key();
+        let key = entry.bench_ref();
         let links = entry.bench.links.clone();
         let id = entry.bench.id;
         let text = ui.text;
@@ -1288,7 +1173,7 @@ impl Pegboard {
         let active = tab.id == bench.active_tab && running;
         let tab_id = tab.id;
         let title = tab.display_title();
-        let card_key = entry.key();
+        let card_key = entry.bench_ref();
         let pane = tab.active();
         let tool = pane.and_then(|p| p.tool.as_ref());
         let (glyph, tint) = crate::bench_window::tab_icon(tab, accent, ui);
@@ -1464,7 +1349,7 @@ impl Pegboard {
         let mono: SharedString = self.state.read(cx).settings.font.family.clone().into();
         let tool = pane.and_then(|p| p.tool.as_ref()).map(|t| t.display());
         let tab_id = tab.id;
-        let card_key = entry.key();
+        let card_key = entry.bench_ref();
 
         let project = tab.project_info().map(|p| p.root.clone());
         let ai = tab.ai_info().map(|a| a.folder.clone());
@@ -1579,29 +1464,6 @@ impl MenuHost for Pegboard {
         }
         cx.notify();
     }
-}
-
-/// Every shown tab in order, as (entry, tab).
-fn flat(entries: &[Entry]) -> Vec<(usize, TabId)> {
-    entries.iter().enumerate().flat_map(|(i, e)| e.tabs.iter().map(move |t| (i, *t))).collect()
-}
-
-/// What the filter searches in a tab: its title, tags, folders and tools.
-fn haystack(tab: &Tab) -> String {
-    let mut text = tab.display_title();
-    for tag in tab.all_tags() {
-        text.push(' ');
-        text.push_str(&tag.label);
-    }
-    for pane in &tab.panes {
-        text.push(' ');
-        text.push_str(&pane.cwd.to_string_lossy());
-        if let Some(tool) = &pane.tool {
-            text.push(' ');
-            text.push_str(&tool.display());
-        }
-    }
-    text
 }
 
 /// `2026-11-01T12:32:05Z` as `2026-11-01 12:32 UTC`.

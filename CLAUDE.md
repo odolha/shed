@@ -82,8 +82,9 @@ Crates (`crates/`), lowest first:
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.
 - `shed-client`: talking to the keeper without GPUI: `keeper_conn.rs` (socket
   connection; starts `shedd` if needed; version check), `cli.rs` (blocking
-  `request`, the CLI's keeper commands: status, list, stop, …), `remote.rs`
-  (remote shells over ssh).
+  `request`, the CLI's keeper commands: status, list, stop, …), `bench_edit.rs`
+  (edits to running or closed benches), `pegboard.rs` (the pegboard's list and
+  filter), `remote.rs` (remote shells over ssh).
 - `shed-app`: `shed` binary: GPUI windows and the CLI.
 
 ### How a change flows
@@ -102,8 +103,9 @@ Closed (saved, not running) benches are edited differently: the app sends
 file, applies the edit through `SavedBench` methods in `shed-save`, and saves it.
 The pegboard reads closed benches from `KeeperMsg::Pegboard(PegboardInfo)`, kept in
 the `PegboardData` GPUI global. UI that edits a bench (`pegboard.rs`,
-`setup_panel.rs`) branches on running vs closed (`BenchKey::Running/Closed`) and
-sends the matching message.
+`setup_panel.rs`) says what changes as a `shed_client::BenchEdit` and lets
+`to_msg(&BenchRef)` pick the message (`BenchRef::Running` live, `Saved` as
+`EditSaved`); `shed_client::pegboard::list` makes the pegboard's filtered list.
 
 Terminal bytes bypass control messages: `Frame::Input`/`Frame::Output` carry raw
 bytes per pane. The keeper runs an emulator per pane (answers terminal queries,
