@@ -1,0 +1,16 @@
+[package]
+name = "shed-review"
+description = "Reviewing what Claude did in an AI tab: changes by how far they went, Viewed marks, explanations asked aside"
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shed-model.workspace = true
+shed-ai.workspace = true
+shed-git.workspace = true
+shed-project.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

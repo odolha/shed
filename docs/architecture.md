@@ -439,8 +439,10 @@ files' plain `drafts` go to the tab's session when read.
 `changes_ui.rs` is what a project tab's Changes and the review share: diff
 rows (laid out by `shed_git::layout`: unified, or side by side with removed
 lines facing the added ones) and their drawing, status letter colours, and
-changed files by folder (`folder_rows`, also in `shed_git::layout`). The review (`ai_review.rs`, a child module of the AI view) reads, off the UI
-thread, each repository the tab works in: `Repo::head_at` finds in the reflog
+changed files by folder (`folder_rows`, also in `shed_git::layout`). The review is
+`shed-review` (no UI: what changed, keys, Viewed marks, explaining) drawn by
+`ai_review.rs`, a child module of the AI view, which runs `shed_review::read` off the UI
+thread over each repository the tab works in: `Repo::head_at` finds in the reflog
 where HEAD was when the turn's (or session's) first prompt was sent,
 `commits_since` the commits after it and which the upstream has; with the
 status, every change goes into one of four layers (not staged, staged,
@@ -452,7 +454,9 @@ FNV hash of its texts, so a change that differs since is not viewed.
 **Explain** asks aside (`shed_ai::aside`): the window runs `claude -p --resume
 <session> --fork-session --no-session-persistence` in plan mode, with Edit,
 Write and Bash disallowed and a JSON schema for the answer, giving it each
-change numbered, how far it went and its diff (cut short). The fork knows the
+change numbered, how far it went and its diff (cut short:
+`Found::explain_request`, 150 lines a file and 4000 in all;
+`ExplainRequest::ask` runs it, `answered` turns the answers into what is kept). The fork knows the
 conversation, so it can say why; it is not saved, so the session's file and
 context stay as they were. Answers are `AiTab.explained` (key, hash, text).
 
@@ -621,6 +625,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, pictures as data, unsaved edits kept aside |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists |
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows |
+| `shed-review` | An AI tab's review as data: changes since a turn or the session by how far they went, their keys and fingerprints, Viewed marks, explanations and the request for them |
 | `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, bench edits routed to running or closed benches, the pegboard's list, remote shells over ssh |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
 

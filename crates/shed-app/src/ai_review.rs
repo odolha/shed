@@ -5,92 +5,38 @@
 //! revert a pushed one (its opposite staged, to commit anew). For this turn,
 //! or the whole session: where the branch was then comes from Git's reflog.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use std::collections::HashSet;
 
 use gpui::{AnyElement, Context, Entity, Focusable, PromptLevel, SharedString, Task, UniformListScrollHandle, Window, div, prelude::*, px, svg, uniform_list};
-use shed_git::{Hunk, LineKind, Repo};
+use shed_git::Repo;
 use shed_model::Rgb;
 
-use super::{AiView, Entry};
+use super::AiView;
 use crate::assets::icon;
 use crate::changes_ui::{DIFF_ROW, DiffRow, FolderRow, diff_layout, folder_rows, render_diff_row, status_color};
 use crate::line_editor::{EditorEvent, LineEditor};
 use crate::menu;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
-/// More than this many changed files are not all read.
-const MOST: usize = 300;
+pub(super) use shed_review::Scope;
+use shed_review::{Change, Found, Layer, MOST};
 
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Scope {
-    /// Since the last prompt was sent.
-    Turn,
-    /// Since the session's first prompt.
-    Session,
-}
-
-/// How far a change went.
-#[derive(Clone, PartialEq)]
-enum Layer {
-    Unstaged { untracked: bool },
-    Staged,
-    Committed { hash: String, pushed: bool },
-}
-
-struct Change {
-    repo: usize,
-    layer: Layer,
-    path: String,
-    /// Git's letter for it: `M`, `A`, `D`, `R`.
-    code: char,
-    hunks: Vec<Hunk>,
-    /// Of what it is now, to tell whether what was viewed is still it.
-    hash: String,
-    /// For a picture: its two versions, shown side by side in place of hunks.
-    pictures: Option<(Option<crate::picture::Picture>, Option<crate::picture::Picture>)>,
-}
-
-impl Change {
-    fn key(&self, root: &Path) -> String {
-        let layer = match &self.layer {
-            Layer::Unstaged { .. } => "worktree".to_string(),
-            Layer::Staged => "index".to_string(),
-            Layer::Committed { hash, .. } => format!("commit {hash}"),
-        };
-        format!("{}|{layer}|{}", root.display(), self.path)
-    }
-}
-
-struct CommitInfo {
-    hash: String,
-    short: String,
-    subject: String,
-    pushed: bool,
-}
-
-struct RepoReview {
-    repo: Repo,
-    name: String,
-    /// Where the branch was when the scope began (`None`: the reflog does not
-    /// go back that far; only what is not committed is shown).
-    base: Option<String>,
-    /// Newest first.
-    commits: Vec<CommitInfo>,
-}
+/// A change's two pictures, ready to draw.
+type Pictures = (Option<crate::picture::Picture>, Option<crate::picture::Picture>);
 
 pub(super) struct Review {
     pub scope: Scope,
-    repos: Vec<RepoReview>,
-    changes: Vec<Change>,
+    /// What reading the repositories found (`shed_review::read`).
+    found: Found,
+    /// Each change's pictures, as `found` has them, ready to draw.
+    pictures: Vec<Option<Pictures>>,
     selected: Option<usize>,
     loading: Option<Task<()>>,
     op: Option<Task<()>>,
     busy: Option<String>,
     error: Option<String>,
-    /// More changes than were read.
-    cut: bool,
     /// Explaining these changes (their keys), aside.
     explaining: Vec<String>,
     /// The diff side by side, as in a project tab.
@@ -103,83 +49,6 @@ pub(super) struct Review {
     message: Entity<LineEditor>,
     _message_sub: gpui::Subscription,
     pub focus: gpui::FocusHandle,
-}
-
-/// What reading the repositories found.
-struct Found {
-    repos: Vec<RepoReview>,
-    changes: Vec<Change>,
-    cut: bool,
-}
-
-/// A stable hash of a change's texts (FNV-1a), kept with Viewed marks.
-fn fingerprint(old: &str, new: &str) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in old.bytes().chain([0u8]).chain(new.bytes()) {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{h:016x}")
-}
-
-/// Reads what changed in each repository since `since` (Unix seconds).
-fn read(dirs: Vec<PathBuf>, since: Option<u64>) -> Found {
-    let mut repos: Vec<RepoReview> = Vec::new();
-    let mut changes = Vec::new();
-    let mut cut = false;
-    for dir in dirs {
-        let Some(repo) = Repo::find(&dir) else { continue };
-        if repos.iter().any(|r| r.repo.root == repo.root) {
-            continue;
-        }
-        let index = repos.len();
-        let name = repo.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let base = since.and_then(|t| repo.head_at(t));
-        let mut add = |layer: Layer, path: String, code: char, old: String, new: String| {
-            if changes.len() >= MOST {
-                cut = true;
-                return;
-            }
-            let at = Path::new(&path);
-            let (hunks, pictures) = if crate::picture::is_picture(at) {
-                let (before, after) = match &layer {
-                    Layer::Unstaged { untracked } => (if *untracked { Vec::new() } else { repo.show_bytes("", &path) }, std::fs::read(repo.root.join(&path)).unwrap_or_default()),
-                    Layer::Staged => (repo.show_bytes("HEAD", &path), repo.show_bytes("", &path)),
-                    Layer::Committed { hash, .. } => (repo.show_bytes(&format!("{hash}^"), &path), repo.show_bytes(hash, &path)),
-                };
-                (Vec::new(), Some((crate::picture::from_bytes(at, before), crate::picture::from_bytes(at, after))))
-            } else {
-                (shed_git::diff_texts(&old, &new, 3), None)
-            };
-            changes.push(Change { repo: index, layer, path, code, hash: fingerprint(&old, &new), hunks, pictures });
-        };
-        if let Ok(status) = repo.status() {
-            for e in status.entries.iter().filter(|e| !e.conflict) {
-                if e.untracked || e.worktree != '.' {
-                    let old = if e.untracked { String::new() } else { repo.show("", &e.path) };
-                    let new = std::fs::read(repo.root.join(&e.path)).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-                    let code = if e.untracked { 'A' } else { e.worktree };
-                    add(Layer::Unstaged { untracked: e.untracked }, e.path.clone(), code, old, new);
-                }
-            }
-            for e in status.entries.iter().filter(|e| !e.conflict && !e.untracked && e.index != '.') {
-                let (old, new) = (repo.show("HEAD", &e.path), repo.show("", &e.path));
-                add(Layer::Staged, e.path.clone(), e.index, old, new);
-            }
-        }
-        let mut commits = Vec::new();
-        if let Some(base) = &base {
-            for (c, pushed) in repo.commits_since(base).unwrap_or_default() {
-                for (code, path) in repo.commit_files(&c.hash).unwrap_or_default() {
-                    let (old, new) = (repo.show_at(&format!("{}^", c.hash), &path), repo.show_at(&c.hash, &path));
-                    add(Layer::Committed { hash: c.hash.clone(), pushed }, path, code, old, new);
-                }
-                commits.push(CommitInfo { hash: c.hash, short: c.short, subject: c.subject, pushed });
-            }
-        }
-        repos.push(RepoReview { repo, name, base, commits });
-    }
-    Found { repos, changes, cut }
 }
 
 impl AiView {
@@ -195,14 +64,13 @@ impl AiView {
             });
             self.review = Some(Review {
                 scope,
-                repos: Vec::new(),
-                changes: Vec::new(),
+                found: Found::default(),
+                pictures: Vec::new(),
                 selected: None,
                 loading: None,
                 op: None,
                 busy: None,
                 error: None,
-                cut: false,
                 explaining: Vec::new(),
                 explain_task: None,
                 side: false,
@@ -231,31 +99,33 @@ impl AiView {
 
     /// When the scope began: the turn's prompt, or the session's first.
     fn review_since(&self, scope: Scope) -> Option<u64> {
-        let mut prompts = self.entries.iter().filter_map(|e| if let Entry::User { at, .. } = e { Some(*at) } else { None }).filter(|at| *at > 0);
-        match scope {
-            Scope::Turn => prompts.next_back(),
-            Scope::Session => prompts.next(),
-        }
+        shed_review::review_since(&self.entries, scope)
     }
 
     fn reload_review(&mut self, cx: &mut Context<Self>) {
         let Some(review) = &self.review else { return };
         let since = self.review_since(review.scope);
-        let mut dirs = vec![self.ai.folder.clone()];
-        dirs.extend(self.ai.add_dirs.iter().cloned());
+        let dirs = shed_review::dirs(&self.ai);
         let task = cx.spawn(async move |this, cx| {
-            let found = cx.background_executor().spawn(async move { read(dirs, since) }).await;
+            let (found, pictures) = cx
+                .background_executor()
+                .spawn(async move {
+                    let found = shed_review::read(dirs, since);
+                    let pictures: Vec<Option<Pictures>> =
+                        found.changes.iter().map(|c| c.pictures.clone().map(|(old, new)| (old.map(Into::into), new.map(Into::into)))).collect();
+                    (found, pictures)
+                })
+                .await;
             this.update(cx, |this, cx| {
                 if let Some(r) = &mut this.review {
-                    let keep = r.selected.and_then(|i| r.changes.get(i)).map(|c| (c.repo, c.layer.clone(), c.path.clone()));
-                    r.repos = found.repos;
-                    r.changes = found.changes;
-                    r.cut = found.cut;
+                    let keep = r.selected.and_then(|i| r.found.changes.get(i)).map(|c| (c.repo, c.layer.clone(), c.path.clone()));
+                    r.found = found;
+                    r.pictures = pictures;
                     r.loading = None;
                     // The same change stays selected, else the first.
                     r.selected = keep
-                        .and_then(|(repo, layer, path)| r.changes.iter().position(|c| c.repo == repo && c.layer == layer && c.path == path))
-                        .or((!r.changes.is_empty()).then_some(0));
+                        .and_then(|(repo, layer, path)| r.found.changes.iter().position(|c| c.repo == repo && c.layer == layer && c.path == path))
+                        .or((!r.found.changes.is_empty()).then_some(0));
                 }
                 cx.notify();
             })
@@ -290,22 +160,17 @@ impl AiView {
     }
 
     fn is_viewed(&self, c: &Change) -> bool {
-        let Some(r) = &self.review else { return false };
-        let key = c.key(&r.repos[c.repo].repo.root);
-        self.ai.viewed.iter().any(|(k, h)| *k == key && *h == c.hash)
+        self.review.as_ref().is_some_and(|r| r.found.is_viewed(c, &self.ai.viewed))
     }
 
     /// Marks a change viewed (as it is now), or not; kept with the tab.
     fn toggle_viewed(&mut self, i: usize, cx: &mut Context<Self>) {
         let Some(r) = &self.review else { return };
-        let Some(c) = r.changes.get(i) else { return };
-        let key = c.key(&r.repos[c.repo].repo.root);
+        let Some(c) = r.found.changes.get(i) else { return };
+        let key = r.found.key(c);
         let viewed = self.is_viewed(c);
         let hash = c.hash.clone();
-        self.ai.viewed.retain(|(k, _)| *k != key);
-        if !viewed {
-            self.ai.viewed.push((key.clone(), hash.clone()));
-        }
+        shed_review::set_viewed(&mut self.ai.viewed, &key, &hash, !viewed);
         // The keeper keeps the marks (and lets old ones go); this copy shows
         // the change until the tree comes back with it.
         self.conn.send_msg(shed_proto::ClientMsg::AiChange { tab: self.tab, change: shed_proto::AiChange::Viewed { key, hash, viewed: !viewed } });
@@ -314,7 +179,7 @@ impl AiView {
 
     fn review_select(&mut self, i: usize, cx: &mut Context<Self>) {
         if let Some(r) = &mut self.review
-            && i < r.changes.len()
+            && i < r.found.changes.len()
         {
             if r.selected != Some(i) {
                 r.diff_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
@@ -336,7 +201,7 @@ impl AiView {
             }
             return;
         }
-        let n = r.changes.len();
+        let n = r.found.changes.len();
         let at = r.selected.unwrap_or(0);
         match e.keystroke.key.as_str() {
             "escape" => self.close_review(window, cx),
@@ -354,7 +219,7 @@ impl AiView {
             "e" if n > 0 && e.keystroke.modifiers.shift => self.explain((0..n).collect(), cx),
             "e" if n > 0 => self.explain(vec![at], cx),
             "n" => {
-                let next = (1..=n).map(|d| (at + d) % n).find(|&i| !self.is_viewed(&self.review.as_ref().unwrap().changes[i]));
+                let next = (1..=n).map(|d| (at + d) % n).find(|&i| !self.is_viewed(&self.review.as_ref().unwrap().found.changes[i]));
                 if let Some(i) = next {
                     self.review_select(i, cx);
                 }
@@ -367,9 +232,7 @@ impl AiView {
     /// The explanation kept for a change: its text, and whether it is of the
     /// change as it is now (else it was of an earlier version).
     fn explanation(&self, c: &Change) -> Option<(String, bool)> {
-        let r = self.review.as_ref()?;
-        let key = c.key(&r.repos[c.repo].repo.root);
-        self.ai.explained.iter().rev().find(|(k, _, _)| *k == key).map(|(_, h, t)| (t.clone(), *h == c.hash))
+        self.review.as_ref()?.found.explanation(c, &self.ai.explained)
     }
 
     /// Asks a copy of the session (not saved, read-only, the session itself
@@ -380,44 +243,16 @@ impl AiView {
         if r.explain_task.is_some() || which.is_empty() {
             return;
         }
-        let several = r.repos.len() > 1;
-        let label = |c: &Change| if several { format!("{}/{}", r.repos[c.repo].name, c.path) } else { c.path.clone() };
-        let mut asked: Vec<(String, String, String)> = Vec::new();
-        let mut files = Vec::new();
-        let mut budget = 4000;
-        for i in which {
-            let Some(c) = r.changes.get(i) else { continue };
-            let state = match &c.layer {
-                Layer::Unstaged { .. } => "not staged".to_string(),
-                Layer::Staged => "staged".to_string(),
-                Layer::Committed { hash, pushed } => {
-                    let subject = r.repos[c.repo].commits.iter().find(|x| x.hash == *hash).map(|x| x.subject.clone()).unwrap_or_default();
-                    format!("{} in commit {} \u{201c}{subject}\u{201d}", if *pushed { "pushed" } else { "committed" }, &hash[..hash.len().min(8)])
-                }
-            };
-            // Its diff, cut short: the copy knows the conversation, and can read files.
-            let mut diff = String::new();
-            for line in c.hunks.iter().flat_map(|h| &h.lines).take(150.min(budget)) {
-                let sign = match line.kind {
-                    LineKind::Added => '+',
-                    LineKind::Removed => '-',
-                    LineKind::Context => ' ',
-                };
-                diff.push(sign);
-                diff.push_str(line.text.trim_end_matches('\n'));
-                diff.push('\n');
-                budget = budget.saturating_sub(1);
-            }
-            let path = label(c);
-            asked.push((path.clone(), c.key(&r.repos[c.repo].repo.root), c.hash.clone()));
-            files.push(shed_ai::aside::ToExplain { path, state, diff });
-        }
-        let keys: Vec<String> = asked.iter().map(|(_, k, _)| k.clone()).collect();
+        let request = r.found.explain_request(&which);
+        let keys = request.keys();
         let (folder, model) = (self.ai.folder.clone(), self.ai.model.clone());
         let task = cx.spawn(async move |this, cx| {
-            let answer = cx
+            let (request, answer) = cx
                 .background_executor()
-                .spawn(async move { shed_ai::aside::explain_changes(&shed_ai::aside::claude_program(), &folder, &session, model.as_deref(), &files) })
+                .spawn(async move {
+                    let answer = request.ask(&folder, &session, model.as_deref());
+                    (request, answer)
+                })
                 .await;
             this.update(cx, |this, cx| {
                 if let Some(r) = &mut this.review {
@@ -427,15 +262,9 @@ impl AiView {
                         r.error = Some(format!("Could not explain: {e}"));
                     }
                 }
-                if let Ok(found) = answer {
-                    let mut kept = Vec::new();
-                    for (n, text) in found {
-                        if let Some((_, key, hash)) = asked.get(n) {
-                            this.ai.explained.retain(|(k, _, _)| k != key);
-                            this.ai.explained.push((key.clone(), hash.clone(), text.clone()));
-                            kept.push((key.clone(), hash.clone(), text));
-                        }
-                    }
+                if let Ok(answer) = answer {
+                    let kept = request.answered(answer);
+                    shed_review::keep_explained(&mut this.ai.explained, &kept);
                     this.conn.send_msg(shed_proto::ClientMsg::AiChange { tab: this.tab, change: shed_proto::AiChange::Explained(kept) });
                 }
                 cx.notify();
@@ -466,8 +295,8 @@ impl AiView {
         let (z, accent, mono) = (self.z(), self.accent, self.settings.font.family.clone());
         let Some(r) = &self.review else { return Vec::new() };
         let Some(i) = r.selected else { return Vec::new() };
-        let Some(c) = r.changes.get(i) else { return Vec::new() };
-        let repo = r.repos[c.repo].repo.clone();
+        let Some(c) = r.found.changes.get(i) else { return Vec::new() };
+        let repo = r.found.repos[c.repo].repo.clone();
         let rows = diff_layout(&c.hunks, r.side);
         let (red, green) = (Rgb::hex(0xE5534B), Rgb::hex(0x57AB5A));
         range
@@ -535,7 +364,7 @@ impl AiView {
             return;
         }
         // The first repository with something staged.
-        let Some(repo) = r.changes.iter().find(|c| c.layer == Layer::Staged).map(|c| r.repos[c.repo].repo.clone()) else { return };
+        let Some(repo) = r.found.staged_repo().cloned() else { return };
         let field = r.message.clone();
         field.update(cx, |f, cx| f.clear(cx));
         self.review_op("Committing…", repo, move |r| r.commit(&message, false), cx);
@@ -544,7 +373,7 @@ impl AiView {
     /// Pushes a repository's commits, after showing where and which.
     fn review_push(&mut self, repo_index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(r) = &self.review else { return };
-        let repo = r.repos[repo_index].repo.clone();
+        let repo = r.found.repos[repo_index].repo.clone();
         let Ok(status) = repo.status() else { return };
         let branch = status.branch;
         let target = repo.push_target(&branch);
@@ -589,7 +418,7 @@ impl AiView {
         let accent = self.accent;
         let z = self.z();
         let mono = self.settings.font.family.clone();
-        let viewed = r.changes.iter().filter(|c| self.is_viewed(c)).count();
+        let viewed = r.found.changes.iter().filter(|c| self.is_viewed(c)).count();
         let scope_button = |id: &'static str, label: &'static str, scope: Scope| {
             let on = r.scope == scope;
             div()
@@ -633,17 +462,17 @@ impl AiView {
             .when_some(r.busy.clone().or(r.loading.as_ref().map(|_| "Reading…".to_string())), |d, b| d.child(div().text_color(hsla(ui.ink(accent))).child(b)))
             .when(!r.explaining.is_empty(), |d| d.child(div().text_color(hsla(ui.ink(accent))).child(format!("Explaining {}…", if r.explaining.len() == 1 { "1 file".to_string() } else { format!("{} files", r.explaining.len()) }))))
             // Every change explained by a copy of the session, aside.
-            .when(self.ai.session.is_some() && !r.changes.is_empty() && r.explaining.is_empty(), |d| {
+            .when(self.ai.session.is_some() && !r.found.changes.is_empty() && r.explaining.is_empty(), |d| {
                 d.child(
                     button("review-explain-all".into(), "Explain All", accent)
                         .tooltip(menu::tooltip("Ask a copy of this session what changed in each file and why; the session itself is left as it is"))
                         .on_click(cx.listener(|this, _, _, cx| {
-                            let n = this.review.as_ref().map_or(0, |r| r.changes.len());
+                            let n = this.review.as_ref().map_or(0, |r| r.found.changes.len());
                             this.explain((0..n).collect(), cx);
                         })),
                 )
             })
-            .when(!r.changes.is_empty(), |d| d.child(div().text_color(hsla(if viewed == r.changes.len() { ui.ink(accent) } else { ui.text_dim })).child(format!("{viewed} of {} viewed", r.changes.len()))))
+            .when(!r.found.changes.is_empty(), |d| d.child(div().text_color(hsla(if viewed == r.found.changes.len() { ui.ink(accent) } else { ui.text_dim })).child(format!("{viewed} of {} viewed", r.found.changes.len()))))
             // A mode: files listed flat, or by folder (the same setting as Changes).
             .child({
                 let tree = self.settings.config.git.tree;
@@ -673,8 +502,8 @@ impl AiView {
         let mut list = div().id("review-list").flex_none().w(px(300.0)).h_full().overflow_y_scroll().border_r_1().border_color(hsla(ui.divider)).py_1().flex().flex_col();
         let section = |title: String, color: Rgb| div().mt_2().px_2().text_size(px(11.0 * z)).text_color(hsla(ui.ink(color))).child(title);
         let (grey, blue, amber, red) = (ui.text_dim, Rgb::hex(0x539BF5), Rgb::hex(0xC69026), ui.danger);
-        for (ri, repo) in r.repos.iter().enumerate() {
-            if r.repos.len() > 1 {
+        for (ri, repo) in r.found.repos.iter().enumerate() {
+            if r.found.repos.len() > 1 {
                 list = list.child(div().mt_2().px_2().text_color(hsla(ui.text)).child(repo.name.clone()));
             }
             let row = |i: usize, c: &Change, depth: Option<usize>| {
@@ -759,7 +588,7 @@ impl AiView {
                     })
                     .collect()
             };
-            let mine = |pick: &dyn Fn(&Layer) -> bool| r.changes.iter().enumerate().filter(|(_, c)| c.repo == ri && pick(&c.layer)).collect::<Vec<_>>();
+            let mine = |pick: &dyn Fn(&Layer) -> bool| r.found.changes.iter().enumerate().filter(|(_, c)| c.repo == ri && pick(&c.layer)).collect::<Vec<_>>();
             let unstaged = mine(&|l| matches!(l, Layer::Unstaged { .. }));
             if !unstaged.is_empty() {
                 list = list.child(section(format!("NOT STAGED ({})", unstaged.len()), grey));
@@ -839,23 +668,23 @@ impl AiView {
                 list = list.child(div().mt_2().px_2().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child("Git's record does not go back to the start of this; commits are not shown."));
             }
         }
-        if r.changes.is_empty() && r.loading.is_none() {
+        if r.found.changes.is_empty() && r.loading.is_none() {
             list = list.child(div().p_3().text_color(hsla(ui.text_dim)).child(match r.scope {
                 Scope::Turn => "Nothing changed in this turn.",
                 Scope::Session => "Nothing changed in this session.",
             }));
         }
-        if r.cut {
+        if r.found.cut {
             list = list.child(div().p_2().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(format!("Only the first {MOST} changes are shown.")));
         }
 
         // The selected change: its file actions, then its diff.
-        let diff = match r.selected.and_then(|i| r.changes.get(i).map(|c| (i, c))) {
+        let diff = match r.selected.and_then(|i| r.found.changes.get(i).map(|c| (i, c))) {
             Some((i, c)) => self.render_review_diff(i, c, ui, &mono, cx),
             None => div().flex_1().into_any_element(),
         };
-        let staged_any = r.changes.iter().any(|c| c.layer == Layer::Staged);
-        let unpushed: Vec<usize> = r.repos.iter().enumerate().filter(|(_, repo)| repo.commits.iter().any(|c| !c.pushed)).map(|(i, _)| i).collect();
+        let staged_any = r.found.changes.iter().any(|c| c.layer == Layer::Staged);
+        let unpushed: Vec<usize> = r.found.repos.iter().enumerate().filter(|(_, repo)| repo.commits.iter().any(|c| !c.pushed)).map(|(i, _)| i).collect();
         let footer = div()
             .flex()
             .flex_none()
@@ -877,7 +706,7 @@ impl AiView {
             })
             .child(div().flex_1())
             .children(unpushed.into_iter().map(|ri| {
-                let label = if r.repos.len() > 1 { format!("Push {}…", r.repos[ri].name) } else { "Push…".to_string() };
+                let label = if r.found.repos.len() > 1 { format!("Push {}…", r.found.repos[ri].name) } else { "Push…".to_string() };
                 div()
                     .id(("review-push", ri))
                     .px_2()
@@ -908,7 +737,7 @@ impl AiView {
     fn render_review_diff(&self, i: usize, c: &Change, ui: &UiColors, mono: &str, cx: &mut Context<Self>) -> AnyElement {
         let Some(r) = &self.review else { return div().into_any_element() };
         let z = self.z();
-        let repo = r.repos[c.repo].repo.clone();
+        let repo = r.found.repos[c.repo].repo.clone();
         let full = repo.root.join(&c.path);
         let (red, green) = (Rgb::hex(0xE5534B), Rgb::hex(0x57AB5A));
         let small = |id: SharedString, label: &'static str, color: Rgb| {
@@ -970,7 +799,7 @@ impl AiView {
             Layer::Committed { .. } => {}
         }
         // What changed and why, asked aside.
-        let explaining = r.explaining.contains(&c.key(&r.repos[c.repo].repo.root));
+        let explaining = r.explaining.contains(&r.found.key(c));
         if self.ai.session.is_some() && !explaining && r.explaining.is_empty() {
             bar = bar.child(
                 small(format!("explain-{i}").into(), "Explain", self.accent)
@@ -990,7 +819,7 @@ impl AiView {
         // The diff, as in a project tab: unified or side by side; a
         // picture's two versions side by side.
         let count = diff_layout(&c.hunks, r.side).len();
-        let lines = if let Some((old, new)) = &c.pictures {
+        let lines = if let Some(Some((old, new))) = r.pictures.get(i) {
             div().flex_1().min_h_0().bg(hsla(ui.background)).child(crate::picture::pair(&format!("review-picture-{i}"), old.as_ref(), new.as_ref(), ui, 11.0 * z)).into_any_element()
         } else if c.hunks.is_empty() {
             div().flex_1().p_3().text_color(hsla(ui.text_dim)).child("No differences in the text (a binary file, or only its mode).").into_any_element()
@@ -1048,83 +877,5 @@ impl AiView {
             .when(explaining, |d| d.child(div().mx_3().mt_2().text_size(px(12.0 * z)).text_color(hsla(ui.ink(self.accent))).child("Asking what changed here and why…")))
             .child(lines)
             .into_any_element()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn git(dir: &Path, args: &[&str]) {
-        let ok = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
-        assert!(ok.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&ok.stderr));
-    }
-
-    #[test]
-    fn changes_are_sorted_by_how_far_they_went() {
-        let dir = tempfile::tempdir().unwrap();
-        let (work, remote) = (dir.path().join("work"), dir.path().join("remote.git"));
-        std::fs::create_dir_all(&work).unwrap();
-        git(dir.path(), &["init", "-q", "--bare", "-b", "main", remote.to_str().unwrap()]);
-        git(&work, &["init", "-q", "-b", "main"]);
-        for (k, v) in [("user.email", "t@example.com"), ("user.name", "T"), ("commit.gpgsign", "false")] {
-            git(&work, &["config", k, v]);
-        }
-        git(&work, &["remote", "add", "origin", remote.to_str().unwrap()]);
-        let write = |name: &str, text: &str| std::fs::write(work.join(name), text).unwrap();
-        write("a.txt", "a\n");
-        git(&work, &["add", "-A"]);
-        git(&work, &["commit", "-qm", "before"]);
-        git(&work, &["push", "-q", "-u", "origin", "main"]);
-        // Git's record of that, from an hour before the session.
-        let start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 600;
-        for log in [".git/logs/HEAD", ".git/logs/refs/heads/main"] {
-            let path = work.join(log);
-            let text = std::fs::read_to_string(&path).unwrap();
-            let old = (start - 3000).to_string();
-            let fixed: String = text.lines().map(|l| {
-                let (head, tail) = l.split_once('\t').unwrap();
-                let mut parts: Vec<&str> = head.split(' ').collect();
-                let n = parts.len();
-                parts[n - 2] = &old;
-                format!("{}\t{tail}\n", parts.join(" "))
-            }).collect();
-            std::fs::write(&path, fixed).unwrap();
-        }
-        // In the session: pushed, committed, staged, not staged.
-        write("b.txt", "b\n");
-        git(&work, &["add", "-A"]);
-        git(&work, &["commit", "-qm", "pushed one"]);
-        git(&work, &["push", "-q"]);
-        write("c.txt", "c\n");
-        git(&work, &["add", "-A"]);
-        git(&work, &["commit", "-qm", "committed one"]);
-        write("a.txt", "a, staged\n");
-        git(&work, &["add", "a.txt"]);
-        write("b.txt", "b, not staged\n");
-        let found = read(vec![work.clone()], Some(start));
-        let layers: Vec<(String, String)> = found
-            .changes
-            .iter()
-            .map(|c| {
-                let layer = match &c.layer {
-                    Layer::Unstaged { .. } => "not staged".to_string(),
-                    Layer::Staged => "staged".to_string(),
-                    Layer::Committed { pushed, .. } => if *pushed { "pushed" } else { "committed" }.to_string(),
-                };
-                (c.path.clone(), layer)
-            })
-            .collect();
-        let want = |p: &str, l: &str| (p.to_string(), l.to_string());
-        assert_eq!(layers, [want("b.txt", "not staged"), want("a.txt", "staged"), want("c.txt", "committed"), want("b.txt", "pushed")]);
-        let commits: Vec<(&str, bool)> = found.repos[0].commits.iter().map(|c| (c.subject.as_str(), c.pushed)).collect();
-        assert_eq!(commits, [("committed one", false), ("pushed one", true)]);
-        // Before the reflog: what is not committed only.
-        let earlier = read(vec![work], Some(start - 7200));
-        assert!(earlier.repos[0].base.is_none());
-        assert_eq!(earlier.changes.len(), 2);
-        // A viewed change is told by its texts.
-        assert_eq!(fingerprint("a", "b"), fingerprint("a", "b"));
-        assert_ne!(fingerprint("a", "b"), fingerprint("ab", ""));
     }
 }

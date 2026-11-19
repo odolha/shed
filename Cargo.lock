@@ -5886,6 +5886,7 @@ dependencies = [
  "shed-model",
  "shed-project",
  "shed-proto",
+ "shed-review",
  "shed-save",
  "shed-text",
  "tempfile",
@@ -6037,6 +6038,17 @@ dependencies = [
  "shed-ai",
  "shed-model",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shed-review"
+version = "0.1.0"
+dependencies = [
+ "shed-ai",
+ "shed-git",
+ "shed-model",
+ "shed-project",
+ "tempfile",
 ]
 
 [[package]]
