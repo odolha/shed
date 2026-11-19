@@ -66,8 +66,10 @@ travel as raw bytes, tagged with their pane, so a busy pane costs a copy and no
 encoding. Everything else is a control message, `ClientMsg` to the keeper and
 `KeeperMsg` back, encoded with postcard (in `shed-proto`).
 
-A client opens with `Hello { version }`, and the keeper answers `Welcome`. The tree
-is broadcast whole (`TreeChanged`) after every change; windows render from it, and every action a window or the CLI takes
+A client opens with `Hello { version, kind }`, and the keeper answers `Welcome`.
+The kind is a window, a CLI command, or the link (`shed link`, which hears what
+windows hear but counts as no window: what it attaches stays hidden). The tree
+is broadcast whole (`TreeChanged`) after every change to windows and the link; windows render from it, and every action a window or the CLI takes
 (new tab, split, rename, move a tab, set colours, setup, aliases) is a message the
 keeper applies to it.
 
@@ -421,8 +423,12 @@ The window's conversation list starts at `AiView::first` (the last
 out of it; that row, once painted, splices the next ones in (`show_from`),
 keeping the view where it was. Rows and entries map through `row` / `entry_at`;
 search, the prompt list and block jumps `reveal` an entry before scrolling to it.
-Drafts are `AiTab.drafts`, changed through `AiSettings` and saved with the bench;
-each names its session (`Draft.session`): Claude Code's session id, or a draft
+Drafts are `AiTab.drafts`, saved with the bench. A window changes an AI tab's
+settings and kept state one thing at a time (`AiChange`: settings, unsent text,
+a draft added or removed, a change viewed, explanations), so two clients
+changing different things at once do not undo each other; a draft is removed
+only if it is still what the client saw. Each draft
+names its session (`Draft.session`): Claude Code's session id, or a draft
 session's key (`draft-…`, `AiTab.draft_session` while one is shown, opened with
 `AiOpenSession` like a session). When Claude Code reports a session id the tab
 did not have (the first one, or a fork's after an edit or a revert), the keeper

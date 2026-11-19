@@ -304,14 +304,11 @@ impl AiView {
         let hash = c.hash.clone();
         self.ai.viewed.retain(|(k, _)| *k != key);
         if !viewed {
-            self.ai.viewed.push((key, hash));
+            self.ai.viewed.push((key.clone(), hash.clone()));
         }
-        // Old marks of changes long gone do not pile up.
-        if self.ai.viewed.len() > 2000 {
-            let n = self.ai.viewed.len() - 2000;
-            self.ai.viewed.drain(..n);
-        }
-        self.conn.send_msg(shed_proto::ClientMsg::AiSettings { tab: self.tab, settings: self.ai.clone() });
+        // The keeper keeps the marks (and lets old ones go); this copy shows
+        // the change until the tree comes back with it.
+        self.conn.send_msg(shed_proto::ClientMsg::AiChange { tab: self.tab, change: shed_proto::AiChange::Viewed { key, hash, viewed: !viewed } });
         cx.notify();
     }
 
@@ -431,17 +428,15 @@ impl AiView {
                     }
                 }
                 if let Ok(found) = answer {
+                    let mut kept = Vec::new();
                     for (n, text) in found {
                         if let Some((_, key, hash)) = asked.get(n) {
                             this.ai.explained.retain(|(k, _, _)| k != key);
-                            this.ai.explained.push((key.clone(), hash.clone(), text));
+                            this.ai.explained.push((key.clone(), hash.clone(), text.clone()));
+                            kept.push((key.clone(), hash.clone(), text));
                         }
                     }
-                    if this.ai.explained.len() > 500 {
-                        let n = this.ai.explained.len() - 500;
-                        this.ai.explained.drain(..n);
-                    }
-                    this.conn.send_msg(shed_proto::ClientMsg::AiSettings { tab: this.tab, settings: this.ai.clone() });
+                    this.conn.send_msg(shed_proto::ClientMsg::AiChange { tab: this.tab, change: shed_proto::AiChange::Explained(kept) });
                 }
                 cx.notify();
             })

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 44;
+pub const PROTOCOL_VERSION: u32 = 45;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -28,6 +28,16 @@ pub enum ClientKind {
     Window,
     /// A one-shot CLI command such as `shed status`.
     Cli,
+    /// `shed link`: hears the tree and AI tabs as a window does, but shows
+    /// nothing, so it counts as no window (benches it attaches stay hidden).
+    Link,
+}
+
+impl ClientKind {
+    /// Whether it hears the tree and AI tabs' conversations.
+    pub fn follows_tree(self) -> bool {
+        matches!(self, ClientKind::Window | ClientKind::Link)
+    }
 }
 
 /// Sent by a window or CLI client to the keeper.
@@ -167,6 +177,34 @@ pub enum ClientMsg {
     /// what came after it leave the conversation (the old session is kept),
     /// and with `files` the files Claude changed since are put back.
     AiRevert { tab: TabId, entry: u32, files: bool },
+    /// Changes one thing of an AI tab's, leaving the rest as it is (so
+    /// clients changing different things at once do not undo each other).
+    AiChange { tab: TabId, change: AiChange },
+}
+
+/// One change to an AI tab's settings or kept state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AiChange {
+    /// `None` leaves a setting as it is; `Some(None)` clears it.
+    Settings {
+        model: Option<Option<String>>,
+        mode: Option<String>,
+        effort: Option<Option<String>>,
+        follow: Option<bool>,
+        browser: Option<bool>,
+        add_dirs: Option<Vec<std::path::PathBuf>>,
+    },
+    /// What is written in the prompt and not sent.
+    Unsent(String),
+    /// A draft kept for `session` (`None`: the session shown, or a new draft
+    /// session when none is shown).
+    AddDraft { session: Option<String>, text: String },
+    /// Takes out the draft at `index` if it still has this session and text.
+    RemoveDraft { index: u32, session: String, text: String },
+    /// Marks a change of the review viewed as it is now (`hash`), or not.
+    Viewed { key: String, hash: String, viewed: bool },
+    /// Keeps explanations of changes: key, hash of what was explained, text.
+    Explained(Vec<(String, String, String)>),
 }
 
 /// A picture sent with a prompt.
