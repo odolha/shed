@@ -8,7 +8,8 @@ diffs and, above all, AI tabs. A server can also run a workspace of its own,
 with a terminal interface, so Claude Code keeps working while the PCs are off.
 This document records the decisions, their reasons and the order of work.
 
-> **Status:** agreed 2026-11-19, not started. Open points are marked
+> **Status:** agreed 2026-11-19. The API's types (`shed-api`) and the nexus
+> server (`shed-nexus`) are in; the rest is not started. Open points are marked
 > **Open**. Once done, this file moves to [History](history/README.md).
 
 ## The picture

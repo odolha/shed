@@ -92,6 +92,10 @@ Crates (`crates/`), lowest first:
   (edits to running or closed benches), `pegboard.rs` (the pegboard's list and
   filter), `remote.rs` (remote shells over ssh).
 - `shed-app`: `shed` binary: GPUI windows and the CLI.
+- `shed-api`: the nexus API's JSON types (frames, state, calls, topics, HTTP).
+- `shed-nexus`: `shed-nexus` binary, the server workspaces link to (axum,
+  SQLite); reads only the API's envelope (`src/raw.rs`). See `docs/nexus-plan.md`,
+  `docs/nexus-deploy.md`.
 
 ### How a change flows
 
