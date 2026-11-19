@@ -476,7 +476,8 @@ prompt (Claude Code copies messages into a new file when it continues or forks
 one). Where in the parent it goes on (past every message both have) tells
 continued (at the parent's end) from branched (earlier); the list is a tree,
 each family by its most recent session, and the window shows a family as one
-row. `load_session` reads a session with the files it goes on from, oldest
+row (`shed_ai::session_rows`: families opened or not, draft sessions first,
+filtered by words). `load_session` reads a session with the files it goes on from, oldest
 first, each up to where it does, a message id once; `PromptMark.session` keeps
 which file the message before a prompt came from, and editing that prompt
 resumes that file.
@@ -628,7 +629,7 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-desktop` | Bench and app icons, desktop entries |
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
 | `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, pictures as data, unsaved edits kept aside |
-| `shed-ai` | Claude Code conversations from its stream or session files; session lists |
+| `shed-ai` | Claude Code conversations from its stream or session files; session lists, and their rows as shown (families, drafts, filter) |
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows; a Git panel's data and operations (`session`) |
 | `shed-review` | An AI tab's review as data: changes since a turn or the session by how far they went, their keys and fingerprints, Viewed marks, explanations and the request for them |
 | `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, bench edits routed to running or closed benches, the pegboard's list, remote shells over ssh |

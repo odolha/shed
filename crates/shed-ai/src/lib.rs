@@ -5,10 +5,12 @@
 
 pub mod markdown;
 pub mod aside;
+pub mod listing;
 pub mod sessions;
 mod summary;
 mod transcript;
 
+pub use listing::{SessionRow, family_of, session_rows};
 pub use sessions::{SessionInfo, list_sessions, load_session, rename_session};
 pub use summary::{BROWSER_TOOLS, summarize};
 pub use transcript::{PromptMark, Transcript, keep_picture_in, prune_pictures};

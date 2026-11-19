@@ -77,7 +77,8 @@ Crates (`crates/`), lowest first:
   (`folder.rs`), pictures as data (`picture.rs`), unsaved edits kept aside
   (`recovery.rs`).
 - `shed-ai`: Claude Code conversations from its stream-json events and session
-  files; the keeper runs `claude` per AI tab (`shed-keeper/src/server/ai.rs`).
+  files, the sessions list's rows (`listing.rs`); the keeper runs `claude` per
+  AI tab (`shed-keeper/src/server/ai.rs`).
 - `shed-git`: Git through the `git` program (status, diffs, hunk patches,
   commits, branches, log), diff rows and changed files by folder (`layout.rs`),
   a Git panel's data and blocking operations (`session.rs`); the UI is

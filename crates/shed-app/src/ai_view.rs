@@ -16,7 +16,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, SharedString, StyledText, Subscription, Task, TextLayout, UniformListScrollHandle,
     Window, div, list, prelude::*, px, relative, svg, uniform_list,
 };
-use shed_ai::{Command, Entry, Limits, Model, SessionInfo, State as AiState, Status};
+use shed_ai::{Command, Entry, Limits, Model, SessionInfo, SessionRow, State as AiState, Status};
 use shed_model::{AiTab, BenchId, Rgb, TabId};
 use shed_proto::{AiChange, AiImage, ClientMsg};
 
@@ -94,17 +94,6 @@ impl Render for EntryView {
             None => div().into_any_element(),
         }
     }
-}
-
-/// A row of the sessions list.
-#[derive(Clone)]
-enum SessionRow {
-    /// A conversation, shown by its most recent file.
-    Conversation { tip: SessionInfo, root: String, parts: usize, open: bool },
-    /// One of its files, listed under it.
-    Part(SessionInfo),
-    /// Drafts written in a new session, nothing sent yet.
-    Draft(shed_model::DraftSession),
 }
 
 #[path = "ai_review.rs"]
@@ -2598,16 +2587,7 @@ impl AiView {
 
     /// The first file of the conversation a session file belongs to.
     fn family_of(&self, id: &str) -> Option<&str> {
-        let mut root = None;
-        for s in self.sessions.iter() {
-            if s.depth == 0 {
-                root = Some(s.id.as_str());
-            }
-            if s.id == id {
-                return root;
-            }
-        }
-        None
+        shed_ai::family_of(&self.sessions, id)
     }
 
     /// This session's prompts the filter lets through: (entry, number, text).
@@ -2733,39 +2713,7 @@ impl AiView {
     }
 
     fn shown_sessions(&self, cx: &gpui::App) -> Vec<SessionRow> {
-        let words: Vec<String> = self.filter.read(cx).text().split_whitespace().map(str::to_lowercase).collect();
-        let mut rows: Vec<SessionRow> = self
-            .ai
-            .draft_sessions()
-            .into_iter()
-            .filter(|d| words.iter().all(|w| d.title.to_lowercase().contains(w)))
-            .map(SessionRow::Draft)
-            .collect();
-        let mut family: Vec<SessionInfo> = Vec::new();
-        let flush = |family: &mut Vec<SessionInfo>, rows: &mut Vec<SessionRow>| {
-            let Some(root) = family.first() else { return };
-            let root = root.id.clone();
-            // The conversation goes on in its most recent file.
-            let Some(tip) = family.iter().max_by_key(|s| s.modified).cloned() else { return };
-            if !words.iter().all(|w| family.iter().any(|s| s.title.to_lowercase().contains(w))) {
-                family.clear();
-                return;
-            }
-            let open = family.len() > 1 && self.open_families.contains(&root);
-            let parts = std::mem::take(family);
-            rows.push(SessionRow::Conversation { tip, root, parts: parts.len(), open });
-            if open {
-                rows.extend(parts.into_iter().map(SessionRow::Part));
-            }
-        };
-        for s in self.sessions.iter() {
-            if s.depth == 0 {
-                flush(&mut family, &mut rows);
-            }
-            family.push(s.clone());
-        }
-        flush(&mut family, &mut rows);
-        rows
+        shed_ai::session_rows(&self.sessions, self.ai.draft_sessions(), &self.open_families, self.filter.read(cx).text())
     }
 
     fn render_header(&self, ui: &UiColors, cx: &mut Context<Self>) -> impl IntoElement {
