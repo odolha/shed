@@ -208,6 +208,8 @@ pub struct ProjectView {
     bars: Bars,
     /// The field for a new link (the bench's), while open.
     new_link: Option<(Entity<LineEditor>, Subscription)>,
+    /// The field naming a new file (or folder, `true`) in a folder, while open.
+    new_entry: Option<(PathBuf, bool, Entity<LineEditor>, Subscription)>,
     /// The status bar shows who last changed the cursor's line.
     blame_on: bool,
     /// Blame for a file, while it matches the file shown.
@@ -251,6 +253,7 @@ impl ProjectView {
             resizing: None,
             git: None,
             new_link: None,
+            new_entry: None,
             bars: Bars::default(),
             blame_on: false,
             blame: None,
@@ -1227,6 +1230,31 @@ impl ProjectView {
             .collect()
     }
 
+    /// The field naming a new file or folder, over the tree.
+    fn render_new_entry(&self, ui: &UiColors) -> Option<impl IntoElement> {
+        let (folder, dir, editor, _) = self.new_entry.as_ref()?;
+        let rel = folder.strip_prefix(&self.root).ok().filter(|r| !r.as_os_str().is_empty()).map(|r| format!("{}/", r.display()));
+        let what = if *dir { "New folder" } else { "New file" };
+        let label = match rel {
+            Some(r) => format!("{what} in {r} (a/b makes folders too)"),
+            None => format!("{what} (a/b makes folders too)"),
+        };
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .gap_1()
+                .px_2()
+                .py_1p5()
+                .border_b_1()
+                .border_color(hsla(ui.divider))
+                .text_size(px(12.0 * self.z()))
+                .child(div().text_color(hsla(ui.text_dim)).truncate().child(label))
+                .child(div().px_1().rounded_sm().border_1().border_color(hsla(self.accent)).bg(hsla(ui.tab_active)).child(editor.clone())),
+        )
+    }
+
     fn render_panel_switch(&self, ui: &UiColors, cx: &mut Context<Self>) -> impl IntoElement {
         let accent = self.accent;
         let z = self.z();
@@ -1244,7 +1272,8 @@ impl ProjectView {
         let icon_w = 13.0 + 16.0;
         let all: f32 = tabs.iter().map(|(_, _, l, _)| icon_w + 4.0 + label_w(l)).sum();
         let active: f32 = tabs.iter().map(|(_, _, l, p)| icon_w + if *p == self.panel { 4.0 + label_w(l) } else { 0.0 }).sum();
-        let room = self.tree_width;
+        // (Files has its "new" button at the right.)
+        let room = self.tree_width - if self.panel == Panel::Files { 28.0 } else { 0.0 };
         let labelled = |panel: Panel| all <= room || (active <= room && panel == self.panel);
         let tab = |id: &'static str, glyph: &'static str, label: &'static str, panel: Panel| {
             let on = self.panel == panel;
@@ -1294,6 +1323,28 @@ impl ProjectView {
                     }
                 }))
             }))
+            .when(self.panel == Panel::Files, |d| {
+                d.child(div().flex_1()).child(
+                    div()
+                        .id("files-new")
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .px_2()
+                        .h_full()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hsla(ui.tab_hover)))
+                        .tooltip(menu::tooltip("New file or folder"))
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            let entries = vec![
+                                menu::item("New File…", |this: &mut Self, window, cx| this.start_new_entry(this.new_entry_folder(), false, window, cx)).icon("plus"),
+                                menu::item("New Folder…", |this: &mut Self, window, cx| this.start_new_entry(this.new_entry_folder(), true, window, cx)).icon("folder"),
+                            ];
+                            this.open_menu(e.position, entries, cx);
+                        }))
+                        .child(svg().path(icon("plus")).size(px(13.0)).text_color(hsla(ui.text_dim))),
+                )
+            })
     }
 
     fn on_resize(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1355,7 +1406,11 @@ impl ProjectView {
             entries.push(menu::item("Show Changes", move |this: &mut Self, _, cx| this.open_diff(a.clone(), DiffSource::Unstaged, cx)).icon("branch"));
             entries.push(menu::item("History", move |this: &mut Self, _, cx| this.open_history(Some(b.clone()), cx)).icon("history"));
         }
+        let (in_file, in_dir) = (folder.clone(), folder.clone());
         entries.extend([
+            menu::item("New File…", move |this: &mut Self, window, cx| this.start_new_entry(in_file.clone(), false, window, cx)).icon("plus"),
+            menu::item("New Folder…", move |this: &mut Self, window, cx| this.start_new_entry(in_dir.clone(), true, window, cx)).icon("folder"),
+            MenuEntry::Separator,
             menu::item("Send to AI", move |this: &mut Self, _, cx| this.send_to_ai(Some(to_ai.clone()), cx)).icon("ai"),
             menu::item("Open Terminal Here", move |this: &mut Self, _, _| this.open_terminal(&folder)).icon("terminal"),
             menu::item("Show in File Manager", move |_, _, cx| cx.reveal_path(&file)).icon("folder"),
@@ -1373,6 +1428,71 @@ impl ProjectView {
             }),
         ]);
         entries
+    }
+
+    /// The folder a new file goes in by default: the selected one, or the
+    /// selected file's, else the project's.
+    fn new_entry_folder(&self) -> PathBuf {
+        match &self.selected {
+            Some(p) if p.is_dir() => p.clone(),
+            Some(p) => p.parent().filter(|d| d.starts_with(&self.root)).unwrap_or(&self.root).to_path_buf(),
+            None => self.root.clone(),
+        }
+    }
+
+    /// Opens the field naming a new file or folder in `folder`; a name with
+    /// slashes makes the folders on the way.
+    fn start_new_entry(&mut self, folder: PathBuf, dir: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = Panel::Files;
+        let editor = cx.new(|cx| LineEditor::new(String::new(), cx).submit_on_blur(window, cx));
+        window.focus(&editor.read(cx).focus_handle(cx), cx);
+        let sub = cx.subscribe(&editor, |this, _, event: &crate::line_editor::EditorEvent, cx| {
+            let Some((folder, dir, _, _)) = this.new_entry.take() else { return };
+            if let crate::line_editor::EditorEvent::Submit(name) = event {
+                this.create_entry(&folder, name.trim(), dir, cx);
+            }
+            this.focus_editor = true;
+            cx.notify();
+        });
+        self.new_entry = Some((folder, dir, editor, sub));
+        cx.notify();
+    }
+
+    /// Makes the file (empty) or folder named in `folder`, and shows it:
+    /// a file opens, a folder opens in the tree.
+    fn create_entry(&mut self, folder: &Path, name: &str, dir: bool, cx: &mut Context<Self>) {
+        if name.is_empty() {
+            return;
+        }
+        let path = folder.join(name);
+        let outside = Path::new(name).is_absolute() || Path::new(name).components().any(|c| matches!(c, std::path::Component::ParentDir));
+        let made = if outside {
+            Err(std::io::Error::other("the name must stay inside the project"))
+        } else if path.exists() {
+            Err(std::io::Error::other("it already exists"))
+        } else if dir {
+            std::fs::create_dir_all(&path)
+        } else {
+            path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::File::create_new(&path).map(drop))
+        };
+        if let Err(e) = made {
+            self.notice = Some(format!("Could not make {name}: {e}"));
+            cx.notify();
+            return;
+        }
+        if let Ok(rel) = path.strip_prefix(&self.root) {
+            let mut files = (*self.files).clone();
+            if !dir && let Err(at) = files.binary_search_by(|f| f.as_path().cmp(rel)) {
+                files.insert(at, rel.to_path_buf());
+            }
+            self.files = Arc::new(files);
+        }
+        if dir {
+            self.expanded.insert(path.clone());
+            self.reveal(&path, cx);
+        } else {
+            self.open_path(path, None, cx);
+        }
     }
 
     fn start_new_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1397,6 +1517,9 @@ impl ProjectView {
 
     fn header_menu(&self) -> Vec<MenuEntry<Self>> {
         let mut entries = vec![
+            menu::item("New File…", |this: &mut Self, window, cx| this.start_new_entry(this.new_entry_folder(), false, window, cx)).icon("plus"),
+            menu::item("New Folder…", |this: &mut Self, window, cx| this.start_new_entry(this.new_entry_folder(), true, window, cx)).icon("folder"),
+            MenuEntry::Separator,
             menu::item("Add Link…", |this: &mut Self, window, cx| this.start_new_link(window, cx)).icon("link"),
             menu::item("Open File by Name…", |this: &mut Self, window, cx| this.open_quick(window, cx)).icon("file"),
             menu::item("Refresh", |this: &mut Self, _, cx| this.refresh(cx)).icon("refresh"),
@@ -1991,7 +2114,7 @@ impl MenuHost for ProjectView {
 
     fn menu_closed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         // A choice may have opened a field of its own, which keeps the keyboard.
-        let field_open = self.new_link.is_some() || self.quick.is_some() || self.git.as_ref().is_some_and(|g| g.has_field());
+        let field_open = self.new_link.is_some() || self.new_entry.is_some() || self.quick.is_some() || self.git.as_ref().is_some_and(|g| g.has_field());
         if !field_open {
             self.focus_editor = true;
         }
@@ -2060,7 +2183,13 @@ impl Render for ProjectView {
                                 Panel::History => div().flex_1().min_h_0().child(self.render_history(&ui, cx)),
                                 panel => match (panel, self.render_search(&ui, cx)) {
                                     (Panel::Search, Some(search)) => div().flex_1().min_h_0().child(search),
-                                    _ => div().flex_1().min_h_0().track_focus(&self.tree_focus).on_key_down(cx.listener(Self::tree_key)).child(tree),
+                                    _ => div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .flex()
+                                        .flex_col()
+                                        .children(self.render_new_entry(&ui))
+                                        .child(div().flex_1().min_h_0().track_focus(&self.tree_focus).on_key_down(cx.listener(Self::tree_key)).child(tree)),
                                 },
                             }),
                     )
@@ -2104,5 +2233,33 @@ mod tests {
         assert_eq!(names, ["Docs", "src", ".env", "A.md", "b.rs"]);
         std::fs::create_dir_all(dir.path().join("src/deep")).unwrap();
         assert_eq!(project_root(&dir.path().join("src/deep")), dir.path());
+    }
+
+    #[gpui::test]
+    fn new_files_and_folders(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir(root.join("src")).unwrap();
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let project = Project { root: root.clone(), ..Default::default() };
+        let (view, cx) = cx.add_window_view(|_, cx| ProjectView::new(BenchId::new(), TabId::new(), &project, Rgb::hex(0xFF8A57), KeeperConn::detached(), Settings::default(), cx));
+        view.update(cx, |v, cx| {
+            // A name with slashes makes the folders on the way, and the file opens.
+            v.create_entry(&root.join("src"), "ui/button.rs", false, cx);
+            assert!(root.join("src/ui/button.rs").is_file());
+            assert_eq!(v.active.and_then(|i| v.open.get(i)).map(|f| f.path.clone()), Some(root.join("src/ui/button.rs")));
+            v.create_entry(&root, "assets/icons", true, cx);
+            assert!(root.join("assets/icons").is_dir());
+            // Never over a file, nor outside the project.
+            std::fs::write(root.join("src/ui/button.rs"), "kept").unwrap();
+            v.create_entry(&root.join("src"), "ui/button.rs", false, cx);
+            assert_eq!(std::fs::read_to_string(root.join("src/ui/button.rs")).unwrap(), "kept");
+            assert!(v.notice.as_deref().is_some_and(|n| n.contains("already exists")));
+            v.create_entry(&root, "../outside.txt", false, cx);
+            assert!(!root.parent().unwrap().join("outside.txt").exists());
+        });
     }
 }

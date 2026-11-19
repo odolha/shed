@@ -210,7 +210,11 @@ File**) opens a file by typing part of its name: `pv` finds `project_view.rs`. T
 list leaves out what Git ignores (`.gitignore`) and what you exclude: right-click
 a file or folder and choose **Exclude from Project**; the **⋯** menu brings
 excluded ones back. Right-click also opens a terminal there, shows it in the file
-manager, or copies its path. Above the tree, **Terminal** opens a terminal tab in
+manager, or copies its path. **New File…** and **New Folder…** (right-click
+a folder or file, the **+** at the right of the Files panel, or the **⋯** menu)
+ask for a name in that folder (by default the one selected); a name with slashes,
+`ui/button.rs`, makes the folders on the way. A new file opens at once, a new
+folder opens in the tree. Above the tree, **Terminal** opens a terminal tab in
 the project's folder, **File Manager** opens the folder, and **Refresh** reads
 everything again.
 
