@@ -135,6 +135,37 @@ runs whole remote tabs through a stand-in ssh script whose "server" is a folder
 with its own home and Shed folders (it needs `target/debug/shedd`, which
 `cargo test --workspace` builds; skipped otherwise).
 
+## The nexus
+
+`shed-nexus` runs on its own; point its settings and data at a scratch folder.
+A `localhost` public URL keeps `Secure` cookies working over plain HTTP:
+
+```sh
+mkdir -p /tmp/nexus-dev
+cat > /tmp/nexus-dev/nexus.toml <<'EOF'
+listen = "127.0.0.1:7870"
+public_url = "http://localhost:7870"
+data_dir = "/tmp/nexus-dev/data"
+# web_dir = "web/dist/browser"   # a built web app, when there is one
+EOF
+cargo run -p shed-nexus -- --config /tmp/nexus-dev/nexus.toml
+```
+
+Until the account exists it logs a setup link (`…/setup?code=…`). Without the
+web app, set up with `curl`: `POST /api/v1/setup` with the code, a user name and
+a password gives the TOTP secret (add it to an authenticator, or compute codes
+with `oathtool --totp -b SECRET`), and `POST /api/v1/setup/confirm` with the
+code, a TOTP code and `"device": {"kind": "phone", "name": "curl"}` gives a
+device token for `Authorization: Bearer`. `SHED_LOG=debug` raises the log
+level. Deleting the data folder starts over.
+
+`crates/shed-nexus/tests/` run a nexus in process on a real socket, with a
+temporary data folder: the account (setup, sign-in, lockout, cookies and CSRF),
+pairing, and relaying, where a fake link and connectors speak over
+`tokio-tungstenite`. TOTP codes come from the account's secret; each time step
+is taken once, so a test that needs more than three codes waits for the next
+step. Recovery codes stand in where a test only needs to sign in.
+
 ## Packages
 
 - `packaging/deb/build.sh` builds the Debian package into `target/debian/`.
@@ -143,3 +174,5 @@ with its own home and Shed folders (it needs `target/debug/shedd`, which
 - `packaging/arch/PKGBUILD` builds the latest commit from GitHub (`makepkg -si`).
 - `packaging/linux/` holds the desktop entry, the optional systemd user unit and
   the copyright notice they share.
+- `packaging/nexus/` holds a sample `nexus.toml` and the nexus's systemd unit;
+  [Deploying a nexus](nexus-deploy.md) uses them.

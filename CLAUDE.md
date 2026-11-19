@@ -77,6 +77,10 @@ Crates (`crates/`), lowest first:
   commits, branches, log); the UI is `shed-app/src/project_git.rs`.
 - `shed-keeper`: `shedd`. Nearly everything is in `src/server.rs`.
 - `shed-app`: `shed` binary: GPUI windows and the CLI.
+- `shed-api`: the nexus API's JSON types (frames, state, calls, topics, HTTP).
+- `shed-nexus`: `shed-nexus` binary, the server workspaces link to (axum,
+  SQLite); reads only the API's envelope (`src/raw.rs`). See `docs/nexus-plan.md`,
+  `docs/nexus-deploy.md`.
 
 ### How a change flows
 

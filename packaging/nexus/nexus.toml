@@ -1,0 +1,69 @@
+# The Shed nexus's settings (`shed-nexus --config <this file>`). Every setting
+# is optional; the values shown are the defaults unless marked "example".
+# See docs/nexus-deploy.md.
+
+# Where to listen. Behind a reverse proxy, keep it on loopback.
+listen = "127.0.0.1:7870"
+
+# The address people and workspaces reach the nexus at (example). Used for the
+# setup link, the allowed WebSocket origin and the push contact.
+public_url = "https://nexus.example.com"
+
+# The database and the push key. Default: $XDG_DATA_HOME/shed-nexus.
+data_dir = "/var/lib/shed-nexus"
+
+# The built web app, served at / (example). Leave out for the API only.
+# web_dir = "/usr/local/share/shed-nexus/web"
+
+# How long a browser stays signed in.
+session_days = 7
+
+# Behind a reverse proxy that sets X-Forwarded-For (nginx below): the client's
+# address is its last entry. Only with a proxy you run in front.
+trusted_proxy = true
+
+# Session cookies only over HTTPS. Turn off only for a plain-HTTP test nexus
+# not on localhost.
+secure_cookies = true
+
+# Pages that may open /api with a session cookie. Default: the public URL's.
+# allowed_origins = ["https://nexus.example.com"]
+
+# Only these address ranges may reach the nexus at all (example). Default: any.
+# allowed_networks = ["192.0.2.0/24", "2001:db8::/32"]
+
+# How long a workspace has to answer a request, in seconds.
+request_timeout_secs = 60
+
+# Sent with every answer. The default allows the nexus's own files only.
+# content_security_policy = "default-src 'self'; …"
+
+[geo]
+# A GeoIP CSV of address ranges: `start,end,country` per line (db-ip's
+# "IP to Country Lite", IP2Location LITE DB1). Also shows where devices sign
+# in from (example).
+# database = "/var/lib/shed-nexus/dbip-country-lite.csv"
+# Two-letter country codes allowed in (example). Empty: no filter.
+# countries = ["DE", "FR"]
+# Let in addresses the database does not know. Private and loopback
+# addresses always come in.
+allow_unknown = false
+
+[login]
+# Failed sign-ins (or one-time codes) from one address before it is locked out.
+max_failures = 5
+# How long failures count, and a lockout lasts.
+lockout_minutes = 15
+# Failed sign-ins from everywhere, within lockout_minutes, before all sign-ins
+# are refused for a while.
+global_max_failures = 50
+# Pairing requests per address per minute.
+pair_per_minute = 5
+
+[push]
+# Web Push to browsers and UnifiedPush (ntfy) to phones.
+enabled = true
+# Who push services can contact: mailto: or https:. Default: the public URL.
+# subject = "mailto:admin@example.com"
+# Accept http: push endpoints (a ntfy on a private network only).
+allow_http_endpoints = false

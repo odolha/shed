@@ -597,6 +597,94 @@ there (see above); it also stops an idle window's frame timer, which upstream ra
 at the display's refresh rate for as long as the window was visible.
 The patches are described in `SHED_PATCHES.md` in their folders.
 
+## The nexus
+
+The nexus (`shed-nexus`, [the plan](nexus-plan.md)) is a server of its own,
+apart from Shed's two processes: an axum server with a SQLite database
+(`nexus.db`, WAL, in its data folder), configured by `nexus.toml`. Workspaces'
+links dial out to it; the web and Android apps (connectors) speak only to it. It
+keeps the account, the paired devices and each workspace's last state, relays
+between connectors and links, and sends push notifications. The API's types are
+in `shed-api`; the nexus reads only their envelope.
+
+```mermaid
+flowchart LR
+    web["web app / Android app"] -- "HTTPS: sign-in, devices, pairing, push" --> http["routes (/api/v1/…)"]
+    web -- "WSS /api: ClientFrame ⇄ ServerFrame" --> hub["hub"]
+    link["shed link (a workspace)"] -- "WSS /link: LinkFrame ⇄ NexusFrame" --> hub
+    http --> db[("nexus.db")]
+    hub -- "last states" --> db
+    hub -- "Notify" --> push["Web Push"] --> service["push service / ntfy"]
+```
+
+- **The account** is one user: an argon2 password hash, a TOTP secret and ten
+  recovery codes (hashed, single use). Until it exists, the nexus logs a setup
+  link with a one-time code at every start; setting up takes the code, a user
+  name and password, then a code from the authenticator. TOTP codes are taken
+  within a step either side, and each step only once (the last used one is
+  stored).
+- **Signing in** takes password and TOTP (or a recovery code). A browser gets a
+  session (`shed_session` cookie: `HttpOnly`, `Secure` unless turned off,
+  `SameSite=Strict`) and a CSRF token it sends in `X-Shed-Csrf` with every
+  change; a phone gets a device token for `Authorization: Bearer`. Tokens are
+  256 random bits; the database keeps their SHA-256 only. Failed attempts
+  (passwords, setup and TOTP codes) lock an address out after a few, and all
+  sign-ins after many from everywhere; pairing requests have a rate of their
+  own. Revoking a device, changing the password and approving a pairing ask
+  for a fresh TOTP code. Every sign-in, failure, pairing, revocation and
+  password change goes into the audit log.
+- **Pairing**: a workspace asks (`pair/start`) and gets a code to show
+  (`K7QF-2M9D`) and a secret to poll with; it is gone after ten minutes. The
+  signed-in user approves the code, naming the workspace. The next poll makes
+  the workspace (a device of kind workspace, with a token) and gives the token
+  out, once; the nexus never keeps it.
+- **Who may come in**: optionally only some address ranges, and only some
+  countries (from a GeoIP CSV of ranges, which also gives the country shown with
+  devices and audit entries). Behind a reverse proxy, the client's address is
+  the last `X-Forwarded-For` entry, when the proxy is trusted. A browser's
+  `/api` socket must come from an allowed origin (the public URL's by default).
+  Answers carry a strict Content-Security-Policy and the usual hardening headers.
+
+**Relaying.** `raw.rs` mirrors `shed_api::wire`'s frames with the payloads
+(`call`, `topic`, `event`, `state`, `ok`) kept as raw JSON, read field by field
+so the key order does not matter; a call the nexus does not know passes through
+byte for byte (a test checks every frame round-trips unchanged). The hub
+(`relay.rs`) knows every live socket. A connector's `Request` or `Subscribe`
+goes to the workspace's link under an id the nexus picks; the `Response` or
+`Event`s come back under it and go out under the connector's id. Each
+subscription is forwarded as is, even when two connectors watch the same thing
+(sharing streams can come later). A request unanswered for 60 s is answered
+`Timeout`; one to a workspace not connected, `Offline` (or `NotFound`). When a
+link goes, its subscriptions end (`Ended`, `Offline`) and its requests are
+answered `Offline`; when a connector goes, its subscriptions are unsubscribed at
+the link. The nexus does not read calls, so a workspace's policy (view only) is
+enforced by its link. Revoking a device, or its session running out, closes its
+sockets at once (with `Goodbye`). Sockets are pinged every 30 s and dropped
+after 90 s of silence; one that cannot keep up (4096 frames queued) is dropped.
+Frames may be up to 24 MB (pictures for AI prompts travel inside them).
+
+**State.** A link sends its workspace's whole state when it changes; the nexus
+passes it to every connector and keeps it (written to the database every few
+seconds), so an offline workspace still shows as it was. `Welcome` carries the
+workspaces and their last states; `Workspaces` goes out when one comes, goes or
+is renamed.
+
+**Push.** A link's `Notify`, and a workspace offline for two minutes, become
+Web Push messages to every device whose subscription wants that kind. The
+payload (JSON: kind, title, body, workspace and its name, bench, tab) is
+encrypted for the device (RFC 8291, `aes128gcm`) and signed with the nexus's
+VAPID key (RFC 8292), made on first start (`vapid.key`, 0600). Browsers'
+push services and UnifiedPush distributors (ntfy) take the same requests, so
+one path covers both. Subscriptions a push service no longer knows (404, 410)
+are dropped.
+
+The modules: `config.rs` (`nexus.toml`), `store.rs` (the database and its
+numbered migrations), `auth.rs` (tokens, passwords, TOTP, recovery codes,
+lockouts), `http.rs` (routes, errors as `ApiError` with a matching status, who
+is calling, headers, the web app's files with `index.html` for any other path),
+`pair.rs`, `relay.rs`, `raw.rs`, `push.rs`, `geo.rs`. Deploying it is
+described in [Deploying a nexus](nexus-deploy.md).
+
 ## The code
 
 | Crate | What it holds |
@@ -613,8 +701,10 @@ The patches are described in `SHED_PATCHES.md` in their folders.
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists |
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts |
 | `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
+| `shed-api` | The nexus API's types: frames, workspace state, calls, topics, HTTP bodies, errors |
+| `shed-nexus` | `shed-nexus`: the account, devices, pairing, relaying, snapshots, push |
 
 `browser/chrome/` is the browser extension (built into `shed`, written out by
 `shed browser setup`). `vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,
 `gpui_ce_render` and `gpui_ce_linux`; `packaging/` the Debian and Arch packaging, desktop entry and
-systemd unit; `tools/screenshots/` the demo setup the docs' screenshots come from.
+systemd unit, and the nexus's sample settings and unit (`packaging/nexus/`); `tools/screenshots/` the demo setup the docs' screenshots come from.
