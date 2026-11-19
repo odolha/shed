@@ -148,7 +148,7 @@ pub struct AiTool {
     pub file: Option<String>,
     /// For edits: the text replaced and the text put in.
     #[serde(default)]
-    pub edit: Option<AiEdit>,
+    pub edit: Option<AiTextEdit>,
     /// What it returned, cut if long; `None` while it runs.
     #[serde(default)]
     pub result: Option<String>,
@@ -158,10 +158,12 @@ pub struct AiTool {
     pub pictures: Vec<String>,
 }
 
+/// An edit's text: what it replaced and what it put in. (Not `AiEdit`: that
+/// is the call, and the generated types share one namespace.)
 #[typeshare]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AiEdit {
+pub struct AiTextEdit {
     pub old: String,
     pub new: String,
 }
@@ -177,7 +179,7 @@ pub struct AiPermission {
     #[serde(default)]
     pub detail: String,
     #[serde(default)]
-    pub edit: Option<AiEdit>,
+    pub edit: Option<AiTextEdit>,
     /// The user's answer, once given.
     #[serde(default)]
     pub answer: Option<bool>,

@@ -20,6 +20,8 @@ cargo test --workspace               # all tests; the shed-app ones run real bas
 cargo test -p shed-app --test benches closed_benches   # one integration test, by name filter
 cargo test -p shed-save closed_benches_change_tab_by_tab
 tools/mac-check.sh                   # clippy for aarch64-apple-darwin from Linux (no linking)
+cargo run -p shed-codegen            # after changing crates/shed-api: regenerates the web/Android API types
+tools/check-codegen.sh               # fails if those generated types are stale
 ```
 
 Integration tests live in `crates/shed-keeper/tests/` (protocol, logout) and

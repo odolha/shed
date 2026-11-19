@@ -56,6 +56,28 @@ cargo clippy --all-targets
   bench window drawing the limits when they arrive. `KeeperConn::detached()`
   stands in for the keeper there.
 
+### API types
+
+The nexus API's types are Rust, in `crates/shed-api`; the web and Android apps
+use generated copies, committed so they build without Rust:
+
+```sh
+cargo run -p shed-codegen            # writes web/src/api/gen/api.ts and
+                                     # android/app/src/main/java/dev/shed/api/Api.kt
+tools/check-codegen.sh               # fails if they are not what shed-api makes now
+```
+
+`shed-codegen` reads every `#[typeshare]` type with `typeshare-core` (no CLI to
+install) and uses its TypeScript and Kotlin generators, adjusted so the types
+describe serde's JSON: `Option` fields are `T | null` in TypeScript, enums
+without data string unions, and Kotlin sealed-class variants name their content
+type with its package. Types share one namespace, so two shed-api types may not
+have the same name. Its tests (`crates/shed-codegen/tests/json.rs`) pin the JSON
+of each kind of type, fail when the generated files are stale, and type-check
+samples of every frame against `api.ts` with `tsc --strict` when there is one
+(`tsc` on `PATH`, or `SHED_TSC="npx -y -p typescript@5 tsc"`); the Kotlin
+`Json` configuration to use is at the top of `Api.kt`.
+
 ## Debugging
 
 - The keeper logs to `~/.local/state/shed/shedd.log`; `SHED_LOG=debug` raises the
