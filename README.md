@@ -52,7 +52,8 @@ bench and tab at a glance, and is where you make, open, hide and close them.
   line.
 - **Claude Code, made comfortable.** Select and copy anything, formatted; see the
   screenshots it reads; keep drafts and queued messages across restarts; long
-  conversations open at once; sessions split over several files read as one.
+  conversations open at once; sessions split over several files read as one;
+  connect one session at a time to your Chrome or Brave (Claude in Chrome).
 - **History across tabs and benches**: every command, with its folder, exit status
   and where it ran. Up walks this tab's history, Ctrl+Up the bench's, Ctrl+Shift+Up
   everything; Ctrl+R searches it all. Remote shells keep theirs on the server.

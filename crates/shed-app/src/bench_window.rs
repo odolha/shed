@@ -67,16 +67,18 @@ impl EditTarget {
 
 /// A tab's one icon, the same on its bench's tab bar and in Shed: what it
 /// is (terminal, program running, project, AI, remote), or that it waits
-/// for you or is working; and its colour.
+/// for you or is working; and its colour. An AI tab connected to the
+/// browser shows a globe, so it is clear which one is.
 pub fn tab_icon(tab: &Tab, accent: Rgb, ui: &UiColors) -> (&'static str, Rgb) {
     let waiting = tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some());
     if waiting {
         ("tool-waiting", ui.ink(accent))
     } else if let Some(ai) = tab.ai_info() {
+        let glyph = if ai.browser { "globe" } else { "ai" };
         match ai.activity {
             shed_model::AiActivity::Waiting => ("tool-waiting", ui.ink(accent)),
-            shed_model::AiActivity::Working => ("ai", ui.ink(accent)),
-            shed_model::AiActivity::Idle => ("ai", ui.text_dim),
+            shed_model::AiActivity::Working => (glyph, ui.ink(accent)),
+            shed_model::AiActivity::Idle => (glyph, if ai.browser { ui.text } else { ui.text_dim }),
         }
     } else if tab.project_info().is_some() {
         ("project", ui.text_dim)

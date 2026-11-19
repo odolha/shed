@@ -442,7 +442,8 @@ terminal of the bench.
   than 1M tokens, the same menu has **Context: 1M tokens**, Claude Code's
   `[1m]` model, "· 1M" after its name), the mode (new AI tabs start in
   **Auto**), and
-  the eye, which makes files Claude edits open in their project tab as it goes.
+  the eye, which makes files Claude edits open in their project tab as it goes,
+  and the globe, which connects the tab to your browser (below).
   The modes: **Ask Before Edits**; **Accept Edits** (file changes go through,
   commands still ask); **Auto** (Claude Code's safety check approves routine
   actions and stops risky ones); **Read Only (Plan)** (looks and plans, changes
@@ -450,6 +451,17 @@ terminal of the bench.
   asks first). The **⋯** menu finds text in the
   conversation (also Ctrl+F), inserts a file's text into the prompt (for long
   prompts kept on disk), and saves the prompt or the whole conversation as a file.
+- **The browser**: the globe below the prompt (or **Connect to the Browser** in
+  the **⋯** menu) lets this tab's Claude use your Chrome or Brave through the
+  [Claude in Chrome](https://claude.com/chrome) extension: open pages, click,
+  fill forms, read what is on them, take screenshots. One AI tab at a time is
+  connected: connecting another lets go of the first. It takes effect at once,
+  even while Claude is working. A connected tab says so above its prompt (and in
+  which browsers the extension is), with **Disconnect**, and its icon is a globe
+  on the tab bar and in Shed. In the browser, Claude works in a tab group of its
+  own. Steps read as "Browser: open https://…", "Browser: click". Needs the
+  extension installed and signed in, and the browser open; when no Chrome or
+  Brave here has it, the strip says how to get it.
 - **After a turn**, the files it changed are listed above the prompt: click one to
   see its diff in its project tab, ready to stage or throw away. When Claude keeps
   a task list, it shows there too.

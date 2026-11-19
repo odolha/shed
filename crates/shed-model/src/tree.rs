@@ -335,6 +335,9 @@ pub struct AiTab {
     /// Explanations of changes, asked aside: each change's key, the hash of
     /// what was explained, and the explanation.
     pub explained: Vec<(String, String, String)>,
+    /// Its Claude Code may use the browser (Claude in Chrome); at most one AI
+    /// tab at a time.
+    pub browser: bool,
 }
 
 /// A message waiting its turn: its text, and its pictures as files.

@@ -353,6 +353,20 @@ Claude Code's suggested rules for "for this session"); Stop is a `control_reques
 effort start a new one at the next prompt. `rate_limit_event`s carry the usage
 limits (`AiLimits`).
 
+The browser (Claude in Chrome) belongs to at most one AI tab (`AiTab.browser`;
+`ai_settings` clears it on every other tab, `load_bench` on a bench loaded
+while another tab has it). Claude Code runs with `--no-chrome`, and the
+keeper adds Claude Code's own server for the extension (`claude
+--claude-in-chrome-mcp`, named `claude-in-chrome`) with a `control_request`
+`mcp_set_servers` when the tab is connected, and sets the servers back to none
+when it lets go: at once, mid-turn too. Not `--chrome` with `mcp_toggle`:
+Claude Code remembers a toggle per folder in `~/.claude.json`, which would
+switch the extension off for the person's own `claude` in that folder too. Each
+server process is its own connection to the extension, so the session gets a
+tab group of its own. The window looks for the extension's folder in the
+browsers' profiles (`browser::claude_browsers`) to say where Claude will work,
+or that it is missing.
+
 Each prompt goes out with a message id of Shed's own (`uuid`), which Claude
 Code keeps in its session file; the transcript also notes the id of the last
 message before each prompt (`PromptMark`). `AiEdit` (edit and send again) asks

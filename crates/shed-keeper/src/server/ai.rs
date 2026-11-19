@@ -114,6 +114,22 @@ pub(super) fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// Claude in Chrome (the browser extension) for the AI tab connected to the
+/// browser, or for none: Claude Code's own server for it (`claude
+/// --claude-in-chrome-mcp`, what `--chrome` starts), added and taken away
+/// while Claude Code runs. Unlike `mcp_toggle`, which Claude Code remembers
+/// per folder in `~/.claude.json` (and so for the person's own `claude`
+/// there too), a server set this way lasts only as long as the process. Each
+/// server has its own connection to the extension, and so its own tab group.
+fn browser_servers(on: bool) -> serde_json::Value {
+    let servers = if on {
+        json!({"claude-in-chrome": {"type": "stdio", "command": claude_program(), "args": ["--claude-in-chrome-mcp"]}})
+    } else {
+        json!({})
+    };
+    json!({"subtype": "mcp_set_servers", "servers": servers})
+}
+
 /// The `claude` program: on the PATH, else where its installer puts it (a
 /// keeper started from the desktop may not have `~/.local/bin` on its PATH).
 fn claude_program() -> PathBuf {
@@ -423,6 +439,9 @@ impl Keeper {
         for dir in ai.add_dirs.iter().filter(|d| d.is_dir()) {
             cmd.arg("--add-dir").arg(dir);
         }
+        // Claude in Chrome only as Shed adds it (`browser_servers`), for the
+        // one tab connected to the browser, even where it is on by default.
+        cmd.arg("--no-chrome");
         cmd.current_dir(&ai.folder).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         let mut child = cmd.spawn()?;
         info!(?tab, folder = %ai.folder.display(), "Claude Code started");
@@ -439,6 +458,9 @@ impl Keeper {
         rt._kill = Some(kill_tx);
         rt.started_with = (ai.add_dirs.clone(), ai.effort.clone());
         rt.write(json!({"type": "control_request", "request_id": INIT_REQUEST, "request": {"subtype": "initialize"}}));
+        if ai.browser {
+            rt.control(browser_servers(true));
+        }
         let tail = rt.stderr.clone();
         tail.lock().unwrap().clear();
 
@@ -661,7 +683,28 @@ impl Keeper {
         ai.unsent = new.unsent;
         ai.viewed = new.viewed;
         ai.explained = new.explained;
+        ai.browser = new.browser;
         let ai = ai.clone();
+        // One AI tab at a time uses the browser: connecting this one lets go
+        // of any other, in any bench.
+        let mut let_go = Vec::new();
+        if ai.browser && !old.browser {
+            for other in st.tree.benches.iter_mut().flat_map(|b| &mut b.tabs).filter(|t| t.id != tab) {
+                if let TabKind::Ai(o) = &mut other.kind
+                    && o.browser
+                {
+                    o.browser = false;
+                    let_go.push(other.id);
+                }
+            }
+        }
+        for other in let_go {
+            if let Some(rt) = st.ai.get_mut(&other)
+                && rt.input.is_some()
+            {
+                rt.control(browser_servers(false));
+            }
+        }
         st.broadcast_tree();
         if let Some(rt) = st.ai.get_mut(&tab)
             && rt.input.is_some()
@@ -671,6 +714,10 @@ impl Keeper {
             }
             if ai.mode != old.mode {
                 rt.control(json!({"subtype": "set_permission_mode", "mode": ai.mode}));
+            }
+            // Mid-turn too: Claude Code takes the browser's tools on or off.
+            if ai.browser != old.browser {
+                rt.control(browser_servers(ai.browser));
             }
             // Folders and effort are fixed when it starts: the next prompt starts it again.
             if rt.started_with != (ai.add_dirs.clone(), ai.effort.clone()) && rt.transcript.status.state == AiState::Idle {

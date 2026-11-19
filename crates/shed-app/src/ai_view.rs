@@ -232,6 +232,8 @@ pub struct AiView {
     first: usize,
     /// The list of drafts is open above the prompt.
     drafts_open: bool,
+    /// The browsers with Claude in Chrome, looked for when the tab connects.
+    browsers: Vec<&'static str>,
     /// The left side shows the folder's sessions, or this one's prompts.
     show_prompts: bool,
     prompts_scroll: UniformListScrollHandle,
@@ -290,6 +292,7 @@ fn over_text(layout: &TextLayout, at: gpui::Point<gpui::Pixels>) -> bool {
 
 impl AiView {
     pub fn new(bench: BenchId, tab: TabId, ai: AiTab, accent: Rgb, conn: KeeperConn, settings: Settings, cx: &mut Context<Self>) -> Self {
+        let browsers = if ai.browser { crate::browser::claude_browsers() } else { Vec::new() };
         let options = TextOptions {
             wrap: true,
             auto_height: Some((2, 14)),
@@ -373,6 +376,7 @@ impl AiView {
             unsent_save: None,
             first: 0,
             drafts_open: false,
+            browsers,
             file_exists: HashMap::new(),
             hover_link: None,
             project_files: Vec::new(),
@@ -444,6 +448,9 @@ impl AiView {
     pub fn set_ai(&mut self, ai: AiTab, cx: &mut Context<Self>) {
         if ai.session != self.ai.session && ai.session.is_some() && !self.sessions.iter().any(|s| Some(&s.id) == ai.session.as_ref()) {
             self.load_sessions(cx);
+        }
+        if ai.browser && !self.ai.browser {
+            self.browsers = crate::browser::claude_browsers();
         }
         if ai != self.ai {
             self.ai = ai;
@@ -704,6 +711,11 @@ impl AiView {
         vec![
             menu::item("Review Changes", |this: &mut Self, window, cx| this.open_review(review::Scope::Turn, window, cx)).icon("branch"),
             menu::item("Find in the Conversation…", |this: &mut Self, window, cx| this.open_find(window, cx)).icon("search"),
+            if self.ai.browser {
+                menu::item("Disconnect from the Browser", |this: &mut Self, _, _| this.set_browser(false)).icon("globe")
+            } else {
+                menu::item("Connect to the Browser", |this: &mut Self, _, _| this.set_browser(true)).icon("globe")
+            },
             menu::item("Insert a File's Text…", |this: &mut Self, _, cx| this.insert_file(cx)).icon("file"),
             menu::item("Save the Prompt…", move |this: &mut Self, _, cx| this.save_as("prompt.md", prompt.clone(), cx)),
             menu::item("Save the Conversation…", move |this: &mut Self, _, cx| this.save_as("conversation.md", conversation.clone(), cx)),
@@ -2819,6 +2831,22 @@ impl AiView {
                     }))
                     .child(svg().path(icon("eye")).size(px(14.0)).text_color(hsla(if self.ai.follow { ui.ink(accent) } else { ui.text_dim }))),
             )
+            .child(
+                div()
+                    .id("ai-browser")
+                    .p_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .when(self.ai.browser, |d| d.bg(hsla_alpha(accent, 0.25)))
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .tooltip(menu::tooltip(if self.ai.browser {
+                        "Connected to your browser: Claude can use Chrome or Brave through Claude in Chrome. Click to disconnect."
+                    } else {
+                        "Connect to your browser: Claude can then open and use tabs in Chrome or Brave (Claude in Chrome). One AI tab at a time."
+                    }))
+                    .on_click(cx.listener(|this, _, _, _| this.set_browser(!this.ai.browser)))
+                    .child(svg().path(icon("globe")).size(px(14.0)).text_color(hsla(if self.ai.browser { ui.ink(accent) } else { ui.text_dim }))),
+            )
             // Drafts: how many, opening their list; and keeping the prompt as one.
             .when(!self.ai.drafts.is_empty(), |d| {
                 let n = self.ai.drafts.len();
@@ -2907,6 +2935,66 @@ impl AiView {
 
 impl AiView {
     /// Above the prompt: find, the task list, and the files the last turn changed.
+    /// Connects this tab's Claude Code to the browser, or disconnects it.
+    /// The keeper turns it off in any other AI tab, and the change reaches
+    /// Claude Code at once, even in the middle of a turn.
+    fn set_browser(&mut self, on: bool) {
+        let msg = self.settings_msg(|a| a.browser = on);
+        self.conn.send_msg(msg);
+    }
+
+    /// While connected to the browser, a strip above the prompt says so
+    /// (and where), with Disconnect; or how to set Claude in Chrome up.
+    fn render_browser(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.ai.browser {
+            return None;
+        }
+        let accent = self.accent;
+        let (text, color) = if self.browsers.is_empty() {
+            (
+                "Connected to the browser, but no Chrome or Brave here has Claude in Chrome: add it from the Chrome Web Store, sign in to it, and keep the browser open.".to_string(),
+                ui.text,
+            )
+        } else {
+            let names = self.browsers.join(" or ");
+            (format!("Connected to your browser ({names}): Claude works in a tab group of its own there"), ui.ink(accent))
+        };
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .mx_3()
+                .mt_1()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .bg(hsla_alpha(accent, 0.12))
+                .border_1()
+                .border_color(hsla_alpha(accent, 0.5))
+                .text_size(px(12.0 * self.z()))
+                .child(svg().path(icon("globe")).size(px(13.0)).flex_none().text_color(hsla(ui.ink(accent))))
+                .child(div().flex_1().min_w_0().text_color(hsla(color)).child(text))
+                .child(
+                    div()
+                        .id("ai-browser-off")
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_1p5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_color(hsla(ui.text))
+                        .hover(|s| s.bg(hsla(ui.tab_hover)))
+                        .on_click(cx.listener(|this, _, _, _| this.set_browser(false)))
+                        .child(svg().path(icon("close")).size(px(12.0)).text_color(hsla(ui.text_dim)))
+                        .child("Disconnect"),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_extras(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
         let accent = self.accent;
         let mut out = div().flex().flex_col().gap_1().mx_3().text_size(px(12.0 * self.z()));
@@ -3271,7 +3359,8 @@ impl Render for AiView {
                         transcript.into_any_element()
                     }))
                     .when(self.review.is_none(), |d| {
-                        d.children(self.render_extras(&ui, cx))
+                        d.children(self.render_browser(&ui, cx))
+                            .children(self.render_extras(&ui, cx))
                             .children(self.render_completion(&ui, cx))
                             .children(self.render_attachments(&ui, cx))
                     })

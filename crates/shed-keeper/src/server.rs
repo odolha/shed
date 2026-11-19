@@ -1431,6 +1431,17 @@ impl Keeper {
         for tab in &mut bench.tabs {
             st.config.recolor_tags(&mut tab.tags);
         }
+        // One AI tab at a time uses the browser: not this bench's, when
+        // another running tab has it (nor a second one of its own).
+        let mut taken = st.tree.benches.iter().flat_map(|b| &b.tabs).any(|t| t.ai_info().is_some_and(|a| a.browser));
+        for tab in &mut bench.tabs {
+            if let TabKind::Ai(a) = &mut tab.kind
+                && a.browser
+            {
+                a.browser = !taken;
+                taken = true;
+            }
+        }
         let bench_cwd = bench.cwd.clone();
         let mut started = Vec::new();
         for tab in &mut bench.tabs {

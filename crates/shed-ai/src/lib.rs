@@ -10,7 +10,7 @@ mod summary;
 mod transcript;
 
 pub use sessions::{SessionInfo, list_sessions, load_session, rename_session};
-pub use summary::summarize;
+pub use summary::{BROWSER_TOOLS, summarize};
 pub use transcript::{PromptMark, Transcript, keep_picture_in, prune_pictures};
 
 use serde::{Deserialize, Serialize};

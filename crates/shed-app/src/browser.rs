@@ -80,6 +80,36 @@ pub fn install(profiles: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
     Ok(targets)
 }
 
+/// Claude in Chrome's ID in the Chrome Web Store (the same in Brave).
+const CLAUDE_EXTENSION_ID: &str = "fcoeoabgfenejglbffodgkkbkcdhcgfn";
+
+/// The browsers with Claude in Chrome installed in some profile, by name
+/// ("Chrome", "Brave"), for an AI tab connected to the browser to say where
+/// Claude will work, or how to set it up when none has it.
+pub fn claude_browsers() -> Vec<&'static str> {
+    let config = config_home();
+    let mut found = Vec::new();
+    for (dir, name) in [("google-chrome", "Chrome"), ("google-chrome-beta", "Chrome"), ("chromium", "Chromium"), ("BraveSoftware/Brave-Browser", "Brave"), ("microsoft-edge", "Edge")] {
+        let dir = if cfg!(target_os = "macos") {
+            config.join(match dir {
+                "google-chrome" => "Google/Chrome",
+                "google-chrome-beta" => "Google/Chrome Beta",
+                "chromium" => "Chromium",
+                "microsoft-edge" => "Microsoft Edge",
+                other => other,
+            })
+        } else {
+            config.join(dir)
+        };
+        let Ok(profiles) = std::fs::read_dir(&dir) else { continue };
+        let has = profiles.flatten().any(|p| p.path().join("Extensions").join(CLAUDE_EXTENSION_ID).is_dir());
+        if has && !found.contains(&name) {
+            found.push(name);
+        }
+    }
+    found
+}
+
 fn config_home() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     if cfg!(target_os = "macos") {

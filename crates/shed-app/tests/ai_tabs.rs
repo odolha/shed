@@ -52,6 +52,9 @@ for line in sys.stdin:
     elif m.get("type") == "control_request" and m["request"]["subtype"] == "rewind_files":
         log.write("rewind " + m["request"]["user_message_id"] + "\n"); log.flush()
         print(json.dumps({{"type": "control_response", "response": {{"subtype": "success", "request_id": m["request_id"], "response": {{"canRewind": True}}}}}}), flush=True)
+    elif m.get("type") == "control_request" and m["request"]["subtype"] == "mcp_set_servers":
+        servers = m["request"]["servers"]
+        log.write("mcp_set_servers %s\n" % " ".join(k + ":" + " ".join(v["args"]) for k, v in servers.items())); log.flush()
     elif m.get("type") == "user":
         log.write("user " + m.get("uuid", "") + "\n"); log.flush()
         # A slow turn, for messages sent meanwhile to wait.
@@ -193,6 +196,47 @@ for line in sys.stdin:
     std::thread::sleep(std::time::Duration::from_millis(500));
     let users_after = std::fs::read_to_string(dir.path().join("claude.log")).unwrap().lines().filter(|l| l.starts_with("user ")).count();
     assert_eq!(users_after, users_before, "a revert sends nothing");
+
+    // The browser: Claude Code starts without it, and gets Claude in Chrome
+    // while the tab is connected; one AI tab at a time has it, and the
+    // switch reaches a running Claude Code at once.
+    let log = || std::fs::read_to_string(dir.path().join("claude.log")).unwrap();
+    assert!(log().lines().filter(|l| l.starts_with("start ")).all(|l| l.contains("--no-chrome")), "{}", log());
+    assert!(!log().contains("mcp_set_servers"), "{}", log());
+    let ai = |c: &Client, tab| c.tree.tab(tab).and_then(|t| t.ai_info()).cloned().unwrap();
+    // Mid-turn: switched on while a slow answer is still coming.
+    let users = log().lines().filter(|l| l.starts_with("user ")).count();
+    c.msg(ClientMsg::AiSend { tab, text: "slow, please".into(), images: Vec::new() });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while log().lines().filter(|l| l.starts_with("user ")).count() == users {
+        assert!(std::time::Instant::now() < deadline, "the prompt never reached Claude Code");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let mut on = ai(&c, tab);
+    on.browser = true;
+    c.msg(ClientMsg::AiSettings { tab, settings: on });
+    tree_until(&mut c, "connected", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.browser));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !log().contains("mcp_set_servers claude-in-chrome:--claude-in-chrome-mcp") {
+        assert!(std::time::Instant::now() < deadline, "the browser was not switched on: {}", log());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    c.msg(ClientMsg::NewAiTab { bench, folder: dir.path().to_path_buf() });
+    let tree = tree_until(&mut c, "second ai tab", |t| t.bench(bench).is_some_and(|b| b.tabs.iter().filter(|t| t.ai_info().is_some()).count() == 2));
+    let other = tree.bench(bench).unwrap().tabs.iter().find(|t| t.ai_info().is_some() && t.id != tab).unwrap().id;
+    let mut on = ai(&c, other);
+    on.browser = true;
+    c.msg(ClientMsg::AiSettings { tab: other, settings: on });
+    tree_until(&mut c, "connection moved", |t| {
+        let browser = |id| t.tab(id).and_then(|t| t.ai_info()).is_some_and(|a| a.browser);
+        browser(other) && !browser(tab)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !log().lines().any(|l| l == "mcp_set_servers ") {
+        assert!(std::time::Instant::now() < deadline, "the first tab kept the browser: {}", log());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    c.msg(ClientMsg::CloseTab { tab: other });
 
     // Closing the tab stops it.
     c.msg(ClientMsg::CloseTab { tab });
