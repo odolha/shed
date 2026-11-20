@@ -71,8 +71,14 @@
     <string name="limit_five_hour">5-hour limit</string>
     <string name="limit_week">Weekly limit</string>
     <string name="limit_left">%1$s left</string>
-    <string name="ai_waiting_count">%1$d waiting</string>
-    <string name="ai_working_count">%1$d working</string>
+    <plurals name="ai_waiting_count">
+        <item quantity="one">%1$d waiting</item>
+        <item quantity="other">%1$d waiting</item>
+    </plurals>
+    <plurals name="ai_working_count">
+        <item quantity="one">%1$d working</item>
+        <item quantity="other">%1$d working</item>
+    </plurals>
 
     <!-- Benches -->
     <string name="bench_new">New Bench</string>
@@ -114,7 +120,10 @@
     <string name="tab_gone">Tab closed</string>
     <string name="tab_gone_text">This tab is not open any more.</string>
     <string name="tab_private_note">A private tab: what is in it stays on its computer.</string>
-    <string name="tab_panes">%1$d panes</string>
+    <plurals name="tab_panes">
+        <item quantity="one">%1$d pane</item>
+        <item quantity="other">%1$d panes</item>
+    </plurals>
 
     <!-- Terminals -->
     <string name="terminal_panes">Panes</string>
@@ -196,7 +205,10 @@
     <string name="ai_context">%1$s context</string>
     <string name="ai_context_of">%1$s / %2$s context</string>
     <string name="ai_thinking">Thinking</string>
-    <string name="ai_pictures_missing">%1$d picture(s) not kept</string>
+    <plurals name="ai_pictures_missing">
+        <item quantity="one">%1$d picture not kept</item>
+        <item quantity="other">%1$d pictures not kept</item>
+    </plurals>
     <string name="ai_permission_asks">Claude asks to use %1$s</string>
     <string name="ai_allow">Allow</string>
     <string name="ai_allow_session">Allow for This Session</string>
@@ -243,7 +255,7 @@
     <string name="mode_full_auto_text">In Full Auto, Claude changes files and runs commands on the workspace without asking first.</string>
 
     <!-- Review -->
-    <string name="review_viewed">%1$d of %2$d viewed</string>
+    <string name="review_viewed">Viewed: %1$d of %2$d</string>
     <string name="review_none">No changes to review.</string>
     <string name="review_explain">Explain</string>
     <string name="review_explaining">Explaining…</string>

@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -110,16 +111,14 @@ fun SessionsSheet(
                         if (s.draft == true || depth > 0) HSpace(8)
                         Column(Modifier.weight(1f)) {
                             Text(s.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            val drafts = s.drafts?.toInt() ?: 0
+                            val draftsText = pluralStringResource(R.plurals.ai_drafts_kept, drafts, drafts)
+                            val promptsText = pluralStringResource(R.plurals.ai_prompts, s.prompts.toInt(), s.prompts.toInt())
                             val parts = buildList {
                                 add(ago(context, s.modified.toLong()))
                                 s.branch?.let { add(it) }
-                                if (s.draft == true) {
-                                    add(context.resources.getQuantityString(R.plurals.ai_drafts_kept, s.drafts?.toInt() ?: 0, s.drafts?.toInt() ?: 0))
-                                } else {
-                                    add(context.resources.getQuantityString(R.plurals.ai_prompts, s.prompts.toInt(), s.prompts.toInt()))
-                                    val d = s.drafts?.toInt() ?: 0
-                                    if (d > 0) add(context.resources.getQuantityString(R.plurals.ai_drafts_kept, d, d))
-                                }
+                                if (s.draft != true) add(promptsText)
+                                if (s.draft == true || drafts > 0) add(draftsText)
                             }
                             Text(parts.joinToString(" · "), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
                         }

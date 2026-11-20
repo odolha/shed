@@ -45,6 +45,9 @@ android {
         abortOnError = true
         // The app is English only for now; translations can come later.
         disable += "MissingTranslation"
+        // Versions are pinned on purpose (gradle/libs.versions.toml) and moved
+        // together; lint's "a newer one exists" would only be noise.
+        disable += setOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion")
     }
 
     packaging {

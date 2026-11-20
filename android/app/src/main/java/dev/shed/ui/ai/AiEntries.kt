@@ -54,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -101,7 +102,7 @@ fun UserEntry(
             }
             val missing = (user.images?.toInt() ?: 0) - names.size
             if (missing > 0) {
-                Text(stringResource(R.string.ai_pictures_missing, missing), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
+                Text(pluralStringResource(R.plurals.ai_pictures_missing, missing, missing), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
             }
         }
         user.at?.let { at ->

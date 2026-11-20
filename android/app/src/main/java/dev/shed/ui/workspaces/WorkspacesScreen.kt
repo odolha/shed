@@ -234,11 +234,11 @@ private fun BenchRow(bench: Bench, home: String, onClick: () -> Unit) {
         }
         if (waiting > 0) {
             HSpace(6)
-            Chip(stringResource(R.string.ai_waiting_count, waiting), shed.warn, filled = true)
+            Chip(pluralStringResource(R.plurals.ai_waiting_count, waiting, waiting), shed.warn, filled = true)
         }
         if (working > 0) {
             HSpace(6)
-            Chip(stringResource(R.string.ai_working_count, working), shed.accent)
+            Chip(pluralStringResource(R.plurals.ai_working_count, working, working), shed.accent)
         }
     }
 }

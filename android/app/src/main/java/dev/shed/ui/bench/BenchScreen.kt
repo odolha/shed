@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -370,7 +371,7 @@ fun TabList(
                     }
                     if ((tab.panes?.size ?: 0) > 1) {
                         HSpace(6)
-                        Chip(stringResource(R.string.tab_panes, tab.panes!!.size), shed.textDim)
+                        Chip(pluralStringResource(R.plurals.tab_panes, tab.panes!!.size, tab.panes!!.size), shed.textDim)
                     }
                     if (tab.id == active) {
                         HSpace(8)

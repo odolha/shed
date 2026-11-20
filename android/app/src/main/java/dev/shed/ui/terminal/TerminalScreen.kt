@@ -39,6 +39,7 @@ import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -278,7 +279,7 @@ private fun NormalScreen(vm: TerminalVm, version: Int, cols: Int, style: TextSty
     LaunchedEffect(rows.size, version) {
         if (follow && rows.isNotEmpty()) list.scrollToItem(rows.size - 1)
     }
-    val atTop = list.firstVisibleItemIndex == 0 && !follow
+    val atTop by remember { derivedStateOf { list.firstVisibleItemIndex == 0 && !follow } }
     LaunchedEffect(atTop) {
         if (atTop) {
             val before = rows.size

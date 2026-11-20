@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import dev.shed.MainActivity
 import dev.shed.R
 import dev.shed.api.NotificationKind
@@ -45,7 +46,7 @@ fun shedLink(workspace: String, bench: String? = null, tab: String? = null): Uri
         text += "/b/" + Uri.encode(bench)
         if (tab != null) text += "/t/" + Uri.encode(tab)
     }
-    return Uri.parse(text)
+    return text.toUri()
 }
 
 /**

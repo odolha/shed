@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.net.Uri
 import android.util.Base64
 import androidx.core.content.FileProvider
+import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import dev.shed.api.Picture
 import kotlinx.coroutines.Dispatchers
@@ -35,7 +36,7 @@ suspend fun pictureForPrompt(context: Context, uri: Uri): Picture? = withContext
     var bitmap = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) } ?: return@withContext null
     val scale = MAX_PICTURE_SIDE.toFloat() / max(bitmap.width, bitmap.height)
     if (scale < 1f) {
-        bitmap = Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).roundToInt(), (bitmap.height * scale).roundToInt(), true)
+        bitmap = bitmap.scale((bitmap.width * scale).roundToInt(), (bitmap.height * scale).roundToInt())
     }
     val rotation = runCatching {
         resolver.openInputStream(uri)?.use { ExifInterface(it).rotationDegrees } ?: 0
