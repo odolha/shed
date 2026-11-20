@@ -385,9 +385,14 @@ impl ProjectView {
                 .background_executor()
                 .spawn(async move {
                     let walked = shed_project::walk(&root, &exclude);
-                    let excluder = Excluder::new(&root, &exclude);
-                    let watch = Watch::new(&walked.dirs, excluder, move |batch| {
-                        let _ = tx.send_blocking(batch);
+                    // Not in unit tests: the watcher's thread wakes this task
+                    // from outside GPUI's test scheduler, which fails the test.
+                    // (Dropping the sender just ends the loop below.)
+                    let watch = (!cfg!(test)).then(|| {
+                        let excluder = Excluder::new(&root, &exclude);
+                        Watch::new(&walked.dirs, excluder, move |batch| {
+                            let _ = tx.send_blocking(batch);
+                        })
                     });
                     (walked, watch)
                 })
@@ -397,14 +402,15 @@ impl ProjectView {
                 .update(cx, |this, cx| {
                     this.files = Arc::new(walked.files);
                     match watch {
-                        Ok(w) => {
+                        Some(Ok(w)) => {
                             this.limited = w.limited;
                             this.watch = Some(w);
                         }
-                        Err(e) => {
+                        Some(Err(e)) => {
                             tracing::warn!("cannot watch {}: {e}", this.root.display());
                             this.limited = true;
                         }
+                        None => {}
                     }
                     this.refresh_quick(cx);
                     cx.notify();
