@@ -171,7 +171,7 @@ server.listen(env.port, '127.0.0.1', () => {
     '  Run the web app with `npm start` and open http://localhost:4200',
   ];
   if (env.fresh) {
-    lines.push('', '  No account yet. Set it up at:', `    http://localhost:4200/setup?code=${setupCode}`, '  Any 6-digit code works as the authenticator code (000000 is wrong).');
+    lines.push('', '  No account yet. Set it up at:', `    http://localhost:4200/setup#code=${setupCode}`, '  Any 6-digit code works as the authenticator code (000000 is wrong).');
   } else {
     lines.push('', '  Sign in as `you`, password `shed`; any 6-digit code (000000 is wrong).');
   }

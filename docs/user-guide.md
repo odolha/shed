@@ -605,10 +605,13 @@ build beside `shed` as `shedd-x86_64-static` or `shedd-aarch64-static` (see
 With a **nexus** (a server you host, see the [plan](nexus-plan.md)), your
 workspaces can be reached from a browser, on a computer or a phone. A workspace
 links to the nexus with `shed nexus join https://nexus.example.com`, which
-prints a code; you approve it in the web app under **Devices**, with a code
-from your authenticator.
+prints a code; in the web app, **Devices** → **Approve a Workspace…**, type
+that code (only someone who sees the workspace can), a name for it and a code
+from your authenticator. The list of workspaces asking to pair shows their
+name, version and address, never their code.
 
-**Setting up** happens once: the nexus writes a setup link to its log. Open it,
+**Setting up** happens once: the nexus writes a setup link to its log (the
+code in it after `#`, so it stays out of servers' logs). Open it,
 choose a user name and password, scan the QR code with an authenticator app,
 type the code it shows, and keep the recovery codes (each signs you in once if
 the authenticator is lost). **Signing in** always asks for the password and a

@@ -18,12 +18,13 @@ npm start        # the app on http://localhost:4200, /api proxied to the mock
 Sign in as `you` with the password `shed`; any six-digit code works but
 `000000`. The mock has a workspace `devbox` (two benches: terminals with a tiny
 fake shell, an AI tab with a scripted conversation, a project tab with files and
-Git; a closed bench) and an offline `laptop`. Its switches:
+Git; a closed bench) and an offline `laptop`. A workspace `buildbox` asks to
+pair: approve it under Devices by typing its code `K7QF-2M9D`. Its switches:
 
 | Variable | Does |
 |---|---|
 | `PORT=8799` | another port (change `proxy.conf.json` to match) |
-| `MOCK_FRESH=1` | no account yet: prints a `/setup?code=…` link for the first-run setup |
+| `MOCK_FRESH=1` | no account yet: prints a `/setup#code=…` link for the first-run setup |
 | `MOCK_VIEW=1` | `devbox` allows viewing only |
 | `MOCK_LATENCY=300` | every answer comes that many ms late |
 | `MOCK_NO_REVIEW=1` | the AI review answers `unsupported` |

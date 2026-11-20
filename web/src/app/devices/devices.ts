@@ -18,7 +18,7 @@ import { Menu, MenuTrigger } from '../../ui/menu';
 import { Notices } from '../../ui/notices';
 import { AgoPipe, Clock, ClockPipe, span } from '../../ui/time';
 import { Tooltip } from '../../ui/tooltip';
-import { ApproveDialog, type ApproveResult } from './approve-dialog';
+import { ApproveDialog, type ApproveData, type ApproveResult } from './approve-dialog';
 
 const AUDIT_PAGE = 50;
 const POLL_MS = 5000;
@@ -50,33 +50,29 @@ function where(address: string | undefined, country: string | null | undefined):
       <section class="col" aria-labelledby="pair-h">
         <div class="row">
           <h2 id="pair-h" class="grow">{{ 'devices.pairing' | t }}</h2>
+          <button class="btn primary small" (click)="approve()">
+            <shed-icon name="check" [size]="14" />{{ 'devices.approveOne' | t }}
+          </button>
         </div>
-        @for (p of pending(); track p.code) {
+        @for (p of pending(); track $index) {
           <div class="card item pairing">
             <shed-icon name="server" [size]="22" />
             <div class="grow col tight">
-              <div class="row wrap">
-                <span class="pair-code mono">{{ p.code }}</span>
-                <strong class="ellipsis">{{ p.name }}</strong>
-              </div>
+              <strong class="ellipsis">{{ p.name }}</strong>
               <span class="dim small">
                 {{ 'devices.pairDetail' | t: { version: p.version, where: where(p.address, p.country) } }}
                 · {{ expiresIn(p) }}
               </span>
             </div>
             <div class="row actions">
-              <button class="btn small danger" (click)="reject(p)">{{ 'devices.reject' | t }}</button>
-              <button class="btn small primary" (click)="approve(p)">
-                <shed-icon name="check" [size]="14" />{{ 'devices.approve' | t }}
-              </button>
+              <button class="btn small" (click)="approve(p)">{{ 'devices.approveEllipsis' | t }}</button>
             </div>
           </div>
-        } @empty {
-          <p class="dim hint">
-            {{ 'devices.noPairing' | t }}
-            <code>shed nexus join {{ origin }}</code>
-          </p>
         }
+        <p class="dim hint">
+          {{ 'devices.noPairing' | t }}
+          <code>shed nexus join {{ origin }}</code>
+        </p>
       </section>
 
       <section class="col" aria-labelledby="dev-h">
@@ -299,27 +295,23 @@ export class DevicesPage implements OnInit {
     return left > 0 ? t('devices.expiresIn', { span: span(left) }) : t('devices.expired');
   }
 
-  protected async approve(p: PendingPairing): Promise<void> {
-    const r = await this.dialogs.open<PendingPairing, ApproveResult>(ApproveDialog, p);
+  /** Approve (or reject) by the code shown on the workspace, typed here. */
+  protected async approve(p?: PendingPairing): Promise<void> {
+    const r = await this.dialogs.open<ApproveData, ApproveResult>(ApproveDialog, { name: p?.name ?? '' });
     if (!r) return;
     try {
-      await this.http.approvePairing({ code: p.code, name: r.name, totp: r.totp });
-      this.notices.info(t('devices.approved', { name: r.name }));
-      await this.load();
+      if (r.action === 'reject') {
+        await this.http.rejectPairing({ code: r.code });
+        this.notices.info(t('devices.rejected'));
+        await this.loadPending();
+      } else {
+        await this.http.approvePairing({ code: r.code, name: r.name, totp: r.totp });
+        this.notices.info(t('devices.approved', { name: r.name }));
+        await this.load();
+      }
     } catch (e) {
       this.notices.error(e);
     }
-  }
-
-  protected async reject(p: PendingPairing): Promise<void> {
-    const ok = await this.dialogs.confirm({
-      title: t('devices.rejectTitle'),
-      body: t('devices.rejectBody', { name: p.name, code: p.code }),
-      ok: t('devices.reject'),
-      danger: true,
-    });
-    if (!ok) return;
-    if ((await this.notices.run(this.http.rejectPairing({ code: p.code }))) !== undefined) await this.loadPending();
   }
 
   protected async rename(d: Device): Promise<void> {

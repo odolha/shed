@@ -298,7 +298,7 @@ export class SetupPage implements OnInit {
   private readonly router = inject(Router);
   private readonly clipboard = inject(Clipboard);
 
-  /** `?code=` from the setup link the nexus logged. */
+  /** `?code=` from the setup link the nexus logged (`#code=` is read too). */
   readonly codeParam = input<string | undefined>(undefined, { alias: 'code' });
 
   protected readonly min = MIN_PASSWORD;
@@ -332,7 +332,11 @@ export class SetupPage implements OnInit {
   });
 
   ngOnInit(): void {
-    const c = this.codeParam()?.trim();
+    // The setup link carries the code in its fragment (`#code=…`, never sent
+    // to a server or kept in logs), or in the query (`?code=…`).
+    const fragment = new URLSearchParams(location.hash.replace(/^#/, '')).get('code')?.trim();
+    if (fragment) history.replaceState(history.state, '', location.pathname + location.search);
+    const c = fragment || this.codeParam()?.trim();
     if (c) {
       this.code.set(c);
       this.codeFromUrl.set(true);

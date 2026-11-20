@@ -259,11 +259,12 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
     }
 
     case 'GET /pair/pending':
-      return pending.filter((p) => p.expires > now());
+      // The list is for information: the code must be typed from the workspace.
+      return pending.filter((p) => p.expires > now()).map((p) => ({ ...p, code: '' }));
     case 'POST /pair/approve': {
       const b = await body<PairApprove>(req);
       totpOk(b.totp);
-      const i = pending.findIndex((p) => p.code === b.code);
+      const i = pending.findIndex((p) => sameCode(p.code, b.code));
       if (i < 0) throw new Fail('notFound', 'no such pairing request');
       const p = pending.splice(i, 1)[0]!;
       const name = b.name?.trim() || p.name;
@@ -274,7 +275,7 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
     }
     case 'POST /pair/reject': {
       const b = await body<PairReject>(req);
-      const i = pending.findIndex((p) => p.code === b.code);
+      const i = pending.findIndex((p) => sameCode(p.code, b.code));
       if (i < 0) throw new Fail('notFound', 'no such pairing request');
       pending.splice(i, 1);
       note('pair-rejected', req, session!.device, b.code);
@@ -302,4 +303,10 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
       return audit.slice(0, 100);
   }
   throw new Fail('notFound', `no route ${route}`);
+}
+
+/** Pairing codes compare without case or dashes: `k7qf2m9d` is `K7QF-2M9D`. */
+function sameCode(a: string, b: string): boolean {
+  const bare = (c: string) => c.replace(/[\s-]/g, '').toUpperCase();
+  return bare(a) !== '' && bare(a) === bare(b);
 }
