@@ -95,7 +95,7 @@ function trimHit(text: string, ranges: number[]): { text: string; ranges: number
       @for (f of files(); track f.path) {
         <button class="file" (click)="toggleFile(f.path)" [attr.aria-expanded]="f.open">
           <shed-icon [name]="f.open ? 'chevron-down' : 'chevron-right'" [size]="12" />
-          <span class="ellipsis"><span>{{ f.name }}</span> <span class="dim small">{{ f.dir }}</span></span>
+          <span class="ellipsis"><span>{{ f.name }}</span>&ngsp;<span class="dim small">{{ f.dir }}</span></span>
           <span class="chip">{{ f.hits.length }}</span>
         </button>
         @if (f.open) {

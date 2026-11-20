@@ -102,7 +102,7 @@ const memory = new Map<string, { mode: Mode; file: OpenAt | null }>();
                 @for (p of openInShed(); track p) {
                   <button class="menu-item" (click)="openFile({ path: p, line: null })">
                     <shed-icon name="file" [size]="14" />
-                    <span class="mono ellipsis"><span>{{ split(p)[1] }}</span> <span class="dim small">{{ split(p)[0] }}</span></span>
+                    <span class="mono ellipsis"><span>{{ split(p)[1] }}</span>&ngsp;<span class="dim small">{{ split(p)[0] }}</span></span>
                   </button>
                 }
               }

@@ -612,6 +612,18 @@ export class AiTab {
       });
       onCleanup(() => sub.close());
     });
+    // Kept at the end while what is around it changes size (the queue, the
+    // prompt growing, a phone's keyboard), if it was at the end.
+    effect((onCleanup) => {
+      const el = this.scroller()?.nativeElement;
+      if (!el || typeof ResizeObserver === 'undefined') return;
+      const ro = new ResizeObserver(() => {
+        if (this.atBottom()) el.scrollTop = el.scrollHeight;
+      });
+      ro.observe(el);
+      if (el.firstElementChild) ro.observe(el.firstElementChild);
+      onCleanup(() => ro.disconnect());
+    });
     // A clock for "working for 12s".
     effect((onCleanup) => {
       if (!this.busy()) return;

@@ -238,7 +238,7 @@
               @for (f of files; track f.path) {
                 <button class="file" (click)="openCommitFile(f.path)">
                   <span class="letter mono" [class]="letterClass(f.status.charAt(0))">{{ f.status.charAt(0) }}</span>
-                  <span class="ellipsis"><span>{{ splitPath(f.path)[1] }}</span> <span class="dim small">{{ splitPath(f.path)[0] }}</span></span>
+                  <span class="ellipsis"><span>{{ splitPath(f.path)[1] }}</span>&ngsp;<span class="dim small">{{ splitPath(f.path)[0] }}</span></span>
                 </button>
               }
             } @else {
@@ -257,7 +257,7 @@
   <div class="file" [class.selected]="isSelected(r.path, side)">
     <button class="file-main" (click)="select(r.path, side)" [title]="r.from ? r.from + ' → ' + r.path : r.path">
       <span class="letter mono" [class]="letterClass(r.letter)">{{ r.letter }}</span>
-      <span class="ellipsis"><span>{{ r.name }}</span> <span class="dim small">{{ r.dir }}</span></span>
+      <span class="ellipsis"><span>{{ r.name }}</span>&ngsp;<span class="dim small">{{ r.dir }}</span></span>
     </button>
     @if (canChange()) {
       @if (side === 'staged') {
