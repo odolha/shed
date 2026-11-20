@@ -16,7 +16,6 @@ import { TPipe, t } from '../../i18n/i18n';
 import { Clipboard } from '../../ui/clipboard';
 import { Dialogs } from '../../ui/dialog';
 import { Icon } from '../../ui/icon';
-import { LimitsBars } from '../../ui/limits';
 import { Menu, MenuTrigger } from '../../ui/menu';
 import { Notices } from '../../ui/notices';
 import { span } from '../../ui/time';
@@ -43,7 +42,7 @@ const PAGE = 150;
 @Component({
   selector: 'shed-ai-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TPipe, Icon, Tooltip, Menu, MenuTrigger, LimitsBars, AiEntryView, AiPrompt, AiSessionsPanel, AiReviewView],
+  imports: [TPipe, Icon, Tooltip, Menu, MenuTrigger, AiEntryView, AiPrompt, AiSessionsPanel, AiReviewView],
   template: `
     @let a = ai();
     <header class="head">
@@ -69,7 +68,6 @@ const PAGE = 150;
         </span>
       </div>
       <span class="grow"></span>
-      <shed-limits class="wide-only" [limits]="limits()" />
       <button class="btn small" [class.on]="reviewing()" (click)="reviewing.set(!reviewing())">
         <shed-icon name="eye" />{{ 'ai.review.open' | t }}
       </button>
@@ -514,7 +512,6 @@ export class AiTab {
   });
   protected readonly canChange = computed(() => this.store.canChange(this.workspace()));
   protected readonly home = computed(() => this.store.state(this.workspace())?.home ?? '');
-  protected readonly limits = computed(() => this.store.state(this.workspace())?.limits);
   protected readonly folder = computed(() => tildify(this.ai().folder, this.home()));
 
   protected readonly entries = signal<AiEntry[]>([]);
@@ -646,11 +643,14 @@ export class AiTab {
   }
 
   protected scrollDown(smooth: boolean): void {
-    requestAnimationFrame(() => {
-      const el = this.scroller()?.nativeElement;
-      if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-      this.atBottom.set(true);
-    });
+    // After the new entries are drawn (the frame after this one).
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = this.scroller()?.nativeElement;
+        if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+        this.atBottom.set(true);
+      }),
+    );
   }
 
   protected onSessionOpened(): void {

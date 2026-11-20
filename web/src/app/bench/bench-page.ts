@@ -109,7 +109,7 @@ import { BENCH_COLORS, BenchActions } from './bench-actions';
             <span [style.color]="activity(tab) ? ink(b.color) : null" [class.pulse]="activity(tab) === 'working'">
               <shed-icon [name]="icon(tab)" />
             </span>
-            <span class="ellipsis">{{ tab.title }}</span>
+            <span class="ellipsis">{{ tab.title || ('tab.privateTitle' | t) }}</span>
             @for (tag of tab.tags ?? []; track tag.label) {
               <span class="dot tag" [style.background]="tag.color"></span>
             }

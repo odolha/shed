@@ -8,6 +8,7 @@ import { type CanActivateFn, Router } from '@angular/router';
 import type { NexusStatus, SignedIn } from './gen/api';
 import { NexusHttp } from './http';
 import { NexusSocket } from './socket';
+import { WorkspacesStore } from './workspaces.store';
 
 const USER_KEY = 'shed.user';
 
@@ -80,6 +81,9 @@ export class AuthService {
 export const authGuard: CanActivateFn = async () => {
   const auth = inject(AuthService);
   const router = inject(Router);
+  const socket = inject(NexusSocket);
+  // The store listens before the socket opens, so it sees the Welcome.
+  inject(WorkspacesStore);
   try {
     const status = await auth.check();
     if (!status.ready) return router.parseUrl('/setup');
@@ -87,7 +91,7 @@ export const authGuard: CanActivateFn = async () => {
   } catch {
     // The nexus is not answering: show the app; the socket keeps trying.
   }
-  inject(NexusSocket).connect();
+  socket.connect();
   return true;
 };
 

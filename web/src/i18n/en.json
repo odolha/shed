@@ -519,5 +519,6 @@
   "ai.prompt.stop": "Stop",
   "ai.prompt.queue": "Queue",
   "ai.prompt.onlyPictures": "Only pictures can be added from here",
-  "ai.prompt.tooLarge": "{name} is too large"
+  "ai.prompt.tooLarge": "{name} is too large",
+  "tab.privateTitle": "Private tab"
 }

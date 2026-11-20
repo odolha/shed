@@ -10,6 +10,7 @@ import type {
   ClosedBench,
   Reply,
   Tab,
+  Welcome,
   WorkspaceInfo,
   WorkspaceState,
 } from './gen/api';
@@ -26,16 +27,13 @@ export class WorkspacesStore {
   readonly connected = computed(() => this.socket.state() === 'open');
 
   constructor() {
+    const welcome = this.socket.welcome();
+    if (welcome) this.welcome(welcome);
     this.socket.listen((frame) => {
       switch (frame.type) {
-        case 'Welcome': {
-          this.workspaces.set(frame.content.workspaces);
-          const states: Record<string, WorkspaceState> = {};
-          for (const s of frame.content.states) states[s.workspace] = s.state;
-          this.states.set(states);
-          this.loaded.set(true);
+        case 'Welcome':
+          this.welcome(frame.content);
           break;
-        }
         case 'Workspaces':
           this.workspaces.set(frame.content);
           break;
@@ -46,6 +44,14 @@ export class WorkspacesStore {
           break;
       }
     });
+  }
+
+  private welcome(w: Welcome): void {
+    this.workspaces.set(w.workspaces);
+    const states: Record<string, WorkspaceState> = {};
+    for (const s of w.states) states[s.workspace] = s.state;
+    this.states.set(states);
+    this.loaded.set(true);
   }
 
   info(workspace: string): WorkspaceInfo | undefined {

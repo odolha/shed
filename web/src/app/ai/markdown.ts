@@ -17,6 +17,10 @@ function purifier(): typeof DOMPurify {
   if (!hooked) {
     hooked = true;
     DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+      if (node.tagName === 'IMG') {
+        const src = node.getAttribute('src') ?? '';
+        if (!/^(https:|data:image\/(png|jpe?g|gif|webp);base64,)/i.test(src)) node.removeAttribute('src');
+      }
       if (node.tagName === 'A') {
         const href = node.getAttribute('href') ?? '';
         if (/^(https?:|mailto:)/i.test(href)) {

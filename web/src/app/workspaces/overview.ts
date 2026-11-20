@@ -148,7 +148,7 @@ interface WsView {
                           </span>
                           <span class="tab-text">
                             <span class="row" style="gap: 6px">
-                              <span class="ellipsis tab-title">{{ tab.title }}</span>
+                              <span class="ellipsis tab-title">{{ tab.title || ('tab.privateTitle' | t) }}</span>
                               @for (tag of tab.tags ?? []; track tag.label) {
                                 <span class="dot tag" [style.background]="tag.color" [shedTip]="tag.label"></span>
                               }
@@ -220,7 +220,7 @@ interface WsView {
                       <li class="tab dim">
                         <span class="tab-icon"><shed-icon [name]="icon(tab)" /></span>
                         <span class="tab-text">
-                          <span class="ellipsis tab-title">{{ tab.title }}</span>
+                          <span class="ellipsis tab-title">{{ tab.title || ('tab.privateTitle' | t) }}</span>
                           <span class="small ellipsis">{{ detail(tab, w.state?.home ?? '') }}</span>
                         </span>
                       </li>
