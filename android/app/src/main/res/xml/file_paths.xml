@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photos taken with the camera for an AI prompt, before they are sent. -->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>

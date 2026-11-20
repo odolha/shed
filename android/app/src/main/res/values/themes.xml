@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="launcher_background">#14171D</color>
+    <color name="shed_background_light">#ECEEF2</color>
+    <color name="shed_background_dark">#0E1116</color>
+
+    <!-- The window before Compose draws: Shed's background, no action bar. -->
+    <style name="Theme.Shed" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/shed_background_light</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
