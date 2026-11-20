@@ -1,7 +1,9 @@
 //! AI tabs: the conversation (Markdown set as styled text, tools folded),
 //! permission requests and questions, the prompt (sending, queueing while
 //! Claude works, stopping, slash-command completion, pictures by path),
-//! the sessions list, drafts, the model, mode and effort, usage limits.
+//! the sessions list, drafts, the model, mode and effort, usage limits;
+//! sub-agents and background tasks with their steps, Claude Code's notes,
+//! wake-ups and scheduled jobs; files attached by path.
 
 use std::collections::HashSet;
 
@@ -11,7 +13,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
-use shed_ai::{Entry, Permission, SessionInfo, SessionRow};
+use shed_ai::{Entry, NoteKind, Permission, Run, RunState, SessionInfo, SessionRow, Timer, TimerKind};
 use shed_model::{AiTab, TabId};
 use shed_proto::{AiChange, AiImage, ClientMsg};
 
@@ -69,6 +71,8 @@ pub struct AiView {
     pub input: Input,
     /// Pictures going with the next prompt: a name and the picture.
     pub images: Vec<(String, AiImage)>,
+    /// Files and folders going with it, as their paths for Claude to read.
+    pub files: Vec<std::path::PathBuf>,
     /// Lines scrolled up from the end of the conversation.
     pub scroll: usize,
     pub expanded: HashSet<usize>,
@@ -95,6 +99,7 @@ impl AiView {
             models: Vec::new(),
             input: Input::new(ai.unsent.clone()),
             images: Vec::new(),
+            files: Vec::new(),
             scroll: 0,
             expanded: HashSet::new(),
             expand_all: false,
@@ -133,6 +138,11 @@ impl AiView {
             }
         }
         self.status = status;
+    }
+
+    /// Something counts time on screen: a timer, or a run going on.
+    pub fn counting(&self) -> bool {
+        !self.status.timers.is_empty() || self.entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.run.as_deref().is_some_and(Run::running)))
     }
 
     /// The request Claude waits on, if any.
@@ -181,11 +191,30 @@ impl AiView {
                     }
                 }
                 Entry::Tool(t) => {
-                    let mark = if t.result.is_none() { "◌ " } else if t.error { "✗ " } else { "⏺ " };
-                    let style = if t.error { c.danger() } else { c.fg(c.ansi[6]) };
+                    let run = t.run.as_deref();
+                    let (mark, style) = match (run.map(|r| r.state), t.error) {
+                        (Some(RunState::Running), _) => ("◌ ", c.accent()),
+                        (Some(RunState::Done), _) => ("✓ ", c.fg(c.ansi[6])),
+                        (Some(RunState::Failed), _) => ("✗ ", c.danger()),
+                        (Some(RunState::Stopped), _) => ("■ ", c.dim()),
+                        (None, _) if t.result.is_none() => ("◌ ", c.fg(c.ansi[6])),
+                        (None, true) => ("✗ ", c.danger()),
+                        (None, false) => ("⏺ ", c.fg(c.ansi[6])),
+                    };
                     let fold = if open { "" } else { " …" };
-                    lines.extend(wrap(vec![Span::styled(t.summary.clone(), Style::new()), Span::styled(fold, c.dim())], cols, vec![Span::styled(mark, style)], vec![Span::raw("  ")]));
-                    if open {
+                    // After it: how a run is doing; when a timer it set fires.
+                    let info = match run {
+                        Some(r) => Some(run_line(t, r)),
+                        None => self.status.timers.iter().find(|x| x.tool == t.id).map(|x| format!("fires {}", timer_when(x))),
+                    };
+                    let mut head = vec![Span::styled(t.summary.clone(), Style::new()), Span::styled(fold, c.dim())];
+                    if let Some(info) = info {
+                        head.push(Span::styled(format!("  {info}"), if run.is_some_and(Run::running) { c.accent() } else { c.dim() }));
+                    }
+                    lines.extend(wrap(head, cols, vec![Span::styled(mark, style)], vec![Span::raw("  ")]));
+                    if open && let Some(r) = run.filter(|_| matches!(t.name.as_str(), "Agent" | "Task")) {
+                        agent_lines(t, r, cols, c, &mut lines);
+                    } else if open {
                         if !t.detail.is_empty() && t.detail != t.summary {
                             for l in t.detail.lines().take(TOOL_LINES) {
                                 lines.push(Line::styled(format!("  {}", fit(l, cols - 2)), c.dim()));
@@ -222,7 +251,25 @@ impl AiView {
                 }
                 Entry::Note(n) => {
                     let style = if n.error { c.danger() } else { c.dim() };
-                    lines.extend(wrap(vec![Span::styled(n.text.clone(), style)], cols, vec![Span::styled("· ", style)], vec![Span::raw("  ")]));
+                    let mark = match n.kind {
+                        _ if n.error => "✗ ",
+                        NoteKind::Task => "◆ ",
+                        NoteKind::Wakeup => "↻ ",
+                        NoteKind::Command => "$ ",
+                        NoteKind::Compacted => "≡ ",
+                        NoteKind::Message => "✉ ",
+                        NoteKind::Hook => "⚙ ",
+                    };
+                    let fold = if n.detail.is_empty() || open { "" } else { " …" };
+                    let mark_style = if n.kind == NoteKind::Wakeup && !n.error { c.accent() } else { style };
+                    lines.extend(wrap(vec![Span::styled(n.text.clone(), style), Span::styled(fold, c.dim())], cols, vec![Span::styled(mark, mark_style)], vec![Span::raw("  ")]));
+                    if open && !n.detail.is_empty() {
+                        for l in crate::md::lines(&n.detail, cols.saturating_sub(2), c) {
+                            let mut spans = vec![Span::raw("  ")];
+                            spans.extend(l.spans);
+                            lines.push(Line::from(spans));
+                        }
+                    }
                 }
                 Entry::Notice { text, error } => {
                     let style = if *error { c.danger() } else { c.dim() };
@@ -256,6 +303,123 @@ fn diff_lines(old: &str, new: &str, cols: usize, c: &Colors, out: &mut Vec<Line<
     }
 }
 
+/// An opened sub-agent: its kind, its steps (tool calls, what it said),
+/// its report.
+fn agent_lines(t: &shed_ai::Tool, run: &Run, cols: usize, c: &Colors, out: &mut Vec<Line<'static>>) {
+    if !t.detail.is_empty() {
+        for l in t.detail.lines().take(TOOL_LINES) {
+            out.push(Line::styled(format!("  {}", fit(l, cols - 2)), c.dim()));
+        }
+    }
+    let what: Vec<String> = [Some(run.agent.clone()).filter(|a| !a.is_empty()), (run.tokens > 0).then(|| format!("{} tokens", tokens(run.tokens)))].into_iter().flatten().collect();
+    if !what.is_empty() {
+        out.push(Line::styled(format!("  {}", what.join(" · ")), c.dim()));
+    }
+    if run.skipped > 0 {
+        out.push(Line::styled(format!("  │ {} earlier steps not shown", run.skipped), c.dim()));
+    }
+    if run.steps.is_empty() {
+        out.push(Line::styled(if run.running() { "  │ No steps yet" } else { "  │ Its steps are not known here" }, c.dim()));
+    }
+    for step in &run.steps {
+        match step {
+            Entry::Tool(s) => {
+                let (mark, style) = match (&s.result, s.error) {
+                    (None, _) if run.running() => ("◌ ", c.accent()),
+                    (None, _) => ("○ ", c.dim()),
+                    (Some(_), false) => ("✓ ", c.fg(c.ansi[6])),
+                    (Some(_), true) => ("✗ ", c.danger()),
+                };
+                out.push(Line::from(vec![Span::styled("  │ ", c.dim()), Span::styled(mark, style), Span::styled(fit(&s.summary, cols.saturating_sub(6)), c.dim())]));
+            }
+            Entry::Assistant { text, .. } => {
+                for l in text.lines().filter(|l| !l.trim().is_empty()).take(3) {
+                    out.push(Line::styled(format!("  │ {}", fit(l, cols.saturating_sub(4))), Style::new().add_modifier(Modifier::ITALIC)));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !run.report.is_empty() {
+        out.push(Line::styled("  Its report", c.dim()));
+        for l in crate::md::lines(&run.report, cols.saturating_sub(2), c) {
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(l.spans);
+            out.push(Line::from(spans));
+        }
+    }
+}
+
+/// A span still going, coarse past a minute: `40 s`, `3 min`, `2 h 5 min`;
+/// whole minutes rounded down (time gone) or up (time left).
+fn coarse(secs: u64, up: bool) -> String {
+    let minutes = if up { secs.div_ceil(60) } else { secs / 60 };
+    match secs {
+        0..60 => format!("{secs} s"),
+        _ if minutes < 60 => format!("{minutes} min"),
+        _ if minutes.is_multiple_of(60) => format!("{} h", minutes / 60),
+        _ => format!("{} h {} min", minutes / 60, minutes % 60),
+    }
+}
+
+/// A run's state in a word, and for how long: `running 3 min`, `done in 40 s`.
+fn run_time(run: &Run) -> String {
+    match run.state {
+        RunState::Running if run.started > 0 => format!("running {}", coarse(now().saturating_sub(run.started), false)),
+        RunState::Running => "running".into(),
+        RunState::Done if run.started > 0 && run.ended >= run.started => format!("done in {}", shed_ai::span(run.ended - run.started)),
+        RunState::Done => "done".into(),
+        RunState::Failed => "failed".into(),
+        RunState::Stopped => "stopped".into(),
+    }
+}
+
+/// A sub-agent's or background task's line: how it is doing, what it does
+/// now, how many tool calls.
+fn run_line(t: &shed_ai::Tool, run: &Run) -> String {
+    let mut parts = vec![run_time(run)];
+    if run.running() && !run.last.is_empty() && run.last != "Starting" {
+        parts.push(run.last.clone());
+    }
+    if matches!(t.name.as_str(), "Agent" | "Task") && run.tools > 0 {
+        parts.push(format!("{} tool call{}", run.tools, if run.tools == 1 { "" } else { "s" }));
+    }
+    parts.join(" · ")
+}
+
+/// When a timer fires, as a person says it: `in 18 min`, `every minute`.
+fn timer_when(t: &Timer) -> String {
+    let now = now();
+    let left = |at: u64| if at > now { format!("in {}", coarse(at - now, true)) } else { "due now".into() };
+    match t.kind {
+        TimerKind::Watch if t.at > 0 => format!("ends {}", left(t.at)),
+        TimerKind::Watch => "watching".into(),
+        _ if !t.every.is_empty() && t.at > now => format!("{}, next {}", t.every.to_lowercase(), left(t.at)),
+        _ if !t.every.is_empty() => t.every.to_lowercase(),
+        _ if t.at > 0 => left(t.at),
+        _ => "later".into(),
+    }
+}
+
+/// A timer above the prompt: `Wakes up in 18 min`.
+fn timer_label(t: &Timer) -> String {
+    match t.kind {
+        TimerKind::Wakeup => format!("Wakes up {}", timer_when(t)),
+        TimerKind::Job => format!("Scheduled job, {}", timer_when(t)),
+        TimerKind::Watch => format!("Watching, {}", timer_when(t)),
+    }
+}
+
+/// The prompt's text with the attached files' paths after it, as the
+/// windows send it.
+fn with_files(text: String, files: &[std::path::PathBuf]) -> String {
+    if files.is_empty() {
+        return text;
+    }
+    let list: Vec<String> = files.iter().map(|f| format!("- {}", f.display())).collect();
+    format!("{}{}Attached files:\n{}", text, if text.is_empty() { "" } else { "\n\n" }, list.join("\n"))
+}
+
 /// A token count, short: 45k.
 fn tokens(n: u64) -> String {
     if n >= 1000 { format!("{}k", n / 1000) } else { n.to_string() }
@@ -278,7 +442,7 @@ pub fn menu_items() -> Vec<crate::overlay::TabAction> {
         (Item::new("Save Prompt as Draft").hint("Alt+D"), |app, tab| app.ai_save_draft(tab)),
         (Item::new("Drafts…").hint("Alt+P"), |app, tab| app.ai_drafts(tab)),
         (Item::new("Queued Messages…").hint("Alt+Q"), |app, tab| app.ai_queued(tab)),
-        (Item::new("Attach Picture…").hint("Alt+I"), |app, tab| app.ai_attach(tab)),
+        (Item::new("Attach Files…").hint("Alt+I"), |app, tab| app.ai_attach(tab)),
         (Item::new("Unfold Tools and Thinking").hint("Alt+T"), |app, tab| app.ai_toggle_fold(tab)),
         (Item::new("Stop").hint("Esc"), |app, tab| app.send(ClientMsg::AiStop { tab })),
     ]
@@ -319,6 +483,7 @@ impl App {
                 't' => return self.ai_toggle_fold(tab),
                 'x' => {
                     view.images.clear();
+                    view.files.clear();
                     return;
                 }
                 _ => {}
@@ -376,10 +541,10 @@ impl App {
 
     fn ai_send(&mut self, tab: TabId) {
         let Some(view) = self.ais.get_mut(&tab) else { return };
-        if view.input.text.trim().is_empty() && view.images.is_empty() {
+        if view.input.text.trim().is_empty() && view.images.is_empty() && view.files.is_empty() {
             return;
         }
-        let text = view.input.take();
+        let text = with_files(view.input.take().trim_end().to_string(), &std::mem::take(&mut view.files));
         let images = std::mem::take(&mut view.images).into_iter().map(|(_, i)| i).collect();
         view.scroll = 0;
         let busy = view.status.state != shed_ai::State::Idle;
@@ -615,19 +780,25 @@ impl App {
         });
     }
 
+    /// Attaches a file or folder by its path: a picture goes as a picture,
+    /// anything else as its path, for Claude to read.
     pub(crate) fn ai_attach(&mut self, tab: TabId) {
         let here = self.ai_tab(tab).map(|a| a.folder).unwrap_or_else(|| self.here());
-        self.ask_with_hint("Attach Picture", "a PNG, JPEG, GIF or WebP file", format!("{}/", here.display()), move |app, typed| {
+        self.ask_with_hint("Attach", "a file or folder: pictures go as pictures, others as their paths", format!("{}/", here.display()), move |app, typed| {
             let path = here.join(crate::app::expand_home(typed.trim()));
-            match shed_project::picture::PictureData::read(&path) {
+            if !path.exists() {
+                return app.error(format!("{} is not there", path.display()));
+            }
+            let small = std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= 10 * 1024 * 1024);
+            let picture = small.then(|| shed_project::picture::PictureData::read(&path)).flatten().filter(|p| p.kind.media_type().starts_with("image/"));
+            let Some(v) = app.ais.get_mut(&tab) else { return };
+            match picture {
                 Some(p) => {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let image = AiImage { media_type: p.kind.media_type().to_string(), data: p.bytes };
-                    if let Some(v) = app.ais.get_mut(&tab) {
-                        v.images.push((name, image));
-                    }
+                    v.images.push((name, AiImage { media_type: p.kind.media_type().to_string(), data: p.bytes }));
                 }
-                None => app.error(format!("{} is not a picture Shed can send", path.display())),
+                None if !v.files.contains(&path) => v.files.push(path),
+                None => {}
             }
         });
     }
@@ -650,7 +821,7 @@ impl App {
                 if m.row >= a.y && m.row < a.y + a.height {
                     // Clicking a tool or a thought folds or unfolds it.
                     if let Some(&entry) = view.line_entries.get((m.row - a.y) as usize)
-                        && matches!(view.entries.get(entry), Some(Entry::Tool(_) | Entry::Thinking { .. }))
+                        && matches!(view.entries.get(entry), Some(Entry::Tool(_) | Entry::Thinking { .. } | Entry::Note(_)))
                         && !view.expanded.remove(&entry)
                     {
                         view.expanded.insert(entry);
@@ -679,8 +850,20 @@ impl App {
         for q in &ai.queued {
             extra.push(Line::from(vec![Span::styled("⏳ queued ", c.dim()), Span::raw(fit(&q.text.replace('\n', " "), w.saturating_sub(10)))]));
         }
-        if !view.images.is_empty() {
-            let names: Vec<String> = view.images.iter().map(|(n, _)| n.clone()).collect();
+        // What Claude set to happen later: wake-ups, scheduled jobs, watches.
+        for t in &view.status.timers {
+            let glyph = if t.kind == TimerKind::Watch { "👁 " } else { "⏰ " };
+            let label = timer_label(t);
+            let room = w.saturating_sub(width(&label) + 6);
+            extra.push(Line::from(vec![Span::styled(glyph, c.accent()), Span::styled(format!("{label} "), c.accent()), Span::raw(fit(&t.what.replace('\n', " "), room))]));
+        }
+        if !view.images.is_empty() || !view.files.is_empty() {
+            let names: Vec<String> = view
+                .images
+                .iter()
+                .map(|(n, _)| n.clone())
+                .chain(view.files.iter().map(|f| f.file_name().map_or_else(|| f.display().to_string(), |n| n.to_string_lossy().into_owned())))
+                .collect();
             extra.push(Line::from(vec![Span::styled("📎 ", c.accent()), Span::raw(fit(&names.join(", "), w.saturating_sub(16))), Span::styled("  Alt+X removes", c.dim())]));
         }
         let pending = view.pending().cloned();
@@ -1010,6 +1193,58 @@ mod tests {
 
     fn view() -> AiView {
         AiView::new(&AiTab::default())
+    }
+
+    fn colors() -> Colors {
+        Colors::from_theme(&shed_model::config::Theme::load("shed-dark").unwrap(), false)
+    }
+
+    fn text(lines: &[Line]) -> String {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn entries_change_in_place() {
+        let mut v = view();
+        let a = |t: &str| Entry::Assistant { text: t.into(), at: 0 };
+        v.update(0, vec![a("one"), a("two")], Default::default());
+        v.replace(vec![(0, a("ONE")), (7, a("nowhere"))], Default::default());
+        assert_eq!(v.entries, vec![a("ONE"), a("two")]);
+    }
+
+    /// A sub-agent's line says how it does; opened, its steps and report.
+    /// Notes fold their detail; a timer counts down above the prompt.
+    #[test]
+    fn agents_notes_and_timers_show() {
+        let mut v = view();
+        let step = shed_ai::Tool { id: "s1".into(), summary: "$ ls -a".into(), result: Some("x".into()), ..Default::default() };
+        let run = Run { state: RunState::Running, started: now() - 5, last: "$ ls -a".into(), tools: 2, steps: vec![Entry::Tool(step)], skipped: 3, agent: "Explore".into(), ..Default::default() };
+        let agent = shed_ai::Tool { id: "a1".into(), name: "Agent".into(), summary: "Agent: Count files".into(), run: Some(Box::new(run)), ..Default::default() };
+        let wake = shed_ai::Tool { id: "w1".into(), name: "ScheduleWakeup".into(), summary: "Wake up in 10 min: check".into(), result: Some(String::new()), ..Default::default() };
+        let note = shed_ai::Note { kind: NoteKind::Task, text: "Agent \"Count files\" finished".into(), detail: "It found 3 files.".into(), ..Default::default() };
+        let status = shed_ai::Status { timers: vec![Timer { kind: TimerKind::Wakeup, what: "check".into(), at: now() + 600, tool: "w1".into(), ..Default::default() }], ..Default::default() };
+        v.update(0, vec![Entry::Tool(agent), Entry::Tool(wake), Entry::Note(note)], status);
+        assert!(v.counting());
+        let c = colors();
+        let shown = text(&v.conversation(100, &c).0);
+        assert!(shown.contains("Agent: Count files … ") && shown.contains("running 5 s · $ ls -a · 2 tool calls"), "{shown}");
+        assert!(shown.contains("fires in 10 min"), "{shown}");
+        assert!(shown.contains("finished …") && !shown.contains("3 files"), "{shown}");
+        v.expand_all = true;
+        let shown = text(&v.conversation(100, &c).0);
+        assert!(shown.contains("Explore") && shown.contains("3 earlier steps not shown") && shown.contains("✓ $ ls -a"), "{shown}");
+        assert!(shown.contains("It found 3 files."), "{shown}");
+        assert_eq!(timer_label(&v.status.timers[0]), "Wakes up in 10 min");
+        let job = Timer { kind: TimerKind::Job, every: "Every minute".into(), ..Default::default() };
+        assert_eq!(timer_label(&job), "Scheduled job, every minute");
+    }
+
+    #[test]
+    fn attached_files_go_as_paths_after_the_text() {
+        let files = vec![std::path::PathBuf::from("/tmp/a.pdf"), std::path::PathBuf::from("/tmp/b")];
+        assert_eq!(with_files("Read these".into(), &files), "Read these\n\nAttached files:\n- /tmp/a.pdf\n- /tmp/b");
+        assert_eq!(with_files(String::new(), &files[..1]), "Attached files:\n- /tmp/a.pdf");
+        assert_eq!(with_files("hi".into(), &[]), "hi");
     }
 
     #[test]

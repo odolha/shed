@@ -1000,6 +1000,16 @@ prompt instead. The line above the prompt says whether Claude works or waits,
 the model, the mode (Full Auto in red), effort, cost, how full the context
 is, and the usage limits.
 
+A sub-agent's line says how it does (`running 3 min · $ cargo test · 4 tool
+calls`, `done in 40 s`); unfolded, it shows the kind of agent, its steps
+(`N earlier steps not shown` before the latest) and its report. Claude Code's
+own notes (a background task finished, a wake-up, a command's output, a
+compaction) are lines of their own, their detail folded. Wake-ups, scheduled
+jobs and watches Claude set wait above the prompt, counting down (`⏰ Wakes up
+in 18 min`), and the tool that set one says when it fires. `Alt+I` attaches a
+file or folder by its path: a picture goes as a picture, anything else as its
+path in the message (under "Attached files:"), for Claude to read.
+
 | Keys | Does |
 | --- | --- |
 | `Alt+Enter` | A new line in the prompt |
@@ -1007,7 +1017,7 @@ is, and the usage limits.
 | `Alt+S` / `Alt+N` | The sessions (Enter opens, → shows a conversation's files, `r` renames, `n` new) / a new session |
 | `Alt+M` / `Alt+O` / `Alt+E` | Model / mode (Full Auto asks first) / effort |
 | `Alt+D` / `Alt+P` | Keep the prompt as a draft / the drafts (send, put back in the prompt, delete) |
-| `Alt+I` / `Alt+X` | Attach a picture by its path / remove the pictures |
+| `Alt+I` / `Alt+X` | Attach a file, folder or picture by its path / remove what is attached |
 | `Alt+R` | Review the changes: by layer, each file's diff; `v` marks it viewed, `e` asks Claude to explain it (`E` all not yet explained), `t` this turn or the whole session |
 
 **Project tabs** list the folder as a tree on the left (Enter opens folders

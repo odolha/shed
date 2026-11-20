@@ -374,8 +374,8 @@ impl App {
         if self.screen == Screen::Benches && self.ticks.is_multiple_of(3) {
             self.send(ClientMsg::Pegboard);
         }
-        // Clocks of turns under way; synchronized updates past their time.
-        if self.ais.values().any(|a| a.status.state != shed_ai::State::Idle) {
+        // Clocks of turns under way, runs and timers; synchronized updates past their time.
+        if self.ais.values().any(|a| a.status.state != shed_ai::State::Idle || a.counting()) {
             self.dirty = true;
         }
         for p in self.panes.values_mut() {
