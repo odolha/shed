@@ -6,6 +6,8 @@
 //     val ShedJson = Json {
 //         classDiscriminator = "type"  // the default, and serde's tag
 //         ignoreUnknownKeys = true     // newer peers add fields
+//         coerceInputValues = true     // and enum values (below)
+//         serializersModule = …        // and variants (below)
 //     }
 //
 // - Enums with data are sealed classes: {"type": "V", "content": …} is
@@ -18,7 +20,16 @@
 //   default, but null only for an Option, not for a String, Boolean or List.
 //   (With `encodeDefaults = true`, also set `explicitNulls = false`.)
 // - u32 is UInt; f32 Float; f64 Double.
-// - A variant or enum value this version does not know fails to decode.
+// - Newer peers may send what this version does not know. `AiEntry` and
+//   `Event` have an `Unknown` variant for that (never sent): make it their
+//   default deserializer, and set `coerceInputValues = true`
+//   so an unknown value of an enum without data, in a field with a default,
+//   reads as null. Elsewhere an unknown variant or value fails to decode:
+//
+//     serializersModule = SerializersModule {
+//         polymorphicDefaultDeserializer(AiEntry::class) { AiEntry.Unknown.serializer() }
+//         polymorphicDefaultDeserializer(Event::class) { Event.Unknown.serializer() }
+//     }
 
 package dev.shed.api
 
@@ -89,6 +100,109 @@ data class AiEdit (
 )
 
 @Serializable
+sealed class AiEntry {
+	@Serializable
+	@SerialName("User")
+	data class User(val content: AiUser): AiEntry()
+	/// Claude's answer, in Markdown; grows while it streams.
+	@Serializable
+	@SerialName("Assistant")
+	data class Assistant(val content: AiAssistant): AiEntry()
+	@Serializable
+	@SerialName("Thinking")
+	data class Thinking(val content: AiText): AiEntry()
+	@Serializable
+	@SerialName("Tool")
+	data class Tool(val content: AiTool): AiEntry()
+	/// Claude asks to use a tool, or asks the user questions.
+	@Serializable
+	@SerialName("Permission")
+	data class Permission(val content: AiPermission): AiEntry()
+	/// A finished turn, an interruption, an error.
+	@Serializable
+	@SerialName("Notice")
+	data class Notice(val content: AiNotice): AiEntry()
+	/// One of Claude Code's own notes, never the user's words: a background
+	/// task that finished, a wake-up, a command's output, a compaction.
+	@Serializable
+	@SerialName("Note")
+	data class Note(val content: AiNote): AiEntry()
+	/// Never sent: connectors read an entry they do not know (a newer
+	/// workspace's) as this; it keeps its place and shows as nothing.
+	@Serializable
+	@SerialName("Unknown")
+	object Unknown: AiEntry()
+}
+
+@Serializable
+data class AiEntryAt (
+	val index: UInt,
+	val entry: AiEntry
+)
+
+@Serializable
+enum class AiActivity(val string: String) {
+	@SerialName("idle")
+	Idle("idle"),
+	@SerialName("working")
+	Working("working"),
+	/// Waits for the user to allow something or answer.
+	@SerialName("waiting")
+	Waiting("waiting"),
+}
+
+@Serializable
+enum class AiTimerKind(val string: String) {
+	@SerialName("wakeup")
+	Wakeup("wakeup"),
+	@SerialName("job")
+	Job("job"),
+	@SerialName("watch")
+	Watch("watch"),
+}
+
+/// Something set to happen later while the tab's Claude Code runs: a
+/// wake-up, a scheduled job, a watch.
+@Serializable
+data class AiTimer (
+	val kind: AiTimerKind? = null,
+	/// What it is for: the reason, the job's prompt, the watch's description.
+	val what: String,
+	/// When it fires next (a watch: when it ends), Unix seconds (0: not known).
+	val at: UInt? = null,
+	/// It repeats: on `every` ("Every minute").
+	val recurring: Boolean? = null,
+	val every: String? = null,
+	/// What it tells Claude when it fires.
+	val prompt: String? = null,
+	/// The tool call (`AiTool::id`) that set it.
+	val tool: String? = null
+)
+
+@Serializable
+data class AiStatus (
+	val session: String? = null,
+	val model: String? = null,
+	val state: AiActivity,
+	/// Dollars spent in this session's process.
+	val cost: Double? = null,
+	/// Tokens in the context, and how many it holds (0: not known).
+	val context: Double? = null,
+	val contextMax: Double? = null,
+	/// When the turn under way started.
+	val since: UInt? = null,
+	/// Wake-ups, scheduled jobs and watches waiting.
+	val timers: List<AiTimer>? = null
+)
+
+/// Entries that changed in place, by index; the others stay as they are.
+@Serializable
+data class AiEntriesChanged (
+	val entries: List<AiEntryAt>,
+	val status: AiStatus
+)
+
+@Serializable
 data class AiExplain (
 	val tab: String,
 	val keys: List<String>
@@ -107,6 +221,41 @@ data class AiModel (
 data class AiInfo (
 	val commands: List<AiCommand>,
 	val models: List<AiModel>
+)
+
+@Serializable
+enum class AiNoteKind(val string: String) {
+	/// A background command, agent or watch finished, or a watch saw something.
+	@SerialName("task")
+	Task("task"),
+	/// A wake-up or a scheduled job started a turn.
+	@SerialName("wakeup")
+	Wakeup("wakeup"),
+	/// A command run in Claude Code's own interface (`/compact`, `! ls`) and its output.
+	@SerialName("command")
+	Command("command"),
+	/// The conversation was compacted: what it was summed up as.
+	@SerialName("compacted")
+	Compacted("compacted"),
+	/// A message from another Claude session or agent.
+	@SerialName("message")
+	Message("message"),
+	/// Context a hook added to a prompt.
+	@SerialName("hook")
+	Hook("hook"),
+}
+
+@Serializable
+data class AiNote (
+	/// Missing when this version does not know the kind: shown as `task`.
+	val kind: AiNoteKind? = null,
+	/// One line.
+	val title: String,
+	/// More, folded: a report, an output, a summary (Markdown).
+	val detail: String? = null,
+	/// Something went wrong (a task failed).
+	val error: Boolean? = null,
+	val at: UInt? = null
 )
 
 @Serializable
@@ -201,6 +350,44 @@ data class AiRevert (
 )
 
 @Serializable
+enum class AiRunState(val string: String) {
+	@SerialName("running")
+	Running("running"),
+	@SerialName("done")
+	Done("done"),
+	@SerialName("failed")
+	Failed("failed"),
+	/// Stopped before it finished.
+	@SerialName("stopped")
+	Stopped("stopped"),
+}
+
+/// A tool that goes on after its call: a sub-agent, or a command or watch
+/// in the background.
+@Serializable
+data class AiRun (
+	val state: AiRunState? = null,
+	/// Started without waiting for it.
+	val background: Boolean? = null,
+	/// The kind of agent (`general-purpose`, `Explore`); empty for commands.
+	val agent: String? = null,
+	/// When it started and ended, Unix seconds (0: not known, or not yet).
+	val started: UInt? = null,
+	val ended: UInt? = null,
+	/// What it does now (its last step), or how it ended.
+	val last: String? = null,
+	/// Tool calls it made, and tokens it used, as last reported.
+	val tools: UInt? = null,
+	val tokens: Double? = null,
+	/// Its latest steps (tool calls, what it said); `skipped` earlier ones
+	/// are left out. Steps have no runs of their own.
+	val steps: List<AiEntry>? = null,
+	val skipped: UInt? = null,
+	/// What it reported when it ended (Markdown).
+	val report: String? = null
+)
+
+@Serializable
 data class AiSend (
 	val tab: String,
 	val text: String,
@@ -252,31 +439,6 @@ data class AiSettings (
 )
 
 @Serializable
-enum class AiActivity(val string: String) {
-	@SerialName("idle")
-	Idle("idle"),
-	@SerialName("working")
-	Working("working"),
-	/// Waits for the user to allow something or answer.
-	@SerialName("waiting")
-	Waiting("waiting"),
-}
-
-@Serializable
-data class AiStatus (
-	val session: String? = null,
-	val model: String? = null,
-	val state: AiActivity,
-	/// Dollars spent in this session's process.
-	val cost: Double? = null,
-	/// Tokens in the context, and how many it holds (0: not known).
-	val context: Double? = null,
-	val contextMax: Double? = null,
-	/// When the turn under way started.
-	val since: UInt? = null
-)
-
-@Serializable
 data class AiTab (
 	val folder: String,
 	val addDirs: List<String>? = null,
@@ -319,38 +481,15 @@ data class AiTool (
 	/// What it returned, cut if long; `None` while it runs.
 	val result: String? = null,
 	val error: Boolean? = null,
-	val pictures: List<String>? = null
+	val pictures: List<String>? = null,
+	/// For a sub-agent, or a command or watch in the background: how it runs.
+	val run: AiRun? = null
 )
 
 @Serializable
 data class AiTopic (
 	val tab: String
 )
-
-@Serializable
-sealed class AiEntry {
-	@Serializable
-	@SerialName("User")
-	data class User(val content: AiUser): AiEntry()
-	/// Claude's answer, in Markdown; grows while it streams.
-	@Serializable
-	@SerialName("Assistant")
-	data class Assistant(val content: AiAssistant): AiEntry()
-	@Serializable
-	@SerialName("Thinking")
-	data class Thinking(val content: AiText): AiEntry()
-	@Serializable
-	@SerialName("Tool")
-	data class Tool(val content: AiTool): AiEntry()
-	/// Claude asks to use a tool, or asks the user questions.
-	@Serializable
-	@SerialName("Permission")
-	data class Permission(val content: AiPermission): AiEntry()
-	/// A finished turn, an interruption, an error.
-	@Serializable
-	@SerialName("Notice")
-	data class Notice(val content: AiNotice): AiEntry()
-}
 
 /// A conversation's entries from `from` on (the first event: from 0, all of
 /// them), replacing what the connector had from there, and its status.
@@ -359,6 +498,16 @@ data class AiTranscript (
 	val from: UInt,
 	val entries: List<AiEntry>,
 	val status: AiStatus
+)
+
+/// A file for a prompt (`Call::AiUpload`).
+@Serializable
+data class AiUpload (
+	val tab: String,
+	/// Its name (made safe: a name, no folders).
+	val name: String,
+	/// Base64.
+	val data: String
 )
 
 @Serializable
@@ -738,6 +887,16 @@ sealed class Event {
 	@Serializable
 	@SerialName("SearchDone")
 	data class SearchDone(val content: dev.shed.api.SearchDone): Event()
+	/// Entries of a conversation changed in place, each alone (a sub-agent's
+	/// progress while the conversation goes on), and its status.
+	@Serializable
+	@SerialName("AiEntries")
+	data class AiEntries(val content: AiEntriesChanged): Event()
+	/// Never sent: connectors read an event they do not know (a newer
+	/// workspace's) as this, and ignore it.
+	@Serializable
+	@SerialName("Unknown")
+	object Unknown: Event()
 }
 
 @Serializable
@@ -1556,6 +1715,12 @@ sealed class Call {
 	@Serializable
 	@SerialName("AiStart")
 	data class AiStart(val content: TabOnly): Call()
+	/// Keeps a file on the workspace for a prompt to attach (by its path, in
+	/// the text): at most `MAX_UPLOAD` bytes, in a folder of the tab's under
+	/// Shed's state folder, deleted after a while. → `Text` (its path)
+	@Serializable
+	@SerialName("AiUpload")
+	data class AiUpload(val content: dev.shed.api.AiUpload): Call()
 	/// A folder's entries. → `Folder`
 	@Serializable
 	@SerialName("ListFolder")
@@ -2182,6 +2347,8 @@ sealed class ServerFrame {
 	@SerialName("Goodbye")
 	data class Goodbye(val content: ApiError): ServerFrame()
 }
+
+const val MAX_UPLOAD: UInt = 16777216u
 
 const val API_VERSION: UInt = 1u
 const val MIN_API_VERSION: UInt = 1u

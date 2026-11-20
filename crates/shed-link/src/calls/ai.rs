@@ -211,8 +211,71 @@ pub(super) async fn call(ctx: &Ctx, tree: &Shed, call: Call) -> Result<Reply, Ap
             ctx.keeper.send_msg(ClientMsg::AiChange { tab, change: AiChange::Explained(kept.clone()) });
             Ok(Reply::Explained(kept.into_iter().map(|(key, _, text)| api::Explanation { key, text }).collect()))
         }
+        Call::AiUpload(a) => {
+            let (tab, _) = ai_tab(tree, &a.tab)?;
+            let name = upload_name(&a.name);
+            // Base64 is 4 bytes for 3: refused before it is decoded.
+            if a.data.len() / 4 * 3 > api::MAX_UPLOAD as usize + 3 {
+                return Err(invalid(format!("{name} is larger than {} MB", api::MAX_UPLOAD / 1024 / 1024)));
+            }
+            let data = base64::engine::general_purpose::STANDARD.decode(a.data.as_bytes()).map_err(|_| invalid("the file is not base64"))?;
+            if data.len() > api::MAX_UPLOAD as usize {
+                return Err(invalid(format!("{name} is larger than {} MB", api::MAX_UPLOAD / 1024 / 1024)));
+            }
+            let dir = ctx.uploads.join(tab.to_string());
+            let path = tokio::task::spawn_blocking(move || keep_upload(&dir, &name, &data))
+                .await
+                .map_err(|e| keeper::failed(e.to_string()))?
+                .map_err(|e| keeper::failed(format!("cannot keep the file: {e}")))?;
+            Ok(Reply::Text(path.to_string_lossy().into_owned()))
+        }
         _ => Err(ApiError::new(ErrorCode::Unsupported, "not an AI call")),
     }
+}
+
+/// An uploaded file's name made safe: its last part only, no control
+/// characters, not hidden, not too long (the extension kept).
+fn upload_name(name: &str) -> String {
+    const MAX: usize = 120;
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let clean: String = last.chars().filter(|c| !c.is_control()).collect();
+    let clean = clean.trim().trim_start_matches('.').trim();
+    if clean.is_empty() {
+        return "file".into();
+    }
+    if clean.len() <= MAX {
+        return clean.to_string();
+    }
+    let (stem, ext) = match clean.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() && e.len() <= 16 => (s, format!(".{e}")),
+        _ => (clean, String::new()),
+    };
+    let mut cut = MAX - ext.len();
+    while !stem.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{ext}", &stem[..cut])
+}
+
+/// Keeps an uploaded file in `dir` (the tab's), in a folder named by its
+/// contents: the same file again is the same path, and two files of one
+/// name stay apart. Its path.
+fn keep_upload(dir: &std::path::Path, name: &str, data: &[u8]) -> std::io::Result<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    let folder = dir.join(format!("{:016x}", h.finish()));
+    let path = folder.join(name);
+    if let Ok(f) = std::fs::File::options().append(true).open(&path) {
+        // Sent again: kept longer (the keeper prunes by this time).
+        f.set_modified(std::time::SystemTime::now())?;
+        return Ok(path);
+    }
+    std::fs::create_dir_all(&folder)?;
+    let part = folder.join(format!(".{name}.part"));
+    std::fs::write(&part, data)?;
+    std::fs::rename(&part, &path)?;
+    Ok(path)
 }
 
 /// A picture as connectors get it.
@@ -309,5 +372,30 @@ mod tests {
         let hidden = private_sessions_in(std::iter::once(&bench));
         assert!(hidden.contains("secret-session") && hidden.contains("draft-x") && hidden.contains("other-secret"));
         assert!(!hidden.contains("open-session"));
+    }
+
+    #[test]
+    fn uploaded_names_are_made_safe() {
+        assert_eq!(upload_name("report.pdf"), "report.pdf");
+        assert_eq!(upload_name("../../etc/passwd"), "passwd");
+        assert_eq!(upload_name("C:\\Users\\you\\notes.txt"), "notes.txt");
+        assert_eq!(upload_name(".bashrc"), "bashrc");
+        assert_eq!(upload_name(".."), "file");
+        assert_eq!(upload_name("a\nb\u{0}.md"), "ab.md");
+        assert_eq!(upload_name(""), "file");
+        let long = format!("{}.tar.gz", "é".repeat(100));
+        let safe = upload_name(&long);
+        assert!(safe.len() <= 120 && safe.ends_with(".gz"), "{safe}");
+    }
+
+    #[test]
+    fn an_upload_is_kept_once_and_apart_from_others_of_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = keep_upload(dir.path(), "notes.txt", b"one").unwrap();
+        assert_eq!(std::fs::read(&a).unwrap(), b"one");
+        assert_eq!(keep_upload(dir.path(), "notes.txt", b"one").unwrap(), a);
+        let b = keep_upload(dir.path(), "notes.txt", b"two").unwrap();
+        assert_ne!(a, b);
+        assert!(a.starts_with(dir.path()) && b.ends_with("notes.txt"));
     }
 }

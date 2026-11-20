@@ -21,7 +21,8 @@ use shed_api::state::{
     Pane, ProjectTab, RemoteTab, Split, SplitDir, Tab, TabKind, Tag, WorkspaceState,
 };
 use shed_api::topics::{
-    AiAssistant, AiEntry, AiNotice, AiOption, AiPermission, AiQuestion, AiStatus, AiTextEdit,
+    AiAssistant, AiEntriesChanged, AiEntry, AiEntryAt, AiNote, AiNoteKind, AiNotice, AiOption,
+    AiPermission, AiQuestion, AiRun, AiRunState, AiStatus, AiTextEdit, AiTimer, AiTimerKind,
     AiTool, AiTranscript, AiUser, Cursor, Event, Highlight, ScreenLine, ScreenRow, SearchTopic,
     Span, Topic,
 };
@@ -161,6 +162,37 @@ fn samples() -> Vec<(&'static str, Value)> {
                 result: None,
                 error: false,
                 pictures: vec![],
+                run: None,
+            }),
+            AiEntry::Tool(AiTool {
+                id: "tool2".into(),
+                name: "Agent".into(),
+                summary: "Agent: Count files".into(),
+                detail: "Count the files".into(),
+                file: None,
+                edit: None,
+                result: None,
+                error: false,
+                pictures: vec![],
+                run: Some(AiRun {
+                    state: AiRunState::Running,
+                    background: true,
+                    agent: "Explore".into(),
+                    started: 1_763_500_000,
+                    last: "$ ls".into(),
+                    tools: 3,
+                    tokens: 1200.0,
+                    steps: vec![AiEntry::Assistant(AiAssistant { text: "Looking".into(), at: 0 })],
+                    skipped: 2,
+                    ..Default::default()
+                }),
+            }),
+            AiEntry::Note(AiNote {
+                kind: AiNoteKind::Wakeup,
+                title: "Woke up: check the build".into(),
+                detail: String::new(),
+                error: false,
+                at: 3,
             }),
             AiEntry::Permission(AiPermission {
                 request: "q1".into(),
@@ -184,8 +216,21 @@ fn samples() -> Vec<(&'static str, Value)> {
             state: AiActivity::Working,
             cost: 0.12,
             since: Some(1_763_500_000),
+            timers: vec![AiTimer {
+                kind: AiTimerKind::Job,
+                what: "Say tick".into(),
+                at: 1_763_500_060,
+                recurring: true,
+                every: "Every minute".into(),
+                prompt: "Say tick".into(),
+                tool: "tool9".into(),
+            }],
             ..Default::default()
         },
+    };
+    let changed = AiEntriesChanged {
+        entries: vec![AiEntryAt { index: 3, entry: transcript.entries[3].clone() }],
+        status: transcript.status.clone(),
     };
     let screen = shed_api::topics::Screen {
         full: true,
@@ -278,6 +323,10 @@ fn samples() -> Vec<(&'static str, Value)> {
                 event: Event::AiTranscript(transcript),
             })),
         ),
+        (
+            "ServerFrame",
+            to_json(&ServerFrame::Event(EventFrame { sub: 3, event: Event::AiEntries(changed) })),
+        ),
         ("ServerFrame", to_json(&ServerFrame::Workspaces(vec![workspace]))),
         ("ServerFrame", to_json(&ServerFrame::Ended(Ended { sub: 1, error: None }))),
         ("ServerFrame", to_json(&ServerFrame::Goodbye(ApiError::new(ErrorCode::Unauthorized, "")))),
@@ -286,6 +335,13 @@ fn samples() -> Vec<(&'static str, Value)> {
             to_json(&ClientFrame::Hello(ClientHello { api: 1, client: "web 0.1.0".into() })),
         ),
         ("ClientFrame", to_json(&request(1, Call::Previews))),
+        (
+            "ClientFrame",
+            to_json(&request(
+                9,
+                Call::AiUpload(AiUpload { tab: "t3".into(), name: "spec.pdf".into(), data: "JVBE".into() }),
+            )),
+        ),
         (
             "ClientFrame",
             to_json(&request(

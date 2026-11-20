@@ -80,6 +80,7 @@ pub fn link(env: &Env, url: String, token: &str, policy: Policy) -> tokio::task:
         ca_file: None,
         logbook: env.logbook.clone(),
         pictures: env.dir.join("state/ai-pictures"),
+        uploads: env.dir.join("state/ai-files"),
         status_file: Some(env.dir.join("link.json")),
         config_file: None,
     };

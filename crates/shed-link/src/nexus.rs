@@ -74,13 +74,19 @@ fn lost(why: impl Into<String>) -> Ended {
     Ended::Lost { why: why.into(), welcomed: false }
 }
 
+/// The largest frame the link reads: the nexus's limit (24 MB), and more.
+const MAX_MESSAGE: usize = 32 * 1024 * 1024;
+
 /// One connection, from dialling to its end. `Ok` when the link is going away.
 async fn session(dial: &Dial, events: &mpsc::UnboundedSender<NexusEvent>) -> Result<(), Ended> {
     let mut request = dial.url.as_str().into_client_request().map_err(|e| lost(format!("bad address: {e}")))?;
     let bearer = HeaderValue::from_str(&format!("Bearer {}", dial.token)).map_err(|_| Ended::Refused(ApiError::new(ErrorCode::Unauthorized, "the token is not valid")))?;
     request.headers_mut().insert("authorization", bearer);
     let connector = tokio_tungstenite::Connector::Rustls(dial.tls.clone());
-    let (ws, _) = match tokio_tungstenite::connect_async_tls_with_config(request, None, true, Some(connector)).await {
+    // Frames as large as the nexus relays (pictures and files for AI prompts
+    // travel inside them; tungstenite's default is 16 MB a frame).
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_frame_size(Some(MAX_MESSAGE)).max_message_size(Some(MAX_MESSAGE));
+    let (ws, _) = match tokio_tungstenite::connect_async_tls_with_config(request, Some(config), true, Some(connector)).await {
         Ok(c) => c,
         Err(tokio_tungstenite::tungstenite::Error::Http(response)) if matches!(response.status().as_u16(), 401 | 403) => {
             return Err(Ended::Refused(ApiError::new(ErrorCode::Unauthorized, format!("the nexus does not know this workspace ({})", response.status()))));

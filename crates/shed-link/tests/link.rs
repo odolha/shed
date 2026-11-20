@@ -162,6 +162,27 @@ async fn a_workspace_through_its_link() {
     let public = nexus.call(Call::SetPrivate(SetPrivate { bench: BenchRef::Running(bench.clone()), tab: tab.clone(), private: false })).await;
     assert_eq!(public.unwrap_err().code, ErrorCode::Forbidden);
 
+    // A file for an AI tab's prompt: kept in the tab's folder of uploads,
+    // under a safe name; too large a file is refused.
+    let Reply::Tab(ai) = nexus
+        .call(Call::NewTab(NewTab { bench: BenchRef::Running(bench.clone()), kind: NewTabKind::Ai(Folder { folder: root.display().to_string() }) }))
+        .await
+        .unwrap()
+    else {
+        panic!("not a tab")
+    };
+    nexus.state_where("the AI tab", |s| bench_tab(s, &ai).is_some()).await;
+    use base64::Engine;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let upload = |name: &str, data: String| Call::AiUpload(AiUpload { tab: ai.clone(), name: name.into(), data });
+    let Reply::Text(path) = nexus.call(upload("../../spec.pdf", b64(b"%PDF-1.7"))).await.unwrap() else { panic!("not a path") };
+    let path = std::path::PathBuf::from(path);
+    assert!(path.starts_with(dir.path().join("state/ai-files").join(&ai)) && path.ends_with("spec.pdf"), "{}", path.display());
+    assert_eq!(std::fs::read(&path).unwrap(), b"%PDF-1.7");
+    let big = nexus.call(upload("big.bin", b64(&vec![0; MAX_UPLOAD as usize + 1]))).await.unwrap_err();
+    assert_eq!(big.code, ErrorCode::Invalid);
+    assert_eq!(nexus.call(Call::AiUpload(AiUpload { tab: project.clone(), name: "x".into(), data: b64(b"x") })).await.unwrap_err().code, ErrorCode::Invalid);
+
     // Closing the bench.
     nexus.call(Call::CloseBench(BenchOnly { bench: bench.clone() })).await.unwrap();
     let state = nexus.state_where("the bench closed", |s| s.benches.is_empty() && s.closed.iter().any(|c| c.name == "work")).await;

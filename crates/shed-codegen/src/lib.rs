@@ -24,7 +24,7 @@ use typeshare_core::language::{
 use typeshare_core::parser::{ParsedData, parse};
 use typeshare_core::reconcile::reconcile_aliases;
 use typeshare_core::rust_types::{
-    FieldDecorator, RustConst, RustEnum, RustStruct, RustType, RustTypeAlias, RustTypeFormatError,
+    FieldDecorator, RustConst, RustConstExpr, RustEnum, RustStruct, RustType, RustTypeAlias, RustTypeFormatError,
     SpecialRustType,
 };
 
@@ -148,6 +148,8 @@ const KOTLIN_HEADER: &str = r#"// Generated from crates/shed-api by shed-codegen
 //     val ShedJson = Json {
 //         classDiscriminator = "type"  // the default, and serde's tag
 //         ignoreUnknownKeys = true     // newer peers add fields
+//         coerceInputValues = true     // and enum values (below)
+//         serializersModule = …        // and variants (below)
 //     }
 //
 // - Enums with data are sealed classes: {"type": "V", "content": …} is
@@ -160,7 +162,16 @@ const KOTLIN_HEADER: &str = r#"// Generated from crates/shed-api by shed-codegen
 //   default, but null only for an Option, not for a String, Boolean or List.
 //   (With `encodeDefaults = true`, also set `explicitNulls = false`.)
 // - u32 is UInt; f32 Float; f64 Double.
-// - A variant or enum value this version does not know fails to decode.
+// - Newer peers may send what this version does not know. `AiEntry` and
+//   `Event` have an `Unknown` variant for that (never sent): make it their
+//   default deserializer, and set `coerceInputValues = true`
+//   so an unknown value of an enum without data, in a field with a default,
+//   reads as null. Elsewhere an unknown variant or value fails to decode:
+//
+//     serializersModule = SerializersModule {
+//         polymorphicDefaultDeserializer(AiEntry::class) { AiEntry.Unknown.serializer() }
+//         polymorphicDefaultDeserializer(Event::class) { Event.Unknown.serializer() }
+//     }
 "#;
 
 /// Writes both files under `root`; returns those that changed.
@@ -346,7 +357,14 @@ impl Language for Kt {
     }
 
     fn write_const(&mut self, w: &mut dyn Write, c: &RustConst) -> io::Result<()> {
-        self.0.write_const(w, c)
+        // typeshare has no Kotlin constants yet.
+        let RustConstExpr::Int(value) = c.expr;
+        let (ty, suffix) = match &c.r#type {
+            RustType::Special(SpecialRustType::U32) => ("UInt", "u"),
+            RustType::Special(SpecialRustType::I32) => ("Int", ""),
+            other => return Err(io::Error::other(format!("a constant of type {other:?}"))),
+        };
+        writeln!(w, "const val {}: {ty} = {value}{suffix}\n", c.id.original)
     }
 
     fn write_struct(&mut self, w: &mut dyn Write, rs: &RustStruct) -> io::Result<()> {

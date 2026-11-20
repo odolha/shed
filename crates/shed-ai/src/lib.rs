@@ -14,7 +14,7 @@ mod transcript;
 pub use listing::{SessionRow, family_of, session_rows};
 pub use sessions::{SessionInfo, list_sessions, load_session, rename_session};
 pub use summary::{BROWSER_TOOLS, span, summarize};
-pub use transcript::{PromptMark, Transcript, keep_picture_in, prune_pictures};
+pub use transcript::{PromptMark, Transcript, keep_picture_in, prune_files, prune_pictures};
 
 use serde::{Deserialize, Serialize};
 

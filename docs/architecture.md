@@ -907,6 +907,29 @@ dialled again after a drop (1 s, doubling up to a minute). After `Hello` and
 - **Events** for subscriptions: an AI tab's transcript (after `AiWatch`, from
   its first whole update), a project's changes (`shed_project::Watch`;
   `GitChanged` 300 ms after changes settle), a search's hits as files are done.
+  The keeper's `AiEntries` (entries changed in place: a sub-agent's progress)
+  go on as `Event::AiEntries`, each entry by its index, rather than the
+  transcript again from the first of them. Claude Code's notes are
+  `AiEntry::Note`; a tool's sub-agent or background run is `AiTool::run`
+  (state, times, last action, tool count, its latest `Run::MAX_STEPS` steps,
+  without runs of their own); wake-ups, scheduled jobs and watches are
+  `AiStatus::timers`.
+- **Files for prompts** (`Call::AiUpload`): a connector sends a file (at most
+  `MAX_UPLOAD`, 16 MB, so its Base64 stays within the nexus's 24 MB frames; the
+  link reads frames up to 32 MB) and gets back the path it was kept at,
+  `$XDG_STATE_HOME/shed/ai-files/<tab>/<hash of its bytes>/<name>`; the name is
+  made safe (its last part, no control characters, not hidden, at most 120
+  bytes). The connector puts the path in the prompt's text, as the GUI does
+  for files it attaches. The keeper deletes uploads unused for 30 days, and
+  the folders they leave empty (`shed_ai::prune_files`, hourly with the
+  pictures).
+
+Connectors must outlive newer workspaces: `AiEntry` and `Event` have an
+`Unknown` variant that is never sent, which the apps read any variant they
+do not know as (an unknown entry keeps its place, so indices stay right, and
+shows as nothing; an unknown event is ignored). On Android `ShedJson` makes
+`Unknown` their default deserializer and coerces unknown values of enums
+without data to the field's default (null).
 - **Notifications** from tree changes (`notify.rs`): an AI tab waiting for an
   answer, a turn done, a command that ran a minute ending.
 

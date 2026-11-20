@@ -44,6 +44,8 @@ pub struct Options {
     pub logbook: PathBuf,
     /// Where the keeper keeps AI prompts' pictures.
     pub pictures: PathBuf,
+    /// Where files uploaded for AI prompts are kept (`Call::AiUpload`).
+    pub uploads: PathBuf,
     /// Where to say how the link is doing (`shed nexus status`).
     pub status_file: Option<PathBuf>,
     /// `shed.toml`: the link stops when its `[nexus]` table changes, so the
@@ -97,6 +99,7 @@ pub fn main() -> i32 {
         ca_file: config.nexus.ca_file.clone(),
         logbook: shed_logbook::default_path(),
         pictures: shed_model::paths::state_dir().join("ai-pictures"),
+        uploads: shed_model::paths::state_dir().join("ai-files"),
         status_file: Some(shed_model::paths::link_status_path()),
         config_file: Some(shed_model::config::Config::path()),
     };

@@ -110,6 +110,10 @@ pub enum Call {
     AiExplain(AiExplain),
     /// Starts Claude Code for the tab ahead of the first prompt.
     AiStart(TabOnly),
+    /// Keeps a file on the workspace for a prompt to attach (by its path, in
+    /// the text): at most `MAX_UPLOAD` bytes, in a folder of the tab's under
+    /// Shed's state folder, deleted after a while. → `Text` (its path)
+    AiUpload(AiUpload),
 
     // ---- projects (paths relative to the tab's root)
     /// A folder's entries. → `Folder`
@@ -614,6 +618,23 @@ pub struct AiSend {
     #[serde(default)]
     pub pictures: Vec<Picture>,
 }
+
+/// A file for a prompt (`Call::AiUpload`).
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiUpload {
+    pub tab: String,
+    /// Its name (made safe: a name, no folders).
+    pub name: String,
+    /// Base64.
+    pub data: String,
+}
+
+/// The largest file `Call::AiUpload` takes, in bytes: as Base64 inside a
+/// frame it stays under the nexus's frame limit.
+#[typeshare]
+pub const MAX_UPLOAD: u32 = 16_777_216;
 
 /// A picture, whole.
 #[typeshare]

@@ -25,6 +25,14 @@ pub(crate) fn transcript(from: u32, entries: &[shed_ai::Entry], status: &shed_ai
     api::AiTranscript { from, entries: entries.iter().map(entry).collect(), status: ai_status(status) }
 }
 
+/// Entries changed in place, by index.
+pub(crate) fn changed(entries: &[(u32, shed_ai::Entry)], status: &shed_ai::Status) -> api::AiEntriesChanged {
+    api::AiEntriesChanged { entries: entries.iter().map(|(index, e)| api::AiEntryAt { index: *index, entry: entry(e) }).collect(), status: ai_status(status) }
+}
+
+/// A run's steps sent at most: its latest.
+const MAX_STEPS: usize = shed_ai::Run::MAX_STEPS;
+
 /// A picture's name, from the path the keeper keeps it at.
 fn picture_name(path: &str) -> String {
     Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
@@ -58,6 +66,7 @@ fn entry(e: &shed_ai::Entry) -> api::AiEntry {
             result: t.result.clone(),
             error: t.error,
             pictures: t.pictures.iter().map(|p| picture_name(p)).collect(),
+            run: t.run.as_deref().map(run),
         }),
         shed_ai::Entry::Permission(p) => api::AiEntry::Permission(api::AiPermission {
             request: p.request.clone(),
@@ -79,7 +88,69 @@ fn entry(e: &shed_ai::Entry) -> api::AiEntry {
             answers: p.answers.clone(),
         }),
         shed_ai::Entry::Notice { text, error } => api::AiEntry::Notice(api::AiNotice { text: text.clone(), error: *error }),
-        shed_ai::Entry::Note(n) => api::AiEntry::Notice(api::AiNotice { text: n.text.clone(), error: n.error }),
+        shed_ai::Entry::Note(n) => api::AiEntry::Note(api::AiNote {
+            kind: match n.kind {
+                shed_ai::NoteKind::Task => api::AiNoteKind::Task,
+                shed_ai::NoteKind::Wakeup => api::AiNoteKind::Wakeup,
+                shed_ai::NoteKind::Command => api::AiNoteKind::Command,
+                shed_ai::NoteKind::Compacted => api::AiNoteKind::Compacted,
+                shed_ai::NoteKind::Message => api::AiNoteKind::Message,
+                shed_ai::NoteKind::Hook => api::AiNoteKind::Hook,
+            },
+            title: n.text.clone(),
+            detail: n.detail.clone(),
+            error: n.error,
+            at: secs(n.at),
+        }),
+    }
+}
+
+/// A sub-agent's or background task's run; its steps (the latest
+/// `MAX_STEPS`) without runs of their own.
+fn run(r: &shed_ai::Run) -> api::AiRun {
+    let over = r.steps.len().saturating_sub(MAX_STEPS);
+    api::AiRun {
+        state: match r.state {
+            shed_ai::RunState::Running => api::AiRunState::Running,
+            shed_ai::RunState::Done => api::AiRunState::Done,
+            shed_ai::RunState::Failed => api::AiRunState::Failed,
+            shed_ai::RunState::Stopped => api::AiRunState::Stopped,
+        },
+        background: r.background,
+        agent: r.agent.clone(),
+        started: secs(r.started),
+        ended: secs(r.ended),
+        last: r.last.clone(),
+        tools: r.tools,
+        tokens: r.tokens as f64,
+        steps: r.steps[over..]
+            .iter()
+            .map(|s| match entry(s) {
+                api::AiEntry::Tool(mut t) => {
+                    t.run = None;
+                    api::AiEntry::Tool(t)
+                }
+                other => other,
+            })
+            .collect(),
+        skipped: r.skipped.saturating_add(over as u32),
+        report: r.report.clone(),
+    }
+}
+
+fn timer(t: &shed_ai::Timer) -> api::AiTimer {
+    api::AiTimer {
+        kind: match t.kind {
+            shed_ai::TimerKind::Wakeup => api::AiTimerKind::Wakeup,
+            shed_ai::TimerKind::Job => api::AiTimerKind::Job,
+            shed_ai::TimerKind::Watch => api::AiTimerKind::Watch,
+        },
+        what: t.what.clone(),
+        at: secs(t.at),
+        recurring: !t.every.is_empty(),
+        every: t.every.clone(),
+        prompt: t.prompt.clone(),
+        tool: t.tool.clone(),
     }
 }
 
@@ -96,6 +167,7 @@ fn ai_status(s: &shed_ai::Status) -> api::AiStatus {
         context: s.context as f64,
         context_max: s.context_max as f64,
         since: s.since.map(secs),
+        timers: s.timers.iter().map(timer).collect(),
     }
 }
 
@@ -208,4 +280,33 @@ pub(crate) fn search(ctx: Arc<Ctx>, root: PathBuf, exclude: Vec<String>, topic: 
         send(&out, sub, Event::SearchDone(api::SearchDone { truncated, error: result.err() }));
     });
     cancel
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A sub-agent goes out with its latest steps (no runs inside them),
+    /// notes as notes, timers with the status.
+    #[test]
+    fn agents_notes_and_timers_go_out() {
+        let step = |n: usize| shed_ai::Entry::Tool(shed_ai::Tool { id: format!("s{n}"), summary: format!("$ step {n}"), run: Some(Box::default()), ..Default::default() });
+        let run = shed_ai::Run { steps: (0..MAX_STEPS + 5).map(step).collect(), skipped: 2, tools: 70, started: 100, ..Default::default() };
+        let agent = shed_ai::Entry::Tool(shed_ai::Tool { id: "a".into(), name: "Agent".into(), run: Some(Box::new(run)), ..Default::default() });
+        let note = shed_ai::Entry::Note(shed_ai::Note { kind: shed_ai::NoteKind::Wakeup, text: "Woke up".into(), detail: "more".into(), error: false, at: 7 });
+        let status = shed_ai::Status {
+            timers: vec![shed_ai::Timer { kind: shed_ai::TimerKind::Job, what: "tick".into(), every: "Every minute".into(), at: 9, tool: "c".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let t = transcript(0, &[agent, note], &status);
+        let api::AiEntry::Tool(tool) = &t.entries[0] else { panic!() };
+        let run = tool.run.as_ref().unwrap();
+        assert_eq!((run.steps.len(), run.skipped, run.tools, run.started), (MAX_STEPS, 7, 70, 100));
+        assert!(matches!(&run.steps[0], api::AiEntry::Tool(s) if s.summary == "$ step 5" && s.run.is_none()));
+        assert_eq!(t.entries[1], api::AiEntry::Note(api::AiNote { kind: api::AiNoteKind::Wakeup, title: "Woke up".into(), detail: "more".into(), error: false, at: 7 }));
+        let timer = &t.status.timers[0];
+        assert_eq!((timer.kind, timer.recurring, timer.at, timer.tool.as_str()), (api::AiTimerKind::Job, true, 9, "c"));
+        let c = changed(&[(4, shed_ai::Entry::Notice { text: "x".into(), error: false })], &status);
+        assert_eq!(c.entries[0].index, 4);
+    }
 }

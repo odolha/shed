@@ -139,6 +139,29 @@ pub fn prune_pictures(dir: &std::path::Path, max_age: std::time::Duration) -> us
     gone
 }
 
+/// Deletes files under `dir`, at any depth, not written or kept again for
+/// `max_age`, and the folders they leave empty (files uploaded for prompts);
+/// how many files went.
+pub fn prune_files(dir: &std::path::Path, max_age: std::time::Duration) -> usize {
+    fn prune(dir: &std::path::Path, cutoff: std::time::SystemTime) -> usize {
+        let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+        let mut gone = 0;
+        for e in entries.flatten() {
+            let Ok(kind) = e.file_type() else { continue };
+            if kind.is_dir() {
+                gone += prune(&e.path(), cutoff);
+                // Left empty: goes too (fails, as it should, when not empty).
+                let _ = std::fs::remove_dir(e.path());
+            } else if e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < cutoff) && std::fs::remove_file(e.path()).is_ok() {
+                gone += 1;
+            }
+        }
+        gone
+    }
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(max_age) else { return 0 };
+    prune(dir, cutoff)
+}
+
 fn picture_name(data: &[u8], media_type: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -737,6 +760,21 @@ mod tests {
         assert_eq!(prune_pictures(dir.path(), std::time::Duration::from_secs(60 * 24 * 3600)), 1);
         assert!(!std::path::Path::new(&old).exists());
         assert!(std::path::Path::new(&seen).exists());
+    }
+
+    #[test]
+    fn old_uploads_go_with_their_empty_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("t1/a/old.pdf"), dir.path().join("t2/b/new.pdf"));
+        for p in [&old, &new] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600);
+        std::fs::File::options().append(true).open(&old).unwrap().set_modified(long_ago).unwrap();
+        assert_eq!(prune_files(dir.path(), std::time::Duration::from_secs(30 * 24 * 3600)), 1);
+        assert!(!dir.path().join("t1").exists());
+        assert!(new.exists());
     }
 
     #[test]

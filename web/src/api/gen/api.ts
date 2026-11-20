@@ -64,6 +64,83 @@ export interface AiEdit {
 	pictures?: Picture[];
 }
 
+export type AiEntry =
+	| { type: "User", content: AiUser }
+	/** Claude's answer, in Markdown; grows while it streams. */
+	| { type: "Assistant", content: AiAssistant }
+	| { type: "Thinking", content: AiText }
+	| { type: "Tool", content: AiTool }
+	/** Claude asks to use a tool, or asks the user questions. */
+	| { type: "Permission", content: AiPermission }
+	/** A finished turn, an interruption, an error. */
+	| { type: "Notice", content: AiNotice }
+	/**
+	 * One of Claude Code's own notes, never the user's words: a background
+	 * task that finished, a wake-up, a command's output, a compaction.
+	 */
+	| { type: "Note", content: AiNote }
+	/**
+	 * Never sent: connectors read an entry they do not know (a newer
+	 * workspace's) as this; it keeps its place and shows as nothing.
+	 */
+	| { type: "Unknown", content?: undefined };
+
+export interface AiEntryAt {
+	index: number;
+	entry: AiEntry;
+}
+
+export type AiActivity =
+	| "idle"
+	| "working"
+	/** Waits for the user to allow something or answer. */
+	| "waiting";
+
+export type AiTimerKind =
+	| "wakeup"
+	| "job"
+	| "watch";
+
+/**
+ * Something set to happen later while the tab's Claude Code runs: a
+ * wake-up, a scheduled job, a watch.
+ */
+export interface AiTimer {
+	kind?: AiTimerKind;
+	/** What it is for: the reason, the job's prompt, the watch's description. */
+	what: string;
+	/** When it fires next (a watch: when it ends), Unix seconds (0: not known). */
+	at?: number;
+	/** It repeats: on `every` ("Every minute"). */
+	recurring?: boolean;
+	every?: string;
+	/** What it tells Claude when it fires. */
+	prompt?: string;
+	/** The tool call (`AiTool::id`) that set it. */
+	tool?: string;
+}
+
+export interface AiStatus {
+	session?: string | null;
+	model?: string | null;
+	state: AiActivity;
+	/** Dollars spent in this session's process. */
+	cost?: number;
+	/** Tokens in the context, and how many it holds (0: not known). */
+	context?: number;
+	contextMax?: number;
+	/** When the turn under way started. */
+	since?: number | null;
+	/** Wake-ups, scheduled jobs and watches waiting. */
+	timers?: AiTimer[];
+}
+
+/** Entries that changed in place, by index; the others stay as they are. */
+export interface AiEntriesChanged {
+	entries: AiEntryAt[];
+	status: AiStatus;
+}
+
 export interface AiExplain {
 	tab: string;
 	keys: string[];
@@ -80,6 +157,32 @@ export interface AiModel {
 export interface AiInfo {
 	commands: AiCommand[];
 	models: AiModel[];
+}
+
+export type AiNoteKind =
+	/** A background command, agent or watch finished, or a watch saw something. */
+	| "task"
+	/** A wake-up or a scheduled job started a turn. */
+	| "wakeup"
+	/** A command run in Claude Code's own interface (`/compact`, `! ls`) and its output. */
+	| "command"
+	/** The conversation was compacted: what it was summed up as. */
+	| "compacted"
+	/** A message from another Claude session or agent. */
+	| "message"
+	/** Context a hook added to a prompt. */
+	| "hook";
+
+export interface AiNote {
+	/** Missing when this version does not know the kind: shown as `task`. */
+	kind?: AiNoteKind;
+	/** One line. */
+	title: string;
+	/** More, folded: a report, an output, a summary (Markdown). */
+	detail?: string;
+	/** Something went wrong (a task failed). */
+	error?: boolean;
+	at?: number;
 }
 
 export interface AiNotice {
@@ -168,6 +271,41 @@ export interface AiRevert {
 	files: boolean;
 }
 
+export type AiRunState =
+	| "running"
+	| "done"
+	| "failed"
+	/** Stopped before it finished. */
+	| "stopped";
+
+/**
+ * A tool that goes on after its call: a sub-agent, or a command or watch
+ * in the background.
+ */
+export interface AiRun {
+	state?: AiRunState;
+	/** Started without waiting for it. */
+	background?: boolean;
+	/** The kind of agent (`general-purpose`, `Explore`); empty for commands. */
+	agent?: string;
+	/** When it started and ended, Unix seconds (0: not known, or not yet). */
+	started?: number;
+	ended?: number;
+	/** What it does now (its last step), or how it ended. */
+	last?: string;
+	/** Tool calls it made, and tokens it used, as last reported. */
+	tools?: number;
+	tokens?: number;
+	/**
+	 * Its latest steps (tool calls, what it said); `skipped` earlier ones
+	 * are left out. Steps have no runs of their own.
+	 */
+	steps?: AiEntry[];
+	skipped?: number;
+	/** What it reported when it ended (Markdown). */
+	report?: string;
+}
+
 export interface AiSend {
 	tab: string;
 	text: string;
@@ -214,25 +352,6 @@ export interface AiSettings {
 	addDirs?: string[] | null;
 }
 
-export type AiActivity =
-	| "idle"
-	| "working"
-	/** Waits for the user to allow something or answer. */
-	| "waiting";
-
-export interface AiStatus {
-	session?: string | null;
-	model?: string | null;
-	state: AiActivity;
-	/** Dollars spent in this session's process. */
-	cost?: number;
-	/** Tokens in the context, and how many it holds (0: not known). */
-	context?: number;
-	contextMax?: number;
-	/** When the turn under way started. */
-	since?: number | null;
-}
-
 export interface AiTab {
 	folder: string;
 	addDirs?: string[];
@@ -274,22 +393,13 @@ export interface AiTool {
 	result?: string | null;
 	error?: boolean;
 	pictures?: string[];
+	/** For a sub-agent, or a command or watch in the background: how it runs. */
+	run?: AiRun | null;
 }
 
 export interface AiTopic {
 	tab: string;
 }
-
-export type AiEntry =
-	| { type: "User", content: AiUser }
-	/** Claude's answer, in Markdown; grows while it streams. */
-	| { type: "Assistant", content: AiAssistant }
-	| { type: "Thinking", content: AiText }
-	| { type: "Tool", content: AiTool }
-	/** Claude asks to use a tool, or asks the user questions. */
-	| { type: "Permission", content: AiPermission }
-	/** A finished turn, an interruption, an error. */
-	| { type: "Notice", content: AiNotice };
 
 /**
  * A conversation's entries from `from` on (the first event: from 0, all of
@@ -299,6 +409,15 @@ export interface AiTranscript {
 	from: number;
 	entries: AiEntry[];
 	status: AiStatus;
+}
+
+/** A file for a prompt (`Call::AiUpload`). */
+export interface AiUpload {
+	tab: string;
+	/** Its name (made safe: a name, no folders). */
+	name: string;
+	/** Base64. */
+	data: string;
 }
 
 export interface AiUser {
@@ -598,7 +717,17 @@ export type Event =
 	| { type: "FilesChanged", content: FilesChanged }
 	| { type: "GitChanged", content?: undefined }
 	| { type: "SearchHits", content: SearchHits }
-	| { type: "SearchDone", content: SearchDone };
+	| { type: "SearchDone", content: SearchDone }
+	/**
+	 * Entries of a conversation changed in place, each alone (a sub-agent's
+	 * progress while the conversation goes on), and its status.
+	 */
+	| { type: "AiEntries", content: AiEntriesChanged }
+	/**
+	 * Never sent: connectors read an event they do not know (a newer
+	 * workspace's) as this, and ignore it.
+	 */
+	| { type: "Unknown", content?: undefined };
 
 export interface EventFrame {
 	/** The subscription's id. */
@@ -1223,6 +1352,12 @@ export type Call =
 	| { type: "AiExplain", content: AiExplain }
 	/** Starts Claude Code for the tab ahead of the first prompt. */
 	| { type: "AiStart", content: TabOnly }
+	/**
+	 * Keeps a file on the workspace for a prompt to attach (by its path, in
+	 * the text): at most `MAX_UPLOAD` bytes, in a folder of the tab's under
+	 * Shed's state folder, deleted after a while. → `Text` (its path)
+	 */
+	| { type: "AiUpload", content: AiUpload }
 	/** A folder's entries. → `Folder` */
 	| { type: "ListFolder", content: ProjectPath }
 	/** Files whose names match, best first. → `Files` */
@@ -1678,3 +1813,5 @@ export type ServerFrame =
 	 * version is not accepted. Not to be retried as is.
 	 */
 	| { type: "Goodbye", content: ApiError };
+
+export const MAX_UPLOAD: number = 16777216;

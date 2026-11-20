@@ -32,6 +32,7 @@ pub(crate) struct Ctx {
     pub ask: mpsc::UnboundedSender<Ask>,
     pub logbook: PathBuf,
     pub pictures: PathBuf,
+    pub uploads: PathBuf,
     /// Each project's files, as walked last, for quick open and search.
     files: Mutex<HashMap<PathBuf, Walked>>,
 }
@@ -52,8 +53,8 @@ pub(crate) enum Ask {
 const FILES_KEPT: Duration = Duration::from_secs(30);
 
 impl Ctx {
-    pub fn new(keeper: KeeperConn, socket: PathBuf, tree: watch::Receiver<Arc<Shed>>, ask: mpsc::UnboundedSender<Ask>, logbook: PathBuf, pictures: PathBuf) -> Ctx {
-        Ctx { keeper, socket, tree, ask, logbook, pictures, files: Mutex::new(HashMap::new()) }
+    pub fn new(keeper: KeeperConn, socket: PathBuf, tree: watch::Receiver<Arc<Shed>>, ask: mpsc::UnboundedSender<Ask>, logbook: PathBuf, pictures: PathBuf, uploads: PathBuf) -> Ctx {
+        Ctx { keeper, socket, tree, ask, logbook, pictures, uploads, files: Mutex::new(HashMap::new()) }
     }
 
     pub fn tree(&self) -> Arc<Shed> {
@@ -338,6 +339,7 @@ pub(crate) async fn call(ctx: Arc<Ctx>, call: Call) -> Result<Reply, ApiError> {
         | Call::AiStop(_)
         | Call::AiAnswer(_)
         | Call::AiAnswerQuestions(_)
+        | Call::AiUpload(_)
         | Call::AiEdit(_)
         | Call::AiRevert(_)
         | Call::AiQueued(_)

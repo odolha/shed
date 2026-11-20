@@ -44,7 +44,7 @@ pub async fn run(opts: Options) -> anyhow::Result<Exit> {
     let url = crate::tls::link_url(&opts.url)?;
     let (tree_tx, tree_rx) = watch::channel(Arc::new(Shed::default()));
     let (ask_tx, mut ask_rx) = mpsc::unbounded_channel();
-    let ctx = Arc::new(Ctx::new(keeper.clone(), opts.socket.clone(), tree_rx, ask_tx, opts.logbook.clone(), opts.pictures.clone()));
+    let ctx = Arc::new(Ctx::new(keeper.clone(), opts.socket.clone(), tree_rx, ask_tx, opts.logbook.clone(), opts.pictures.clone(), opts.uploads.clone()));
     let (nexus_tx, mut nexus_rx) = mpsc::unbounded_channel();
     let hello = LinkHello { api: shed_api::API_VERSION, version: env!("CARGO_PKG_VERSION").into(), policy: opts.policy };
     let dial = Dial { url: url.clone(), token: opts.token.clone(), hello, tls };
@@ -420,20 +420,24 @@ impl Link {
         }
     }
 
-    /// Entries changed in place: what the link has from the first of them
-    /// on goes again, as a transcript.
+    /// Entries changed in place (a sub-agent's progress): into the link's
+    /// copy, and to the tab's subscriptions, each entry alone.
     fn ai_entries(&mut self, tab: TabId, changed: Vec<(u32, shed_ai::Entry)>, status: shed_ai::Status) {
-        let Some(conv) = self.conversations.get_mut(&tab).filter(|c| c.whole) else { return };
-        let mut from = None::<u32>;
-        for (i, e) in changed {
-            if let Some(slot) = conv.entries.get_mut(i as usize) {
-                *slot = e;
-                from = Some(from.map_or(i, |f| f.min(i)));
+        if let Some(conv) = self.conversations.get_mut(&tab).filter(|c| c.whole) {
+            for (i, e) in &changed {
+                if let Some(slot) = conv.entries.get_mut(*i as usize) {
+                    *slot = e.clone();
+                }
             }
         }
-        let Some(from) = from else { return };
-        let entries = conv.entries[from as usize..].to_vec();
-        self.ai_update(tab, from, entries, status);
+        let subs: Vec<u32> = self.subs.iter().filter(|(_, s)| matches!(s, Sub::Ai { tab: t, started: true } if *t == tab)).map(|(id, _)| *id).collect();
+        if subs.is_empty() {
+            return;
+        }
+        let event = topics::changed(&changed, &status);
+        for id in subs {
+            self.send(LinkFrame::Event(shed_api::wire::EventFrame { sub: id, event: Event::AiEntries(event.clone()) }));
+        }
     }
 
     // ------------------------------------------------------------ the nexus
