@@ -61,6 +61,14 @@ bench and tab at a glance, and is where you make, open, hide and close them.
   tab groups, tags with colours set once for every tab.
 - **Safe with your setup.** A backup of your settings and benches every day, and
   settings files always written whole.
+- **From anywhere, if you want it.** Host a **nexus** on a server of yours and
+  link your machines to it: a web app and an Android app then show your benches,
+  terminals, history, projects and diffs, and above all your AI tabs (answer
+  Claude, send it pictures, watch your limits), with a push when Claude waits.
+  Password and TOTP, devices paired once, view-only per machine; private tabs
+  never leave it. Entirely optional.
+- **Shed on a server.** The same keeper runs headless on a server, with `shed tui`
+  over ssh, so Claude keeps working while your computers are off.
 - **Fast**: GPU rendering, kitty keyboard protocol, input methods, find in
   scrollback, clickable links and paths, OSC 52 clipboard. Light and dark,
   following your desktop.
@@ -138,6 +146,8 @@ of keys, commands and settings.
 - [User Guide](docs/user-guide.md): how Shed is used.
 - [Architecture](docs/architecture.md): how it works inside.
 - [Development](docs/development.md): building, testing and working on Shed.
+- [Deploying a nexus](docs/nexus-deploy.md): the server for the web and Android
+  apps, and a workspace on a server.
 - [Roadmap](docs/roadmap.md): what is still open.
 - [History](docs/history/README.md): the plans Shed was built from, and the
   decisions in them.
