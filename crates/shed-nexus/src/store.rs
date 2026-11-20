@@ -571,6 +571,15 @@ impl Store {
         Ok(())
     }
 
+    /// Whether the device has a subscription to push to.
+    pub fn subscribed(&self, device: &str) -> anyhow::Result<bool> {
+        Ok(self
+            .lock()
+            .query_row("SELECT 1 FROM push WHERE device = ?1 AND endpoint IS NOT NULL", params![device], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
     pub fn set_push_kinds(&self, device: &str, kinds: &[NotificationKind]) -> anyhow::Result<()> {
         self.lock().execute(
             "INSERT INTO push (device, kinds) VALUES (?1, ?2) ON CONFLICT(device) DO UPDATE SET kinds = ?2",

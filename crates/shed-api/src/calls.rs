@@ -3,6 +3,11 @@
 //! A call that changes something is refused with `Forbidden` when the
 //! workspace allows viewing only (`Call::changes`). Paths in calls are
 //! absolute, or relative to the tab's project root where the call says so.
+//!
+//! Positions in text (`FileMatch::hits`, `topics::Highlight`,
+//! `topics::SearchHit::ranges`) count UTF-16 code units, as JavaScript and
+//! Kotlin strings index: a character outside the Basic Multilingual Plane
+//! (most emoji) counts two.
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -147,7 +152,12 @@ pub enum Call {
     // ---- the machine
     /// Folders under a path, to choose where a tab works. → `Folder`.
     /// Refused (`Forbidden`) by a view-only workspace, which makes no tabs.
+    /// Kept for older apps: `Browse` says where it looked too.
     BrowseFolders(Browse),
+    /// Folders under a path, and the path as an absolute one (`~` and `""`
+    /// made into the home folder), to show and to go up from. → `Browsed`.
+    /// Refused by a view-only workspace, as `BrowseFolders`.
+    Browse(Browse),
 }
 
 impl Call {
@@ -171,6 +181,7 @@ impl Call {
                 | Call::GitCommitFiles(_)
                 | Call::GitBranches(_)
                 | Call::BrowseFolders(_)
+                | Call::Browse(_)
         )
     }
 }
@@ -202,6 +213,7 @@ pub enum Reply {
     CommitFiles(Vec<CommitFile>),
     Branches(Branches),
     Text(String),
+    Browsed(Browsed),
 }
 
 // ---------------------------------------------------------------- arguments
@@ -425,6 +437,52 @@ pub enum InputItem {
     Key(Key),
     /// Pasted text (bracketed when the program asks for it).
     Paste(String),
+    /// The mouse, at a cell of the screen. Sent on to the program only
+    /// while it asks for mouse events (`Screen::mouse`), encoded as it
+    /// asked (X10, SGR); otherwise dropped.
+    Mouse(Mouse),
+}
+
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mouse {
+    pub kind: MouseKind,
+    /// The button pressed or released, or held while moving (`None`: no
+    /// button held; a press or release without one is the left button).
+    /// Not used for the wheel.
+    #[serde(default)]
+    pub button: Option<MouseButton>,
+    /// 0-based, in cells of the screen (`Screen::cols` by `Screen::rows`).
+    pub col: u32,
+    pub row: u32,
+    #[serde(default)]
+    pub ctrl: bool,
+    #[serde(default)]
+    pub alt: bool,
+    #[serde(default)]
+    pub shift: bool,
+}
+
+#[typeshare]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MouseKind {
+    Press,
+    Release,
+    Move,
+    /// One notch of the wheel, up (away from the user) or down.
+    WheelUp,
+    WheelDown,
+}
+
+#[typeshare]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
 }
 
 #[typeshare]
@@ -634,6 +692,7 @@ pub struct AiSettings {
     pub model: Option<String>,
     #[serde(default)]
     pub mode: Option<String>,
+    /// `Some("")`: back to the default effort (the model's own).
     #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
@@ -782,7 +841,7 @@ pub struct QuickOpen {
 #[serde(rename_all = "camelCase")]
 pub struct FileMatch {
     pub path: String,
-    /// Character positions in `path` that matched, to highlight.
+    /// Positions in `path` that matched, to highlight, in UTF-16 code units.
     pub hits: Vec<u32>,
 }
 
@@ -1046,4 +1105,18 @@ pub struct GitPush {
 pub struct Browse {
     /// Absolute, or `~/…`; `""`: home.
     pub path: String,
+}
+
+/// A folder's folders (`Call::Browse`).
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Browsed {
+    /// Where it looked, absolute (`~` expanded, no `..`).
+    pub path: String,
+    /// The folder above, if any.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// Its folders (hidden ones left out), by name.
+    pub entries: Vec<FolderEntry>,
 }

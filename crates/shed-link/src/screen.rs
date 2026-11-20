@@ -9,9 +9,10 @@
 
 use std::time::Instant;
 
-use shed_api::calls::{InputItem, Key};
+use shed_api::calls::{InputItem, Key, Mouse, MouseButton, MouseKind};
 use shed_api::topics::{Cursor, Screen, ScreenLine, Span};
 use shed_emu::keys::{self, KeyInput, Mods};
+use shed_emu::mouse::{self, Button, MouseAction};
 use shed_emu::{AlacrittyEmulator, Emulator, GridSize, Ink, Modes, MouseMode, Palette, StyledCell};
 
 /// A watched pane's emulator, and what was last sent of it.
@@ -224,9 +225,38 @@ pub(crate) fn encode(items: &[InputItem], modes: Modes) -> Vec<u8> {
             }
             InputItem::Key(key) => out.extend(encode_key(key, modes).unwrap_or_default()),
             InputItem::Paste(text) => out.extend(keys::encode_paste(text, modes)),
+            InputItem::Mouse(m) => out.extend(encode_mouse(m, modes).unwrap_or_default()),
         }
     }
     out
+}
+
+/// The mouse, as the program asked for it; `None` when it did not. The
+/// wheel, on the alternate screen of a program that wants no mouse (less,
+/// man) but scrolls by arrow keys, gives those, as the GUI does.
+fn encode_mouse(m: &Mouse, modes: Modes) -> Option<Vec<u8>> {
+    let mods = Mods { ctrl: m.ctrl, alt: m.alt, shift: m.shift, super_: false };
+    let button = |b: Option<MouseButton>| match b {
+        None | Some(MouseButton::Left) => Button::Left,
+        Some(MouseButton::Middle) => Button::Middle,
+        Some(MouseButton::Right) => Button::Right,
+    };
+    let action = match m.kind {
+        MouseKind::Press => MouseAction::Press(button(m.button)),
+        MouseKind::Release => MouseAction::Release(button(m.button)),
+        MouseKind::Move => MouseAction::Move(m.button.map(|b| button(Some(b)))),
+        MouseKind::WheelUp | MouseKind::WheelDown => {
+            let up = m.kind == MouseKind::WheelUp;
+            if modes.mouse == MouseMode::Off {
+                if !(modes.alt_screen && modes.alternate_scroll) {
+                    return None;
+                }
+                return keys::encode(KeyInput { key: if up { "up" } else { "down" }, text: None, mods: Mods::NONE }, modes);
+            }
+            MouseAction::Press(if up { Button::WheelUp } else { Button::WheelDown })
+        }
+    };
+    mouse::encode(action, m.col as usize, m.row as usize, mods, modes)
 }
 
 /// A named key or a character, with modifiers.
@@ -296,6 +326,31 @@ mod tests {
         let kitty = Modes { kitty: 1, ..Default::default() };
         assert_eq!(encode(&[key("Escape", false, false, false)], kitty), b"\x1b[27u");
         assert!(encode(&[key("NoSuchKey", false, false, false)], plain).is_empty());
+    }
+
+    #[test]
+    fn the_mouse_only_when_asked_for() {
+        let at = |kind, button, col, row| InputItem::Mouse(Mouse { kind, button, col, row, ctrl: false, alt: false, shift: false });
+        let click = [at(MouseKind::Press, None, 4, 2), at(MouseKind::Release, None, 4, 2)];
+        // A shell asked for nothing: nothing goes.
+        assert!(encode(&click, Modes::default()).is_empty());
+        assert!(encode(&[at(MouseKind::WheelUp, None, 0, 0)], Modes::default()).is_empty());
+        // Clicks, as X10 reports (1-based, offset by 32) or SGR.
+        let x10 = Modes { mouse: MouseMode::Click, ..Default::default() };
+        assert_eq!(encode(&click, x10), b"\x1b[M %#\x1b[M#%#");
+        let sgr = Modes { mouse: MouseMode::Click, sgr_mouse: true, ..Default::default() };
+        assert_eq!(encode(&click, sgr), b"\x1b[<0;5;3M\x1b[<0;5;3m");
+        let right = at(MouseKind::Press, Some(MouseButton::Right), 0, 0);
+        assert_eq!(encode(&[right], sgr), b"\x1b[<2;1;1M");
+        assert_eq!(encode(&[at(MouseKind::WheelDown, None, 9, 9)], sgr), b"\x1b[<65;10;10M");
+        // Moving without a button only when the program wants all motion.
+        assert!(encode(&[at(MouseKind::Move, None, 1, 1)], sgr).is_empty());
+        let motion = Modes { mouse: MouseMode::Motion, sgr_mouse: true, ..Default::default() };
+        assert_eq!(encode(&[at(MouseKind::Move, None, 1, 1)], motion), b"\x1b[<35;2;2M");
+        // less on the alternate screen: the wheel as arrow keys.
+        let less = Modes { alt_screen: true, alternate_scroll: true, ..Default::default() };
+        assert_eq!(encode(&[at(MouseKind::WheelUp, None, 0, 0)], less), b"\x1b[A");
+        assert!(encode(&click, less).is_empty());
     }
 
     #[test]

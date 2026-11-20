@@ -354,6 +354,8 @@ pub struct Span {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cursor {
+    /// Row and column in cells of the grid (a wide character takes two
+    /// columns, and once in a span's `text`).
     pub row: u32,
     pub col: u32,
     pub visible: bool,
@@ -369,7 +371,9 @@ pub struct FilesChanged {
     pub paths: Vec<String>,
 }
 
-/// A coloured range in a line of code: character positions, and what it is.
+/// A coloured range in a line of code, and what it is. `start` and `end`
+/// are positions in the line in UTF-16 code units (as JavaScript and Kotlin
+/// strings index).
 #[typeshare]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -397,7 +401,8 @@ pub struct SearchHit {
     /// 1-based.
     pub line: u32,
     pub text: String,
-    /// Character ranges in `text` that matched: start, end, start, end…
+    /// Ranges in `text` that matched: start, end, start, end…, in UTF-16
+    /// code units.
     pub ranges: Vec<u32>,
 }
 

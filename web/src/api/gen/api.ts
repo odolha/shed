@@ -207,6 +207,7 @@ export interface AiSettings {
 	/** `Some("")`: back to the default model. */
 	model?: string | null;
 	mode?: string | null;
+	/** `Some("")`: back to the default effort (the model's own). */
 	effort?: string | null;
 	follow?: boolean | null;
 	browser?: boolean | null;
@@ -452,6 +453,23 @@ export interface Browse {
 	path: string;
 }
 
+export interface FolderEntry {
+	name: string;
+	dir: boolean;
+	/** Left out by the tab's excludes or Git's ignore rules (shown dimmed). */
+	ignored?: boolean;
+}
+
+/** A folder's folders (`Call::Browse`). */
+export interface Browsed {
+	/** Where it looked, absolute (`~` expanded, no `..`). */
+	path: string;
+	/** The folder above, if any. */
+	parent?: string | null;
+	/** Its folders (hidden ones left out), by name. */
+	entries: FolderEntry[];
+}
+
 export interface ChangePassword {
 	old: string;
 	new: string;
@@ -500,6 +518,10 @@ export interface CommitFile {
 }
 
 export interface Cursor {
+	/**
+	 * Row and column in cells of the grid (a wide character takes two
+	 * columns, and once in a span's `text`).
+	 */
 	row: number;
 	col: number;
 	visible: boolean;
@@ -595,7 +617,11 @@ export type FileKind =
 	| "binary"
 	| "tooLarge";
 
-/** A coloured range in a line of code: character positions, and what it is. */
+/**
+ * A coloured range in a line of code, and what it is. `start` and `end`
+ * are positions in the line in UTF-16 code units (as JavaScript and Kotlin
+ * strings index).
+ */
 export interface Highlight {
 	start: number;
 	end: number;
@@ -624,7 +650,7 @@ export interface FileContent {
 
 export interface FileMatch {
 	path: string;
-	/** Character positions in `path` that matched, to highlight. */
+	/** Positions in `path` that matched, to highlight, in UTF-16 code units. */
 	hits: number[];
 }
 
@@ -635,13 +661,6 @@ export interface FilesChanged {
 
 export interface Folder {
 	folder: string;
-}
-
-export interface FolderEntry {
-	name: string;
-	dir: boolean;
-	/** Left out by the tab's excludes or Git's ignore rules (shown dimmed). */
-	ignored?: boolean;
 }
 
 export interface GitBranch {
@@ -739,7 +758,13 @@ export type InputItem =
 	/** A key with modifiers. */
 	| { type: "Key", content: Key }
 	/** Pasted text (bracketed when the program asks for it). */
-	| { type: "Paste", content: string };
+	| { type: "Paste", content: string }
+	/**
+	 * The mouse, at a cell of the screen. Sent on to the program only
+	 * while it asks for mouse events (`Screen::mouse`), encoded as it
+	 * asked (X10, SGR); otherwise dropped.
+	 */
+	| { type: "Mouse", content: Mouse };
 
 export interface Input {
 	pane: string;
@@ -833,6 +858,35 @@ export interface Login {
 	device: DeviceHello;
 }
 
+export type MouseKind =
+	| "press"
+	| "release"
+	| "move"
+	/** One notch of the wheel, up (away from the user) or down. */
+	| "wheelUp"
+	| "wheelDown";
+
+export type MouseButton =
+	| "left"
+	| "middle"
+	| "right";
+
+export interface Mouse {
+	kind: MouseKind;
+	/**
+	 * The button pressed or released, or held while moving (`None`: no
+	 * button held; a press or release without one is the left button).
+	 * Not used for the wheel.
+	 */
+	button?: MouseButton | null;
+	/** 0-based, in cells of the screen (`Screen::cols` by `Screen::rows`). */
+	col: number;
+	row: number;
+	ctrl?: boolean;
+	alt?: boolean;
+	shift?: boolean;
+}
+
 /** A running bench by id, or a closed one by name. */
 export type BenchRef =
 	| { type: "Running", content: string }
@@ -886,7 +940,8 @@ export type NotificationKind =
 
 /**
  * Something that happened in a workspace that the user may want to hear
- * about away from it. The nexus pushes it to the devices that want its kind.
+ * about away from it. The nexus pushes it to the devices that want its kind,
+ * as a `http::PushPayload` (this, with the workspace's id and name added).
  */
 export interface Notification {
 	kind: NotificationKind;
@@ -1004,6 +1059,29 @@ export interface PushInfo {
 	vapidKey?: string | null;
 	/** This device's choices. */
 	prefs: PushPrefs;
+	/**
+	 * This device has a subscription (`push/subscribe`), so pushes reach
+	 * it. False once it unsubscribed, or after the push service said the
+	 * subscription is gone.
+	 */
+	subscribed?: boolean;
+}
+
+/**
+ * What a push carries, once decrypted: a workspace's `Notification` with
+ * the workspace it came from, added by the nexus. A connector opens
+ * `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given).
+ */
+export interface PushPayload {
+	kind: NotificationKind;
+	title: string;
+	body?: string;
+	/** The workspace's id (`WorkspaceInfo::id`). */
+	workspace: string;
+	/** Its name at the nexus. */
+	workspaceName?: string;
+	bench?: string | null;
+	tab?: string | null;
 }
 
 /**
@@ -1182,8 +1260,15 @@ export type Call =
 	/**
 	 * Folders under a path, to choose where a tab works. → `Folder`.
 	 * Refused (`Forbidden`) by a view-only workspace, which makes no tabs.
+	 * Kept for older apps: `Browse` says where it looked too.
 	 */
-	| { type: "BrowseFolders", content: Browse };
+	| { type: "BrowseFolders", content: Browse }
+	/**
+	 * Folders under a path, and the path as an absolute one (`~` and `""`
+	 * made into the home folder), to show and to go up from. → `Browsed`.
+	 * Refused by a view-only workspace, as `BrowseFolders`.
+	 */
+	| { type: "Browse", content: Browse };
 
 /** A call on a workspace. Answered by one `Response` with the same id. */
 export interface Request {
@@ -1217,7 +1302,8 @@ export type Reply =
 	| { type: "Commits", content: Commit[] }
 	| { type: "CommitFiles", content: CommitFile[] }
 	| { type: "Branches", content: Branches }
-	| { type: "Text", content: string };
+	| { type: "Text", content: string }
+	| { type: "Browsed", content: Browsed };
 
 export interface Response {
 	id: number;
@@ -1334,7 +1420,10 @@ export interface SearchHit {
 	/** 1-based. */
 	line: number;
 	text: string;
-	/** Character ranges in `text` that matched: start, end, start, end… */
+	/**
+	 * Ranges in `text` that matched: start, end, start, end…, in UTF-16
+	 * code units.
+	 */
 	ranges: number[];
 }
 

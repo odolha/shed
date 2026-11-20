@@ -7,7 +7,7 @@ mod ai;
 mod git;
 mod project;
 
-pub(crate) use project::{root_of, slash};
+pub(crate) use project::{root_of, slash, utf16_at};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -352,7 +352,7 @@ pub(crate) async fn call(ctx: Arc<Ctx>, call: Call) -> Result<Reply, ApiError> {
         | Call::AiStart(_) => ai::call(&ctx, &tree, call).await,
 
         // ---- projects
-        Call::ListFolder(_) | Call::QuickOpen(_) | Call::ReadFile(_) | Call::WriteFile(_) | Call::CreateEntry(_) | Call::BrowseFolders(_) => {
+        Call::ListFolder(_) | Call::QuickOpen(_) | Call::ReadFile(_) | Call::WriteFile(_) | Call::CreateEntry(_) | Call::BrowseFolders(_) | Call::Browse(_) => {
             project::call(&ctx, &tree, call).await
         }
 

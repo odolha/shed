@@ -56,7 +56,11 @@ pub(super) async fn call(ctx: &std::sync::Arc<Ctx>, tree: &Shed, call: Call) -> 
                 Ok(Reply::Files(
                     shed_project::fuzzy::rank(&a.query, &files, limit)
                         .into_iter()
-                        .map(|(i, hits)| api::FileMatch { path: slash(&files[i]), hits })
+                        .map(|(i, hits)| {
+                            let path = slash(&files[i]);
+                            let hits = utf16_of_chars(&path, &hits);
+                            api::FileMatch { path, hits }
+                        })
                         .collect(),
                 ))
             })
@@ -113,21 +117,60 @@ pub(super) async fn call(ctx: &std::sync::Arc<Ctx>, tree: &Shed, call: Call) -> 
         }
         Call::BrowseFolders(a) => {
             let dir = crate::paths::expand(&a.path)?;
+            blocking(move || Ok(Reply::Folder(folders_in(&dir)?))).await
+        }
+        Call::Browse(a) => {
+            let dir = crate::paths::expand(&a.path)?;
             blocking(move || {
-                let entries = std::fs::read_dir(&dir).map_err(|e| not_found(format!("{}: {e}", dir.display())))?;
-                let mut names: Vec<String> = entries
-                    .flatten()
-                    .filter(|e| e.path().is_dir())
-                    .map(|e| e.file_name().to_string_lossy().into_owned())
-                    .filter(|n| !n.starts_with('.'))
-                    .collect();
-                names.sort_by_key(|n| n.to_lowercase());
-                Ok(Reply::Folder(names.into_iter().map(|name| api::FolderEntry { name, dir: true, ignored: false }).collect()))
+                // Where it looked, as one path (no `..` nor links in it).
+                let dir = std::fs::canonicalize(&dir).map_err(|e| not_found(format!("{}: {e}", dir.display())))?;
+                let entries = folders_in(&dir)?;
+                Ok(Reply::Browsed(api::Browsed {
+                    path: dir.to_string_lossy().into_owned(),
+                    parent: dir.parent().map(|p| p.to_string_lossy().into_owned()),
+                    entries,
+                }))
             })
             .await
         }
         _ => Err(ApiError::new(ErrorCode::Unsupported, "not a project call")),
     }
+}
+
+/// The folders in `dir`, hidden ones left out, by name.
+fn folders_in(dir: &Path) -> Result<Vec<api::FolderEntry>, ApiError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| not_found(format!("{}: {e}", dir.display())))?;
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    Ok(names.into_iter().map(|name| api::FolderEntry { name, dir: true, ignored: false }).collect())
+}
+
+/// A byte offset in `text` as a position in UTF-16 code units, which is
+/// how the API counts (JavaScript and Kotlin strings index so).
+pub(crate) fn utf16_at(text: &str, byte: usize) -> u32 {
+    let mut byte = byte.min(text.len());
+    while !text.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    text[..byte].encode_utf16().count() as u32
+}
+
+/// Character positions in `text` (as the fuzzy matcher gives them) as
+/// UTF-16 positions.
+pub(crate) fn utf16_of_chars(text: &str, chars: &[u32]) -> Vec<u32> {
+    let mut at = Vec::with_capacity(text.len() + 1);
+    let mut units = 0u32;
+    for c in text.chars() {
+        at.push(units);
+        units += c.len_utf16() as u32;
+    }
+    at.push(units);
+    chars.iter().filter_map(|&i| at.get(i as usize).copied()).collect()
 }
 
 /// A relative path with `/` between its parts.
@@ -163,17 +206,16 @@ pub(crate) fn read(path: &Path, rel: String) -> Result<api::FileContent, ApiErro
     Ok(api::FileContent { text, lang: lang.map(|l| l.name.to_string()), highlights, ..empty(FileKind::Text) })
 }
 
-/// Per line, its coloured ranges in character positions (the highlighter
-/// gives bytes), each with its kind's name: `keyword`, `string`…
+/// Per line, its coloured ranges in UTF-16 positions (the highlighter gives
+/// bytes), each with its kind's name: `keyword`, `string`…
 pub(crate) fn highlights(text: &str, spans: &shed_project::Spans) -> Vec<Vec<Highlight>> {
     text.split('\n')
         .zip(spans)
         .map(|(line, spans)| {
-            let char_at = |byte: usize| line[..byte.min(line.len())].chars().count() as u32;
             spans
                 .iter()
                 .filter(|(r, _)| line.is_char_boundary(r.start.min(line.len())) && line.is_char_boundary(r.end.min(line.len())))
-                .map(|(r, style)| Highlight { start: char_at(r.start), end: char_at(r.end), kind: style_name(*style).into() })
+                .map(|(r, style)| Highlight { start: utf16_at(line, r.start), end: utf16_at(line, r.end), kind: style_name(*style).into() })
                 .collect()
         })
         .collect()
@@ -205,7 +247,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn highlights_in_characters() {
+    fn highlights_in_utf16_units() {
         let text = "let é = \"ü\"; // x\nfn f() {}";
         let lang = shed_project::by_name("rust").unwrap();
         let spans = shed_project::highlight(lang, text).unwrap();
@@ -217,6 +259,36 @@ mod tests {
         let comment = lines[0].iter().find(|h| h.kind == "comment").unwrap();
         assert_eq!((comment.start, comment.end), (13, 17));
         assert_eq!(lines[1][0], Highlight { start: 0, end: 2, kind: "keyword".into() });
+        // An emoji is two UTF-16 units (four bytes, one character).
+        let text = "let s = \"🦀\"; // 🦀 ok";
+        let spans = shed_project::highlight(lang, text).unwrap();
+        let line = &highlights(text, &spans)[0];
+        let string = line.iter().find(|h| h.kind == "string").unwrap();
+        assert_eq!((string.start, string.end), (8, 12));
+        let comment = line.iter().find(|h| h.kind == "comment").unwrap();
+        let units: Vec<u16> = text.encode_utf16().collect();
+        assert_eq!(String::from_utf16(&units[comment.start as usize..comment.end as usize]).unwrap(), "// 🦀 ok");
+    }
+
+    #[test]
+    fn positions_in_utf16_units() {
+        let text = "a🦀b€c";
+        assert_eq!([0, 1, 5, 6, 9, 10].map(|b| utf16_at(text, b)), [0, 1, 3, 4, 5, 6]);
+        // Inside a character: where it starts.
+        assert_eq!(utf16_at(text, 2), 1);
+        assert_eq!(utf16_of_chars(text, &[0, 1, 2, 3, 4, 5]), vec![0, 1, 3, 4, 5, 6]);
+        assert_eq!(utf16_of_chars(text, &[9]), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn folders_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("b/c")).unwrap();
+        std::fs::create_dir_all(dir.path().join("A")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".hidden")).unwrap();
+        std::fs::write(dir.path().join("file"), "").unwrap();
+        let names: Vec<String> = folders_in(dir.path()).unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["A", "b"]);
     }
 
     #[test]

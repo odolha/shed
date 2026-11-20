@@ -244,7 +244,8 @@ pub struct LinkWelcome {
 }
 
 /// Something that happened in a workspace that the user may want to hear
-/// about away from it. The nexus pushes it to the devices that want its kind.
+/// about away from it. The nexus pushes it to the devices that want its kind,
+/// as a `http::PushPayload` (this, with the workspace's id and name added).
 #[typeshare]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

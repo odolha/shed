@@ -115,8 +115,16 @@ async fn cookie_sessions_need_the_csrf_token_for_changes() {
     let without = Auth::Cookie { token: token.clone(), csrf: None };
     let wrong = Auth::Cookie { token: token.clone(), csrf: Some("x".into()) };
 
+    // A browser that lost its token (a reload) asks for it again.
+    let session: SignedIn = nexus.get("/api/v1/session", &without).await;
+    assert_eq!(session.csrf, csrf);
+    assert!(session.token.is_none() && session.recovery_codes.is_empty());
+    assert_eq!(session.username, "me");
+    assert_eq!(nexus.get_raw("/api/v1/session", &Auth::None).await.status(), StatusCode::UNAUTHORIZED);
+
     // Reading needs only the cookie.
     let devices: Vec<Device> = nexus.get("/api/v1/devices", &without).await;
+    assert_eq!(session.device, devices.iter().find(|d| d.current).unwrap().id);
     let me = devices.iter().find(|d| d.current).unwrap().id.clone();
 
     let rename = RenameDevice { device: me, name: "Laptop".into() };
@@ -139,7 +147,6 @@ async fn cookie_sessions_need_the_csrf_token_for_changes() {
     assert_eq!(answer.status(), StatusCode::OK);
     assert!(answer.headers()["set-cookie"].to_str().unwrap().contains("Max-Age=0"));
     assert_eq!(nexus.get_raw("/api/v1/devices", &account.browser).await.status(), StatusCode::UNAUTHORIZED);
-    let _ = csrf;
 }
 
 #[tokio::test]
@@ -180,5 +187,30 @@ async fn push_subscriptions_are_kept_per_device() {
     let prefs = PushPrefs { kinds: vec![shed_api::wire::NotificationKind::AiWaiting] };
     let _: serde_json::Value = nexus.post("/api/v1/push/prefs", &prefs, &account.browser).await;
     let info: PushInfo = nexus.get("/api/v1/push", &account.browser).await;
+    assert_eq!(info.prefs, prefs);
+    assert!(!info.subscribed);
+}
+
+#[tokio::test]
+async fn a_device_unsubscribes_and_keeps_its_choices() {
+    let nexus = start_with(|c| {
+        c.push.allow_private_endpoints = true;
+        c.push.allow_http_endpoints = true;
+    })
+    .await;
+    let account = set_up(&nexus).await;
+    use base64::Engine;
+    use web_push_native::p256::elliptic_curve::sec1::ToEncodedPoint;
+    let secret = web_push_native::p256::SecretKey::random(&mut web_push_native::p256::elliptic_curve::rand_core::OsRng);
+    let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret.public_key().to_encoded_point(false).as_bytes());
+    let sub = PushSubscribe { endpoint: "http://127.0.0.1:9/push".into(), p256dh: key, auth: "AAAAAAAAAAAAAAAAAAAAAA".into() };
+    let _: serde_json::Value = nexus.post("/api/v1/push/subscribe", &sub, &account.browser).await;
+    let prefs = PushPrefs { kinds: vec![shed_api::wire::NotificationKind::AiDone] };
+    let _: serde_json::Value = nexus.post("/api/v1/push/prefs", &prefs, &account.browser).await;
+    let info: PushInfo = nexus.get("/api/v1/push", &account.browser).await;
+    assert!(info.subscribed);
+    let _: serde_json::Value = nexus.post("/api/v1/push/unsubscribe", &serde_json::json!({}), &account.browser).await;
+    let info: PushInfo = nexus.get("/api/v1/push", &account.browser).await;
+    assert!(!info.subscribed);
     assert_eq!(info.prefs, prefs);
 }

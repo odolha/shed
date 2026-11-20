@@ -475,7 +475,7 @@ impl Link {
         // Browsing the machine's folders is for choosing where a new tab
         // works: a view-only workspace makes no tabs, and shows no more of
         // its disk than its tabs' folders.
-        if matches!(call, Call::BrowseFolders(_)) && self.opts.policy == Policy::View {
+        if matches!(call, Call::BrowseFolders(_) | Call::Browse(_)) && self.opts.policy == Policy::View {
             return self.respond(id, Err(ApiError::new(ErrorCode::Forbidden, "this workspace lets connectors look at its tabs only")));
         }
         match call {

@@ -32,6 +32,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/setup", post(setup))
         .route("/setup/confirm", post(setup_confirm))
         .route("/login", post(login))
+        .route("/session", get(session))
         .route("/logout", post(logout))
         .route("/devices", get(devices))
         .route("/devices/revoke", post(revoke))
@@ -44,6 +45,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/pair/reject", post(pair::reject))
         .route("/push", get(push_info))
         .route("/push/subscribe", post(push_subscribe))
+        .route("/push/unsubscribe", post(push_unsubscribe))
         .route("/push/prefs", post(push_prefs))
         .route("/audit", get(audit))
         .fallback(|| async { Failure::new(ErrorCode::NotFound, "no such route") })
@@ -511,6 +513,17 @@ async fn login(State(app): State<Arc<App>>, client: Client, Body(req): Body<Logi
     Ok(answer)
 }
 
+/// Who is signed in here: for a browser that lost its CSRF token (a
+/// reload), the session's token again.
+async fn session(State(app): State<Arc<App>>, headers: HeaderMap, caller: Caller) -> Answer<SignedIn> {
+    let account = app.store.account()?.ok_or_else(|| Failure::new(ErrorCode::Unauthorized, "not set up yet"))?;
+    let csrf = match cookie(&headers, COOKIE) {
+        Some(token) if caller.session.is_some() => app.store.session(&auth::hash_token(token), now())?.map(|s| s.csrf),
+        _ => None,
+    };
+    Ok(Json(SignedIn { username: account.username, device: caller.device, token: None, csrf, recovery_codes: vec![] }))
+}
+
 async fn logout(State(app): State<Arc<App>>, client: Client, caller: Caller) -> Result<Response, Failure> {
     app.store.revoke_device(&caller.device)?;
     app.hub.close_device(&caller.device, ApiError::new(ErrorCode::Unauthorized, "signed out"));
@@ -616,6 +629,7 @@ async fn push_info(State(app): State<Arc<App>>, caller: Caller) -> Answer<PushIn
     Ok(Json(PushInfo {
         vapid_key: app.push.as_ref().map(|p| p.public_key().to_string()),
         prefs: PushPrefs { kinds: app.store.push_kinds(&caller.device)? },
+        subscribed: app.store.subscribed(&caller.device)?,
     }))
 }
 
@@ -628,6 +642,11 @@ async fn push_subscribe(
     push.check(&req).map_err(|e| Failure::new(ErrorCode::Invalid, e))?;
     push.check_address(&req.endpoint).await.map_err(|e| Failure::new(ErrorCode::Invalid, e))?;
     app.store.set_subscription(&caller.device, &req)?;
+    Ok(Json(Empty {}))
+}
+
+async fn push_unsubscribe(State(app): State<Arc<App>>, caller: Caller) -> Answer<Empty> {
+    app.store.remove_subscription(&caller.device)?;
     Ok(Json(Empty {}))
 }
 

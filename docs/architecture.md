@@ -702,7 +702,8 @@ flowchart LR
 - **Signing in** takes password and TOTP (or a recovery code). A browser gets a
   session (`shed_session` cookie: `HttpOnly`, `Secure` unless turned off,
   `SameSite=Strict`) and a CSRF token it sends in `X-Shed-Csrf` with every
-  change; a phone gets a device token for `Authorization: Bearer`. Tokens are
+  change (after a reload, `GET /api/v1/session` gives it again); a phone gets
+  a device token for `Authorization: Bearer`. Tokens are
   256 random bits; the database keeps their SHA-256 only. The guard
   (`auth::Guard`) counts by address, an IPv4 address or an IPv6 /64. A sign-in
   or setup attempt counts as a failure from when it starts until it succeeds
@@ -762,12 +763,15 @@ is renamed.
 **Push.** A link's `Notify` (at most 30 a minute per workspace, title and body
 cut short), and a workspace offline for two minutes, become
 Web Push messages to every device whose subscription wants that kind. The
-payload (JSON: kind, title, body, workspace and its name, bench, tab) is
+payload (`shed_api::http::PushPayload`: kind, title, body, workspace and its
+name, bench, tab, so a click opens `/w/{workspace}/b/{bench}/t/{tab}`) is
 encrypted for the device (RFC 8291, `aes128gcm`) and signed with the nexus's
 VAPID key (RFC 8292), made on first start (`vapid.key`, 0600). Browsers'
 push services and UnifiedPush distributors (ntfy) take the same requests, so
 one path covers both. Subscriptions a push service no longer knows (404, 410)
-are dropped. Endpoints must be on public addresses (not loopback, private,
+are dropped, and a device can drop its own (`push/unsubscribe`, keeping its
+choice of kinds; `PushInfo::subscribed` says whether it has one). Endpoints
+must be on public addresses (not loopback, private,
 link-local, shared or reserved, IPv4 within IPv6 included): checked on
 subscribing, and again as the push client connects, by a resolver that keeps
 only public addresses (so a name that later resolves inside does not lead
@@ -809,7 +813,10 @@ dialled again after a drop (1 s, doubling up to a minute). After `Hello` and
   usage limits, mapped to `shed_api::state` (`state.rs`), sent whole when it
   differs from the last sent, at most four times a second. Colours are the
   accents as `#rrggbb`; titles are `Tab::display_title`.
-- **Responses** to calls (`calls/`). Changes go to the keeper as the GUI's
+- **Responses** to calls (`calls/`). Positions in text (highlights, quick
+  open's hits, search ranges) are counted in UTF-16 code units, as JavaScript
+  and Kotlin strings index, from the byte or character positions the crates
+  give. Changes go to the keeper as the GUI's
   messages (`BenchEdit` for running or closed benches). Where the keeper's
   answer matters (`Done`, `Error`), the message goes over a short CLI
   connection of its own so the answer is its own; what a call made (a bench,
@@ -836,13 +843,17 @@ Colours stay as the program chose them (`Emulator::styled_line`): a palette
 index (`"0"`…`"255"`) or `#rrggbb`, `None` for the terminal's own, so each
 connector applies its theme; inverse and dim are flags. Keys come as named keys
 with modifiers, text or pastes, encoded by `shed_emu::keys` for the pane's
-modes (typed before its replay arrives, they wait for it). `TakeSize` resizes
+modes (typed before its replay arrives, they wait for it). The mouse (press,
+release, move, wheel, at a cell) goes on encoded by `shed_emu::mouse` only
+while the program asks for it; the wheel on the alternate screen of a program
+that does not (less) becomes arrow keys, as in the GUI. `TakeSize` resizes
 the pane (`Resize`) and gives the old size back on `ReleaseSize` or when the
 last subscriber of its screen goes. The keeper broadcasts the tree when a
 pane's size changes, so the link replays a pane the GUI resized.
 
 **Policy.** With `[nexus] control = "view"`, calls that change something
-(`Call::changes`) are refused with `Forbidden`, and so is `BrowseFolders`
+(`Call::changes`) are refused with `Forbidden`, and so are `Browse` and
+`BrowseFolders`
 (choosing a folder is for making tabs; a view-only connector sees no more of
 the disk than its tabs' folders). A private tab shows as its id, kind and
 place only (title "Private", no name, folders, tags, panes' titles or tools);

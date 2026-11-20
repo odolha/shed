@@ -21,8 +21,7 @@ use std::time::Duration;
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::Serialize;
-use shed_api::http::PushSubscribe;
+use shed_api::http::{PushPayload as Payload, PushSubscribe};
 use shed_api::wire::{Notification, NotificationKind};
 use web_push_native::jwt_simple::algorithms::{ECDSAP256PublicKeyLike, ES256KeyPair};
 use web_push_native::p256::PublicKey;
@@ -113,19 +112,6 @@ fn host_port(endpoint: &str) -> Option<(String, u16)> {
     let host = uri.host()?.trim_start_matches('[').trim_end_matches(']').to_string();
     let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("http") { 80 } else { 443 });
     Some((host, port))
-}
-
-/// What a device gets, as JSON, once decrypted.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Payload {
-    pub kind: NotificationKind,
-    pub title: String,
-    pub body: String,
-    pub workspace: String,
-    pub workspace_name: String,
-    pub bench: Option<String>,
-    pub tab: Option<String>,
 }
 
 /// How a delivery went.

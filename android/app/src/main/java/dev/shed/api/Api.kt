@@ -244,6 +244,7 @@ data class AiSettings (
 	/// `Some("")`: back to the default model.
 	val model: String? = null,
 	val mode: String? = null,
+	/// `Some("")`: back to the default effort (the model's own).
 	val effort: String? = null,
 	val follow: Boolean? = null,
 	val browser: Boolean? = null,
@@ -553,6 +554,25 @@ data class Browse (
 )
 
 @Serializable
+data class FolderEntry (
+	val name: String,
+	val dir: Boolean,
+	/// Left out by the tab's excludes or Git's ignore rules (shown dimmed).
+	val ignored: Boolean? = null
+)
+
+/// A folder's folders (`Call::Browse`).
+@Serializable
+data class Browsed (
+	/// Where it looked, absolute (`~` expanded, no `..`).
+	val path: String,
+	/// The folder above, if any.
+	val parent: String? = null,
+	/// Its folders (hidden ones left out), by name.
+	val entries: List<FolderEntry>
+)
+
+@Serializable
 data class ChangePassword (
 	val old: String,
 	val new: String,
@@ -608,6 +628,8 @@ data class CommitFile (
 
 @Serializable
 data class Cursor (
+	/// Row and column in cells of the grid (a wide character takes two
+	/// columns, and once in a span's `text`).
 	val row: UInt,
 	val col: UInt,
 	val visible: Boolean
@@ -743,7 +765,9 @@ enum class FileKind(val string: String) {
 	TooLarge("tooLarge"),
 }
 
-/// A coloured range in a line of code: character positions, and what it is.
+/// A coloured range in a line of code, and what it is. `start` and `end`
+/// are positions in the line in UTF-16 code units (as JavaScript and Kotlin
+/// strings index).
 @Serializable
 data class Highlight (
 	val start: UInt,
@@ -773,7 +797,7 @@ data class FileContent (
 @Serializable
 data class FileMatch (
 	val path: String,
-	/// Character positions in `path` that matched, to highlight.
+	/// Positions in `path` that matched, to highlight, in UTF-16 code units.
 	val hits: List<UInt>
 )
 
@@ -786,14 +810,6 @@ data class FilesChanged (
 @Serializable
 data class Folder (
 	val folder: String
-)
-
-@Serializable
-data class FolderEntry (
-	val name: String,
-	val dir: Boolean,
-	/// Left out by the tab's excludes or Git's ignore rules (shown dimmed).
-	val ignored: Boolean? = null
 )
 
 @Serializable
@@ -920,6 +936,12 @@ sealed class InputItem {
 	@Serializable
 	@SerialName("Paste")
 	data class Paste(val content: String): InputItem()
+	/// The mouse, at a cell of the screen. Sent on to the program only
+	/// while it asks for mouse events (`Screen::mouse`), encoded as it
+	/// asked (X10, SGR); otherwise dropped.
+	@Serializable
+	@SerialName("Mouse")
+	data class Mouse(val content: dev.shed.api.Mouse): InputItem()
 }
 
 @Serializable
@@ -1031,6 +1053,46 @@ data class Login (
 	val device: DeviceHello
 )
 
+@Serializable
+enum class MouseKind(val string: String) {
+	@SerialName("press")
+	Press("press"),
+	@SerialName("release")
+	Release("release"),
+	@SerialName("move")
+	Move("move"),
+	/// One notch of the wheel, up (away from the user) or down.
+	@SerialName("wheelUp")
+	WheelUp("wheelUp"),
+	@SerialName("wheelDown")
+	WheelDown("wheelDown"),
+}
+
+@Serializable
+enum class MouseButton(val string: String) {
+	@SerialName("left")
+	Left("left"),
+	@SerialName("middle")
+	Middle("middle"),
+	@SerialName("right")
+	Right("right"),
+}
+
+@Serializable
+data class Mouse (
+	val kind: MouseKind,
+	/// The button pressed or released, or held while moving (`None`: no
+	/// button held; a press or release without one is the left button).
+	/// Not used for the wheel.
+	val button: MouseButton? = null,
+	/// 0-based, in cells of the screen (`Screen::cols` by `Screen::rows`).
+	val col: UInt,
+	val row: UInt,
+	val ctrl: Boolean? = null,
+	val alt: Boolean? = null,
+	val shift: Boolean? = null
+)
+
 /// A running bench by id, or a closed one by name.
 @Serializable
 sealed class BenchRef {
@@ -1111,7 +1173,8 @@ enum class NotificationKind(val string: String) {
 }
 
 /// Something that happened in a workspace that the user may want to hear
-/// about away from it. The nexus pushes it to the devices that want its kind.
+/// about away from it. The nexus pushes it to the devices that want its kind,
+/// as a `http::PushPayload` (this, with the workspace's id and name added).
 @Serializable
 data class Notification (
 	val kind: NotificationKind,
@@ -1239,7 +1302,27 @@ data class PushInfo (
 	/// The VAPID public key for Web Push (base64url), if Web Push is on.
 	val vapidKey: String? = null,
 	/// This device's choices.
-	val prefs: PushPrefs
+	val prefs: PushPrefs,
+	/// This device has a subscription (`push/subscribe`), so pushes reach
+	/// it. False once it unsubscribed, or after the push service said the
+	/// subscription is gone.
+	val subscribed: Boolean? = null
+)
+
+/// What a push carries, once decrypted: a workspace's `Notification` with
+/// the workspace it came from, added by the nexus. A connector opens
+/// `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given).
+@Serializable
+data class PushPayload (
+	val kind: NotificationKind,
+	val title: String,
+	val body: String? = null,
+	/// The workspace's id (`WorkspaceInfo::id`).
+	val workspace: String,
+	/// Its name at the nexus.
+	val workspaceName: String? = null,
+	val bench: String? = null,
+	val tab: String? = null
 )
 
 /// Where to push to this device: a Web Push subscription (browser), or a
@@ -1549,9 +1632,16 @@ sealed class Call {
 	data class GitPush(val content: dev.shed.api.GitPush): Call()
 	/// Folders under a path, to choose where a tab works. → `Folder`.
 	/// Refused (`Forbidden`) by a view-only workspace, which makes no tabs.
+	/// Kept for older apps: `Browse` says where it looked too.
 	@Serializable
 	@SerialName("BrowseFolders")
-	data class BrowseFolders(val content: Browse): Call()
+	data class BrowseFolders(val content: dev.shed.api.Browse): Call()
+	/// Folders under a path, and the path as an absolute one (`~` and `""`
+	/// made into the home folder), to show and to go up from. → `Browsed`.
+	/// Refused by a view-only workspace, as `BrowseFolders`.
+	@Serializable
+	@SerialName("Browse")
+	data class Browse(val content: dev.shed.api.Browse): Call()
 }
 
 /// A call on a workspace. Answered by one `Response` with the same id.
@@ -1629,6 +1719,9 @@ sealed class Reply {
 	@Serializable
 	@SerialName("Text")
 	data class Text(val content: String): Reply()
+	@Serializable
+	@SerialName("Browsed")
+	data class Browsed(val content: dev.shed.api.Browsed): Reply()
 }
 
 @Serializable
@@ -1751,7 +1844,8 @@ data class SearchHit (
 	/// 1-based.
 	val line: UInt,
 	val text: String,
-	/// Character ranges in `text` that matched: start, end, start, end…
+	/// Ranges in `text` that matched: start, end, start, end…, in UTF-16
+	/// code units.
 	val ranges: List<UInt>
 )
 

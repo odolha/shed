@@ -8,6 +8,7 @@
 //! | `POST /api/v1/setup` | `SetupStart` → `SetupTotp` | anyone with the setup code (from the setup link, `…/setup#code=…`, which the nexus writes to `setup-link.txt` in its data folder until the account exists) |
 //! | `POST /api/v1/setup/confirm` | `SetupConfirm` → `SignedIn` | same |
 //! | `POST /api/v1/login` | `Login` → `SignedIn` (a browser also gets the session cookie) | anyone (rate limited) |
+//! | `GET /api/v1/session` | → `SignedIn` (no token, no recovery codes; a browser gets its session's current `csrf`) | signed in |
 //! | `POST /api/v1/logout` | → `{}` | signed in |
 //! | `GET /api/v1/devices` | → `Vec<Device>` | signed in |
 //! | `POST /api/v1/devices/revoke` | `Revoke` → `{}` | signed in, with a fresh TOTP |
@@ -20,12 +21,17 @@
 //! | `POST /api/v1/pair/reject` | `PairReject` (its id, or the code) → `{}` | signed in |
 //! | `GET /api/v1/push` | → `PushInfo` | signed in |
 //! | `POST /api/v1/push/subscribe` | `PushSubscribe` → `{}` | signed in (this device) |
+//! | `POST /api/v1/push/unsubscribe` | → `{}` (this device gets no more pushes; its choices stay) | signed in (this device) |
 //! | `POST /api/v1/push/prefs` | `PushPrefs` → `{}` | signed in (this device) |
 //! | `GET /api/v1/audit` | → `Vec<AuditEntry>` | signed in |
 //!
 //! A device token goes in `Authorization: Bearer …`; a browser uses the
 //! session cookie (and `X-Shed-Csrf` with the token from `SignedIn` on
-//! changes).
+//! changes). A browser that lost the token (a reload) gets it again from
+//! `GET /api/v1/session`.
+//!
+//! Pushes (Web Push to a browser, UnifiedPush to the Android app) carry a
+//! `PushPayload` as JSON, encrypted for the device.
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -280,6 +286,33 @@ pub struct PushInfo {
     pub vapid_key: Option<String>,
     /// This device's choices.
     pub prefs: PushPrefs,
+    /// This device has a subscription (`push/subscribe`), so pushes reach
+    /// it. False once it unsubscribed, or after the push service said the
+    /// subscription is gone.
+    #[serde(default)]
+    pub subscribed: bool,
+}
+
+/// What a push carries, once decrypted: a workspace's `Notification` with
+/// the workspace it came from, added by the nexus. A connector opens
+/// `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given).
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushPayload {
+    pub kind: NotificationKind,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    /// The workspace's id (`WorkspaceInfo::id`).
+    pub workspace: String,
+    /// Its name at the nexus.
+    #[serde(default)]
+    pub workspace_name: String,
+    #[serde(default)]
+    pub bench: Option<String>,
+    #[serde(default)]
+    pub tab: Option<String>,
 }
 
 /// Where to push to this device: a Web Push subscription (browser), or a

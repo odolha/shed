@@ -193,8 +193,8 @@ pub(crate) fn search(ctx: Arc<Ctx>, root: PathBuf, exclude: Vec<String>, topic: 
                     .hits
                     .into_iter()
                     .map(|h| {
-                        let char_at = |b: usize| h.text[..b.min(h.text.len())].chars().count() as u32;
-                        api::SearchHit { line: h.line as u32 + 1, ranges: h.ranges.iter().flat_map(|r| [char_at(r.start), char_at(r.end)]).collect(), text: h.text }
+                        let at = |b: usize| crate::calls::utf16_at(&h.text, b);
+                        api::SearchHit { line: h.line as u32 + 1, ranges: h.ranges.iter().flat_map(|r| [at(r.start), at(r.end)]).collect(), text: h.text }
                     })
                     .collect(),
             };
