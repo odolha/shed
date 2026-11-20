@@ -1,0 +1,42 @@
+[package]
+name = "shed-link"
+description = "`shed link`: a workspace's link to a nexus, publishing its state and serving the web and Android apps"
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shed-api.workspace = true
+shed-client.workspace = true
+shed-model.workspace = true
+shed-proto.workspace = true
+shed-emu.workspace = true
+shed-save.workspace = true
+shed-ai.workspace = true
+shed-git.workspace = true
+shed-review.workspace = true
+shed-logbook.workspace = true
+shed-project.workspace = true
+anyhow.workspace = true
+async-channel.workspace = true
+base64.workspace = true
+uuid.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+toml_edit.workspace = true
+tokio-tungstenite = { workspace = true, features = ["__rustls-tls"] }
+rustls.workspace = true
+rustls-pki-types.workspace = true
+webpki-roots.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+futures-util.workspace = true
+
+[dev-dependencies]
+shed-keeper.workspace = true
+shed-nexus = { path = "../shed-nexus" }
+totp-rs.workspace = true
+tempfile.workspace = true

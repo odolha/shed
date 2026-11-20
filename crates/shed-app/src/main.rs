@@ -255,6 +255,14 @@ enum Command {
     },
     /// Stop the keeper and every tool it holds.
     Stop,
+    /// Link this workspace to a nexus, to reach it from the web and Android apps.
+    Nexus {
+        #[command(subcommand)]
+        action: NexusAction,
+    },
+    /// The link to a nexus, started by the keeper.
+    #[command(hide = true)]
+    Link,
     /// Types text into the first bench's active pane (for testing; `\r` is Enter).
     #[command(hide = true)]
     DebugType { text: String },
@@ -282,6 +290,22 @@ enum Command {
         #[command(subcommand)]
         action: HookAction,
     },
+}
+
+#[derive(Subcommand)]
+enum NexusAction {
+    /// Pair this workspace with the nexus at URL: shows a code to approve in
+    /// the web app, then links.
+    Join {
+        url: String,
+        /// The name it goes by there (default: the machine's name).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// The nexus set up here, the pairing, and whether the link is connected.
+    Status,
+    /// Forget the pairing and the nexus here; the link stops.
+    Leave,
 }
 
 #[derive(Subcommand)]
@@ -350,11 +374,14 @@ enum HookAction {
 }
 
 fn main() -> anyhow::Result<()> {
-    let filter = EnvFilter::try_from_env("SHED_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
+    let command = Cli::parse().command;
+    // The link runs in the background; its log says what it did.
+    let level = if matches!(command, Some(Command::Link)) { "info" } else { "warn" };
+    let filter = EnvFilter::try_from_env("SHED_LOG").unwrap_or_else(|_| EnvFilter::new(level));
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
     log_panics();
 
-    match Cli::parse().command {
+    match command {
         None => run_app(ShowTarget::Shed),
         Some(Command::New { name, cwd }) => {
             let cwd = cwd.map(std::path::absolute).transpose()?;
@@ -438,6 +465,10 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Project { dir, bench }) => project(dir, bench, false),
         Some(Command::Ai { dir, bench }) => project(dir, bench, true),
         Some(Command::Stop) => cli::stop(),
+        Some(Command::Link) => std::process::exit(shed_link::main()),
+        Some(Command::Nexus { action: NexusAction::Join { url, name } }) => shed_link::pairing::join(&url, name),
+        Some(Command::Nexus { action: NexusAction::Status }) => shed_link::pairing::status(),
+        Some(Command::Nexus { action: NexusAction::Leave }) => shed_link::pairing::leave(),
         Some(Command::Backup { action }) => backup(action),
         Some(Command::DebugType { text }) => cli::debug_type(&text),
         Some(Command::DebugAi { text, model, answer }) => debug_ai(text, model, answer),

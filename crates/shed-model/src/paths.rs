@@ -69,6 +69,22 @@ pub fn keeper_log_path() -> PathBuf {
     state_dir().join("shedd.log")
 }
 
+/// The pairing with a nexus: its workspace id, name and token (0600, and
+/// not a `.toml`, so backups leave it out).
+pub fn nexus_secret_path() -> PathBuf {
+    data_dir().join("nexus.json")
+}
+
+/// What the running link says about itself, for `shed nexus status`.
+pub fn link_status_path() -> PathBuf {
+    runtime_dir().join("link.json")
+}
+
+/// The link's own log (the keeper starts it with its output here).
+pub fn link_log_path() -> PathBuf {
+    state_dir().join("link.log")
+}
+
 /// Writes a file whole: to a file beside it, then over it in one step, so a
 /// crash or a full disk never leaves it half written.
 /// A file that is a link (dotfiles) is written where it points, the link kept.

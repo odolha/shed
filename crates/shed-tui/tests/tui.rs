@@ -39,6 +39,8 @@ fn start_keeper(dir: &Path) -> PathBuf {
         store: Some(shed_save::Store::new(dir.join("benches"))),
         desktop: None,
         aliases_file: dir.join("aliases.toml"),
+        link_secret: None,
+        link_log: dir.join("link.log"),
     };
     let listen = socket.clone();
     std::thread::spawn(move || {
@@ -62,7 +64,7 @@ impl Harness {
         let socket = start_keeper(dir);
         let deadline = Instant::now() + Duration::from_secs(5);
         let (conn, frames) = loop {
-            match shed_client::keeper_conn::connect_to(&socket, ClientKind::Tui) {
+            match shed_client::keeper_conn::connect_at(&socket, ClientKind::Tui) {
                 Ok(c) => break c,
                 Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
                 Err(e) => panic!("no keeper: {e}"),

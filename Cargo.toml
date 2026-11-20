@@ -26,6 +26,7 @@ shed-tui = { path = "crates/shed-tui" }
 shed-review = { path = "crates/shed-review" }
 shed-api = { path = "crates/shed-api" }
 shed-client = { path = "crates/shed-client" }
+shed-link = { path = "crates/shed-link" }
 
 # GPUI community edition, pinned exactly: upgrade on purpose, one version at a time.
 gpui = { package = "gpui-ce", version = "=0.3.0" }
@@ -77,6 +78,9 @@ web-push-native = "0.5"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-tungstenite = "0.29"
+# The link (shed-link): the web's roots, plus a CA file of one's own if set.
+rustls-pki-types = { version = "1", features = ["std"] }
+webpki-roots = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 notify = "8"
 nucleo-matcher = "0.3"

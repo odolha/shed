@@ -86,6 +86,12 @@ pub struct KeeperConfig {
     pub desktop: Option<shed_desktop::Desktop>,
     /// Shed's global aliases, reloaded when the file changes.
     pub aliases_file: PathBuf,
+    /// The pairing with a nexus (`shed nexus join`): while it exists and
+    /// `[nexus]` is set and on, the keeper runs `shed link` (`shed_bin`).
+    /// `None` never runs one.
+    pub link_secret: Option<PathBuf>,
+    /// Where the link's output goes.
+    pub link_log: PathBuf,
 }
 
 type ClientId = u64;
@@ -118,6 +124,8 @@ pub struct Keeper {
     /// Saved benches as the pegboard shows them, by name, while their file's
     /// save time is unchanged.
     stored_cache: Mutex<HashMap<String, CachedStored>>,
+    /// The `shed link` process, while one runs.
+    link: Mutex<Option<tokio::process::Child>>,
 }
 
 /// A saved bench for the pegboard: its save time, itself, and its previews.
@@ -369,6 +377,7 @@ impl Keeper {
             quitting: AtomicBool::new(false),
             restored: AtomicBool::new(false),
             stored_cache: Mutex::new(HashMap::new()),
+            link: Mutex::new(None),
         })
     }
 
@@ -384,6 +393,7 @@ impl Keeper {
         let flush = tokio::spawn(self.clone().flush_loop());
         let autosave = tokio::spawn(self.clone().autosave_loop());
         let ai_flush = tokio::spawn(self.clone().ai_flush_loop());
+        let link = tokio::spawn(self.clone().link_loop());
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -402,6 +412,7 @@ impl Keeper {
         flush.abort();
         autosave.abort();
         ai_flush.abort();
+        link.abort();
         self.lock().ai.clear();
         self.finish();
         Ok(())
@@ -509,8 +520,10 @@ impl Keeper {
         if st.config.keeper.stay {
             return;
         }
+        // A link follows the keeper: it does not keep it running.
+        let clients = st.clients.values().filter(|c| c.kind != ClientKind::Link).count();
         // A bench may run with no panes (an AI tab working on its own).
-        if st.panes.is_empty() && st.tree.benches.is_empty() && st.clients.is_empty() && !self.stopping.swap(true, Ordering::Relaxed) {
+        if st.panes.is_empty() && st.tree.benches.is_empty() && clients == 0 && !self.stopping.swap(true, Ordering::Relaxed) {
             info!("nothing left to keep; exiting");
             self.shutdown.notify_one();
         }
@@ -636,13 +649,13 @@ impl Keeper {
             ClientMsg::Replay { pane } => self.lock().send_replay(client, pane),
             ClientMsg::Detach { bench } => {
                 let mut st = self.lock();
-                let was_window = st.clients.get_mut(&client).is_some_and(|c| {
+                let window = st.clients.get_mut(&client).is_some_and(|c| {
                     c.attached.remove(&bench);
                     c.kind == ClientKind::Window
                 });
                 // A window detaching is hiding the bench: its window was closed.
                 // (A terminal client moving on leaves windows as they are.)
-                if was_window && !st.is_open(bench) {
+                if window && !st.is_open(bench) {
                     st.shown.remove(&bench);
                 }
                 info!(client, ?bench, "detached");
@@ -657,9 +670,13 @@ impl Keeper {
                         warn!(?pane, "resize failed: {e}");
                     }
                 }
-                if let Some(p) = st.tree.pane_mut(pane) {
+                if let Some(p) = st.tree.pane_mut(pane)
+                    && (p.cols, p.rows) != (cols, rows)
+                {
                     p.cols = cols;
                     p.rows = rows;
+                    // A link following the pane's screen sizes its own emulator by it.
+                    self.tree_dirty.notify_one();
                 }
             }
             ClientMsg::Show(target) => self.show(client, target),
@@ -2182,6 +2199,73 @@ impl Keeper {
         }
         info!("saved; stopping");
         self.hang_up_all();
+        if let Some(mut link) = self.link.lock().unwrap().take() {
+            let _ = link.start_kill();
+        }
+    }
+
+    /// Runs `shed link` while a nexus is set up, on and paired; starts it
+    /// again (waiting longer each time) when it stops. A link the nexus
+    /// refused is not started again until the settings or the pairing change.
+    async fn link_loop(self: Arc<Self>) {
+        let (Some(secret), Some(shed)) = (self.cfg.link_secret.clone(), self.cfg.shed_bin.clone()) else { return };
+        let stamp = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        let (mut failures, mut next_try, mut started) = (0u32, Instant::now(), Instant::now());
+        let mut refused = None;
+        loop {
+            tick.tick().await;
+            let want = self.lock().config.nexus.active() && secret.is_file() && !self.stopping.load(Ordering::Relaxed);
+            let mut link = self.link.lock().unwrap();
+            if let Some(child) = link.as_mut()
+                && let Ok(Some(status)) = child.try_wait()
+            {
+                *link = None;
+                if status.code() == Some(shed_proto::LINK_REFUSED) {
+                    warn!("the nexus refused the link; see {}", self.cfg.link_log.display());
+                    refused = Some((stamp(&self.cfg.config_file), stamp(&secret)));
+                } else {
+                    failures = if started.elapsed() > Duration::from_secs(60) { 1 } else { failures + 1 };
+                    let wait = Duration::from_secs((1u64 << failures.min(6)).min(60));
+                    info!(%status, ?wait, "the link stopped; starting it again");
+                    next_try = Instant::now() + wait;
+                }
+            }
+            if !want {
+                if let Some(mut child) = link.take() {
+                    let _ = child.start_kill();
+                    info!("link stopped");
+                }
+                (failures, refused) = (0, None);
+                continue;
+            }
+            if refused.is_some_and(|r| r != (stamp(&self.cfg.config_file), stamp(&secret))) {
+                refused = None;
+            }
+            if link.is_some() || refused.is_some() || Instant::now() < next_try {
+                continue;
+            }
+            let log = std::fs::OpenOptions::new().create(true).append(true).open(&self.cfg.link_log);
+            let mut cmd = tokio::process::Command::new(&shed);
+            cmd.arg("link").stdin(std::process::Stdio::null()).kill_on_drop(true);
+            if let Ok(log) = log
+                && let Ok(copy) = log.try_clone()
+            {
+                cmd.stdout(copy).stderr(log);
+            }
+            match cmd.spawn() {
+                Ok(child) => {
+                    info!(pid = child.id(), "link started");
+                    *link = Some(child);
+                    started = Instant::now();
+                }
+                Err(e) => {
+                    warn!("cannot start the link ({}): {e}", shed.display());
+                    failures += 1;
+                    next_try = Instant::now() + Duration::from_secs(60);
+                }
+            }
+        }
     }
 
     /// A remote tab: a pane running `shed remote connect HOST ID`, again

@@ -759,6 +759,68 @@ is calling, headers, the web app's files with `index.html` for any other path),
 `pair.rs`, `relay.rs`, `raw.rs`, `push.rs`, `geo.rs`. Deploying it is
 described in [Deploying a nexus](nexus-deploy.md).
 
+## The link
+
+`shed link` (crate `shed-link`) puts a workspace on a nexus. The keeper starts
+it as a child while `[nexus]` in `shed.toml` has a `url`, is not turned off,
+and a pairing exists (`nexus.json` in Shed's data folder, 0600, written by
+`shed nexus join`). Its output goes to `link.log` in the state folder. If it
+stops, the keeper starts it again after 2 s, doubling up to a minute; if the
+nexus refused it (exit code `LINK_REFUSED`), not until the settings or the
+pairing change. The link stops when the keeper's connection closes, and when
+`[nexus]` changes (to be started again with the new settings). A link does not
+keep an idle keeper running.
+
+The link is a keeper client of its own kind (`ClientKind::Link`): it hears the
+tree and AI tabs' updates as a window does, but counts as no window. Its
+connection to the nexus is a WebSocket (`wss://…/link`, `Authorization: Bearer`
+with the workspace's token, rustls with the web's roots plus `[nexus] ca_file`),
+dialled again after a drop (1 s, doubling up to a minute). After `Hello` and
+`Welcome` it sends:
+
+- **State**: the tree, the closed benches (the keeper's pegboard, asked for when
+  benches change and every 10 s), which benches windows show (`Status`) and the
+  usage limits, mapped to `shed_api::state` (`state.rs`), sent whole when it
+  differs from the last sent, at most four times a second. Colours are the
+  accents as `#rrggbb`; titles are `Tab::display_title`.
+- **Responses** to calls (`calls/`). Changes go to the keeper as the GUI's
+  messages (`BenchEdit` for running or closed benches). Where the keeper's
+  answer matters (`Done`, `Error`), the message goes over a short CLI
+  connection of its own so the answer is its own; what a call made (a bench,
+  tab or pane) is found in the tree as it changes (`keeper.rs`). Files, Git
+  (`shed_git::session`), the logbook (read only), AI sessions and the review
+  (`shed-review`) run on blocking tasks. Paths are relative to the tab's
+  folder and must stay in it, through links too (`paths.rs`).
+- **Events** for subscriptions: an AI tab's transcript (after `AiWatch`, from
+  its first whole update), a project's changes (`shed_project::Watch`;
+  `GitChanged` 300 ms after changes settle), a search's hits as files are done.
+- **Notifications** from tree changes (`notify.rs`): an AI tab waiting for an
+  answer, a turn done, a command that ran a minute ending.
+
+**Terminals as content** (`screen.rs`). For a watched pane the link attaches
+its bench (detaching when nothing there is watched) and runs a `shed-emu`
+emulator fed by the keeper's replay and output. At most ~30 times a second it
+sends the rows that changed (the whole screen first, after a resize or a switch
+of screens) as spans of styled text, with the cursor, title, alternate-screen
+and mouse flags, the scrollback's length and how many lines scrolled off.
+Colours stay as the program chose them (`Emulator::styled_line`): a palette
+index (`"0"`…`"255"`) or `#rrggbb`, `None` for the terminal's own, so each
+connector applies its theme; inverse and dim are flags. Keys come as named keys
+with modifiers, text or pastes, encoded by `shed_emu::keys` for the pane's
+modes (typed before its replay arrives, they wait for it). `TakeSize` resizes
+the pane (`Resize`) and gives the old size back on `ReleaseSize` or when the
+last subscriber of its screen goes. The keeper broadcasts the tree when a
+pane's size changes, so the link replays a pane the GUI resized.
+
+**Policy.** With `[nexus] control = "view"`, calls that change something
+(`Call::changes`) are refused with `Forbidden`. A private tab shows as its id,
+kind and place only (title "Private", no name, folders, tags, panes' titles or
+tools); its screen, scrollback, input, logbook, files, Git and AI calls are
+refused, its notifications never raised, and a connector cannot make it public.
+
+`shed nexus status` reads `link.json` in the runtime folder, which the link
+keeps current (connecting, connected, offline, refused).
+
 ## The code
 
 | Crate | What it holds |
@@ -773,6 +835,7 @@ described in [Deploying a nexus](nexus-deploy.md).
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
 | `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, pictures as data, unsaved edits kept aside |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists, and their rows as shown (families, drafts, filter) |
+| `shed-link` | `shed link`: a workspace's link to a nexus (state, calls, terminals as content, notifications), and `shed nexus join/status/leave` |
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows; a Git panel's data and operations (`session`) |
 | `shed-review` | An AI tab's review as data: changes since a turn or the session by how far they went, their keys and fingerprints, Viewed marks, explanations and the request for them |
 | `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, bench edits routed to running or closed benches, the pegboard's list, remote shells over ssh |

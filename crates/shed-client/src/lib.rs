@@ -7,6 +7,7 @@
 pub mod bench_edit;
 pub mod cli;
 pub mod keeper_conn;
+pub mod link_status;
 pub mod pegboard;
 pub mod remote;
 

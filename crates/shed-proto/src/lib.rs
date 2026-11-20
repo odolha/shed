@@ -17,6 +17,11 @@ pub const PROTOCOL_VERSION: u32 = 46;
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 
+/// How `shed link` exits when the nexus refuses it (unpaired, revoked, or
+/// another API version): the keeper does not start it again until the
+/// settings or the pairing change.
+pub const LINK_REFUSED: i32 = 78;
+
 const KIND_CLIENT: u8 = 0;
 const KIND_KEEPER: u8 = 1;
 const KIND_INPUT: u8 = 2;

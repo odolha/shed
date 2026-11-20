@@ -14,14 +14,14 @@ use shed_model::Rgb;
 
 use crate::palette::dim;
 use crate::{
-    CellFlags, CellView, CursorShape, CursorView, EmuEvent, Emulator, GridPoint, GridSize, Modes,
-    MouseMode, Palette, SelectionKind, Snapshot,
+    CellFlags, CellView, CursorShape, CursorView, EmuEvent, Emulator, GridPoint, GridSize, Ink, Modes,
+    MouseMode, Palette, SelectionKind, Snapshot, StyledCell,
 };
 
 mod replay;
 
 /// Scrollback kept per pane, in lines.
-const SCROLLBACK: usize = 10_000;
+const SCROLLBACK: usize = crate::SCROLLBACK_LINES;
 
 /// [`Emulator`] backed by `alacritty_terminal`.
 pub struct AlacrittyEmulator {
@@ -564,6 +564,51 @@ impl Emulator for AlacrittyEmulator {
         out
     }
 
+    fn styled_line(&self, line: i32, out: &mut Vec<StyledCell>) -> Option<bool> {
+        out.clear();
+        let grid = if line < 0 { self.main_grid() } else { self.term.grid() };
+        let (cols, rows) = (grid.columns(), grid.screen_lines() as i32);
+        if line >= rows || line < -(grid.history_size() as i32) {
+            return None;
+        }
+        let row = &grid[Line(line)];
+        for col in 0..cols {
+            let cell = &row[Column(col)];
+            let f = cell.flags;
+            let (fg, dim_fg) = self.ink(cell.fg);
+            let (bg, _) = self.ink(cell.bg);
+            out.push(StyledCell {
+                ch: visible_char(cell.c),
+                zerowidth: cell.zerowidth().map(|z| z.iter().collect::<String>().into()),
+                fg,
+                bg,
+                bold: f.contains(Flags::BOLD),
+                dim: f.contains(Flags::DIM) || dim_fg,
+                italic: f.contains(Flags::ITALIC),
+                underline: f.intersects(Flags::ALL_UNDERLINES),
+                strike: f.contains(Flags::STRIKEOUT),
+                inverse: f.contains(Flags::INVERSE),
+                hidden: f.contains(Flags::HIDDEN),
+                wide: f.contains(Flags::WIDE_CHAR),
+                spacer: f.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
+            });
+        }
+        Some(row[Column(cols - 1)].flags.contains(Flags::WRAPLINE))
+    }
+
+    fn main_history_size(&self) -> usize {
+        self.main_grid().history_size()
+    }
+
+    fn cursor_cell(&self) -> Option<(usize, usize)> {
+        if !self.term.mode().contains(TermMode::SHOW_CURSOR) {
+            return None;
+        }
+        let grid = self.term.grid();
+        let point = grid.cursor.point;
+        Some((point.line.0.max(0) as usize, point.column.0.min(grid.columns() - 1)))
+    }
+
     fn set_search(&mut self, query: Option<&str>) -> bool {
         let regex = query.filter(|q| !q.is_empty()).and_then(|q| RegexSearch::new(&literal(q)).ok());
         self.search = regex.map(|regex| Search { regex: RefCell::new(regex), focused: None });
@@ -597,6 +642,32 @@ impl AlacrittyEmulator {
         let col = at.col.min(grid.columns() - 1);
         let point = Point::new(Line(row as i32 - grid.display_offset() as i32), Column(col));
         (point, if at.right_half { Side::Right } else { Side::Left })
+    }
+}
+
+impl AlacrittyEmulator {
+    /// A colour as the program chose it, and whether it is a dim one.
+    fn ink(&self, color: Color) -> (Ink, bool) {
+        let overrides = self.term.colors();
+        let set = |c: Option<ansi::Rgb>| c.map(|c| Ink::Rgb(Rgb { r: c.r, g: c.g, b: c.b }));
+        match color {
+            Color::Spec(c) => (Ink::Rgb(Rgb { r: c.r, g: c.g, b: c.b }), false),
+            Color::Indexed(i) => (set(overrides[i as usize]).unwrap_or(Ink::Indexed(i)), false),
+            Color::Named(name) => {
+                let idx = name as usize;
+                match name {
+                    NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Background | NamedColor::Cursor => (Ink::Default, false),
+                    NamedColor::DimForeground => (Ink::Default, true),
+                    _ if idx < 16 => (set(overrides[name]).unwrap_or(Ink::Indexed(idx as u8)), false),
+                    _ => (Ink::Indexed((idx - NamedColor::DimBlack as usize) as u8), true),
+                }
+            }
+        }
+    }
+
+    /// The main screen's grid, also while the alternate one shows.
+    fn main_grid(&self) -> &alacritty_terminal::Grid<alacritty_terminal::term::cell::Cell> {
+        if self.term.mode().contains(TermMode::ALT_SCREEN) { self.term.inactive_grid() } else { self.term.grid() }
     }
 }
 
@@ -837,6 +908,31 @@ mod tests {
         fn row_text_at_top(&self) -> String {
             self.row_text(0).0.trim_end().to_string()
         }
+    }
+
+    #[test]
+    fn styled_lines_keep_the_program_s_colours() {
+        let mut e = emu(6, 2);
+        e.advance(b"\x1b[31mR\x1b[0m\x1b[38;5;196mX\x1b[38;2;1;2;3mT\x1b[0m\x1b[7mI\x1b[0mwrap");
+        let mut cells = Vec::new();
+        let wraps = e.styled_line(0, &mut cells).unwrap();
+        assert!(wraps, "6 columns hold 'RXTIwr', the rest goes on");
+        assert_eq!(cells[0].fg, Ink::Indexed(1));
+        assert_eq!(cells[1].fg, Ink::Indexed(196));
+        assert_eq!(cells[2].fg, Ink::Rgb(Rgb::hex(0x010203)));
+        assert!(cells[3].inverse && cells[3].fg == Ink::Default);
+        assert_eq!(e.cursor_cell(), Some((1, 2)));
+        assert!(e.styled_line(2, &mut cells).is_none());
+        assert!(e.styled_line(-1, &mut cells).is_none());
+        e.advance(b"\r\nmore\r\nlines");
+        assert_eq!(e.main_history_size(), 2);
+        e.styled_line(-2, &mut cells).unwrap();
+        assert_eq!(cells[0].ch, 'R');
+        // Under a full-screen app, scrollback is still the main screen's.
+        e.advance(b"\x1b[?1049h");
+        assert_eq!(e.main_history_size(), 2);
+        e.styled_line(-1, &mut cells).unwrap();
+        assert_eq!(cells[0].ch, 'a');
     }
 
     #[test]

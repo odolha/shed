@@ -59,17 +59,17 @@ pub fn connect(kind: ClientKind, start_keeper: bool) -> anyhow::Result<(KeeperCo
         }
         Err(e) => return Err(e).with_context(|| format!("the keeper is not running ({})", socket.display())),
     };
-    Ok(over(stream, kind)?)
+    connected(stream, kind)
 }
 
-/// Connects to the keeper listening on `socket` (a test's), without starting one.
-pub fn connect_to(socket: &std::path::Path, kind: ClientKind) -> anyhow::Result<(KeeperConn, async_channel::Receiver<Frame>)> {
-    let stream = UnixStream::connect(socket).with_context(|| format!("no keeper at {}", socket.display()))?;
-    Ok(over(stream, kind)?)
+/// Connects to the keeper listening on `socket` (never starting one).
+pub fn connect_at(socket: &std::path::Path, kind: ClientKind) -> anyhow::Result<(KeeperConn, async_channel::Receiver<Frame>)> {
+    let stream = UnixStream::connect(socket).with_context(|| format!("the keeper is not running ({})", socket.display()))?;
+    connected(stream, kind)
 }
 
-/// Talks to the keeper over `stream`: a writer and a reader thread, then `Hello`.
-fn over(stream: UnixStream, kind: ClientKind) -> std::io::Result<(KeeperConn, async_channel::Receiver<Frame>)> {
+fn connected(stream: UnixStream, kind: ClientKind) -> anyhow::Result<(KeeperConn, async_channel::Receiver<Frame>)> {
+
     let (out_tx, out_rx) = mpsc::channel::<Frame>();
     let mut writer = BufWriter::new(stream.try_clone()?);
     std::thread::Builder::new().name("keeper-write".into()).spawn(move || {

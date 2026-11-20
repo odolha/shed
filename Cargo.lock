@@ -7576,6 +7576,7 @@ dependencies = [
  "shed-emu",
  "shed-git",
  "shed-keeper",
+ "shed-link",
  "shed-logbook",
  "shed-model",
  "shed-project",
@@ -7600,6 +7601,8 @@ dependencies = [
  "anyhow",
  "async-channel",
  "libc",
+ "serde",
+ "serde_json",
  "shed-model",
  "shed-proto",
  "shed-save",
@@ -7665,6 +7668,43 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "shed-link"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "base64 0.22.1",
+ "futures-util",
+ "libc",
+ "reqwest",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "shed-ai",
+ "shed-api",
+ "shed-client",
+ "shed-emu",
+ "shed-git",
+ "shed-keeper",
+ "shed-logbook",
+ "shed-model",
+ "shed-nexus",
+ "shed-project",
+ "shed-proto",
+ "shed-review",
+ "shed-save",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "toml_edit",
+ "totp-rs",
+ "tracing",
+ "uuid",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -8698,7 +8738,10 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
 ]
 
@@ -9132,6 +9175,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.21",
 ]
@@ -9757,6 +9802,15 @@ name = "webpki-root-certs"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "293198dcebfb821155b5092ab94b5a82ff180eddd7241df3bd6e66a4ffd1a585"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7265c9301c16a8711c992c2d8da90ee77ef54b1ed51482d6dfeb00dc756b1297"
 dependencies = [
  "rustls-pki-types",
 ]
