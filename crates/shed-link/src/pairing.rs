@@ -49,33 +49,7 @@ impl Secret {
     }
 }
 
-/// How the link is doing, as it last wrote.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LinkStatus {
-    pub pid: u32,
-    /// `connecting`, `connected`, `offline` or `refused`.
-    pub state: String,
-    /// The workspace's name at the nexus, once welcomed.
-    #[serde(default)]
-    pub name: Option<String>,
-    /// Why it is not connected, if it says.
-    #[serde(default)]
-    pub error: Option<String>,
-    /// Since when, Unix seconds.
-    pub since: u64,
-}
-
-impl LinkStatus {
-    pub fn write(&self, path: &Path) {
-        let _ = paths::write_whole(path, serde_json::to_string(self).expect("serializes"));
-    }
-
-    /// The running link's status; `None` when no link runs.
-    pub fn read(path: &Path) -> Option<LinkStatus> {
-        let s: LinkStatus = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-        shed_client::keeper_conn::alive(s.pid).then_some(s)
-    }
-}
+pub use shed_client::link_status::LinkStatus;
 
 pub(crate) fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())

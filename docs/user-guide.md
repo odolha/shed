@@ -822,7 +822,9 @@ It shows a code; approve that code in the web app (Devices), checking it is the
 same. From then on, while Shed runs, a small background process (the link) keeps
 this workspace on the nexus: its benches, tabs, terminals, projects, history and
 AI tabs, reachable from the apps. It connects again by itself after a network
-drop. `shed nexus status` says whether it is connected; `shed nexus leave`
+drop. The Shed window's header says how it is doing (**Linked** with the
+workspace's name, **Linking…**, **Link off**); clicking it switches the link off,
+or on again, keeping the pairing. `shed nexus status` says the same; `shed nexus leave`
 unlinks the machine (remove it in the web app's Devices too).
 
 In `shed.toml`:

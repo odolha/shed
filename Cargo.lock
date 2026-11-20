@@ -7105,6 +7105,8 @@ dependencies = [
  "anyhow",
  "async-channel",
  "libc",
+ "serde",
+ "serde_json",
  "shed-model",
  "shed-proto",
  "shed-save",

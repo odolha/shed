@@ -20,6 +20,9 @@ pub struct ShedWindow {
     place: PlaceTracker,
     /// The settings, over the right side, while open.
     settings: Option<(Entity<crate::settings_panel::SettingsPanel>, Subscription)>,
+    /// How the link to the nexus is doing, read every few seconds while a
+    /// nexus is set (`None`: no link runs).
+    link: Option<shed_client::link_status::LinkStatus>,
     _following: Subscription,
 }
 
@@ -45,6 +48,25 @@ impl ShedWindow {
         })
         .detach();
         let board = cx.new(|cx| Pegboard::new(state.clone(), window, cx));
+        // The link's status file, while a nexus is set: cheap to read.
+        cx.spawn_in(window, async move |this, cx| loop {
+            let linked = this.update(cx, |this, cx| !this.state.read(cx).settings.config.nexus.url.trim().is_empty());
+            let Ok(linked) = linked else { break };
+            let status = if linked { cx.background_executor().spawn(async { shed_client::link_status::LinkStatus::current() }).await } else { None };
+            if this
+                .update(cx, |this, cx| {
+                    if this.link != status {
+                        this.link = status;
+                        cx.notify();
+                    }
+                })
+                .is_err()
+            {
+                break;
+            }
+            cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+        })
+        .detach();
         // SHED_PERF_FRAMES=<n>: redraw the pegboard n times a second, as
         // hovering does, to measure what a frame of this window costs.
         if let Some(fps) = std::env::var("SHED_PERF_FRAMES").ok().and_then(|v| v.parse::<u64>().ok()).filter(|n| *n > 0) {
@@ -58,7 +80,7 @@ impl ShedWindow {
             .detach();
         }
         let following = PlaceTracker::follow(window, cx);
-        Self { state, board, quitting: false, place, settings: None, _following: following }
+        Self { state, board, quitting: false, place, settings: None, link: None, _following: following }
     }
 
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
@@ -248,6 +270,7 @@ impl Render for ShedWindow {
                     .child(svg().path(icon("shed")).size(crate::theme::us(18.0)).text_color(hsla(ui.accent)))
                     .child(div().text_size(crate::theme::us(16.0)).child("Shed"))
                     .child(div().flex_1())
+                    .children(self.link_chip(cx))
                     .child(
                         div()
                             .id("open-settings")
@@ -279,5 +302,59 @@ impl Render for ShedWindow {
                     .child(self.board.clone())
                     .when_some(self.settings.as_ref().map(|(p, _)| p.clone()), |d, panel| d.child(div().absolute().top_0().right_0().h_full().child(panel))),
             )
+    }
+}
+
+impl ShedWindow {
+    /// While a nexus is set: whether this machine is linked to it (reachable
+    /// from the web and phone apps), switching the link on or off.
+    fn link_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let state = self.state.read(cx);
+        let nexus = state.settings.config.nexus.clone();
+        if nexus.url.trim().is_empty() {
+            return None;
+        }
+        let ui = state.settings.ui.clone();
+        let on = nexus.active();
+        let (label, color, tip): (String, _, String) = match (&self.link, on) {
+            (_, false) => ("Link off".into(), ui.text_dim, "Not reachable from the web and phone apps; click to link again".into()),
+            (Some(l), true) if l.state == "connected" => (
+                format!("Linked{}", l.name.as_ref().map(|n| format!(" · {n}")).unwrap_or_default()),
+                ui.accent,
+                format!("Reachable from the web and phone apps through {}; click to stop", nexus.url),
+            ),
+            (Some(l), true) if l.state == "refused" => (
+                "Link refused".into(),
+                ui.danger,
+                format!("{}; pair again with shed nexus join", l.error.clone().unwrap_or_else(|| "The nexus refused this machine".into())),
+            ),
+            (Some(l), true) => (
+                "Linking…".into(),
+                ui.text_dim,
+                l.error.clone().map(|e| format!("Not connected yet: {e}")).unwrap_or_else(|| format!("Connecting to {}", nexus.url)),
+            ),
+            (None, true) => ("Not linked".into(), ui.text_dim, "No link runs: pair this machine with shed nexus join".into()),
+        };
+        Some(
+            div()
+                .id("nexus-link")
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .cursor_pointer()
+                .text_size(crate::theme::us(12.0))
+                .text_color(hsla(if color == ui.accent { ui.ink(color) } else { color }))
+                .when(on && color == ui.accent, |d| d.bg(hsla_alpha(ui.accent, 0.15)))
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .tooltip(crate::menu::tooltip_text(tip))
+                .child(svg().path(icon("globe")).size(crate::theme::us(14.0)).text_color(hsla(if color == ui.accent { ui.ink(color) } else { color })))
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.state.update(cx, |state, cx| state.set_config_value(Some("nexus"), "enabled", toml_edit::Value::from(!on), cx));
+                })),
+        )
     }
 }
