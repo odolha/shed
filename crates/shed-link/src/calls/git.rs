@@ -10,7 +10,7 @@ use shed_model::Shed;
 
 use super::{invalid, not_found};
 use crate::keeper;
-use crate::paths::{git_name, git_path};
+use crate::paths::{GitScope, git_name};
 
 fn git_err(e: shed_git::GitError) -> ApiError {
     ApiError::new(ErrorCode::Failed, e.0)
@@ -34,21 +34,23 @@ pub(super) async fn call(tree: &Shed, call: Call) -> Result<Reply, ApiError> {
         let repo = Repo::find(&root);
         if let Call::GitStatus(_) = call {
             return Ok(Reply::GitStatus(match repo {
-                Some(repo) => status(&repo)?,
+                Some(repo) => status(&repo, &GitScope::new(&repo.root, &root)?)?,
                 None => api::GitStatus::default(),
             }));
         }
         let repo = repo.ok_or_else(|| not_found("not a Git repository"))?;
-        blocking(&repo, call)
+        // Paths are the repository's, but only those in the tab's folder.
+        let scope = GitScope::new(&repo.root, &root)?;
+        blocking(&repo, &scope, call)
     })
     .await
     .map_err(|e| keeper::failed(e.to_string()))?
 }
 
-fn blocking(repo: &Repo, call: Call) -> Result<Reply, ApiError> {
-    let paths = |ps: &[String]| ps.iter().map(|p| git_path(p)).collect::<Result<Vec<_>, _>>();
+fn blocking(repo: &Repo, scope: &GitScope, call: Call) -> Result<Reply, ApiError> {
+    let paths = |ps: &[String]| ps.iter().map(|p| scope.path(p)).collect::<Result<Vec<_>, _>>();
     match call {
-        Call::GitDiff(a) => Ok(Reply::Diff(diff(repo, &git_path(&a.path)?, &a.source)?.0)),
+        Call::GitDiff(a) => Ok(Reply::Diff(diff(repo, &scope.path(&a.path)?, &a.source)?.0)),
         Call::GitStage(a) => repo.stage(&paths(&a.paths)?).map(|_| Reply::Done).map_err(git_err),
         Call::GitUnstage(a) => repo.unstage(&paths(&a.paths)?).map(|_| Reply::Done).map_err(git_err),
         Call::GitDiscard(a) => {
@@ -59,7 +61,7 @@ fn blocking(repo: &Repo, call: Call) -> Result<Reply, ApiError> {
             repo.discard(&tracked, &gone).map(|_| Reply::Done).map_err(git_err)
         }
         Call::GitHunk(a) => {
-            let path = git_path(&a.path)?;
+            let path = scope.path(&a.path)?;
             let (diff, hunks, untracked) = diff(repo, &path, &a.source)?;
             let (Some(shown), Some(hunk)) = (diff.hunks.get(a.hunk as usize), hunks.get(a.hunk as usize)) else {
                 return Err(not_found("that change is not there any more"));
@@ -83,7 +85,7 @@ fn blocking(repo: &Repo, call: Call) -> Result<Reply, ApiError> {
             Ok(Reply::Text(hash.trim().to_string()))
         }
         Call::GitLog(a) => {
-            let path = a.path.as_deref().map(git_path).transpose()?;
+            let path = a.path.as_deref().map(|p| scope.path(p)).transpose()?;
             let limit = if a.limit == 0 { gs::LOG_LIMIT } else { a.limit as usize };
             Ok(Reply::Commits(gs::history(repo, path.as_deref()).map_err(git_err)?.iter().take(limit).map(commit).collect()))
         }
@@ -111,8 +113,9 @@ fn blocking(repo: &Repo, call: Call) -> Result<Reply, ApiError> {
     }
 }
 
-/// The status with what is not pushed yet, as the project view shows it.
-fn status(repo: &Repo) -> Result<api::GitStatus, ApiError> {
+/// The status with what is not pushed yet, as the project view shows it;
+/// only the files in the tab's folder.
+fn status(repo: &Repo, scope: &GitScope) -> Result<api::GitStatus, ApiError> {
     let gs::Refreshed { status: s, outgoing } = gs::refresh(repo).map_err(git_err)?;
     let letter = |c: char| if c == '.' { String::new() } else { c.to_string() };
     Ok(api::GitStatus {
@@ -125,6 +128,7 @@ fn status(repo: &Repo) -> Result<api::GitStatus, ApiError> {
         files: s
             .entries
             .iter()
+            .filter(|e| scope.shows(&e.path))
             .map(|e| api::GitFile {
                 path: e.path.clone(),
                 staged: if e.untracked { String::new() } else { letter(e.index) },

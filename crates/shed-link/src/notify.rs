@@ -152,4 +152,19 @@ mod tests {
         let (private_done, ..) = tree(AiActivity::Idle, None, true);
         assert!(n.changed(&private_done, t0 + Duration::from_secs(300)).is_empty());
     }
+
+    #[test]
+    fn a_private_ai_tab_says_nothing() {
+        let private_ai = |activity| {
+            let (mut tree, ai, _) = tree(activity, None, false);
+            tree.tab_mut(ai).unwrap().private = true;
+            tree
+        };
+        let mut n = Notifier::default();
+        let t0 = Instant::now();
+        n.changed(&private_ai(AiActivity::Working), t0);
+        assert!(n.changed(&private_ai(AiActivity::Waiting), t0).is_empty());
+        n.changed(&private_ai(AiActivity::Working), t0);
+        assert!(n.changed(&private_ai(AiActivity::Idle), t0).is_empty());
+    }
 }

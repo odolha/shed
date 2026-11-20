@@ -80,9 +80,18 @@ pub fn main() -> i32 {
         tracing::warn!("not paired with a nexus (shed nexus join URL)");
         return shed_proto::LINK_REFUSED;
     };
+    let url = match nexus_url(&config.nexus.url, &secret.url) {
+        Ok(url) => url,
+        Err(why) => {
+            tracing::error!("{why}");
+            let status = pairing::LinkStatus { pid: std::process::id(), state: "refused".into(), name: None, error: Some(why), since: pairing::now() };
+            status.write(&shed_model::paths::link_status_path());
+            return shed_proto::LINK_REFUSED;
+        }
+    };
     let opts = Options {
         socket: shed_model::paths::socket_path(),
-        url: config.nexus.url.clone(),
+        url,
         token: secret.token,
         policy: policy_of(config.nexus.control),
         ca_file: config.nexus.ca_file.clone(),
@@ -120,10 +129,39 @@ pub fn main() -> i32 {
     code
 }
 
+/// The nexus to dial: the one the pairing was made with (`nexus.json`). The
+/// token is that nexus's; if `shed.toml` names another, the link does not
+/// connect (it would hand the token to whoever is there) and says why.
+pub fn nexus_url(configured: &str, paired: &str) -> Result<String, String> {
+    let normal = |u: &str| u.trim().trim_end_matches('/').to_ascii_lowercase();
+    if normal(configured) != normal(paired) {
+        return Err(format!(
+            "shed.toml's [nexus] url ({}) is not the nexus this workspace is paired with ({}); \
+             its token is not sent there. Pair with the new one (`shed nexus join URL`) or set the url back",
+            configured.trim(),
+            paired.trim()
+        ));
+    }
+    Ok(paired.trim().trim_end_matches('/').to_string())
+}
+
 /// The API's policy for a `[nexus] control` setting.
 pub fn policy_of(control: shed_model::config::NexusControl) -> Policy {
     match control {
         shed_model::config::NexusControl::Full => Policy::Full,
         shed_model::config::NexusControl::View => Policy::View,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_token_goes_only_to_the_nexus_it_was_paired_with() {
+        assert_eq!(nexus_url("https://n.example.com/", "https://n.example.com").unwrap(), "https://n.example.com");
+        assert_eq!(nexus_url("https://N.example.com", "https://n.example.com/").unwrap(), "https://n.example.com");
+        let why = nexus_url("https://evil.example.com", "https://n.example.com").unwrap_err();
+        assert!(why.contains("evil.example.com") && why.contains("n.example.com"), "{why}");
     }
 }

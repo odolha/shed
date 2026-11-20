@@ -90,8 +90,20 @@ enum Sub {
     /// An AI tab's conversation; `started` once its whole has been sent.
     Ai { tab: TabId, started: bool },
     Screen(PaneId),
-    Project(#[allow(dead_code)] ProjectWatch),
-    Search(Arc<AtomicBool>),
+    /// A project or AI tab's folder followed on disk (the watch stops when
+    /// dropped).
+    Project(TabId, #[allow(dead_code)] ProjectWatch),
+    Search(TabId, Arc<AtomicBool>),
+}
+
+impl Sub {
+    /// The tab whose contents it streams, for those that follow a tab.
+    fn tab(&self) -> Option<TabId> {
+        match self {
+            Sub::Ai { tab, .. } | Sub::Project(tab, _) | Sub::Search(tab, _) => Some(*tab),
+            Sub::Screen(_) => None,
+        }
+    }
 }
 
 /// A pane the link follows: its emulator once the keeper replayed it.
@@ -311,15 +323,20 @@ impl Link {
             self.watched.remove(&pane);
             self.held.remove(&pane);
         }
-        // So do AI tabs gone or made private.
-        let ai_gone: Vec<u32> = self
+        // So do AI tabs, projects and searches whose tab is gone or private.
+        let tab_gone: Vec<u32> = self
             .subs
             .iter()
-            .filter(|(_, s)| matches!(s, Sub::Ai { tab, .. } if tree.tab(*tab).is_none_or(|t| t.private)))
+            .filter(|(_, s)| s.tab().is_some_and(|tab| tree.tab(tab).is_none_or(|t| t.private)))
             .map(|(id, _)| *id)
             .collect();
-        for id in ai_gone {
-            let private = matches!(self.subs.remove(&id), Some(Sub::Ai { tab, .. }) if tree.tab(tab).is_some());
+        for id in tab_gone {
+            let Some(sub) = self.subs.remove(&id) else { continue };
+            let private = sub.tab().is_some_and(|tab| tree.tab(tab).is_some());
+            if let Sub::Search(_, cancel) = &sub {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            drop(sub);
             self.ended(id, Some(if private { forbidden_private() } else { not_found("the tab closed") }));
         }
         // A pane the GUI resized: its emulator is out of step until replayed.
@@ -455,6 +472,12 @@ impl Link {
         if call.changes() && self.opts.policy == Policy::View {
             return self.respond(id, Err(ApiError::new(ErrorCode::Forbidden, "this workspace lets connectors look, not change things")));
         }
+        // Browsing the machine's folders is for choosing where a new tab
+        // works: a view-only workspace makes no tabs, and shows no more of
+        // its disk than its tabs' folders.
+        if matches!(call, Call::BrowseFolders(_)) && self.opts.policy == Policy::View {
+            return self.respond(id, Err(ApiError::new(ErrorCode::Forbidden, "this workspace lets connectors look at its tabs only")));
+        }
         match call {
             Call::Input(a) => {
                 let r = self.input(a);
@@ -587,14 +610,16 @@ impl Link {
                 Sub::Screen(pane)
             }),
             Topic::Project(p) => crate::calls::root_of(&tree, &p.tab).and_then(|(root, exclude)| {
+                let tab = calls::tab_id(&p.tab)?;
                 let out = self.out.clone().ok_or_else(|| ApiError::new(ErrorCode::Offline, "not connected"))?;
                 topics::watch_project(self.ctx.clone(), root, exclude, id, out)
-                    .map(Sub::Project)
+                    .map(|watch| Sub::Project(tab, watch))
                     .map_err(|e| ApiError::new(ErrorCode::Failed, format!("cannot follow the project: {e}")))
             }),
             Topic::Search(s) => crate::calls::root_of(&tree, &s.tab).and_then(|(root, exclude)| {
+                let tab = calls::tab_id(&s.tab)?;
                 let out = self.out.clone().ok_or_else(|| ApiError::new(ErrorCode::Offline, "not connected"))?;
-                Ok(Sub::Search(topics::search(self.ctx.clone(), root, exclude, s, id, out)))
+                Ok(Sub::Search(tab, topics::search(self.ctx.clone(), root, exclude, s, id, out)))
             }),
         };
         match started {
@@ -615,8 +640,8 @@ impl Link {
                     self.sync_attached();
                 }
             }
-            Some(Sub::Search(cancel)) => cancel.store(true, Ordering::Relaxed),
-            Some(Sub::Ai { .. } | Sub::Project(_)) | None => {}
+            Some(Sub::Search(_, cancel)) => cancel.store(true, Ordering::Relaxed),
+            Some(Sub::Ai { .. } | Sub::Project(..)) | None => {}
         }
     }
 

@@ -179,7 +179,9 @@ async fn a_view_only_workspace_shows_but_does_not_change() {
     let refused = nexus.call(Call::NewBench(NewBench { name: None, cwd: None })).await.unwrap_err();
     assert_eq!(refused.code, ErrorCode::Forbidden);
     assert!(matches!(nexus.call(Call::Previews).await.unwrap(), Reply::Previews(_)));
-    let Reply::Folder(_) = nexus.call(Call::BrowseFolders(Browse { path: env.home.display().to_string() })).await.unwrap() else { panic!() };
+    // Nor does it show the machine's folders (that is for making tabs).
+    let browse = nexus.call(Call::BrowseFolders(Browse { path: env.home.display().to_string() })).await.unwrap_err();
+    assert_eq!(browse.code, ErrorCode::Forbidden);
     // An id that is not one, a tab that is not there.
     assert_eq!(nexus.call(Call::GitStatus(TabOnly { tab: "nope".into() })).await.unwrap_err().code, ErrorCode::Invalid);
     let missing = nexus.call(Call::GitStatus(TabOnly { tab: shed_model::TabId::new().to_string() })).await.unwrap_err();

@@ -165,9 +165,13 @@ fn parse(msg: Message) -> Option<Result<NexusFrame, Unknown>> {
     };
     match serde_json::from_str::<NexusFrame>(&text) {
         Ok(f) => Some(Ok(f)),
-        Err(e) => {
-            warn!("a frame from the nexus did not read ({e}): {}", text.chars().take(200).collect::<String>());
-            let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        Err(_) => {
+            // What it says may be private (typed text, file contents): its
+            // type and length only.
+            let v: Option<serde_json::Value> = serde_json::from_str(&text).ok();
+            let kind = v.as_ref().and_then(|v| v.get("type")).and_then(|t| t.as_str()).map(|t| t.chars().take(32).collect::<String>());
+            warn!("a frame from the nexus did not read (type {}, {} bytes)", kind.as_deref().unwrap_or("?"), text.len());
+            let v = v?;
             let id = v.get("content").and_then(|c| c.get("id")).and_then(|i| i.as_u64()).map(|i| i as u32);
             match v.get("type").and_then(|t| t.as_str()) {
                 Some("Request") => Some(Err((id, None))),

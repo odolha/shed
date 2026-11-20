@@ -1,6 +1,8 @@
 //! AI tabs' calls: most are the keeper's messages; sessions and pictures
 //! are read here.
 
+use std::collections::HashSet;
+
 use base64::Engine;
 use shed_api::calls::{self as api, Call, Reply};
 use shed_api::{ApiError, ErrorCode};
@@ -89,15 +91,24 @@ pub(super) async fn call(ctx: &Ctx, tree: &Shed, call: Call) -> Result<Reply, Ap
     match call {
         Call::AiSessions(a) => {
             let (_, ai) = ai_tab(tree, &a.tab)?;
-            let sessions = tokio::task::spawn_blocking(move || sessions(&ai)).await.map_err(|e| keeper::failed(e.to_string()))?;
+            let hidden = private_sessions(ctx, tree).await;
+            let sessions = tokio::task::spawn_blocking(move || sessions(&ai, &hidden)).await.map_err(|e| keeper::failed(e.to_string()))?;
             Ok(Reply::Sessions(sessions))
         }
         Call::AiOpenSession(a) => {
             let (tab, _) = ai_tab(tree, &a.tab)?;
+            if let Some(session) = &a.session
+                && private_sessions(ctx, tree).await.contains(session)
+            {
+                return Err(super::forbidden_private());
+            }
             quiet(ClientMsg::AiOpenSession { tab, session: a.session })
         }
         Call::AiRenameSession(a) => {
             let (_, ai) = ai_tab(tree, &a.tab)?;
+            if private_sessions(ctx, tree).await.contains(&a.session) {
+                return Err(super::forbidden_private());
+            }
             if shed_model::AiTab::is_draft_key(&a.session) || a.session.contains(['/', '\\']) || a.session.starts_with('.') {
                 return Err(invalid("only a Claude Code session can be renamed"));
             }
@@ -209,9 +220,34 @@ pub(crate) fn picture_of(p: &shed_project::picture::PictureData) -> api::Picture
     api::Picture { media_type: p.kind.media_type().into(), data: base64::engine::general_purpose::STANDARD.encode(&p.bytes) }
 }
 
+/// Sessions private AI tabs show or keep drafts for (Claude Code's, and
+/// draft sessions), in these benches. Another AI tab in the same folder
+/// lists the same Claude Code sessions: these are left out of its list, and
+/// cannot be opened or renamed from it.
+fn private_sessions_in<'a>(benches: impl Iterator<Item = &'a shed_model::Bench>) -> HashSet<String> {
+    let mut hidden = HashSet::new();
+    for tab in benches.flat_map(|b| &b.tabs).filter(|t| t.private) {
+        if let shed_model::TabKind::Ai(ai) = &tab.kind {
+            hidden.extend(ai.session.iter().chain(&ai.draft_session).cloned());
+            hidden.extend(ai.drafts.iter().map(|d| d.session.clone()));
+        }
+    }
+    hidden
+}
+
+/// `private_sessions_in` the running benches and the closed ones.
+async fn private_sessions(ctx: &Ctx, tree: &Shed) -> HashSet<String> {
+    let mut hidden = private_sessions_in(tree.benches.iter());
+    if let Ok(pegboard) = ctx.pegboard().await {
+        hidden.extend(private_sessions_in(pegboard.stored.iter().map(|s| &s.bench)));
+    }
+    hidden
+}
+
 /// The folder's sessions as the GUI lists them: draft sessions first (the
-/// newest first), then Claude Code's, each with how many drafts it has.
-fn sessions(ai: &shed_model::AiTab) -> Vec<api::AiSession> {
+/// newest first), then Claude Code's, each with how many drafts it has;
+/// those of private tabs (`hidden`) left out.
+fn sessions(ai: &shed_model::AiTab, hidden: &HashSet<String>) -> Vec<api::AiSession> {
     let drafts_of = |key: &str| ai.drafts.iter().filter(|d| d.session == key).count() as u32;
     let drafts = ai.draft_sessions().into_iter().map(|d| api::AiSession {
         id: d.key.clone(),
@@ -235,5 +271,43 @@ fn sessions(ai: &shed_model::AiTab) -> Vec<api::AiSession> {
         depth: s.depth as u32,
         draft: false,
     });
-    drafts.chain(found).collect()
+    drafts.chain(found).filter(|s| !hidden.contains(&s.id)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_tabs_sessions_are_hidden() {
+        let mut public = shed_model::Tab::ai("/srv".into());
+        let mut private = shed_model::Tab::ai("/srv".into());
+        private.private = true;
+        if let shed_model::TabKind::Ai(a) = &mut private.kind {
+            a.session = Some("secret-session".into());
+            a.drafts.push(shed_model::Draft { session: "draft-x".into(), text: "psst".into() });
+            a.drafts.push(shed_model::Draft { session: "other-secret".into(), text: "later".into() });
+        }
+        if let shed_model::TabKind::Ai(a) = &mut public.kind {
+            a.session = Some("open-session".into());
+        }
+        let bench = shed_model::Bench {
+            id: shed_model::BenchId::new(),
+            name: "b".into(),
+            color: shed_model::BenchColor::Blue,
+            badge: None,
+            cwd: "/srv".into(),
+            active_tab: public.id,
+            tabs: vec![public, private],
+            aliases: Default::default(),
+            closing: false,
+            launcher: "b".into(),
+            window: None,
+            started: false,
+            links: Vec::new(),
+        };
+        let hidden = private_sessions_in(std::iter::once(&bench));
+        assert!(hidden.contains("secret-session") && hidden.contains("draft-x") && hidden.contains("other-secret"));
+        assert!(!hidden.contains("open-session"));
+    }
 }

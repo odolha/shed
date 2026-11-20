@@ -85,7 +85,8 @@ async fn post<B: Serialize, R: for<'de> Deserialize<'de>>(client: &reqwest::Clie
         let why = serde_json::from_str::<ApiError>(&text).map(|e| e.to_string()).unwrap_or(text);
         bail!("the nexus said {status}: {why}");
     }
-    serde_json::from_str(&text).with_context(|| format!("the nexus's answer did not read: {}", text.chars().take(200).collect::<String>()))
+    // (Not quoted: an answer may hold the workspace's token.)
+    serde_json::from_str(&text).with_context(|| format!("the nexus's answer did not read ({} bytes)", text.len()))
 }
 
 /// How a pairing ended.
@@ -165,7 +166,14 @@ pub fn status() -> anyhow::Result<()> {
         println!("nexus: {} ({on}, {control})", n.url);
     }
     match Secret::load() {
-        Some(s) => println!("paired as: {} ({})", s.name, s.workspace),
+        Some(s) => {
+            println!("paired as: {} ({}) with {}", s.name, s.workspace, s.url);
+            if !n.url.trim().is_empty()
+                && let Err(why) = crate::nexus_url(&n.url, &s.url)
+            {
+                println!("refused: {why}");
+            }
+        }
         None => println!("paired: no"),
     }
     match LinkStatus::read(&paths::link_status_path()) {

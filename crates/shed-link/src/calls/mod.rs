@@ -485,9 +485,15 @@ async fn log_search(ctx: &Ctx, tree: &Shed, a: api::LogSearch) -> Result<Reply, 
     })
     .await
     .map_err(|e| keeper::failed(e.to_string()))??;
+    // Commands kept before their tab became private were not marked so in
+    // logbooks older than that rule (the keeper marks them now): left out
+    // here too.
+    let private_now: std::collections::HashSet<String> =
+        tree.benches.iter().flat_map(|b| &b.tabs).filter(|t| t.private).map(|t| t.id.to_string()).collect();
     Ok(Reply::Log(
         entries
             .into_iter()
+            .filter(|e| !private_now.contains(&e.tab))
             .map(|e| api::LogEntry {
                 command: e.command,
                 cwd: e.cwd,

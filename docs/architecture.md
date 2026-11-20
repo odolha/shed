@@ -730,7 +730,12 @@ described in [Deploying a nexus](nexus-deploy.md).
 `shed link` (crate `shed-link`) puts a workspace on a nexus. The keeper starts
 it as a child while `[nexus]` in `shed.toml` has a `url`, is not turned off,
 and a pairing exists (`nexus.json` in Shed's data folder, 0600, written by
-`shed nexus join`). Its output goes to `link.log` in the state folder. If it
+`shed nexus join`, with the nexus's address). The link dials the address the
+pairing was made with; if `shed.toml`'s `url` names another, it does not
+connect (its token is that nexus's) and says so (`refused`). Plain `http`/`ws`
+is refused but to this machine, for pairing too. Its output goes to `link.log`
+in the state folder; frames that do not read are logged by type and length
+only. If it
 stops, the keeper starts it again after 2 s, doubling up to a minute; if the
 nexus refused it (exit code `LINK_REFUSED`), not until the settings or the
 pairing change. The link stops when the keeper's connection closes, and when
@@ -756,7 +761,10 @@ dialled again after a drop (1 s, doubling up to a minute). After `Hello` and
   tab or pane) is found in the tree as it changes (`keeper.rs`). Files, Git
   (`shed_git::session`), the logbook (read only), AI sessions and the review
   (`shed-review`) run on blocking tasks. Paths are relative to the tab's
-  folder and must stay in it, through links too (`paths.rs`).
+  folder and must stay in it, through links too (`paths.rs`). Git's paths are
+  relative to the repository, whose root may be above the tab's folder: each
+  must still lead into the folder (`GitScope`, links followed, never into
+  `.git`), and the status lists only the folder's files.
 - **Events** for subscriptions: an AI tab's transcript (after `AiWatch`, from
   its first whole update), a project's changes (`shed_project::Watch`;
   `GitChanged` 300 ms after changes settle), a search's hits as files are done.
@@ -779,10 +787,19 @@ last subscriber of its screen goes. The keeper broadcasts the tree when a
 pane's size changes, so the link replays a pane the GUI resized.
 
 **Policy.** With `[nexus] control = "view"`, calls that change something
-(`Call::changes`) are refused with `Forbidden`. A private tab shows as its id,
-kind and place only (title "Private", no name, folders, tags, panes' titles or
-tools); its screen, scrollback, input, logbook, files, Git and AI calls are
-refused, its notifications never raised, and a connector cannot make it public.
+(`Call::changes`) are refused with `Forbidden`, and so is `BrowseFolders`
+(choosing a folder is for making tabs; a view-only connector sees no more of
+the disk than its tabs' folders). A private tab shows as its id, kind and
+place only (title "Private", no name, folders, tags, panes' titles or tools);
+its screen, scrollback, input, logbook, files, Git and AI calls are refused,
+its notifications never raised, and a connector cannot make it public.
+Subscriptions to a tab (screen, AI transcript, project changes, search) end
+with `Forbidden` when it becomes private. When a tab becomes private the keeper
+marks its commands in the logbook private too (`Logbook::mark_private`), and
+the link leaves out commands of tabs private now. Claude Code sessions a
+private AI tab shows or keeps drafts for are left out of other AI tabs'
+sessions lists (the same folder lists the same sessions), and cannot be opened
+or renamed from them.
 
 `shed nexus status` reads `link.json` in the runtime folder, which the link
 keeps current (connecting, connected, offline, refused).

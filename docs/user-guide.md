@@ -818,8 +818,10 @@ A **nexus** is a server you host that the web and Android apps connect to (see
 shed nexus join https://nexus.example.com
 ```
 
-It shows a code; approve that code in the web app (Devices), checking it is the
-same. From then on, while Shed runs, a small background process (the link) keeps
+It shows a code; type that code in the web app (Devices) to approve it (the web
+app lists waiting requests but not their codes, so only the machine you are at
+can be approved). The address must be `https://` (plain `http://` only for a
+nexus on this same machine). From then on, while Shed runs, a small background process (the link) keeps
 this workspace on the nexus: its benches, tabs, terminals, projects, history and
 AI tabs, reachable from the apps. It connects again by itself after a network
 drop. The Shed window's header says how it is doing (**Linked** with the
@@ -831,16 +833,22 @@ In `shed.toml`:
 
 ```toml
 [nexus]
-url = "https://nexus.example.com"   # set by `shed nexus join`
+url = "https://nexus.example.com"   # set by `shed nexus join`; must stay the paired nexus
 enabled = true                      # false keeps the pairing but does not link
-control = "full"                    # "view": the apps can look but change nothing
+control = "full"                    # "view": the apps can look at tabs but change nothing
 # ca_file = "~/nexus-ca.pem"        # for a nexus with a certificate of your own making
 ```
 
 The pairing's token is not in `shed.toml` (which backups copy): it is in
-`~/.local/share/shed/nexus.json`, readable only by you. Private tabs show in the
-apps as "Private", with nothing of their folders, screens, commands or files, and
-cannot be made public from there. Whoever runs the nexus can see and type into
+`~/.local/share/shed/nexus.json`, readable only by you, with the nexus it belongs
+to. The link sends it only there: if `url` is changed to another nexus, the link
+does not connect (`shed nexus status` says why) until you pair with that one.
+Private tabs show in the apps as "Private", with nothing of their folders,
+screens, commands (also those run before the tab was made private), files or
+Claude Code sessions, and cannot be made public from there; making a tab private
+ends what the apps were watching of it. A project or AI tab's Git, seen from the
+apps, covers only that tab's folder, even when the repository is larger. A
+view-only workspace does not let the apps browse the machine's folders. Whoever runs the nexus can see and type into
 what it relays, so host it yourself.
 
 ## Colours and appearance

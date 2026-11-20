@@ -60,6 +60,54 @@ pub(crate) fn git_path(rel: &str) -> Result<String, ApiError> {
     Ok(rel.to_string())
 }
 
+/// Where a tab's project sits in its repository, to keep Git calls to it:
+/// both roots resolved (links followed).
+pub(crate) struct GitScope {
+    repo: PathBuf,
+    project: PathBuf,
+}
+
+impl GitScope {
+    pub fn new(repo_root: &Path, project_root: &Path) -> Result<GitScope, ApiError> {
+        let real = |p: &Path| std::fs::canonicalize(p).map_err(|e| ApiError::new(ErrorCode::NotFound, format!("{}: {e}", p.display())));
+        Ok(GitScope { repo: real(repo_root)?, project: real(project_root)? })
+    }
+
+    /// Whether a path Git names (relative to the repository) is in the
+    /// project, by its name alone: for lists.
+    pub fn shows(&self, rel: &str) -> bool {
+        self.repo.join(rel).starts_with(&self.project)
+    }
+
+    /// A path a Git call names, relative to the repository: as `git_path`,
+    /// and it must lead into the tab's project (not just the repository,
+    /// which may hold more), also once links are followed; never into Git's
+    /// own folder.
+    pub fn path(&self, rel: &str) -> Result<String, ApiError> {
+        let rel = git_path(rel)?;
+        let outside = || ApiError::new(ErrorCode::Forbidden, format!("{rel:?} is not in the tab's folder"));
+        if Path::new(&rel).components().any(|c| matches!(c, Component::Normal(n) if n.eq_ignore_ascii_case(".git"))) {
+            return Err(ApiError::new(ErrorCode::Forbidden, "Git's own folder is not open to connectors"));
+        }
+        let path = self.repo.join(&rel);
+        if !path.starts_with(&self.project) {
+            return Err(outside());
+        }
+        // The nearest part that exists, resolved: a link must not lead out.
+        let mut existing = path.as_path();
+        let resolved = loop {
+            match std::fs::canonicalize(existing) {
+                Ok(p) => break p,
+                Err(_) => existing = existing.parent().ok_or_else(outside)?,
+            }
+        };
+        if !resolved.starts_with(&self.project) {
+            return Err(outside());
+        }
+        Ok(rel)
+    }
+}
+
 /// A revision or branch name, which must not read as an option to Git.
 pub(crate) fn git_name(name: &str) -> Result<&str, ApiError> {
     if name.trim().is_empty() || name.starts_with('-') || name.chars().any(|c| c.is_whitespace() || c.is_control()) {
@@ -86,6 +134,31 @@ pub(crate) fn expand(path: &str) -> Result<PathBuf, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_paths_stay_in_the_project() {
+        // A repository whose root is above the project's folder.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("mono");
+        let project = repo.join("app");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join("secret.txt"), "x").unwrap();
+        std::fs::write(project.join("src/a.rs"), "").unwrap();
+        std::os::unix::fs::symlink(repo.join("secret.txt"), project.join("leak")).unwrap();
+        std::os::unix::fs::symlink(project.join("src/a.rs"), project.join("fine")).unwrap();
+        let scope = GitScope::new(&repo, &project).unwrap();
+        assert_eq!(scope.path("app/src/a.rs").unwrap(), "app/src/a.rs");
+        assert!(scope.path("app/src/gone.rs").is_ok(), "deleted files are named too");
+        assert!(scope.path("app/fine").is_ok());
+        for bad in ["secret.txt", "app/leak", ".git/config", "app/.git/config", "app/../secret.txt", "-p", "/etc/passwd"] {
+            assert!(scope.path(bad).is_err(), "{bad}");
+        }
+        assert!(scope.shows("app/src/a.rs") && !scope.shows("secret.txt"));
+        // The project at the repository's root.
+        let whole = GitScope::new(&repo, &repo).unwrap();
+        assert!(whole.path("secret.txt").is_ok() && whole.path(".git/HEAD").is_err());
+    }
 
     #[test]
     fn paths_stay_in_the_project() {
