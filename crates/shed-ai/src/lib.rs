@@ -6,13 +6,14 @@
 pub mod markdown;
 pub mod aside;
 pub mod listing;
+pub mod notes;
 pub mod sessions;
 mod summary;
 mod transcript;
 
 pub use listing::{SessionRow, family_of, session_rows};
 pub use sessions::{SessionInfo, list_sessions, load_session, rename_session};
-pub use summary::{BROWSER_TOOLS, summarize};
+pub use summary::{BROWSER_TOOLS, span, summarize};
 pub use transcript::{PromptMark, Transcript, keep_picture_in, prune_pictures};
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,119 @@ pub enum Entry {
     Permission(Permission),
     /// Something that happened: a finished turn, an interruption, an error.
     Notice { text: String, error: bool },
+    /// One of Claude Code's own notes, never the user's words: a background
+    /// task that finished, a wake-up, a command's output, what a compaction
+    /// summed up. `detail` unfolds.
+    Note(Note),
+}
+
+/// A note of Claude Code's in the conversation.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Note {
+    pub kind: NoteKind,
+    /// One line.
+    pub text: String,
+    /// More, folded: a report, an output, a summary.
+    pub detail: String,
+    /// Something went wrong (a task failed).
+    pub error: bool,
+    /// When (Unix seconds, 0 if not known).
+    pub at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoteKind {
+    /// A background command, agent or watch finished, or a watch saw something.
+    #[default]
+    Task,
+    /// A wake-up or a scheduled job started a turn.
+    Wakeup,
+    /// A command run in Claude Code's own interface (`/compact`, `! ls`) and its output.
+    Command,
+    /// The conversation was compacted: what it was summed up as.
+    Compacted,
+    /// A message from another Claude session or agent.
+    Message,
+    /// Context a hook added to a prompt.
+    Hook,
+}
+
+/// A tool that goes on after its call: a sub-agent, or a command or watch
+/// in the background.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Run {
+    pub state: RunState,
+    /// Started without waiting for it (`run_in_background`).
+    pub background: bool,
+    /// Claude Code's id for it (an agent's id), which its notifications name.
+    pub task: String,
+    /// The kind of agent (`general-purpose`, `Explore`); empty for commands.
+    pub agent: String,
+    /// When it started and ended, Unix seconds (0: not known, or not yet).
+    pub started: u64,
+    pub ended: u64,
+    /// What it is doing now (its last step), or how it ended.
+    pub last: String,
+    /// Tool calls it made, and tokens it used, as last reported.
+    pub tools: u32,
+    pub tokens: u64,
+    /// Its steps (an agent's tool calls and what it said), the latest
+    /// `Run::MAX_STEPS`; `skipped` earlier ones are left out.
+    pub steps: Vec<Entry>,
+    pub skipped: u32,
+    /// What it reported when it ended: an agent's result, a command's summary.
+    pub report: String,
+    /// Where Claude Code writes its output (background commands, agents).
+    pub output: String,
+}
+
+impl Run {
+    /// Steps kept of a sub-agent's run (the latest ones).
+    pub const MAX_STEPS: usize = 60;
+    /// A step's output beyond this is cut.
+    pub const MAX_STEP_RESULT: usize = 1_500;
+
+    pub fn running(&self) -> bool {
+        self.state == RunState::Running
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunState {
+    #[default]
+    Running,
+    Done,
+    Failed,
+    /// Stopped before it finished (by Claude, a time limit, or the process ending).
+    Stopped,
+}
+
+/// Something set to happen later in a conversation, while its Claude Code
+/// runs: a wake-up (ScheduleWakeup), a scheduled job (CronCreate), a watch
+/// (Monitor).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Timer {
+    pub kind: TimerKind,
+    /// Claude Code's id: the job's, or the watch's task id.
+    pub id: String,
+    /// What it is for: the reason, the job's prompt, the watch's description.
+    pub what: String,
+    /// When it fires next (a watch: when it expires), Unix seconds (0: not known).
+    pub at: u64,
+    /// A recurring job's schedule, as Claude Code says it ("Every minute").
+    pub every: String,
+    /// What it tells Claude when it fires.
+    pub prompt: String,
+    /// The tool call that set it.
+    pub tool: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimerKind {
+    #[default]
+    Wakeup,
+    Job,
+    Watch,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -52,6 +166,9 @@ pub struct Tool {
     /// Pictures it returned (a screenshot Claude read), kept as files.
     #[serde(default)]
     pub pictures: Vec<String>,
+    /// For a sub-agent, or a command or watch in the background: how it runs.
+    #[serde(default)]
+    pub run: Option<Box<Run>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -154,6 +271,9 @@ pub struct Status {
     pub context_max: u64,
     /// When the turn under way started, Unix seconds.
     pub since: Option<u64>,
+    /// Wake-ups, scheduled jobs and watches waiting, while Claude Code runs.
+    #[serde(default)]
+    pub timers: Vec<Timer>,
 }
 
 /// A usage limit's window.

@@ -272,6 +272,7 @@ impl Link {
             }
             KeeperMsg::Replay { pane, cols, rows, bytes } => self.replayed(pane, cols, rows, &bytes),
             KeeperMsg::AiUpdate { tab, from, entries, status } => self.ai_update(tab, from, entries, status),
+            KeeperMsg::AiEntries { tab, entries, status } => self.ai_entries(tab, entries, status),
             KeeperMsg::AiInfo { tab, commands, models } => {
                 let info = topics::ai_info(&commands, &models);
                 for (id, sub) in &self.subs {
@@ -417,6 +418,22 @@ impl Link {
         for id in subs {
             self.send(LinkFrame::Event(shed_api::wire::EventFrame { sub: id, event: Event::AiTranscript(event.clone()) }));
         }
+    }
+
+    /// Entries changed in place: what the link has from the first of them
+    /// on goes again, as a transcript.
+    fn ai_entries(&mut self, tab: TabId, changed: Vec<(u32, shed_ai::Entry)>, status: shed_ai::Status) {
+        let Some(conv) = self.conversations.get_mut(&tab).filter(|c| c.whole) else { return };
+        let mut from = None::<u32>;
+        for (i, e) in changed {
+            if let Some(slot) = conv.entries.get_mut(i as usize) {
+                *slot = e;
+                from = Some(from.map_or(i, |f| f.min(i)));
+            }
+        }
+        let Some(from) = from else { return };
+        let entries = conv.entries[from as usize..].to_vec();
+        self.ai_update(tab, from, entries, status);
     }
 
     // ------------------------------------------------------------ the nexus

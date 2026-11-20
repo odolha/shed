@@ -40,7 +40,48 @@ xtype() { python3 "$repo/tools/screenshots/xtype.py" "$@"; }
 # A stand-in for Claude Code, for the review's explanations.
 cat > "$demo/claude" <<'PY'
 #!/usr/bin/env python3
-import json, re, sys
+import json, re, sys, time
+if "--input-format" in sys.argv:
+    # The AI tab's Claude Code: a turn that leaves an agent working in the
+    # background, builds the site, and sets a wake-up; then it waits.
+    sid = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else "demo"
+    now = time.time()
+    def ts(ago):
+        return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(now - ago))
+    def out(**o):
+        print(json.dumps(o), flush=True)
+    def call(tid, name, inp, ago, result, extra=None, parent=None):
+        out(type="assistant", parent_tool_use_id=parent, timestamp=ts(ago), message={"id": "msg_" + tid, "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]})
+        if result is not None:
+            out(type="user", parent_tool_use_id=parent, timestamp=ts(ago - 2), tool_use_result=extra, message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": result}]})
+    def say(text, ago, parent=None):
+        out(type="assistant", parent_tool_use_id=parent, timestamp=ts(ago), message={"id": "msg_t%d" % ago, "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": text}]})
+    for line in sys.stdin:
+        m = json.loads(line)
+        if m.get("type") == "control_request":
+            out(type="control_response", response={"subtype": "success", "request_id": m["request_id"], "response": {}})
+        elif m.get("type") == "user":
+            out(type="system", subtype="init", session_id=sid, model="claude-opus-5-5")
+            say("I'll have an agent check every link in the guides while the site builds.", 250)
+            call("toolu_agent", "Agent", {"description": "Check every link in the guides", "subagent_type": "Explore", "prompt": "Open every link in guides/*.md and report the ones that fail, with file and line.", "run_in_background": True}, 245,
+                 [{"type": "text", "text": "Async agent launched successfully.\nagentId: a51c7e0d2b9f4e6a1"}], {"isAsync": True, "status": "async_launched", "agentId": "a51c7e0d2b9f4e6a1"})
+            out(type="system", subtype="task_started", task_id="a51c7e0d2b9f4e6a1", tool_use_id="toolu_agent", description="Check every link in the guides", is_backgrounded=True, task_type="local_agent", subagent_type="Explore")
+            call("toolu_s1", "Glob", {"pattern": "guides/*.md"}, 240, "guides/intro.md\nguides/setup.md", parent="toolu_agent")
+            call("toolu_s2", "Grep", {"pattern": "https?://", "path": "guides"}, 230, "guides/setup.md:9: https://nodejs.org/en/download\nguides/intro.md:4: https://example.com/board", parent="toolu_agent")
+            say("Two links. Trying each.", 220, parent="toolu_agent")
+            call("toolu_s3", "Bash", {"command": "curl -sI https://example.com/board | head -1"}, 200, "HTTP/2 200", parent="toolu_agent")
+            call("toolu_s4", "Bash", {"command": "curl -sI https://nodejs.org/en/download | head -1"}, 60, None, parent="toolu_agent")
+            out(type="system", subtype="task_progress", task_id="a51c7e0d2b9f4e6a1", tool_use_id="toolu_agent", description="Running curl", usage={"tool_uses": 4, "total_tokens": 18400, "duration_ms": 190000})
+            call("toolu_build", "Bash", {"command": "npm run build", "description": "Build the docs site", "run_in_background": True}, 120,
+                 "Command running in background with ID: b2m8q4. Output is being written to: /tmp/claude/tasks/b2m8q4.output.", {"backgroundTaskId": "b2m8q4"})
+            out(type="system", subtype="task_started", task_id="b2m8q4", tool_use_id="toolu_build", description="Build the docs site", is_backgrounded=True, task_type="local_bash")
+            out(type="system", subtype="task_notification", task_id="b2m8q4", tool_use_id="toolu_build", status="completed", summary="Background command \"Build the docs site\" completed (exit code 0)")
+            at = int(now) + 18 * 60
+            call("toolu_wake", "ScheduleWakeup", {"delaySeconds": 1080, "reason": "read the link check's report", "prompt": "Read the agent's link report and fix the broken links."}, 30,
+                 "Next wakeup scheduled (in 1080s).", {"scheduledFor": at * 1000, "clampedDelaySeconds": 1080})
+            say("The site builds. The agent is still checking links in the background; I'll read its report in about 18 minutes, or as soon as it finishes.", 20)
+            out(type="result", subtype="success", duration_ms=9000, total_cost_usd=0.42)
+    sys.exit(0)
 asked = sys.stdin.read()
 why = {
     "guides/setup.md": "Walks a new contributor from cloning to a first change, in numbered steps, because the guide only said to run ./dev.sh. The troubleshooting part covers the first-run problems you asked for, kept short.",
@@ -82,6 +123,9 @@ grab "$docs_win" ai
 xtype "$docs_win" %0.3 @Control_L+Shift_L+r %3 && xtype "$docs_win" @Shift_L+e %4 && grab "$docs_win" review && xtype "$docs_win" @Down @Down %0.8 && grab "$docs_win" review-commit && xtype "$docs_win" s %0.8 && grab "$docs_win" review-side && xtype "$docs_win" s %0.3 \
   && printf 'theme = "shed-dark"\n[git]\ntree = true\n' > "$XDG_CONFIG_HOME/shed/shed.toml" && sleep 2.5 && grab "$docs_win" review-tree \
   && echo 'theme = "shed-dark"' > "$XDG_CONFIG_HOME/shed/shed.toml" && sleep 1.5 && xtype "$docs_win" @Escape %0.5 || true
+# A prompt whose turn leaves an agent working in the background and a
+# wake-up waiting (the stand-in Claude Code plays it).
+xtype "$docs_win" %0.3 "Check the links in the guides, and build the site" %0.3 @Control_L+Return %5 && grab "$docs_win" ai-agents || true
 "$shed" hide docs >/dev/null; sleep 4
 grab "$shed_win" shed
 echo 'theme = "shed-light"' > "$XDG_CONFIG_HOME/shed/shed.toml"; sleep 3
@@ -104,7 +148,7 @@ def scaled(im, factor):
     return im.resize((int(im.width * factor), int(im.height * factor)), Image.LANCZOS)
 # (colours.png and tab-menu.png need right-clicks, which do not reach GPUI on
 # Xvfb: they stay as they were.)
-for name in ["shed", "bench", "shed-light", "project", "ai", "review", "setup", "logbook", "find"]:
+for name in ["shed", "bench", "shed-light", "project", "ai", "ai-agents", "review", "setup", "logbook", "find"]:
     path = f"{demo}/{name}.png"
     if os.path.exists(path):
         im = Image.open(path).convert("RGB")

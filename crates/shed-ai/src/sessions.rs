@@ -343,18 +343,22 @@ fn load_from(dir: &Path, folder: &Path, id: &str, picture_dir: Option<std::path:
                     continue;
                 }
             }
-            if !(line.contains("\"user\"") || line.contains("\"assistant\"")) {
+            // Messages, and what came while Claude worked (notifications).
+            if !(line.contains("\"user\"") || line.contains("\"assistant\"") || line.contains("\"queued_command\"")) {
                 continue;
             }
             if let Ok(v) = serde_json::from_str::<Value>(&line) {
                 t.apply(&v);
             }
         }
+        // Its sub-agents, as steps of their Agent tools.
+        t.read_subagents(&dir.join(&part).join("subagents"));
     }
     t.reading_session = None;
     t.status.session = Some(id.to_string());
     t.status.state = crate::State::Idle;
     t.status.since = None;
+    t.finish_loading();
     Some(t)
 }
 
@@ -449,6 +453,66 @@ mod tests {
         assert_eq!(order[0].1, 0);
         let a = order.iter().position(|(id, _)| id == "a").unwrap();
         assert!(order[a + 1].1 == 1 && order[a + 2].1 == 1, "{order:?}");
+    }
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(format!("{}/tests/sessions/{name}", env!("CARGO_MANIFEST_DIR")))
+    }
+
+    /// Recorded: a background command, a sub-agent and one in the
+    /// background; the agents' own records are in `<session>/subagents/`.
+    #[test]
+    fn a_saved_session_shows_its_agents_and_notifications() {
+        use crate::{Entry, RunState};
+        let t = load_from(&fixture("agents"), Path::new("/tmp/shed-cap-b"), "54996e21-70cb-43f1-88b0-3e377cd622bd", None).unwrap();
+        let users: Vec<&str> = t.entries.iter().filter_map(|e| if let Entry::User { text, .. } = e { Some(text.as_str()) } else { None }).collect();
+        assert_eq!(users.len(), 1, "the prompt only, no notification or sub-agent prompt: {users:#?}");
+        assert!(users[0].starts_with("This is a test of tools"));
+        let run = |name: &str| {
+            t.entries
+                .iter()
+                .find_map(|e| match e {
+                    Entry::Tool(x) if x.summary == name => x.run.as_deref().cloned(),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let count = run("Agent: Count files");
+        assert_eq!((count.state, count.background), (RunState::Done, false));
+        assert!(count.steps.iter().any(|e| matches!(e, Entry::Tool(x) if x.summary == "$ ls -a" && x.result.is_some())), "{:#?}", count.steps);
+        assert!(count.ended > count.started && count.started > 0);
+        assert_eq!(count.tools, 1, "counted once, from its result or its steps");
+        let echo = run("Agent: Echo twice");
+        assert_eq!((echo.state, echo.background, echo.task.as_str()), (RunState::Done, true, "a49d0ab7a82dc4dff"));
+        let steps: Vec<&str> = echo.steps.iter().filter_map(|e| if let Entry::Tool(x) = e { Some(x.summary.as_str()) } else { None }).collect();
+        assert_eq!(steps, ["$ echo one", "$ echo two"]);
+        assert_eq!(run("$ sleep 4").state, RunState::Done);
+        let notes: Vec<&str> = t.entries.iter().filter_map(|e| if let Entry::Note(n) = e { Some(n.text.as_str()) } else { None }).collect();
+        assert_eq!(notes, ["Background command \"Sleep 4 seconds in background\" completed (exit code 0)", "Agent \"Echo twice\" finished"]);
+        assert!(t.status.timers.is_empty());
+    }
+
+    /// Recorded: a wake-up, a job, a watch and its events, as the session
+    /// file keeps them; read back, nothing is left waiting.
+    #[test]
+    fn a_saved_session_shows_its_wake_ups_and_watches() {
+        use crate::Entry;
+        let t = load_from(&fixture("timers"), Path::new("/tmp/shed-cap-c"), "fa1e436c-2ca9-4680-aad8-ea160a2b764c", None).unwrap();
+        let users = t.entries.iter().filter(|e| matches!(e, Entry::User { .. })).count();
+        assert_eq!(users, 1, "{:#?}", t.entries);
+        let notes: Vec<&str> = t.entries.iter().filter_map(|e| if let Entry::Note(n) = e { Some(n.text.as_str()) } else { None }).collect();
+        assert_eq!(
+            notes,
+            [
+                "Monitor event: \"three events\": ev1",
+                "Monitor event: \"three events\": ev2",
+                "Monitor event: \"three events\": ev3",
+                "Monitor \"three events\" stream ended",
+                "Scheduled job ran: Say tick, then delete this cron job with CronDelete.",
+                "Woke up: check back on the test",
+            ]
+        );
+        assert!(t.status.timers.is_empty(), "no Claude Code runs it now: {:?}", t.status.timers);
     }
 
     #[test]

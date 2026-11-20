@@ -403,6 +403,76 @@ transcript, and starts it with `--resume SESSION --resume-session-at BEFORE
 --fork-session` (a new session that starts as a copy up to there; before the
 first prompt, a fresh one), and sends the new text.
 
+**Sub-agents and background tasks.** A tool that goes on after its call (an
+`Agent`/`Task` call, `Bash` with `run_in_background`, `Monitor`) carries a
+`Run` in its `Tool.run` (state, background, Claude Code's task id, times, tool
+calls, tokens, what it is doing, its report, and for agents its last
+`Run::MAX_STEPS` steps, each step's output cut). Live, a sub-agent's own
+messages come as `assistant`/`user` events with `parent_tool_use_id` set to its
+Agent call (complete messages, never `stream_event`s); the transcript turns
+them into steps of that tool (`transcript/tasks.rs`, `owners` maps the tools an
+agent calls back to it), never into entries. `system` events tell the rest:
+`task_started` (task id, tool id, `is_backgrounded`), `task_progress` (tool
+calls, tokens), `task_updated`, `task_notification` (status, summary; an
+agent's summary is its last words). A background agent's tool result is "Async
+agent launched" with its `agentId` (`tool_use_result` live, `toolUseResult` in
+the file); a background command's has `backgroundTaskId`. Saved sessions keep
+sub-agents apart: `<session>/subagents/agent-ID.jsonl` (`isSidechain` records)
+with `agent-ID.meta.json` naming the tool call (`toolUseId`, `finished`);
+`load_session` reads them as the agents' steps (`read_subagents`), and
+`finish_loading` marks what was still running as ended with its session. With
+its sub-agents a session can take a while to read, so the keeper reads it off
+its lock (`ai_load`, on a blocking thread) when a window first watches the tab
+or opens another session, and sends it once read.
+
+A run changing on an entry before the end (an agent working on while the
+conversation goes on) is changed in place: `Transcript::take_update` gives
+those entries apart from "everything from entry N", and the keeper sends them
+as `AiEntries` (each entry alone; a running agent with its latest
+`LIVE_STEPS` steps only, the rest counted as skipped, all of them once it
+ends), so the window lays out one entry, not all after it, and keeps what it
+parsed (keyed by what it read). Idle, the window is drawn again once a second
+only while a run is in its first minute or a timer in its last, every 30 s while
+a run goes on longer or a timer is further off (their times show whole minutes
+then), and not at all otherwise; marks of runs turn only while Claude works.
+
+User messages are read as notes only when they start with one of Claude Code's
+tags, block after block; `<system-reminder>` and hook context are taken off the
+end only, as whole blocks; a tag in the user's own words, or one never closed,
+stays theirs.
+
+**Claude Code's notes.** Some user messages are Claude Code's, not the user's:
+`<task-notification>` (a background task finished, a watch's `<event>`; as a
+user message starting a turn, or a `queued_command` attachment when it came
+mid-turn), `<command-name>`/`<command-args>` (a slash command, shown as the
+user's `/name args`), `<local-command-stdout>`, `<bash-input>`/`<bash-stdout>`
+(a `!` command), `<system-reminder>` and `<local-command-caveat>` (hidden),
+`<user-prompt-submit-hook>`, compaction summaries (`isCompactSummary`),
+"[Request interrupted…", and `isMeta` messages: a wake-up's prompt
+(`turnOrigin: "scheduled"`) or a background agent handing back (`origin.kind:
+"peer"`, `<agent-message from=…>`), the rest hidden. `shed_ai::notes` reads
+them; the transcript updates the run they name and adds an `Entry::Note` (kind,
+line, folded detail) instead of a prompt. Live, notifications are `system`
+events, not messages.
+
+**Turns Claude starts.** While its process runs, Claude Code starts turns by
+itself: when a background task ends, a watch sees something, or a wake-up or job
+fires. Each begins with `system` `init` (and for a wake-up a
+`command_lifecycle` event, `wakeup_source` `loop_wakeup` or `schedule_wakeup`);
+an `init` while idle makes the tab Working again, so a message sent then waits
+in the queue. A watch's events show only as such turns live (their text is in
+the session file).
+
+**Timers.** `Status.timers` lists what Claude set for later: wake-ups
+(`ScheduleWakeup`: reason, prompt, when, from `scheduledFor`), jobs
+(`CronCreate`: id, schedule, next run; `CronList` results put the list right)
+and watches (`Monitor`: task id, until when). They go when they fire, are
+cancelled (`CronDelete`, `ScheduleWakeup` with `stop`, `TaskStop`) or end; a
+new wake-up replaces the waiting one. They are Claude Code's own and live only
+as long as its process (`--input-format stream-json` keeps it, and it does
+fire them); `Transcript::stopped` (the process ends: the tab or bench closes,
+folders or effort change, the keeper stops) clears them with a note saying so.
+
 Claude's questions come as a `can_use_tool` request for its AskUserQuestion
 tool: the transcript keeps them in the `Permission` entry (`questions`), the
 window draws them as a form, and `AiAnswerQuestions` answers with the tool's
@@ -427,6 +497,12 @@ tool's result (Claude reading a screenshot) go to `Tool.pictures` the same way,
 and Claude Code's `[Image: original …]` notes that follow them, sent as user
 messages, are not shown as prompts. The keeper deletes pictures there unseen for
 60 days (`prune_pictures`, by modification time, which `keep_picture` renews).
+Other files and folders go with a prompt as their paths (an "Attached files:"
+list after its text, for Claude to read with its own tools): dropped, picked
+(**Attach**, `prompt_for_paths`) or pasted. A paste of files copied in a file
+manager is a `ClipboardEntry::ExternalPaths`: macOS's clipboard gives one, and
+the patched Linux one (`gpui_ce_linux`, X11 and Wayland) adds one when the
+clipboard offers `text/uri-list`.
 
 Each entry the conversation list draws is an `EntryView` of its own (it asks
 the `AiView` to draw it, and follows the `AiView`'s notifications), so its layout
@@ -495,8 +571,9 @@ which file the message before a prompt came from, and editing that prompt
 resumes that file.
 `shed-ai` has
 no UI and no processes; its tests replay recorded streams
-(`crates/shed-ai/tests/streams/`), and `crates/shed-app/tests/ai_tabs.rs` runs the
-keeper against a stand-in `claude` (`SHED_CLAUDE`).
+(`crates/shed-ai/tests/streams/`) and read saved sessions
+(`tests/sessions/`), and `crates/shed-app/tests/ai_tabs.rs` (and `ai_agents.rs`,
+`ai_questions.rs`) run the keeper against a stand-in `claude` (`SHED_CLAUDE`).
 
 `ai_view.rs` draws the conversation with GPUI's `list` (variable-height rows,
 only those in view, following the end as it grows), a light Markdown renderer,

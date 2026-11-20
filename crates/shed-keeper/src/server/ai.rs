@@ -113,6 +113,32 @@ impl AiRt {
     }
 }
 
+/// Steps of a running agent sent with each change of it: its latest only
+/// (all of them go once it ends, and to a window opening the tab).
+const LIVE_STEPS: usize = 12;
+
+/// An entry changed in place, as it goes out: a running agent with its
+/// latest steps, so its progress costs little each time.
+fn glimpse(entry: &mut shed_ai::Entry) -> shed_ai::Entry {
+    match entry {
+        shed_ai::Entry::Tool(t) if t.run.as_ref().is_some_and(|r| r.running() && r.steps.len() > LIVE_STEPS) => {
+            // Its steps set aside a moment, not to copy them all.
+            let mut run = t.run.take().unwrap();
+            let steps = std::mem::take(&mut run.steps);
+            let over = steps.len() - LIVE_STEPS;
+            let mut light = shed_ai::Tool { run: Some(run.clone()), ..t.clone() };
+            if let Some(r) = light.run.as_mut() {
+                r.steps = steps[over..].to_vec();
+                r.skipped += over as u32;
+            }
+            run.steps = steps;
+            t.run = Some(run);
+            shed_ai::Entry::Tool(light)
+        }
+        other => other.clone(),
+    }
+}
+
 pub(super) fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
@@ -159,29 +185,62 @@ impl Keeper {
         self.cfg.state_dir.join("ai-pictures")
     }
 
+    /// A tab's conversation as its saved session has it (a new one if none).
+    fn read_transcript(ai: &AiTab, picture_dir: PathBuf) -> Transcript {
+        ai.session.as_deref().and_then(|id| shed_ai::load_session(&ai.folder, id, Some(picture_dir.clone()))).unwrap_or_else(|| {
+            let mut t = Transcript::new(&ai.folder.to_string_lossy());
+            t.picture_dir = Some(picture_dir);
+            t
+        })
+    }
+
     /// The tab's conversation, made (from its saved session, if any) the first time.
     fn ai_rt<'a>(&self, st: &'a mut State, tab: TabId) -> Option<&'a mut AiRt> {
         if !st.ai.contains_key(&tab) {
             let ai = ai_tab(st, tab)?;
-            let transcript = ai
-                .session
-                .as_deref()
-                .and_then(|id| shed_ai::load_session(&ai.folder, id, Some(self.picture_dir())))
-                .unwrap_or_else(|| {
-                    let mut t = Transcript::new(&ai.folder.to_string_lossy());
-                    t.picture_dir = Some(self.picture_dir());
-                    t
-                });
-            st.ai.insert(tab, AiRt::new(transcript));
+            st.ai.insert(tab, AiRt::new(Self::read_transcript(&ai, self.picture_dir())));
         }
         st.ai.get_mut(&tab)
     }
 
+    /// Reads a tab's session off the keeper's lock (with its sub-agents' files
+    /// it can take a while), then `then` with the lock, if the tab still
+    /// shows that session: with what was read, or none when something read
+    /// it meanwhile (that stays).
+    fn ai_load(self: &Arc<Self>, tab: TabId, ai: AiTab, then: impl FnOnce(&Keeper, &mut State, Option<Transcript>) + Send + 'static) {
+        let keeper = self.clone();
+        let dir = self.picture_dir();
+        tokio::task::spawn_blocking(move || {
+            let transcript = Self::read_transcript(&ai, dir);
+            let mut st = keeper.lock();
+            if ai_tab(&st, tab).is_none_or(|now| now.session != ai.session) {
+                return;
+            }
+            // (Read meanwhile, for another window or a prompt: kept as it is.)
+            let fresh = (!st.ai.contains_key(&tab)).then_some(transcript);
+            then(&keeper, &mut st, fresh);
+        });
+    }
+
     /// A window opened the tab: it gets the whole conversation and what
-    /// Claude Code offers.
-    pub(super) fn ai_watch(&self, client: ClientId, tab: TabId) {
+    /// Claude Code offers (once read, when it is not yet).
+    pub(super) fn ai_watch(self: &Arc<Self>, client: ClientId, tab: TabId) {
         let mut st = self.lock();
-        let Some(rt) = self.ai_rt(&mut st, tab) else { return };
+        if !st.ai.contains_key(&tab) {
+            let Some(ai) = ai_tab(&st, tab) else { return };
+            drop(st);
+            return self.ai_load(tab, ai, move |keeper, st, transcript| {
+                if let Some(transcript) = transcript {
+                    st.ai.insert(tab, AiRt::new(transcript));
+                }
+                keeper.ai_send_watched(st, client, tab);
+            });
+        }
+        self.ai_send_watched(&mut st, client, tab);
+    }
+
+    fn ai_send_watched(&self, st: &mut State, client: ClientId, tab: TabId) {
+        let Some(rt) = st.ai.get(&tab) else { return };
         let update = KeeperMsg::AiUpdate { tab, from: 0, entries: rt.transcript.entries.clone(), status: rt.transcript.status.clone() };
         let info = (!rt.commands.is_empty()).then(|| KeeperMsg::AiInfo { tab, commands: rt.commands.clone(), models: rt.models.clone() });
         st.send(client, update);
@@ -653,7 +712,7 @@ impl Keeper {
 
     /// Shows another session (or a new one) in the tab; the process stops
     /// and starts again for it with the next prompt.
-    pub(super) fn ai_open_session(&self, tab: TabId, session: Option<String>) {
+    pub(super) fn ai_open_session(self: &Arc<Self>, tab: TabId, session: Option<String>) {
         let mut st = self.lock();
         let Some(t) = st.tree.tab_mut(tab) else { return };
         let TabKind::Ai(ai) = &mut t.kind else { return };
@@ -668,22 +727,17 @@ impl Keeper {
         if let Some(mut rt) = st.ai.remove(&tab) {
             rt.stop();
         }
-        let transcript = ai
-            .session
-            .as_deref()
-            .and_then(|id| shed_ai::load_session(&ai.folder, id, Some(self.picture_dir())))
-            .unwrap_or_else(|| {
-                    let mut t = Transcript::new(&ai.folder.to_string_lossy());
-                    t.picture_dir = Some(self.picture_dir());
-                    t
-                });
-        let mut rt = AiRt::new(transcript);
-        rt.transcript.touch_all();
-        st.ai.insert(tab, rt);
         st.broadcast_tree();
         drop(st);
         self.save_soon.notify_one();
-        self.ai_dirty.notify_one();
+        // Read off the lock; windows get it whole once it is.
+        self.ai_load(tab, ai, move |keeper, st, transcript| {
+            let Some(transcript) = transcript else { return };
+            let mut rt = AiRt::new(transcript);
+            rt.transcript.touch_all();
+            st.ai.insert(tab, rt);
+            keeper.ai_dirty.notify_one();
+        });
     }
 
     pub(super) fn ai_settings(&self, tab: TabId, new: AiTab) {
@@ -844,7 +898,14 @@ impl Keeper {
             let tabs: Vec<TabId> = st.ai.keys().copied().collect();
             for tab in tabs {
                 let rt = st.ai.get_mut(&tab).unwrap();
-                if let Some(from) = rt.transcript.take_changes() {
+                let (one, from) = rt.transcript.take_update();
+                // Entries changed in place (a background agent's progress) go
+                // alone, not with everything after them.
+                if !one.is_empty() {
+                    let entries = one.iter().map(|&i| (i as u32, glimpse(&mut rt.transcript.entries[i]))).collect();
+                    updates.push(KeeperMsg::AiEntries { tab, entries, status: rt.transcript.status.clone() });
+                }
+                if let Some(from) = from {
                     let entries = rt.transcript.entries[from.min(rt.transcript.entries.len())..].to_vec();
                     updates.push(KeeperMsg::AiUpdate { tab, from: from as u32, entries, status: rt.transcript.status.clone() });
                 }
@@ -881,5 +942,28 @@ impl Keeper {
                 st.broadcast_tree();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A running agent goes out with its latest steps; the keeper keeps all.
+    #[test]
+    fn a_running_agent_goes_out_light() {
+        let step = |n: usize| shed_ai::Entry::Assistant { text: format!("step {n}"), at: 0 };
+        let run = shed_ai::Run { steps: (0..30).map(step).collect(), skipped: 2, ..Default::default() };
+        let mut entry = shed_ai::Entry::Tool(shed_ai::Tool { name: "Agent".into(), run: Some(Box::new(run)), ..Default::default() });
+        let shed_ai::Entry::Tool(sent) = glimpse(&mut entry) else { panic!() };
+        let sent = sent.run.unwrap();
+        assert_eq!((sent.steps.len(), sent.skipped), (LIVE_STEPS, 2 + 30 - LIVE_STEPS as u32));
+        assert_eq!(sent.steps.last(), Some(&step(29)));
+        let shed_ai::Entry::Tool(kept) = &mut entry else { panic!() };
+        assert_eq!(kept.run.as_ref().unwrap().steps.len(), 30);
+        // Ended: all of it.
+        kept.run.as_mut().unwrap().state = shed_ai::RunState::Done;
+        let shed_ai::Entry::Tool(sent) = glimpse(&mut entry) else { panic!() };
+        assert_eq!(sent.run.unwrap().steps.len(), 30);
     }
 }

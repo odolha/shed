@@ -79,6 +79,7 @@ fn entry(e: &shed_ai::Entry) -> api::AiEntry {
             answers: p.answers.clone(),
         }),
         shed_ai::Entry::Notice { text, error } => api::AiEntry::Notice(api::AiNotice { text: text.clone(), error: *error }),
+        shed_ai::Entry::Note(n) => api::AiEntry::Notice(api::AiNotice { text: n.text.clone(), error: n.error }),
     }
 }
 

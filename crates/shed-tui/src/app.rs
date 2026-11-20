@@ -436,6 +436,11 @@ impl App {
                     view.update(from as usize, entries, status);
                 }
             }
+            KeeperMsg::AiEntries { tab, entries, status } => {
+                if let Some(view) = self.ais.get_mut(&tab) {
+                    view.replace(entries, status);
+                }
+            }
             KeeperMsg::AiInfo { tab, commands, models } => {
                 if let Some(view) = self.ais.get_mut(&tab) {
                     view.commands = commands;

@@ -125,6 +125,16 @@ impl AiView {
         }
     }
 
+    /// Entries changed in place (a sub-agent's progress), each alone.
+    pub fn replace(&mut self, entries: Vec<(u32, Entry)>, status: shed_ai::Status) {
+        for (i, e) in entries {
+            if let Some(slot) = self.entries.get_mut(i as usize) {
+                *slot = e;
+            }
+        }
+        self.status = status;
+    }
+
     /// The request Claude waits on, if any.
     pub fn pending(&self) -> Option<&Permission> {
         self.entries.iter().rev().find_map(|e| match e {
@@ -209,6 +219,10 @@ impl AiView {
                             lines.extend(wrap(vec![Span::raw(q.question.clone()), Span::styled(answer, c.added())], cols, vec![Span::styled("? ", style)], vec![Span::raw("  ")]));
                         }
                     }
+                }
+                Entry::Note(n) => {
+                    let style = if n.error { c.danger() } else { c.dim() };
+                    lines.extend(wrap(vec![Span::styled(n.text.clone(), style)], cols, vec![Span::styled("· ", style)], vec![Span::raw("  ")]));
                 }
                 Entry::Notice { text, error } => {
                     let style = if *error { c.danger() } else { c.dim() };
