@@ -282,6 +282,9 @@ folder joined, `src/app`); click a folder to close or open it, its box to add or
 leave out every file under it. The list button goes back to the flat list; the
 choice is remembered (`[git] tree`). Hover a file to stage (+), unstage (−) or
 discard it (↺, after asking); **Stage All** and **Unstage All** do every file.
+A new folder holding more than 300 files (an unignored `node_modules`, a build
+folder) is one row, `name/` with how many files it has, staged or discarded
+whole; a section lists at most 1000 rows and says how many files there are in all.
 Click a file for its diff: hunk by hunk, each with **Stage**, **Unstage** or
 **Discard…**, unified or **Side by Side**; a picture's diff is its two
 versions side by side, **Before** and **After**, each with its size. **Go to

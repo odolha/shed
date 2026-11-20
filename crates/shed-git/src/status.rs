@@ -25,6 +25,9 @@ pub struct Entry {
     pub worktree: char,
     pub untracked: bool,
     pub conflict: bool,
+    /// An untracked folder too full to list file by file (`path` ends with
+    /// `/`): how many files are in it. 0 for a file.
+    pub files: u32,
 }
 
 impl Entry {
