@@ -205,6 +205,10 @@ impl App {
                     v.files = walked.files;
                     v.loaded = true;
                     v.watch = watch;
+                    // Typed before the files were known: ranked now.
+                    if let Some(q) = &mut v.quick {
+                        q.results = shed_project::fuzzy::rank(&q.input.text, &v.files, 200).into_iter().map(|(i, _)| i).collect();
+                    }
                 }
             }
         });

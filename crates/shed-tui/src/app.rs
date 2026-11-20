@@ -173,7 +173,8 @@ impl App {
         self.conn.send_msg(ClientMsg::Pegboard);
     }
 
-    pub(crate) fn send(&self, msg: ClientMsg) {
+    /// Sends a message to the keeper.
+    pub fn send(&self, msg: ClientMsg) {
         self.conn.send_msg(msg);
     }
 
