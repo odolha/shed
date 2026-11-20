@@ -881,6 +881,17 @@ keeps current (connecting, connected, offline, refused).
 | `shed-api` | The nexus API's types: frames, workspace state, calls, topics, HTTP bodies, errors |
 | `shed-nexus` | `shed-nexus`: the account, devices, pairing, relaying, snapshots, push |
 
+`web/` is the web app the nexus serves (Angular, `web/README.md`): it speaks
+only the nexus API (`crates/shed-api`, whose TypeScript types are generated
+into `web/src/api/gen/`). One WebSocket carries requests (answered by id) and
+subscriptions (an AI tab's transcript, a pane's screen as lines of styled
+text, a project's changes, a search), which the client sends again after a
+reconnect and pauses while their workspace is offline; the workspaces and
+their last states come with the welcome and with every change. Terminals are
+drawn from that text, re-wrapped to the browser's width on the normal screen,
+so the app has no terminal emulator. `web/mock/` is a pretend nexus to develop
+against.
+
 `browser/chrome/` is the browser extension (built into `shed`, written out by
 `shed browser setup`). `vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,
 `gpui_ce_render` and `gpui_ce_linux`; `packaging/` the Debian and Arch packaging, desktop entry and

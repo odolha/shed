@@ -24,6 +24,7 @@ cargo run -p shed-codegen            # after changing crates/shed-api: regenerat
 tools/check-codegen.sh               # fails if those generated types are stale
 cargo build -p shed-app --no-default-features --features tui   # shed without windows (CLI + shed tui)
 cargo clippy -p shed-app --no-default-features --features tui --all-targets   # must stay clean too
+cd web && npm run build && npm test  # the web app (Angular, Node 24.15+); npm run mock + npm start to try it
 ```
 
 Integration tests live in `crates/shed-keeper/tests/` (protocol, logout) and

@@ -1,0 +1,104 @@
+/**
+ * Cutting a line of text into styled pieces, from character ranges: code
+ * colours (`Highlight`), matched characters in quick open, search hits.
+ *
+ * Positions count characters as Rust does (Unicode scalar values, what
+ * `Array.from` gives), not UTF-16 units, so text beyond the BMP (emoji) does
+ * not shift the colours after it.
+ */
+
+import type { Highlight } from '../../api/gen/api';
+
+export interface Segment {
+  text: string;
+  /** The CSS class, or null for plain text. */
+  cls: string | null;
+}
+
+export interface Mark {
+  start: number;
+  end: number;
+  cls: string;
+}
+
+/** Pieces of `text`; overlapping marks: the one starting first wins. */
+export function segment(text: string, marks: readonly Mark[]): Segment[] {
+  if (!marks.length) return text ? [{ text, cls: null }] : [];
+  const chars = Array.from(text);
+  const sorted = marks.filter((m) => m.end > m.start).sort((a, b) => a.start - b.start || b.end - a.end);
+  const out: Segment[] = [];
+  let pos = 0;
+  for (const m of sorted) {
+    const s = Math.max(m.start, pos);
+    const e = Math.min(m.end, chars.length);
+    if (e <= s) continue;
+    if (s > pos) out.push({ text: chars.slice(pos, s).join(''), cls: null });
+    out.push({ text: chars.slice(s, e).join(''), cls: m.cls });
+    pos = e;
+  }
+  if (pos < chars.length) out.push({ text: chars.slice(pos).join(''), cls: null });
+  return out;
+}
+
+/** `string.special` → `hl-string.special`; anything odd is dropped. */
+export function kindClass(kind: string): string | null {
+  return /^[a-z][a-z0-9._-]*$/i.test(kind) ? `hl-${kind.toLowerCase()}` : null;
+}
+
+/** A line of code coloured by its highlights. */
+export function highlightLine(text: string, highlights: readonly Highlight[] | undefined): Segment[] {
+  const marks: Mark[] = [];
+  for (const h of highlights ?? []) {
+    const cls = kindClass(h.kind);
+    if (cls) marks.push({ start: h.start, end: h.end, cls });
+  }
+  return segment(text, marks);
+}
+
+/** Single positions (quick open's `hits`) as runs of marks. */
+export function positionMarks(positions: readonly number[], cls: string): Mark[] {
+  const sorted = [...positions].sort((a, b) => a - b);
+  const marks: Mark[] = [];
+  for (const p of sorted) {
+    const last = marks[marks.length - 1];
+    if (last && last.end === p) last.end = p + 1;
+    else if (!last || p >= last.end) marks.push({ start: p, end: p + 1, cls });
+  }
+  return marks;
+}
+
+/** Ranges as `start, end, start, end…` (search hits) as marks. */
+export function rangeMarks(ranges: readonly number[], cls: string): Mark[] {
+  const marks: Mark[] = [];
+  for (let i = 0; i + 1 < ranges.length; i += 2) {
+    marks.push({ start: ranges[i]!, end: ranges[i + 1]!, cls });
+  }
+  return marks;
+}
+
+/** `src/app/main.rs` → [`src/app/`, `main.rs`]. */
+export function splitPath(path: string): [string, string] {
+  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path;
+  const i = trimmed.lastIndexOf('/');
+  return i < 0 ? ['', trimmed] : [trimmed.slice(0, i + 1), trimmed.slice(i + 1)];
+}
+
+/** The folder holding a path, relative to the root (`''` for the root). */
+export function parentOf(path: string): string {
+  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path;
+  const i = trimmed.lastIndexOf('/');
+  return i < 0 ? '' : trimmed.slice(0, i);
+}
+
+/** `1536` → `1.5 KB`. */
+export function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = bytes / 1024;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[u]}`;
+}

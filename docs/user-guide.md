@@ -9,6 +9,7 @@ settings file. Screenshots come from a demo setup (`tools/screenshots/`).
 - [Project tabs](#project-tabs)
 - [AI tabs](#ai-tabs)
 - [Remote tabs](#remote-tabs)
+- [Shed from a browser](#shed-from-a-browser)
 - [Opening, hiding, closing](#opening-hiding-closing)
 - [Setup: startup, teardown and aliases](#setup-startup-teardown-and-aliases)
 - [History and the logbook](#history-and-the-logbook)
@@ -599,6 +600,76 @@ a C library at least as new as this machine's (and the same architecture); for
 older servers, other architectures, or when Shed runs on a Mac, put a static
 build beside `shed` as `shedd-x86_64-static` or `shedd-aarch64-static` (see
 [Development](development.md#remote-tabs)) and Shed copies that instead.
+
+## Shed from a browser
+
+With a **nexus** (a server you host, see the [plan](nexus-plan.md)), your
+workspaces can be reached from a browser, on a computer or a phone. A workspace
+links to the nexus with `shed nexus join https://nexus.example.com`, which
+prints a code; in the web app, **Devices** → **Approve a Workspace…**, type
+that code (only someone who sees the workspace can), a name for it and a code
+from your authenticator. The list of workspaces asking to pair shows their
+name, version and address, never their code.
+
+**Setting up** happens once: the nexus writes a setup link to its log (the
+code in it after `#`, so it stays out of servers' logs). Open it,
+choose a user name and password, scan the QR code with an authenticator app,
+type the code it shows, and keep the recovery codes (each signs you in once if
+the authenticator is lost). **Signing in** always asks for the password and a
+code.
+
+What the web app shows:
+
+- **Workspaces**: each linked workspace with its benches as cards in their
+  colours, each tab with its icon, tags, what runs in it and, for terminals,
+  its last lines; AI tabs that work or wait for you say so. Usage limits are
+  beside each workspace. Closed benches can be opened (or opened with their
+  startup), renamed, recoloured or deleted. A workspace that is offline still
+  shows, read only, as it was when it was last seen. A workspace set to allow
+  viewing only says **View only**, and nothing there can be changed.
+- **A bench**: its tabs on a bar in its colour; **+** makes a terminal,
+  project, AI or remote tab (choosing a folder on the workspace); a tab's
+  menu (right-click, or the arrow after the tabs) renames it, makes it private
+  or closes it, after asking. The bench's name opens its menu: rename, badge,
+  colour, Run Startup, Run Teardown, the logbook, Close Bench…. A link to a tab
+  (`…/w/<workspace>/b/<bench>/t/<tab>`) opens that tab.
+- **AI tabs**, as in Shed: the conversation with its steps (click one for its
+  detail, change and result), thinking folded, permission cards (**Allow**,
+  **Allow for This Session**, **Deny**) and questions (pick options, or write
+  your own answer). The prompt sends with Enter on a computer (Shift+Enter
+  breaks the line) and with its button on a phone; `/` lists Claude Code's
+  commands; pictures can be added with the clip, pasted, dropped, or taken with
+  the camera on a phone. While Claude works, sending queues the message
+  (**Edit**, **Send Now**, **Remove**); **Draft** keeps it for later; **Stop**
+  interrupts. Below the prompt: the model, its effort, the mode (**Full Auto…**
+  asks first), and the follow and browser switches. The clock button lists the
+  sessions (draft sessions first; double-click to rename); **Review** shows
+  what Claude changed, with **Viewed** and **Explain**.
+- **Terminals** show the text of the screen, re-flowed to the width of the
+  browser, so a shell's output reads well on a phone; full-screen programs
+  (vim, htop) show as they are, scaled to fit or panned. Scroll up for older
+  lines. Tap the terminal to type; on a phone a bar of keys (Esc, Tab, Ctrl,
+  Alt, arrows, `|`, `~`, `/`) sits above the keyboard. **Take size** makes the
+  terminal the size of your screen while you look at it (for a full-screen
+  program on a phone); leaving gives the size back. The logbook button finds
+  earlier commands and types one in.
+- **Project tabs**: the file tree, files with their colours, **Go to File**
+  (Ctrl+P), search in files, and **Changes**: stage, unstage or discard files
+  and hunks (discarding asks), commit (or amend), branches, history, Fetch,
+  Pull and Push. Files are read only, apart from small text files.
+- **Logbook** (on each workspace, and in a bench's menu): commands with their
+  exit status, folder and time; search a tab, its bench, or everything, and
+  `tag:label`.
+- **Devices**: browsers, phones and workspaces with when and where they were
+  last seen; rename or revoke them (revoking asks for a code); workspaces
+  asking to pair; the record of sign-ins and changes.
+- **Settings**: notifications in this browser (Claude waiting for you, a turn
+  done, a long command finished, a workspace gone offline: each can be on or
+  off); clicking one opens its tab. Change the password, sign out.
+
+On a phone, **Add to Home Screen** installs it as an app (on iPhone, needed for
+notifications). Private tabs are listed, never shown: what is in them stays on
+their workspace.
 
 ## Opening, hiding, closing
 
