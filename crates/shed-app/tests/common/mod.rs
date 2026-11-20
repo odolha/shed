@@ -190,6 +190,8 @@ pub fn start_with_shell(dir: &Path, socket_name: &str, shell: &Path) -> Env {
         store: Some(shed_save::Store::new(dir.join("benches"))),
         desktop: None,
         aliases_file: dir.join("aliases.toml"),
+        link_secret: None,
+        link_log: dir.join("link.log"),
     };
     let listen = socket.clone();
     std::thread::spawn(move || {

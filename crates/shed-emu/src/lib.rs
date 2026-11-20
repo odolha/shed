@@ -87,6 +87,41 @@ pub struct GridPoint {
     pub right_half: bool,
 }
 
+/// A cell's colour as the program chose it, before a theme gives it one:
+/// for clients that colour terminals with their own theme (the nexus's apps).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Ink {
+    /// The terminal's foreground or background.
+    #[default]
+    Default,
+    /// One of the 256 palette colours (0–15 are the theme's).
+    Indexed(u8),
+    Rgb(Rgb),
+}
+
+/// A cell as the program wrote it: its colours unresolved (see [`Ink`]),
+/// inverse and dim kept as flags rather than folded into the colours.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StyledCell {
+    pub ch: char,
+    /// Combining characters on top of `ch`.
+    pub zerowidth: Option<Box<str>>,
+    pub fg: Ink,
+    pub bg: Ink,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike: bool,
+    pub inverse: bool,
+    /// Drawn as blank (concealed text).
+    pub hidden: bool,
+    /// The first half of a double-width character.
+    pub wide: bool,
+    /// The second half of a double-width character: no character of its own.
+    pub spacer: bool,
+}
+
 /// Something the terminal asked for that the emulator cannot do by itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EmuEvent {
@@ -179,4 +214,22 @@ pub trait Emulator: Send {
     /// Goes to the next match, older or newer, wrapping around, and scrolls
     /// it into view. Returns whether anything matches.
     fn search_step(&mut self, older: bool) -> bool;
+
+    /// A line's cells as written (see [`StyledCell`]), into `out`, and
+    /// whether it wraps into the next. `line` counts from the screen's top
+    /// whatever the view's scroll: `0..rows` is the screen, `-1` the line of
+    /// scrollback just above it. Scrollback is the main screen's, also while
+    /// a full-screen app shows the alternate one. `None` past either end.
+    fn styled_line(&self, line: i32, out: &mut Vec<StyledCell>) -> Option<bool>;
+
+    /// How many lines of the main screen's scrollback there are (also while
+    /// the alternate screen shows), at most [`SCROLLBACK_LINES`].
+    fn main_history_size(&self) -> usize;
+
+    /// Where the cursor is on the screen (row, column), whatever the view's
+    /// scroll; `None` while the program hides it.
+    fn cursor_cell(&self) -> Option<(usize, usize)>;
 }
+
+/// Lines of scrollback each emulator keeps.
+pub const SCROLLBACK_LINES: usize = 10_000;

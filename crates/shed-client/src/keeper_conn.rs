@@ -59,6 +59,16 @@ pub fn connect(kind: ClientKind, start_keeper: bool) -> anyhow::Result<(KeeperCo
         }
         Err(e) => return Err(e).with_context(|| format!("the keeper is not running ({})", socket.display())),
     };
+    connected(stream, kind)
+}
+
+/// Connects to the keeper listening on `socket` (never starting one).
+pub fn connect_at(socket: &std::path::Path, kind: ClientKind) -> anyhow::Result<(KeeperConn, async_channel::Receiver<Frame>)> {
+    let stream = UnixStream::connect(socket).with_context(|| format!("the keeper is not running ({})", socket.display()))?;
+    connected(stream, kind)
+}
+
+fn connected(stream: UnixStream, kind: ClientKind) -> anyhow::Result<(KeeperConn, async_channel::Receiver<Frame>)> {
 
     let (out_tx, out_rx) = mpsc::channel::<Frame>();
     let mut writer = BufWriter::new(stream.try_clone()?);

@@ -109,6 +109,8 @@ fn start_keeper(dir: &Path) -> std::path::PathBuf {
                 store: None,
                 desktop: None,
                 aliases_file: home.join("aliases.toml"),
+                link_secret: None,
+                link_log: home.join("link.log"),
                 shell: Some("/bin/sh".into()),
                 home,
                 exit_when_idle: false,

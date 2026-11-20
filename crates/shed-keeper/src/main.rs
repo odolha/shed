@@ -127,6 +127,8 @@ fn main() -> anyhow::Result<()> {
             shell: args.shell,
             home,
             exit_when_idle: !args.persist,
+            link_secret: Some(paths::nexus_secret_path()),
+            link_log: paths::link_log_path(),
         });
 
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

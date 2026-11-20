@@ -43,6 +43,43 @@ pub struct Config {
     /// A colour per tag label (`prod = "red"`, or `"#rrggbb"`): every tag with
     /// that label is drawn in it, wherever it is.
     pub tag_colors: BTreeMap<String, String>,
+    /// Linking this workspace to a nexus, to reach it from the web and
+    /// Android apps (`shed nexus join`).
+    pub nexus: NexusConfig,
+}
+
+/// A nexus this workspace links to. The token it links with is not here
+/// (this file is backed up and often shared): it is in `nexus.json` in Shed's
+/// data folder, readable only by you.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NexusConfig {
+    /// The nexus's address, `https://nexus.example.com`; empty: not linked.
+    pub url: String,
+    /// Off keeps the pairing but does not link; on by default once `url` is set.
+    pub enabled: Option<bool>,
+    /// What the web and Android apps may do here: `full` (the default) or
+    /// `view` (look, change nothing).
+    pub control: NexusControl,
+    /// A PEM file of certificates to trust besides the usual ones, for a
+    /// nexus with a certificate of its own making.
+    pub ca_file: Option<PathBuf>,
+}
+
+impl NexusConfig {
+    /// Whether the link should run (given a pairing).
+    pub fn active(&self) -> bool {
+        !self.url.trim().is_empty() && self.enabled.unwrap_or(true)
+    }
+}
+
+/// How much connectors may do in a linked workspace.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NexusControl {
+    #[default]
+    Full,
+    View,
 }
 
 /// The editor in project tabs.
@@ -741,6 +778,16 @@ mod tests {
     #[test]
     fn unknown_fields_are_errors() {
         assert!(toml::from_str::<Config>("fnot = 1").is_err());
+    }
+
+    #[test]
+    fn nexus_is_off_until_a_url_is_set() {
+        assert!(!Config::default().nexus.active());
+        let c: Config = toml::from_str("[nexus]\nurl = \"https://nexus.example.com\"\ncontrol = \"view\"\n").unwrap();
+        assert!(c.nexus.active());
+        assert_eq!(c.nexus.control, NexusControl::View);
+        let off: Config = toml::from_str("[nexus]\nurl = \"https://n.example.com\"\nenabled = false\n").unwrap();
+        assert!(!off.nexus.active());
     }
 
     #[test]
