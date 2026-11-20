@@ -805,7 +805,41 @@ Tags can also come from **rules** in `shed.toml`: for example, every tab running
 `ssh` to a host with `prod` in its name gets a red `prod` tag.
 
 A **private** tab keeps its commands to itself: they stay in its own history and
-never show in the bench's or the global one.
+never show in the bench's or the global one. It also never leaves the machine:
+the web and Android apps (see [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere))
+show that it is there, not what is in it.
+
+## Reaching Shed from elsewhere
+
+A **nexus** is a server you host that the web and Android apps connect to (see
+[Deploying a nexus](nexus-deploy.md)). Link this machine to it once:
+
+```sh
+shed nexus join https://nexus.example.com
+```
+
+It shows a code; approve that code in the web app (Devices), checking it is the
+same. From then on, while Shed runs, a small background process (the link) keeps
+this workspace on the nexus: its benches, tabs, terminals, projects, history and
+AI tabs, reachable from the apps. It connects again by itself after a network
+drop. `shed nexus status` says whether it is connected; `shed nexus leave`
+unlinks the machine (remove it in the web app's Devices too).
+
+In `shed.toml`:
+
+```toml
+[nexus]
+url = "https://nexus.example.com"   # set by `shed nexus join`
+enabled = true                      # false keeps the pairing but does not link
+control = "full"                    # "view": the apps can look but change nothing
+# ca_file = "~/nexus-ca.pem"        # for a nexus with a certificate of your own making
+```
+
+The pairing's token is not in `shed.toml` (which backups copy): it is in
+`~/.local/share/shed/nexus.json`, readable only by you. Private tabs show in the
+apps as "Private", with nothing of their folders, screens, commands or files, and
+cannot be made public from there. Whoever runs the nexus can see and type into
+what it relays, so host it yourself.
 
 ## Colours and appearance
 
@@ -906,6 +940,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed stop` | Saves everything and stops the keeper, and every program in it |
 | `shed backup [list \| restore NAME]` | Backs up your setup now, lists the backups, or puts one back (see [Backups](#backups)) |
 | `shed init bash`, `shed init zsh` | Prints the shell integration, for a shell Shed did not start |
+| `shed nexus join URL [--name N]`, `status`, `leave` | Links this machine to a nexus, says how the link is doing, or unlinks it (see [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere)) |
 
 ## Settings: shed.toml
 
@@ -1020,6 +1055,7 @@ change in Shed are in `~/.config/shed/shell-aliases.sh`.
 | Browser extension and its native host | `~/.local/share/shed/browser-extension/`, `browser-host/` |
 | Launchers and icons for Shed and each bench (Linux) | `~/.local/share/applications/`, `~/.local/share/icons/` |
 | Backups of your setup | `~/.local/share/shed/backups/` |
+| The pairing with a nexus (0600, not backed up); the link's log | `~/.local/share/shed/nexus.json`; `~/.local/state/shed/link.log` |
 
 macOS uses the same folders under your home (`~/.config/shed/` and so on).
 

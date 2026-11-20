@@ -188,6 +188,30 @@ pairing, and relaying, where a fake link and connectors speak over
 is taken once, so a test that needs more than three codes waits for the next
 step. Recovery codes stand in where a test only needs to sign in.
 
+### A link against a dev nexus
+
+With the dev nexus above and a dev keeper (the environment from "Running a dev
+build safely" in CLAUDE.md, so the pairing and settings land in
+`/tmp/shed-dev`), pair and link:
+
+```sh
+export SHED_RUNTIME_DIR=/tmp/shed-dev XDG_CONFIG_HOME=/tmp/shed-dev/config \
+       XDG_DATA_HOME=/tmp/shed-dev/data XDG_STATE_HOME=/tmp/shed-dev/state
+./target/debug/shed nexus join http://localhost:7870   # approve the code (POST /api/v1/pair/approve)
+./target/debug/shed nexus status
+tail -f /tmp/shed-dev/state/shed/link.log
+```
+
+The keeper starts the link within a second of the pairing; `shed nexus leave`
+stops it. To run one by hand instead, in the foreground: `SHED_LOG=debug
+./target/debug/shed link` (same environment). Without the web app, approve with
+`curl` (`GET /api/v1/pair/pending`, then `POST /api/v1/pair/approve` with the
+code, a name and a TOTP code) and speak to `/api` with a WebSocket client.
+
+`crates/shed-link/tests/link.rs` runs an in-process keeper (real bash) and a
+link against a fake nexus on a real socket (`tests/common/mod.rs`), and
+`tests/nexus.rs` the whole way through the real nexus, pairing included.
+
 ## Packages
 
 - `packaging/deb/build.sh` builds the Debian package into `target/debian/`.

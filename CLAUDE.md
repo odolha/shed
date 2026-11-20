@@ -93,6 +93,14 @@ Crates (`crates/`), lowest first:
   filter), `remote.rs` (remote shells over ssh).
 - `shed-app`: `shed` binary: GPUI windows and the CLI.
 - `shed-api`: the nexus API's JSON types (frames, state, calls, topics, HTTP).
+- `shed-link`: `shed link`, a workspace's link to a nexus (no GPUI): keeper
+  client (`ClientKind::Link`) and WSS client; `run.rs` (the task owning tree,
+  subscriptions, watched terminals), `state.rs` (tree → `shed_api` state,
+  private tabs scrubbed), `calls/` (calls → `ClientMsg`s, files, Git, logbook,
+  AI), `screen.rs` (terminals as styled text, key encoding), `topics.rs`,
+  `notify.rs`, `pairing.rs` (`shed nexus join/status/leave`). The keeper starts
+  it (`link_loop` in `server.rs`). Tests: `crates/shed-link/tests/` (fake nexus;
+  one with the real one).
 - `shed-nexus`: `shed-nexus` binary, the server workspaces link to (axum,
   SQLite); reads only the API's envelope (`src/raw.rs`). See `docs/nexus-plan.md`,
   `docs/nexus-deploy.md`.
