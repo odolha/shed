@@ -25,6 +25,26 @@ export XDG_STATE_HOME=/tmp/shed-dev/state    # its own logbook and logs
 ./target/debug/shed
 ```
 
+**The terminal interface** runs the same way, with the same variables, in a
+terminal of its own: `./target/debug/shed tui`. Never in the terminal your own
+Shed's panes are in if you are testing keeper changes; the dev keeper is
+separate only through `SHED_RUNTIME_DIR`.
+
+### A build without windows
+
+For a server: the CLI and `shed tui`, with no GPUI and no display libraries.
+
+```sh
+cargo build --release -p shed-app --no-default-features --features tui
+cargo build --release -p shed-keeper
+# nothing from GPUI, X11 or Wayland:
+cargo tree -p shed-app --no-default-features --features tui -e normal,build | grep -iE "gpui|x11|wayland"
+cargo clippy -p shed-app --no-default-features --features tui --all-targets
+```
+
+(`-e normal,build`: GPUI stays a dev-dependency, for the window code's own
+tests.) CI builds this variant too.
+
 **After changing the keeper**, the keeper still running has the old code: run
 `shed stop`. A window refuses a keeper of another protocol version and says so.
 
@@ -48,6 +68,10 @@ cargo clippy --all-targets
   protocol and plays a recorded stream); `remote_tabs.rs` runs remote tabs against
   a stand-in `ssh` (`SHED_SSH`) that runs the "server" locally, with its own
   home.
+- `crates/shed-tui/tests/tui.rs` drives the terminal interface's `App`
+  against an in-process keeper with real bash and draws it on ratatui's
+  `TestBackend`: no terminal is touched. Its unit tests cover the split layout,
+  keys to bytes, Markdown to styled lines and text wrapping.
 - `crates/shed-ai/tests/streams/` holds recorded Claude Code streams the
   transcript tests replay; `shed-git`'s tests make throwaway repositories (and a
   bare remote) with the real `git`.

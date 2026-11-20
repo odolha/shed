@@ -7583,6 +7583,7 @@ dependencies = [
  "shed-review",
  "shed-save",
  "shed-text",
+ "shed-tui",
  "tempfile",
  "tokio",
  "toml",

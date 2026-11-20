@@ -9,6 +9,14 @@ license.workspace = true
 name = "shed"
 path = "src/main.rs"
 
+[features]
+default = ["gui", "tui"]
+# The windows (GPUI). Without it, `shed` is the CLI and the terminal
+# interface: a server build, with no display libraries.
+gui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:raw-window-handle", "dep:x11rb"]
+# `shed tui`, Shed in a terminal (ratatui).
+tui = ["dep:shed-tui"]
+
 [dependencies]
 shed-model.workspace = true
 shed-proto.workspace = true
@@ -25,9 +33,10 @@ shed-client.workspace = true
 serde_json.workspace = true
 base64.workspace = true
 # Must match the version gpui-ce uses, for window icons.
-image = { version = "0.25", default-features = false }
-gpui.workspace = true
-gpui_platform.workspace = true
+image = { version = "0.25", default-features = false, optional = true }
+gpui = { workspace = true, optional = true }
+gpui_platform = { workspace = true, optional = true }
+shed-tui = { workspace = true, optional = true }
 anyhow.workspace = true
 serde.workspace = true
 toml.workspace = true
@@ -38,12 +47,12 @@ async-channel.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-raw-window-handle = "0.6"
+raw-window-handle = { version = "0.6", optional = true }
 
 # Changing an open window's icon on X11, which GPUI only sets at opening, and
 # hearing which selection changed last (XFixes), for middle-click.
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb = { version = "0.13", features = ["xfixes"] }
+x11rb = { version = "0.13", features = ["xfixes"], optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

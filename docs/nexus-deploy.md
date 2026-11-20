@@ -186,6 +186,52 @@ app, set its default server to `https://ntfy.example.com` and sign in as
 nexus. A ntfy on a private network without TLS needs `allow_http_endpoints = true`
 in the nexus's `[push]`.
 
+## 8. A server workspace (optional)
+
+A server can run Shed itself, so benches and Claude Code keep working while
+your PCs are off: a keeper for a user of its own, reached with `shed tui` over
+ssh (and linked to the nexus, once the link is in). It needs no display: build
+Shed without windows. The placeholders here are `server.example.com` and the
+user `shed`.
+
+```sh
+# A user of its own, with a shell (you will ssh in as it), lingering so its
+# systemd services run without a login and survive logouts.
+sudo useradd --create-home --shell /bin/bash shed
+sudo loginctl enable-linger shed
+
+# Shed without windows: the CLI, shed tui, and the keeper.
+cargo build --release -p shed-app --no-default-features --features tui
+cargo build --release -p shed-keeper
+sudo install -m 0755 target/release/shed target/release/shedd /usr/local/bin/
+```
+
+As `shed` (`sudo -iu shed`, or `ssh shed@server.example.com`), run the keeper
+as a user service that stays up with nothing open, and sign Claude Code in
+once (its usage limits are the account's, shown on every workspace using it):
+
+```sh
+mkdir -p ~/.config/systemd/user
+# packaging/linux/shedd.service from the checkout, pointed at where shedd is:
+sed 's|/usr/bin/shedd|/usr/local/bin/shedd|' shedd.service > ~/.config/systemd/user/shedd.service
+systemctl --user enable --now shedd.service
+printf '[keeper]\nstay = true\n' >> ~/.config/shed/shed.toml   # also when started by hand
+claude login
+```
+
+Then, from anywhere:
+
+```sh
+ssh -t shed@server.example.com shed       # a build without windows runs shed tui
+```
+
+`Ctrl+B d`, or a dropped connection, leaves the interface; everything keeps
+running for the next `ssh`. [The user guide](user-guide.md#shed-in-a-terminal-shed-tui)
+has its keys. Remote tabs from your PCs to this server (`shed remote new
+shed@server.example.com`) use the same keeper, so they show up there as
+benches of their own. Once the link is built, `shed nexus join
+https://nexus.example.com` links the workspace as in [6](#6-linking-workspaces).
+
 ## Backups and upgrades
 
 Back up `/var/lib/shed-nexus` (`nexus.db` with `sqlite3 nexus.db ".backup

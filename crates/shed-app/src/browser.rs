@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -80,9 +80,11 @@ pub fn install(profiles: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
     Ok(targets)
 }
 
+#[cfg(feature = "gui")]
 /// Claude in Chrome's ID in the Chrome Web Store (the same in Brave).
 const CLAUDE_EXTENSION_ID: &str = "fcoeoabgfenejglbffodgkkbkcdhcgfn";
 
+#[cfg(feature = "gui")]
 /// The browsers with Claude in Chrome installed in some profile, by name
 /// ("Chrome", "Brave"), for an AI tab connected to the browser to say where
 /// Claude will work, or how to set it up when none has it.
@@ -119,11 +121,12 @@ fn config_home() -> PathBuf {
     home.join(".config")
 }
 
+#[cfg(feature = "gui")]
 /// Asks the extension to show `url`: a tab already on it comes forward
 /// (unless `new_tab`). `Ok(true)` if a tab was reused; an error if the
 /// extension is not there to ask.
 pub fn open(url: &str, new_tab: bool) -> io::Result<bool> {
-    let mut stream = UnixStream::connect(socket_path())?;
+    let mut stream = std::os::unix::net::UnixStream::connect(socket_path())?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     let request = serde_json::json!({"open": url, "new": new_tab});
     stream.write_all(format!("{request}\n").as_bytes())?;
@@ -264,7 +267,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         let ask = |new: bool| {
-            let mut stream = UnixStream::connect(&socket).unwrap();
+            let mut stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();
             stream.write_all(format!("{}\n", serde_json::json!({"open": "http://localhost:3000/", "new": new})).as_bytes()).unwrap();
             let mut reply = String::new();
             BufReader::new(stream).read_line(&mut reply).unwrap();

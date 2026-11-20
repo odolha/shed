@@ -7,6 +7,11 @@
 # is the user manager's, which only has DISPLAY, WAYLAND_DISPLAY,
 # SSH_AUTH_SOCK and the like if the desktop imports them (GNOME and KDE do;
 # check with `systemctl --user show-environment`).
+#
+# On a server (a workspace reached with `ssh -t host shed tui`): enable
+# lingering for the user (`sudo loginctl enable-linger USER`) so the keeper
+# runs without a login and survives logouts; --persist keeps it up with
+# nothing open. See docs/nexus-deploy.md, "A server workspace".
 [Unit]
 Description=Shed keeper: holds Shed's shells and the programs in them
 Documentation=https://github.com/odolha/shed file:///usr/share/doc/shed-terminal/README.md

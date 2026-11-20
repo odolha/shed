@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+    // Only the windows (feature `gui`) link it; a server build has no display libraries.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") || std::env::var_os("CARGO_FEATURE_GUI").is_none() {
         return;
     }
     const DIRS: [&str; 4] = ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/usr/lib/aarch64-linux-gnu"];

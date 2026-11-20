@@ -47,13 +47,20 @@ the program in it, the tree of benches, tabs and panes, and a terminal emulator 
 pane. It is a daemon, one per user, found through a socket in
 `$XDG_RUNTIME_DIR/shed/` and kept unique with a lock file there. The first `shed`
 starts it if it is not running; it stops when Shed is closed, on `shed stop`, at
-logout, or once nothing runs in it and no window is connected.
+logout, or once no bench runs in it and no client is connected, unless told to
+stay (`shedd --persist`, or `[keeper] stay = true` in `shed.toml`, for a server
+reached over ssh). A bench running with no panes (an AI tab at work on its own)
+counts as running.
 
 **`shed`, the window process**, draws the Shed window and one window per open bench,
 with GPUI (the UI framework from the Zed editor, community edition). It is single
 instance: running `shed` again, or a bench's launcher, only asks the keeper to have
 the existing window process show something. Every other `shed` subcommand is a
 short-lived client of the keeper.
+
+**`shed tui`, the terminal interface** (`crates/shed-tui`), is another client
+of the same keeper, drawing in a terminal with ratatui and crossterm: see
+[The terminal interface](#the-terminal-interface).
 
 Windows hold no state of their own beyond what they draw. Hiding a bench closes its
 window and detaches from it; the keeper keeps it running. Closing a bench's window
@@ -67,8 +74,13 @@ encoding. Everything else is a control message, `ClientMsg` to the keeper and
 `KeeperMsg` back, encoded with postcard (in `shed-proto`).
 
 A client opens with `Hello { version, kind }`, and the keeper answers `Welcome`.
-The kind is a window, a CLI command, or the link (`shed link`, which hears what
-windows hear but counts as no window: what it attaches stays hidden). The tree
+The kind is a window, a CLI command, the link (`shed link`, which hears what
+windows hear but counts as no window: what it attaches stays hidden), or a
+terminal interface (`shed tui`, `ClientKind::Tui`): it hears what windows hear,
+and what it asks to show (`Show`) the keeper hands back to it, but it is not
+the window process, so `shed load` and launchers still go to a window, and
+`KeeperStatus::windows` does not count it. Its benches are not "shown" for the
+session either, and its `Detach` does not hide a bench a window shows. The tree
 is broadcast whole (`TreeChanged`) after every change to windows and the link; windows render from it, and every action a window or the CLI takes
 (new tab, split, rename, move a tab, set colours, setup, aliases) is a message the
 keeper applies to it.
@@ -615,6 +627,49 @@ rather than as an element per line. The vendored `gpui_ce_linux` fixes key relea
 there (see above); it also stops an idle window's frame timer, which upstream ran
 at the display's refresh rate for as long as the window was visible.
 The patches are described in `SHED_PATCHES.md` in their folders.
+
+## The terminal interface
+
+`shed tui` (`crates/shed-tui`) is a client of the keeper like the window
+process, drawing with ratatui over crossterm. `App` (`app.rs`) holds the
+state: the tree, the pegboard's data, the screen (benches or a bench), and for
+the bench shown an emulator per pane of its three most recent tabs (as the
+windows keep them), AI views and project views. Everything reaches it as an
+`Event`: frames from the keeper, the terminal's keys, mouse and pastes, a
+clock tick, and `Apply` closures carrying the results of work done on other
+threads (Git, search, file reading, session lists, the review), so the state
+has one owner and tests drive it without a terminal. `run.rs` connects it to
+the real terminal: raw mode, the alternate screen, mouse capture, bracketed
+paste, the kitty keyboard flags where the terminal has them; a thread each for
+the keeper, the terminal and the clock; a frame drawn at most every 16 ms
+while something changed.
+
+Opening a bench attaches to it (and detaches the one shown before); its panes'
+screens arrive as `Replay`, then live output, into `shed-emu` emulators.
+Drawing a pane copies the emulator's snapshot cell by cell into ratatui's
+buffer; a pane takes the size it is drawn at (`Resize`, with no cell size in
+pixels). Splits are laid out as tmux lays them (`layout.rs`): each split
+gives a line of cells to the divider and the rest by its ratio. Keys are
+named as GPUI names them and encoded by `shed_emu::keys` per the pane's modes
+(`keys.rs`), so the kitty protocol, application cursor keys and bracketed
+paste behave as in a window; the mouse goes through `shed_emu::mouse` when
+the program asked for it. The prefix key (Ctrl+B) makes the next key Shed's.
+
+AI tabs render the transcript from `AiUpdate` (`ai.rs`), Markdown through
+`shed_ai::markdown` into styled, wrapped lines (`md.rs`), and change the tab
+with the same messages as the windows (`AiSend`, `AiAnswer`,
+`AiAnswerQuestions`, `AiChange`). Project tabs use `shed-project` (walk,
+watch, fuzzy ranking, search, colouring) and `shed_git::session`; the review
+uses `shed-review`. Nothing is edited in the interface: `$EDITOR` runs in a
+new terminal tab (`NewCommandTab`).
+
+**Builds.** `shed-app` has two cargo features, both on by default: `gui`
+(GPUI, its platform crates, `image`, `x11rb`; the window modules, gated in
+`main.rs`, and `gui.rs`, which starts the window process) and `tui`
+(`shed-tui`). `cargo build -p shed-app --no-default-features --features tui`
+builds a `shed` with the CLI and `shed tui` and no display libraries (the
+build script links libxkbcommon only with `gui`); without `gui`, plain `shed`,
+`shed new` and `shed load` run the terminal interface.
 
 ## The nexus
 
