@@ -24,9 +24,14 @@ pub struct Config {
     pub web_dir: Option<PathBuf>,
     /// How long a browser stays signed in.
     pub session_days: u32,
-    /// Take the client's address from `X-Forwarded-For` (the last entry, the
-    /// one the proxy added). Only behind a proxy you run.
+    /// Take the client's address from `X-Forwarded-For` when the request
+    /// comes from a trusted proxy: one in `trusted_proxies`, or loopback if
+    /// that list is empty. Only behind a proxy you run.
     pub trusted_proxy: bool,
+    /// The proxies (address ranges, `127.0.0.1/32`, `10.0.0.5/32`) whose
+    /// `X-Forwarded-For` is believed. The client is the right-most address
+    /// in it that is not one of them. Empty: loopback, when `trusted_proxy`.
+    pub trusted_proxies: Vec<String>,
     /// Session cookies only over HTTPS. Turn off for a local, plain-HTTP dev
     /// nexus that is not on `localhost`.
     pub secure_cookies: bool,
@@ -40,6 +45,11 @@ pub struct Config {
     pub request_timeout_secs: u64,
     /// The Content-Security-Policy sent with every answer.
     pub content_security_policy: String,
+    /// Connections open at once; more wait until one closes.
+    pub max_connections: usize,
+    /// How long a client may take to send a request's headers (and how long
+    /// an idle connection is kept between requests), in seconds.
+    pub header_timeout_secs: u64,
     pub geo: GeoConfig,
     pub login: LoginConfig,
     pub push: PushConfig,
@@ -60,18 +70,25 @@ pub struct GeoConfig {
     pub allow_unknown: bool,
 }
 
-/// Limits on signing in and other unauthenticated calls.
+/// Limits on signing in and other unauthenticated calls. An "address" is
+/// an IPv4 address or an IPv6 /64 (what one household or server gets).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoginConfig {
-    /// Failed sign-ins (or one-time codes) from one address before it is
-    /// locked out.
+    /// Failed sign-ins (or setup codes) from one address before it is locked
+    /// out; also wrong one-time codes per signed-in device (revoking,
+    /// pairing, the password), counted apart.
     pub max_failures: u32,
     /// How long failures count, and how long a lockout lasts.
     pub lockout_minutes: u32,
     /// Failed sign-ins from everywhere together, within `lockout_minutes`,
-    /// before every sign-in is refused for a while.
+    /// before the nexus slows down: then addresses that never signed in
+    /// share `slow_per_minute` attempts (waiting their turn), while those
+    /// that did are not held back.
     pub global_max_failures: u32,
+    /// Sign-in attempts per minute, for everyone together, from addresses
+    /// that never signed in, while the nexus is slowed down.
+    pub slow_per_minute: u32,
     /// Pairing requests per address per minute.
     pub pair_per_minute: u32,
 }
@@ -88,6 +105,10 @@ pub struct PushConfig {
     /// Accept `http:` push endpoints (a ntfy on a private network). Off: only
     /// `https:`.
     pub allow_http_endpoints: bool,
+    /// Accept push endpoints on private, loopback or link-local addresses (a
+    /// ntfy on a private network). Off: only public addresses, checked when
+    /// subscribing and again when sending.
+    pub allow_private_endpoints: bool,
 }
 
 impl Default for Config {
@@ -99,11 +120,14 @@ impl Default for Config {
             web_dir: None,
             session_days: 7,
             trusted_proxy: false,
+            trusted_proxies: Vec::new(),
             secure_cookies: true,
             allowed_origins: Vec::new(),
             allowed_networks: Vec::new(),
             request_timeout_secs: 60,
             content_security_policy: DEFAULT_CSP.into(),
+            max_connections: 1024,
+            header_timeout_secs: 10,
             geo: GeoConfig::default(),
             login: LoginConfig::default(),
             push: PushConfig::default(),
@@ -113,13 +137,13 @@ impl Default for Config {
 
 impl Default for LoginConfig {
     fn default() -> Self {
-        LoginConfig { max_failures: 5, lockout_minutes: 15, global_max_failures: 50, pair_per_minute: 5 }
+        LoginConfig { max_failures: 5, lockout_minutes: 15, global_max_failures: 50, slow_per_minute: 6, pair_per_minute: 5 }
     }
 }
 
 impl Default for PushConfig {
     fn default() -> Self {
-        PushConfig { enabled: true, subject: None, allow_http_endpoints: false }
+        PushConfig { enabled: true, subject: None, allow_http_endpoints: false, allow_private_endpoints: false }
     }
 }
 
@@ -149,6 +173,12 @@ impl Config {
         }
         for net in &self.allowed_networks {
             net.parse::<ipnet::IpNet>().with_context(|| format!("allowed_networks: {net}"))?;
+        }
+        for net in &self.trusted_proxies {
+            parse_net(net).with_context(|| format!("trusted_proxies: {net}"))?;
+        }
+        if self.max_connections == 0 {
+            anyhow::bail!("max_connections must be at least 1");
         }
         if let Some(subject) = &self.push.subject
             && !(subject.starts_with("mailto:") || subject.starts_with("https://"))
@@ -187,6 +217,18 @@ impl Config {
         self.allowed_networks.iter().filter_map(|n| n.parse().ok()).collect()
     }
 
+    /// The proxies whose `X-Forwarded-For` is believed: `trusted_proxies`,
+    /// or loopback when only `trusted_proxy` is on; none when neither is.
+    pub fn proxies(&self) -> Vec<ipnet::IpNet> {
+        if !self.trusted_proxies.is_empty() {
+            return self.trusted_proxies.iter().filter_map(|n| parse_net(n).ok()).collect();
+        }
+        if self.trusted_proxy {
+            return ["127.0.0.0/8", "::1/128"].iter().filter_map(|n| n.parse().ok()).collect();
+        }
+        Vec::new()
+    }
+
     /// Who push services can contact.
     pub fn push_subject(&self) -> String {
         match &self.push.subject {
@@ -194,6 +236,16 @@ impl Config {
             None => self.public_base().to_string(),
         }
     }
+}
+
+/// A range (`10.0.0.0/8`), or one address (`10.0.0.5`).
+fn parse_net(net: &str) -> anyhow::Result<ipnet::IpNet> {
+    let net = net.trim();
+    if let Ok(n) = net.parse::<ipnet::IpNet>() {
+        return Ok(n);
+    }
+    let ip: std::net::IpAddr = net.parse().map_err(|_| anyhow::anyhow!("not an address or range"))?;
+    Ok(ipnet::IpNet::from(ip))
 }
 
 /// `scheme://host[:port]` of a URL.
@@ -239,6 +291,21 @@ mod tests {
         config.check().unwrap();
         assert!(config.trusted_proxy);
         assert_eq!(config.public_base(), "https://nexus.example.com");
+    }
+
+    #[test]
+    fn trusted_proxies_default_to_loopback() {
+        let none: Config = toml::from_str("").unwrap();
+        assert!(none.proxies().is_empty());
+        let loopback: Config = toml::from_str("trusted_proxy = true").unwrap();
+        let nets = loopback.proxies();
+        assert!(nets.iter().any(|n| n.contains(&"127.0.0.1".parse::<std::net::IpAddr>().unwrap())));
+        assert!(nets.iter().any(|n| n.contains(&"::1".parse::<std::net::IpAddr>().unwrap())));
+        let listed: Config = toml::from_str("trusted_proxies = [\"10.0.0.5\", \"fd00::/8\"]").unwrap();
+        listed.check().unwrap();
+        assert_eq!(listed.proxies().len(), 2);
+        let bad: Config = toml::from_str("trusted_proxies = [\"nope\"]").unwrap();
+        assert!(bad.check().is_err());
     }
 
     #[test]

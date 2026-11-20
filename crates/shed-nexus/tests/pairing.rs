@@ -28,6 +28,9 @@ async fn an_approved_workspace_gets_its_token_once() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].name, "desk");
     assert_eq!(pending[0].address, "127.0.0.1");
+    // The list does not give the code away: the person types it.
+    assert_eq!(pending[0].code, "");
+    assert_eq!(pending[0].id.len(), 16);
 
     // Approving needs a fresh code.
     let wrong = PairApprove { code: started.code.clone(), name: "Desk PC".into(), totp: "000000".into() };
@@ -65,7 +68,7 @@ async fn a_rejected_workspace_hears_so() {
     let nexus = start().await;
     let account = set_up(&nexus).await;
     let started = ask(&nexus, "stranger").await;
-    let reject = PairReject { code: started.code.clone() };
+    let reject = PairReject { code: started.code.clone(), id: String::new() };
     let _: serde_json::Value = nexus.post("/api/v1/pair/reject", &reject, &account.browser).await;
     assert_eq!(poll(&nexus, &started).await, PairState::Rejected);
     nexus.post_err("/api/v1/pair/reject", &reject, &account.browser, StatusCode::NOT_FOUND).await;
@@ -95,4 +98,49 @@ async fn pairing_requests_are_rate_limited() {
     let start = PairStart { name: "c".into(), version: "0.1.0".into() };
     let err = nexus.post_err("/api/v1/pair/start", &start, &Auth::None, StatusCode::TOO_MANY_REQUESTS).await;
     assert_eq!(err.code, ErrorCode::RateLimited);
+}
+
+#[tokio::test]
+async fn a_request_is_rejected_by_its_id() {
+    let nexus = start().await;
+    let account = set_up(&nexus).await;
+    let started = ask(&nexus, "stranger").await;
+    let pending: Vec<PendingPairing> = nexus.get("/api/v1/pair/pending", &account.browser).await;
+    let reject = PairReject { code: String::new(), id: pending[0].id.clone() };
+    let _: serde_json::Value = nexus.post("/api/v1/pair/reject", &reject, &account.browser).await;
+    assert_eq!(poll(&nexus, &started).await, PairState::Rejected);
+    let nothing = PairReject { code: String::new(), id: "0123456789abcdef".into() };
+    nexus.post_err("/api/v1/pair/reject", &nothing, &account.browser, StatusCode::NOT_FOUND).await;
+}
+
+/// Asks to pair from `ip` (behind a trusted proxy on loopback).
+async fn ask_from(nexus: &Nexus, ip: &str, name: &str) -> reqwest::Response {
+    let start = PairStart { name: name.into(), version: "0.1.0".into() };
+    nexus.http.post(format!("{}/api/v1/pair/start", nexus.base)).header("X-Forwarded-For", ip).json(&start).send().await.unwrap()
+}
+
+#[tokio::test]
+async fn a_flood_of_requests_cannot_keep_others_out() {
+    let nexus = start_with(|c| c.trusted_proxy = true).await;
+    let account = set_up(&nexus).await;
+    // A few per address.
+    for name in ["a", "b", "c"] {
+        assert_eq!(ask_from(&nexus, "203.0.113.9", name).await.status(), StatusCode::OK);
+    }
+    assert_eq!(ask_from(&nexus, "203.0.113.9", "d").await.status(), StatusCode::TOO_MANY_REQUESTS);
+    // The same /64 is the same address.
+    for i in 1..=3 {
+        assert_eq!(ask_from(&nexus, &format!("2001:db8:5:6::{i}"), "v6").await.status(), StatusCode::OK);
+    }
+    assert_eq!(ask_from(&nexus, "2001:db8:5:6:ffff::1", "v6").await.status(), StatusCode::TOO_MANY_REQUESTS);
+    // From many addresses: the oldest make way, and a new one still gets in.
+    for i in 0..60 {
+        assert_eq!(ask_from(&nexus, &format!("198.51.100.{i}"), "flood").await.status(), StatusCode::OK, "{i}");
+    }
+    let real = ask(&nexus, "real").await;
+    let pending: Vec<PendingPairing> = nexus.get("/api/v1/pair/pending", &account.browser).await;
+    assert!(pending.len() <= 50, "{}", pending.len());
+    assert!(pending.iter().any(|p| p.name == "real"));
+    assert!(!pending.iter().any(|p| p.name == "a"), "the oldest went");
+    assert_eq!(poll(&nexus, &real).await, PairState::Pending);
 }

@@ -7,7 +7,7 @@
 #   sudo install -m 0644 nexus.toml /etc/shed-nexus/
 #   sudo install -m 0644 shed-nexus.service /etc/systemd/system/
 #   sudo systemctl enable --now shed-nexus
-#   journalctl -u shed-nexus     # the setup link, until the account exists
+#   sudo cat /var/lib/shed-nexus/setup-link.txt   # the setup link, until the account exists
 [Unit]
 Description=Shed nexus: links Shed workspaces to the web and Android apps
 Documentation=file:///usr/local/share/doc/shed-nexus/nexus-deploy.md
@@ -31,6 +31,11 @@ StateDirectory=shed-nexus
 StateDirectoryMode=0700
 ReadWritePaths=/var/lib/shed-nexus
 UMask=0077
+
+# Resources: argon2 runs two at a time (~19 MiB each), WebSocket frames up
+# to 24 MiB; a runaway or an attack stops at these.
+MemoryMax=1G
+TasksMax=256
 
 # Sandboxing: nothing but its data folder is writable; no privileges, devices,
 # kernel knobs or other users' files.

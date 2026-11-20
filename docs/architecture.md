@@ -637,8 +637,10 @@ flowchart LR
 ```
 
 - **The account** is one user: an argon2 password hash, a TOTP secret and ten
-  recovery codes (hashed, single use). Until it exists, the nexus logs a setup
-  link with a one-time code at every start; setting up takes the code, a user
+  recovery codes (hashed, single use). Until it exists, the nexus writes a
+  setup link with a one-time code (`/setup#code=…`: in the fragment, which no
+  proxy sees) to `setup-link.txt` in its data folder (0600) at every start, and
+  logs only where it is; setting up takes the code, a user
   name and password, then a code from the authenticator. TOTP codes are taken
   within a step either side, and each step only once (the last used one is
   stored).
@@ -646,21 +648,35 @@ flowchart LR
   session (`shed_session` cookie: `HttpOnly`, `Secure` unless turned off,
   `SameSite=Strict`) and a CSRF token it sends in `X-Shed-Csrf` with every
   change; a phone gets a device token for `Authorization: Bearer`. Tokens are
-  256 random bits; the database keeps their SHA-256 only. Failed attempts
-  (passwords, setup and TOTP codes) lock an address out after a few, and all
-  sign-ins after many from everywhere; pairing requests have a rate of their
-  own. Revoking a device, changing the password and approving a pairing ask
-  for a fresh TOTP code. Every sign-in, failure, pairing, revocation and
-  password change goes into the audit log.
+  256 random bits; the database keeps their SHA-256 only. The guard
+  (`auth::Guard`) counts by address, an IPv4 address or an IPv6 /64. A sign-in
+  or setup attempt counts as a failure from when it starts until it succeeds
+  (so attempts at once count before argon2 has checked any), and an address
+  with a few is locked out for a while. After many failures from everywhere
+  the nexus slows down instead of locking everyone out: addresses that never
+  signed in share a few attempts a minute, each waiting its turn (or refused
+  if that is over 10 s off), while addresses that signed in or that devices
+  were seen from (remembered, and read from the devices at start) are not held
+  back. Argon2 runs two at a time (`App::argon`). Revoking a device, changing
+  the password and approving a pairing ask for a fresh TOTP code; wrong ones
+  are counted per device, apart from sign-ins, so failed sign-ins from
+  elsewhere never block them. Pairing requests have a rate of their own. The
+  guard's maps are bounded (the oldest entries go). Every sign-in, failure,
+  pairing, revocation and password change goes into the audit log.
 - **Pairing**: a workspace asks (`pair/start`) and gets a code to show
   (`K7QF-2M9D`) and a secret to poll with; it is gone after ten minutes. The
-  signed-in user approves the code, naming the workspace. The next poll makes
-  the workspace (a device of kind workspace, with a token) and gives the token
-  out, once; the nexus never keeps it.
+  signed-in user types the code (the list of waiting requests leaves codes
+  out, giving an id to reject by) and approves it, naming the workspace. The
+  next poll makes the workspace (a device of kind workspace, with a token) and
+  gives the token out, once; the nexus never keeps it. At most three requests
+  wait per address and fifty in all, the oldest making way.
 - **Who may come in**: optionally only some address ranges, and only some
   countries (from a GeoIP CSV of ranges, which also gives the country shown with
-  devices and audit entries). Behind a reverse proxy, the client's address is
-  the last `X-Forwarded-For` entry, when the proxy is trusted. A browser's
+  devices and audit entries). Behind a reverse proxy, `X-Forwarded-For` is
+  believed only from `trusted_proxies` (loopback with `trusted_proxy`), and the
+  client is the right-most address in it that is not a trusted proxy. The
+  server loop (`lib.rs`, hyper with axum's router) caps connections at once
+  and closes those that do not send a request's headers in time. A browser's
   `/api` socket must come from an allowed origin (the public URL's by default).
   Answers carry a strict Content-Security-Policy and the usual hardening headers.
 
@@ -688,14 +704,19 @@ seconds), so an offline workspace still shows as it was. `Welcome` carries the
 workspaces and their last states; `Workspaces` goes out when one comes, goes or
 is renamed.
 
-**Push.** A link's `Notify`, and a workspace offline for two minutes, become
+**Push.** A link's `Notify` (at most 30 a minute per workspace, title and body
+cut short), and a workspace offline for two minutes, become
 Web Push messages to every device whose subscription wants that kind. The
 payload (JSON: kind, title, body, workspace and its name, bench, tab) is
 encrypted for the device (RFC 8291, `aes128gcm`) and signed with the nexus's
 VAPID key (RFC 8292), made on first start (`vapid.key`, 0600). Browsers'
 push services and UnifiedPush distributors (ntfy) take the same requests, so
 one path covers both. Subscriptions a push service no longer knows (404, 410)
-are dropped.
+are dropped. Endpoints must be on public addresses (not loopback, private,
+link-local, shared or reserved, IPv4 within IPv6 included): checked on
+subscribing, and again as the push client connects, by a resolver that keeps
+only public addresses (so a name that later resolves inside does not lead
+there); `allow_private_endpoints` lifts this for a ntfy on one's network.
 
 The modules: `config.rs` (`nexus.toml`), `store.rs` (the database and its
 numbered migrations), `auth.rs` (tokens, passwords, TOTP, recovery codes,

@@ -167,11 +167,10 @@ impl<S: Send + Sync> FromRequestParts<S> for Client {
 
 /// Finds the client's address and keeps out those the filter refuses.
 async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Response {
-    let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
-    let forwarded = app.config.trusted_proxy.then(|| forwarded_for(req.headers())).flatten();
-    let Some(ip) = forwarded.or(peer) else {
+    let Some(peer) = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip()) else {
         return Failure::new(ErrorCode::Failed, "no client address").into_response();
     };
+    let ip = client_ip(peer, req.headers(), &app.proxies);
     let country = app.filter.country(ip);
     if !app.filter.allows(ip, country.as_deref()) {
         tracing::info!("refused {ip} ({})", country.as_deref().unwrap_or("unknown country"));
@@ -181,10 +180,33 @@ async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Resp
     next.run(req).await
 }
 
-/// The last address in `X-Forwarded-For`: the one the proxy added.
-fn forwarded_for(headers: &HeaderMap) -> Option<IpAddr> {
-    let last = headers.get_all("x-forwarded-for").iter().next_back()?.to_str().ok()?;
-    last.rsplit(',').next()?.trim().parse().ok()
+/// The client's address: the TCP peer, unless that is a trusted proxy;
+/// then, walking `X-Forwarded-For` from the right (each proxy appends the
+/// address it heard from), the first address that is not a trusted proxy.
+/// What a client wrote at the left of the header is never believed past an
+/// untrusted hop.
+pub fn client_ip(peer: IpAddr, headers: &HeaderMap, proxies: &[ipnet::IpNet]) -> IpAddr {
+    let trusted = |ip: IpAddr| proxies.iter().any(|n| n.contains(&crate::geo::canonical(ip)));
+    let peer = crate::geo::canonical(peer);
+    if !trusted(peer) {
+        return peer;
+    }
+    let hops: Vec<&str> = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .collect();
+    let mut client = peer;
+    for hop in hops.iter().rev() {
+        let Ok(ip) = hop.parse::<IpAddr>() else { break };
+        client = crate::geo::canonical(ip);
+        if !trusted(client) {
+            break;
+        }
+    }
+    client
 }
 
 /// A signed-in device: a browser by its session cookie, or a phone by its
@@ -203,6 +225,7 @@ impl FromRequestParts<Arc<App>> for Caller {
         let client = Client::from_request_parts(parts, app).await?;
         let caller = authenticate(app, &parts.headers, &parts.method)?;
         app.store.touch_device(&caller.device, &client.address(), client.country.as_deref(), now())?;
+        app.guard.remember(client.ip);
         Ok(caller)
     }
 }
@@ -253,19 +276,64 @@ fn session_cookie(app: &App, token: &str, max_age: u64) -> HeaderValue {
     HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static(""))
 }
 
-/// Checks a fresh TOTP code (for revoking, pairing, the password).
-pub fn fresh_totp(app: &App, client: &Client, code: &str) -> Result<(), Failure> {
-    if !app.guard.may_try(client.ip) {
-        return Err(Failure::new(ErrorCode::RateLimited, "too many wrong codes; try again later"));
+/// The answer to an attempt the guard holds back.
+pub fn refused(why: auth::Refused) -> Failure {
+    match why {
+        auth::Refused::Locked => Failure::new(ErrorCode::RateLimited, "too many attempts; try again later"),
+        auth::Refused::Busy => {
+            Failure::new(ErrorCode::RateLimited, "the nexus sees many failed sign-ins; try again in a minute")
+        }
     }
+}
+
+/// Starts an anonymous attempt from `client` (counted until it succeeds).
+async fn begin(app: &App, client: &Client) -> Result<(), Failure> {
+    app.guard.begin(client.ip).await.map_err(refused)
+}
+
+/// Runs argon2 (hashing or checking a password) off the async threads, a
+/// few at a time: each takes ~19 MiB and a core, so attempts at once must
+/// not add up. Waits a while for a turn, then answers `RateLimited`.
+pub async fn argon<T: Send + 'static>(app: &App, work: impl FnOnce() -> T + Send + 'static) -> Result<T, Failure> {
+    let permit = tokio::time::timeout(ARGON_WAIT, app.argon.clone().acquire_owned())
+        .await
+        .map_err(|_| Failure::new(ErrorCode::RateLimited, "the nexus is busy; try again"))?
+        .map_err(|e| anyhow::anyhow!(e))?;
+    // The permit goes with the work: it is held until argon2 is done, even
+    // if the request is dropped.
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!(e))?;
+    Ok(result)
+}
+
+/// How long an argon2 job waits for its turn.
+const ARGON_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether `code` is the authenticator's, not used yet (and uses it).
+fn totp_right(app: &App, code: &str) -> Result<bool, Failure> {
     let account = app.store.account()?.ok_or_else(|| Failure::new(ErrorCode::Invalid, "no account"))?;
     let totp = auth::totp(&account.totp_secret, &account.username)?;
-    if let Some(step) = auth::totp_step(&totp, code, now())
-        && app.store.use_totp_step(step)?
-    {
+    Ok(match auth::totp_step(&totp, code, now()) {
+        Some(step) => app.store.use_totp_step(step)?,
+        None => false,
+    })
+}
+
+/// Checks a fresh TOTP code from a signed-in device (for revoking, pairing,
+/// the password). Wrong codes are counted per device, apart from sign-ins,
+/// so failed sign-ins from elsewhere never block these.
+pub fn fresh_totp(app: &App, caller: &Caller, code: &str) -> Result<(), Failure> {
+    app.guard.begin_fresh(&caller.device).map_err(|_| {
+        Failure::new(ErrorCode::RateLimited, "too many wrong codes from this device; try again later")
+    })?;
+    if totp_right(app, code)? {
+        app.guard.fresh_ok(&caller.device);
         return Ok(());
     }
-    app.guard.failed(client.ip);
     Err(Failure::new(ErrorCode::WrongCode, "wrong or already used code"))
 }
 
@@ -333,11 +401,10 @@ async fn status(State(app): State<Arc<App>>, headers: HeaderMap) -> Answer<Nexus
     }))
 }
 
-/// Checks the setup code; counts a wrong one as a failed attempt.
-fn check_setup_code(app: &App, client: &Client, code: &str) -> Result<(), Failure> {
-    if !app.guard.may_try(client.ip) {
-        return Err(Failure::new(ErrorCode::RateLimited, "too many attempts; try again later"));
-    }
+/// Checks the setup code; the attempt counts as a failure until the
+/// account is made.
+async fn check_setup_code(app: &App, client: &Client, code: &str) -> Result<(), Failure> {
+    begin(app, client).await?;
     if app.store.account()?.is_some() {
         return Err(Failure::new(ErrorCode::Forbidden, "the account is set up already"));
     }
@@ -345,22 +412,18 @@ fn check_setup_code(app: &App, client: &Client, code: &str) -> Result<(), Failur
     if setup.code.as_deref().is_some_and(|expected| auth::same(code.trim(), expected)) {
         return Ok(());
     }
-    drop(setup);
-    app.guard.failed(client.ip);
-    Err(Failure::new(ErrorCode::Unauthorized, "wrong setup code (see the nexus's log)"))
+    Err(Failure::new(ErrorCode::Unauthorized, "wrong setup code (see the setup link's file, named in the nexus's log)"))
 }
 
 async fn setup(State(app): State<Arc<App>>, client: Client, Body(req): Body<SetupStart>) -> Answer<SetupTotp> {
-    check_setup_code(&app, &client, &req.code)?;
+    check_setup_code(&app, &client, &req.code).await?;
     let username = valid_name(&req.username)?;
     if username.contains(':') {
         return Err(Failure::new(ErrorCode::Invalid, "a user name cannot have ':' in it"));
     }
     auth::password_ok(&req.password).map_err(|e| Failure::new(ErrorCode::Invalid, e))?;
     let password = req.password;
-    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&password))
-        .await
-        .map_err(|e| anyhow::anyhow!(e))??;
+    let hash = argon(&app, move || auth::hash_password(&password)).await??;
     let secret = auth::new_totp_secret();
     let totp = auth::totp(&secret, &username)?;
     let answer = SetupTotp { secret: secret.clone(), url: totp.get_url() };
@@ -374,7 +437,7 @@ async fn setup_confirm(
     client: Client,
     Body(req): Body<SetupConfirm>,
 ) -> Result<SignedInAnswer, Failure> {
-    check_setup_code(&app, &client, &req.code)?;
+    check_setup_code(&app, &client, &req.code).await?;
     if req.device.kind == DeviceKind::Workspace {
         return Err(Failure::new(ErrorCode::Invalid, "workspaces pair, they do not sign in"));
     }
@@ -385,7 +448,6 @@ async fn setup_confirm(
     };
     let totp = auth::totp(&secret, &username)?;
     let Some(step) = auth::totp_step(&totp, &req.totp, now()) else {
-        app.guard.failed(client.ip);
         return Err(Failure::new(ErrorCode::WrongCode, "wrong code from the authenticator"));
     };
     let codes = auth::new_recovery_codes();
@@ -393,6 +455,7 @@ async fn setup_confirm(
     let account = crate::store::Account { username: username.clone(), password, totp_secret: secret, totp_step: step };
     app.store.create_account(&account, &hashes, now())?;
     *app.setup.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+    let _ = std::fs::remove_file(app.config.data_dir().join(crate::SETUP_FILE));
     app.guard.succeeded(client.ip);
     let address = client.address();
     app.store.audit("setup", client.audit(&address, None, ""), now())?;
@@ -403,16 +466,18 @@ async fn setup_confirm(
 }
 
 async fn login(State(app): State<Arc<App>>, client: Client, Body(req): Body<Login>) -> Result<SignedInAnswer, Failure> {
-    if !app.guard.may_try(client.ip) {
-        return Err(Failure::new(ErrorCode::RateLimited, "too many attempts; try again later"));
-    }
     if req.device.kind == DeviceKind::Workspace {
         return Err(Failure::new(ErrorCode::Invalid, "workspaces pair, they do not sign in"));
     }
+    if req.password.len() > 1024 {
+        return Err(Failure::new(ErrorCode::Invalid, "the password is too long"));
+    }
     let account = app.store.account()?.ok_or_else(|| Failure::new(ErrorCode::Unauthorized, "not set up yet"))?;
+    // Counted as a failure from here until it succeeds, so attempts made at
+    // once count before any of them is checked.
+    begin(&app, &client).await?;
     let address = client.address();
-    let wrong =|detail: &str| -> Result<SignedInAnswer, Failure> {
-        app.guard.failed(client.ip);
+    let wrong = |detail: &str| -> Result<SignedInAnswer, Failure> {
         app.store.audit("login-failed", client.audit(&address, None, detail), now())?;
         Err(Failure::new(ErrorCode::Unauthorized, "wrong user name, password or code"))
     };
@@ -421,9 +486,7 @@ async fn login(State(app): State<Arc<App>>, client: Client, Body(req): Body<Logi
     // the user name was right.
     let hash = account.password.clone();
     let password = req.password.clone();
-    let password_ok = tokio::task::spawn_blocking(move || auth::verify_password(&hash, &password))
-        .await
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let password_ok = argon(&app, move || auth::verify_password(&hash, &password)).await?;
     let user_ok = auth::same(req.username.trim(), &account.username);
     if !(password_ok && user_ok) {
         return wrong("wrong user name or password");
@@ -481,7 +544,7 @@ async fn devices(State(app): State<Arc<App>>, caller: Caller) -> Answer<Vec<Devi
 }
 
 async fn revoke(State(app): State<Arc<App>>, client: Client, caller: Caller, Body(req): Body<Revoke>) -> Answer<Empty> {
-    fresh_totp(&app, &client, &req.totp)?;
+    fresh_totp(&app, &caller, &req.totp)?;
     let device = app.store.device(&req.device)?.filter(|d| !d.revoked);
     let Some(device) = device else { return Err(Failure::new(ErrorCode::NotFound, "no such device")) };
     app.store.revoke_device(&device.id)?;
@@ -520,24 +583,26 @@ async fn password(
     caller: Caller,
     Body(req): Body<ChangePassword>,
 ) -> Answer<Empty> {
-    if !app.guard.may_try(client.ip) {
-        return Err(Failure::new(ErrorCode::RateLimited, "too many attempts; try again later"));
-    }
-    let account = app.store.account()?.ok_or_else(|| Failure::new(ErrorCode::Invalid, "no account"))?;
-    let (hash, old) = (account.password.clone(), req.old.clone());
-    let old_ok = tokio::task::spawn_blocking(move || auth::verify_password(&hash, &old))
-        .await
-        .map_err(|e| anyhow::anyhow!(e))?;
-    if !old_ok {
-        app.guard.failed(client.ip);
+    auth::password_ok(&req.new).map_err(|e| Failure::new(ErrorCode::Invalid, e))?;
+    if req.old.len() > 1024 {
         return Err(Failure::new(ErrorCode::Forbidden, "wrong password"));
     }
-    auth::password_ok(&req.new).map_err(|e| Failure::new(ErrorCode::Invalid, e))?;
-    fresh_totp(&app, &client, &req.totp)?;
+    // The old password and the code count as one attempt of this device's.
+    app.guard.begin_fresh(&caller.device).map_err(|_| {
+        Failure::new(ErrorCode::RateLimited, "too many wrong attempts from this device; try again later")
+    })?;
+    let account = app.store.account()?.ok_or_else(|| Failure::new(ErrorCode::Invalid, "no account"))?;
+    let (hash, old) = (account.password.clone(), req.old.clone());
+    let old_ok = argon(&app, move || auth::verify_password(&hash, &old)).await?;
+    if !old_ok {
+        return Err(Failure::new(ErrorCode::Forbidden, "wrong password"));
+    }
+    if !totp_right(&app, &req.totp)? {
+        return Err(Failure::new(ErrorCode::WrongCode, "wrong or already used code"));
+    }
+    app.guard.fresh_ok(&caller.device);
     let new = req.new;
-    let hash = tokio::task::spawn_blocking(move || auth::hash_password(&new))
-        .await
-        .map_err(|e| anyhow::anyhow!(e))??;
+    let hash = argon(&app, move || auth::hash_password(&new)).await??;
     app.store.set_password(&hash)?;
     for id in app.store.revoke_people_devices_but(&caller.device)? {
         app.hub.close_device(&id, ApiError::new(ErrorCode::Unauthorized, "the password changed"));
@@ -561,6 +626,7 @@ async fn push_subscribe(
 ) -> Answer<Empty> {
     let Some(push) = &app.push else { return Err(Failure::new(ErrorCode::Unsupported, "push is off on this nexus")) };
     push.check(&req).map_err(|e| Failure::new(ErrorCode::Invalid, e))?;
+    push.check_address(&req.endpoint).await.map_err(|e| Failure::new(ErrorCode::Invalid, e))?;
     app.store.set_subscription(&caller.device, &req)?;
     Ok(Json(Empty {}))
 }

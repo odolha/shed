@@ -51,6 +51,9 @@ const HELLO_WAIT: Duration = Duration::from_secs(10);
 /// `IDLE` is taken for dead.
 const PING: Duration = Duration::from_secs(30);
 const IDLE: Duration = Duration::from_secs(90);
+/// Notifications a workspace may push: this many a minute, this many at once.
+const NOTIFY_PER_MINUTE: u32 = 30;
+const NOTIFY_BURST: u32 = 10;
 /// A workspace must stay offline this long before the push says so.
 const OFFLINE_PUSH_AFTER: Duration = Duration::from_secs(120);
 
@@ -658,10 +661,14 @@ async fn run_link(app: Arc<App>, mut socket: WebSocket, device: DeviceRow) {
         pump(&mut socket, &mut rx, &closer, |text| match RawLinkFrame::parse(text) {
             Ok(frame) => {
                 if let Some(notification) = app.hub.link_frame(&workspace, conn, frame) {
-                    crate::push::notify(&app, &workspace, notification);
+                    if app.guard.take_for("notify", &workspace, NOTIFY_PER_MINUTE, NOTIFY_BURST) {
+                        crate::push::notify(&app, &workspace, notification);
+                    } else {
+                        tracing::debug!("workspace {:?} sends too many notifications; one dropped", device.name);
+                    }
                 }
             }
-            Err(e) => tracing::debug!("a link sent a frame that does not read: {e}"),
+            Err(e) => tracing::debug!("a link sent a frame that does not read ({} bytes): {e}", text.len()),
         })
         .await;
     }

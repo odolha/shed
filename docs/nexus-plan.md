@@ -180,26 +180,39 @@ by the nexus, so a compromised nexus could serve one that leaks the keys, and
 the server workspace usually runs on the same machine anyway. The nexus is
 hardened instead:
 
-- **Account**: one user for now. On first start the nexus logs a one-time
-  setup link (as oddmoth does); setting up means a password and a TOTP
-  authenticator (shown as a QR code), plus single-use recovery codes.
+- **Account**: one user for now. On first start the nexus writes a one-time
+  setup link to a 0600 file in its data folder and logs where it is (the code
+  is in the link's `#` fragment, so no proxy logs it); setting up means a
+  password and a TOTP authenticator (shown as a QR code), plus single-use
+  recovery codes.
 - **Signing in** always asks for password and TOTP. A browser gets a session
   cookie (`HttpOnly`, `Secure`, `SameSite=Strict`; 7 days by default,
   configurable). A phone gets a **device token** that it keeps in the Android
   Keystore, optionally behind a fingerprint unlock in the app.
 - **Pairing a workspace**: `shed nexus join https://nexus.example.com` prints
-  a code. You approve it in the web app, which asks for TOTP again. The
-  workspace gets a long-lived token, kept in a 0600 file in Shed's data folder,
-  outside the `*.toml` files that backups copy.
+  a code. You type it into the web app (which lists waiting requests without
+  their codes) and approve it, with TOTP again. The workspace gets a
+  long-lived token, kept with the nexus's address in a 0600 file in Shed's
+  data folder, outside the `*.toml` files that backups copy; the link sends it
+  only to that address, and only over TLS (plain `http` only to the same
+  machine). Waiting requests are capped per address, the oldest making way.
 - **Devices** are listed with last seen time and address and can be revoked.
   Revoking closes their connections at once. Changing the password ends every
   session and device token but the current one.
-- **Asking for TOTP again** for pairing, revoking, and account changes.
-- **Rate limiting and lockout** on sign-in. An optional **country filter**
+- **Asking for TOTP again** for pairing, revoking, and account changes; wrong
+  codes there are counted per device, apart from sign-ins.
+- **Rate limiting and lockout** on sign-in, per address (IPv4, or IPv6 /64),
+  counting attempts as they start. Many failures from everywhere slow down
+  addresses that never signed in rather than locking out everyone, so a
+  distributed attack cannot lock out the owner. Argon2 runs a few at a time;
+  connections are capped and must send their headers in time. Push endpoints
+  must be public addresses (no requests into the nexus's own network). An
+  optional **country filter**
   (an allow-list, checked against a GeoIP database file you provide, such as
   db-ip lite) and optional address ranges. Off by default.
 - **Behind a reverse proxy** (nginx + certbot in the docs) or with its own TLS
-  (rustls), as configured. WebSocket `Origin` checks and a strict
+  (rustls), as configured. `X-Forwarded-For` is believed only from the
+  configured proxies. WebSocket `Origin` checks and a strict
   Content-Security-Policy for the web app.
 - **On the server**: the nexus and the server workspace run as **their own
   non-root users**, under systemd with its sandboxing options, never as root.

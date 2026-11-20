@@ -50,7 +50,26 @@ sudoedit /etc/shed-nexus/nexus.toml
 
 At least set `public_url = "https://nexus.example.com"`. The sample
 (`packaging/nexus/nexus.toml`) lists every setting with its default. With nginx
-in front as below, keep `listen` on `127.0.0.1` and `trusted_proxy = true`.
+in front as below, keep `listen` on `127.0.0.1` and `trusted_proxy = true`: the
+nexus then believes `X-Forwarded-For` from loopback only (set
+`trusted_proxies` to the proxy's addresses if it runs elsewhere) and takes the
+client to be the right-most address in it that is not a trusted proxy. Without
+it, every client would look like the proxy, and one address's failed sign-ins
+would lock out everyone.
+
+Limits worth knowing (all in the sample):
+
+- `[login]`: failed sign-ins lock out their address (an IPv4 address or an
+  IPv6 /64) for `lockout_minutes`. With `global_max_failures` failures from
+  everywhere, the nexus slows down rather than locking everyone out: addresses
+  that never signed in share `slow_per_minute` attempts, while those your
+  devices signed in or were seen from are not held back. Wrong one-time codes
+  from a signed-in device (revoking, pairing, the password) are counted per
+  device, apart from sign-ins.
+- `max_connections` and `header_timeout_secs`: connections at once, and how
+  long a client may take to send a request's headers.
+- Push endpoints must be on public addresses (`[push] allow_private_endpoints`
+  for a ntfy on your network).
 
 Optional filters:
 
@@ -72,20 +91,25 @@ journalctl -u shed-nexus -f
 
 The unit runs the nexus as `shed-nexus` with `NoNewPrivileges`, no
 capabilities, `ProtectSystem=strict` (everything read-only but
-`/var/lib/shed-nexus`), `ProtectHome`, private `/tmp` and devices, and a system
-call filter. If you move the data folder, change `ReadWritePaths` and
-`StateDirectory` to match.
+`/var/lib/shed-nexus`), `ProtectHome`, private `/tmp` and devices, a system
+call filter, and `MemoryMax`/`TasksMax` limits. If you move the data folder,
+change `ReadWritePaths` and `StateDirectory` to match.
 
-Until the account exists, the log shows a setup link at every start:
+Until the account exists, the nexus writes a setup link to `setup-link.txt` in
+its data folder (0600, readable by `shed-nexus` only) at every start, and logs
+where it is, not the link itself:
 
-```text
-WARN no account yet: set it up at https://nexus.example.com/setup?code=…
+```sh
+sudo cat /var/lib/shed-nexus/setup-link.txt
+# https://nexus.example.com/setup#code=…
 ```
 
-Open it once nginx is up (below): choose a user name and password, add the
-authenticator (scan the QR code), confirm with a code from it, and keep the
-recovery codes somewhere safe. The code in the link is new at every start and
-works only until the account exists.
+The code is in the link's fragment (after `#`), which browsers never send, so
+it does not end up in nginx's access log either. Open the link once nginx is
+up (below): choose a user name and password, add the authenticator (scan the
+QR code), confirm with a code from it, and keep the recovery codes somewhere
+safe. The code is new at every start and works only until the account exists;
+the file is removed then.
 
 ## 5. nginx and certbot
 
@@ -103,7 +127,8 @@ server {
         proxy_pass http://127.0.0.1:7870;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        # The nexus takes the last address in this header (trusted_proxy).
+        # The client's address, replacing whatever the client sent; the
+        # nexus believes it from loopback (trusted_proxy).
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         client_max_body_size 1m;
@@ -141,13 +166,15 @@ The nexus sets its own security headers (a strict Content-Security-Policy,
 
 ## 6. Linking workspaces
 
-The link (`shed link`, `shed nexus join`) is still being built
-([the plan](nexus-plan.md)); this is how it will go. On each machine running
-Shed, `shed nexus join https://nexus.example.com`
-prints a code such as `K7QF-2M9D`. In the web app, under devices, compare the
-code, give the workspace a name and approve it with a code from your
+On each machine running Shed, `shed nexus join https://nexus.example.com`
+prints a code such as `K7QF-2M9D`. In the web app, under devices, type that
+code (the list of waiting requests shows which machine asks and from where,
+but not the code, so a request someone else made cannot be approved by
+mistake), give the workspace a name and approve it with a code from your
 authenticator. The workspace keeps its token in a 0600 file in Shed's data
-folder. Revoke it there to cut it off at once.
+folder (`nexus.json`, with the nexus's address: the link dials only that
+nexus, and only over `https`, plain `http` being for a nexus on the same
+machine). Revoke it there to cut it off at once.
 
 ## 7. Push to Android with ntfy (optional)
 
@@ -183,8 +210,8 @@ Put it behind nginx like the nexus (its own `server_name ntfy.example.com`,
 `proxy_read_timeout 1h`) and run certbot for it. On the phone, install the ntfy
 app, set its default server to `https://ntfy.example.com` and sign in as
 `phone`; Shed's app then registers through it and hands its endpoint to the
-nexus. A ntfy on a private network without TLS needs `allow_http_endpoints = true`
-in the nexus's `[push]`.
+nexus. A ntfy on a private network needs `allow_private_endpoints = true` in
+the nexus's `[push]` (and `allow_http_endpoints = true` without TLS).
 
 ## Backups and upgrades
 

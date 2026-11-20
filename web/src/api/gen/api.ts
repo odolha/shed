@@ -904,6 +904,10 @@ export interface OptionalFolder {
 }
 
 export interface PairApprove {
+	/**
+	 * The code `shed nexus join` printed on the workspace, as the person
+	 * typed it (case, spaces and dashes do not matter).
+	 */
 	code: string;
 	/** The name to give it (may differ from the one it asked for). */
 	name: string;
@@ -921,7 +925,10 @@ export interface PairPoll {
 }
 
 export interface PairReject {
-	code: string;
+	/** The request's code, if known; else empty and `id` set. */
+	code?: string;
+	/** The request's id from `PendingPairing`. */
+	id?: string;
 }
 
 /** A workspace asks to be paired. */
@@ -932,7 +939,7 @@ export interface PairStart {
 }
 
 export interface PairStarted {
-	/** What the person compares and approves in the web app: `K7QF-2M9D`. */
+	/** What the person types in the web app to approve it: `K7QF-2M9D`. */
 	code: string;
 	/** What the workspace polls with; secret. */
 	poll: string;
@@ -944,8 +951,17 @@ export interface PaneOnly {
 	pane: string;
 }
 
+/**
+ * A pairing request waiting, for information: which workspace asks and
+ * from where. It carries no code: approving takes the code `shed nexus
+ * join` printed, typed by the person, so a request someone else made
+ * cannot be approved by mistake.
+ */
 export interface PendingPairing {
+	/** Always empty (kept for older apps); see `PairApprove::code`. */
 	code: string;
+	/** Names it to reject it (`PairReject::id`). */
+	id?: string;
 	name: string;
 	version: string;
 	address: string;
@@ -1163,7 +1179,10 @@ export type Call =
 	| { type: "GitFetch", content: TabOnly }
 	| { type: "GitPull", content: TabOnly }
 	| { type: "GitPush", content: GitPush }
-	/** Folders under a path, to choose where a tab works. → `Folder` */
+	/**
+	 * Folders under a path, to choose where a tab works. → `Folder`.
+	 * Refused (`Forbidden`) by a view-only workspace, which makes no tabs.
+	 */
 	| { type: "BrowseFolders", content: Browse };
 
 /** A call on a workspace. Answered by one `Response` with the same id. */
@@ -1371,8 +1390,8 @@ export interface SetupConfirm {
 }
 
 /**
- * The first step of setting up the account: the setup code from the
- * nexus's log, a user name and a password.
+ * The first step of setting up the account: the setup code (the setup
+ * link's `#code=` fragment), a user name and a password.
  */
 export interface SetupStart {
 	code: string;

@@ -145,7 +145,8 @@ pub enum Call {
     GitPush(GitPush),
 
     // ---- the machine
-    /// Folders under a path, to choose where a tab works. → `Folder`
+    /// Folders under a path, to choose where a tab works. → `Folder`.
+    /// Refused (`Forbidden`) by a view-only workspace, which makes no tabs.
     BrowseFolders(Browse),
 }
 

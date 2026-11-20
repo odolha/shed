@@ -18,9 +18,13 @@ data_dir = "/var/lib/shed-nexus"
 # How long a browser stays signed in.
 session_days = 7
 
-# Behind a reverse proxy that sets X-Forwarded-For (nginx below): the client's
-# address is its last entry. Only with a proxy you run in front.
+# Behind a reverse proxy that sets X-Forwarded-For (nginx, see
+# docs/nexus-deploy.md): believe that header from the proxies below, and take
+# the client to be the right-most address in it that is not one of them.
+# Only with a proxy you run in front.
 trusted_proxy = true
+# The proxies' addresses. Default (empty): loopback, for a proxy on this host.
+# trusted_proxies = ["127.0.0.1/32", "::1/128"]
 
 # Session cookies only over HTTPS. Turn off only for a plain-HTTP test nexus
 # not on localhost.
@@ -38,6 +42,12 @@ request_timeout_secs = 60
 # Sent with every answer. The default allows the nexus's own files only.
 # content_security_policy = "default-src 'self'; …"
 
+# Connections open at once; more wait until one closes.
+max_connections = 1024
+# Seconds a client has to send a request's headers (and that an idle
+# connection is kept between requests).
+header_timeout_secs = 10
+
 [geo]
 # A GeoIP CSV of address ranges: `start,end,country` per line (db-ip's
 # "IP to Country Lite", IP2Location LITE DB1). Also shows where devices sign
@@ -50,13 +60,17 @@ request_timeout_secs = 60
 allow_unknown = false
 
 [login]
-# Failed sign-ins (or one-time codes) from one address before it is locked out.
+# An "address" here is an IPv4 address or an IPv6 /64.
+# Failed sign-ins from one address before it is locked out; also wrong
+# one-time codes per signed-in device (revoking, pairing, the password).
 max_failures = 5
 # How long failures count, and a lockout lasts.
 lockout_minutes = 15
-# Failed sign-ins from everywhere, within lockout_minutes, before all sign-ins
-# are refused for a while.
+# Failed sign-ins from everywhere, within lockout_minutes, before the nexus
+# slows down: addresses that never signed in then share slow_per_minute
+# attempts; addresses that signed in before are not held back.
 global_max_failures = 50
+slow_per_minute = 6
 # Pairing requests per address per minute.
 pair_per_minute = 5
 
@@ -67,3 +81,6 @@ enabled = true
 # subject = "mailto:admin@example.com"
 # Accept http: push endpoints (a ntfy on a private network only).
 allow_http_endpoints = false
+# Accept push endpoints on private, loopback or link-local addresses (a ntfy
+# on a private network). Off: public addresses only.
+allow_private_endpoints = false

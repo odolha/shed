@@ -14,8 +14,14 @@ struct Args {
     config: Option<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Blocking work (argon2, SQLite) on a bounded number of threads, so the
+    // service's task limit is never reached.
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().max_blocking_threads(64).build()?;
+    rt.block_on(run())
+}
+
+async fn run() -> anyhow::Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_env("SHED_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     // Colours only on a terminal, not in journald.

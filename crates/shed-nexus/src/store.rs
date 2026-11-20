@@ -127,6 +127,9 @@ pub enum PairingState {
 
 #[derive(Clone, Debug)]
 pub struct Pairing {
+    /// Names it in lists (the start of its poll secret's hash): not the code,
+    /// which only the workspace shows.
+    pub id: String,
     pub code: String,
     pub name: String,
     pub version: String,
@@ -426,9 +429,17 @@ impl Store {
         self.pairing_where("poll_hash = ?1", poll_hash)
     }
 
+    /// By the id lists show (`Pairing::id`).
+    pub fn pairing_by_id(&self, id: &str) -> anyhow::Result<Option<Pairing>> {
+        if id.len() != PAIRING_ID_LEN {
+            return Ok(None);
+        }
+        self.pairing_where(&format!("substr(poll_hash, 1, {PAIRING_ID_LEN}) = ?1"), id)
+    }
+
     fn pairing_where(&self, cond: &str, arg: &str) -> anyhow::Result<Option<Pairing>> {
         let sql = format!(
-            "SELECT code, name, version, address, country, expires, state, approved_name FROM pairings WHERE {cond}"
+            "SELECT code, name, version, address, country, expires, state, approved_name, poll_hash FROM pairings WHERE {cond}"
         );
         Ok(self.lock().query_row(&sql, params![arg], pairing_row).optional()?)
     }
@@ -437,7 +448,7 @@ impl Store {
     pub fn pending_pairings(&self, now: u64) -> anyhow::Result<Vec<Pairing>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT code, name, version, address, country, expires, state, approved_name FROM pairings
+            "SELECT code, name, version, address, country, expires, state, approved_name, poll_hash FROM pairings
              WHERE state = 'pending' AND expires > ?1 ORDER BY expires",
         )?;
         let rows = stmt.query_map(params![now as i64], pairing_row)?.collect::<Result<Vec<_>, _>>()?;
@@ -660,10 +671,20 @@ fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceRow> {
     })
 }
 
+/// Hex characters of a pairing's id.
+const PAIRING_ID_LEN: usize = 16;
+
+/// A pairing's id, from its poll secret's hash.
+pub fn pairing_id(poll_hash: &str) -> String {
+    poll_hash.chars().take(PAIRING_ID_LEN).collect()
+}
+
 fn pairing_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Pairing> {
     let state: String = r.get(6)?;
     let approved: Option<String> = r.get(7)?;
+    let poll_hash: String = r.get(8)?;
     Ok(Pairing {
+        id: pairing_id(&poll_hash),
         code: r.get(0)?,
         name: r.get(1)?,
         version: r.get(2)?,

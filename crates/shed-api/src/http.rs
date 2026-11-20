@@ -5,7 +5,7 @@
 //! | Route | Body → answer | Who |
 //! |---|---|---|
 //! | `GET /api/v1/status` | → `NexusStatus` | anyone |
-//! | `POST /api/v1/setup` | `SetupStart` → `SetupTotp` | anyone with the setup code (logged at start until the account exists) |
+//! | `POST /api/v1/setup` | `SetupStart` → `SetupTotp` | anyone with the setup code (from the setup link, `…/setup#code=…`, which the nexus writes to `setup-link.txt` in its data folder until the account exists) |
 //! | `POST /api/v1/setup/confirm` | `SetupConfirm` → `SignedIn` | same |
 //! | `POST /api/v1/login` | `Login` → `SignedIn` (a browser also gets the session cookie) | anyone (rate limited) |
 //! | `POST /api/v1/logout` | → `{}` | signed in |
@@ -15,9 +15,9 @@
 //! | `POST /api/v1/password` | `ChangePassword` → `{}` | signed in, with TOTP |
 //! | `POST /api/v1/pair/start` | `PairStart` → `PairStarted` | a workspace (`shed nexus join`) |
 //! | `POST /api/v1/pair/poll` | `PairPoll` → `PairState` | that workspace |
-//! | `GET /api/v1/pair/pending` | → `Vec<PendingPairing>` | signed in |
-//! | `POST /api/v1/pair/approve` | `PairApprove` → `{}` | signed in, with TOTP |
-//! | `POST /api/v1/pair/reject` | `PairReject` → `{}` | signed in |
+//! | `GET /api/v1/pair/pending` | → `Vec<PendingPairing>` (informational: no codes) | signed in |
+//! | `POST /api/v1/pair/approve` | `PairApprove` (the code as typed) → `{}` | signed in, with TOTP |
+//! | `POST /api/v1/pair/reject` | `PairReject` (its id, or the code) → `{}` | signed in |
 //! | `GET /api/v1/push` | → `PushInfo` | signed in |
 //! | `POST /api/v1/push/subscribe` | `PushSubscribe` → `{}` | signed in (this device) |
 //! | `POST /api/v1/push/prefs` | `PushPrefs` → `{}` | signed in (this device) |
@@ -44,8 +44,8 @@ pub struct NexusStatus {
     pub signed_in: bool,
 }
 
-/// The first step of setting up the account: the setup code from the
-/// nexus's log, a user name and a password.
+/// The first step of setting up the account: the setup code (the setup
+/// link's `#code=` fragment), a user name and a password.
 #[typeshare]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,7 +190,7 @@ pub struct PairStart {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairStarted {
-    /// What the person compares and approves in the web app: `K7QF-2M9D`.
+    /// What the person types in the web app to approve it: `K7QF-2M9D`.
     pub code: String,
     /// What the workspace polls with; secret.
     pub poll: String,
@@ -225,11 +225,19 @@ pub struct PairApproved {
     pub token: String,
 }
 
+/// A pairing request waiting, for information: which workspace asks and
+/// from where. It carries no code: approving takes the code `shed nexus
+/// join` printed, typed by the person, so a request someone else made
+/// cannot be approved by mistake.
 #[typeshare]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingPairing {
+    /// Always empty (kept for older apps); see `PairApprove::code`.
     pub code: String,
+    /// Names it to reject it (`PairReject::id`).
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub version: String,
     pub address: String,
@@ -242,6 +250,8 @@ pub struct PendingPairing {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairApprove {
+    /// The code `shed nexus join` printed on the workspace, as the person
+    /// typed it (case, spaces and dashes do not matter).
     pub code: String,
     /// The name to give it (may differ from the one it asked for).
     pub name: String,
@@ -252,7 +262,12 @@ pub struct PairApprove {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairReject {
+    /// The request's code, if known; else empty and `id` set.
+    #[serde(default)]
     pub code: String,
+    /// The request's id from `PendingPairing`.
+    #[serde(default)]
+    pub id: String,
 }
 
 /// How this nexus pushes.

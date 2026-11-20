@@ -17,17 +17,21 @@ async fn a_connector_reaches_the_workspace_through_the_nexus() {
     let hub = nexus::start().await;
     let mut account = nexus::set_up(&hub).await;
 
-    // Paired as `shed nexus join` does it: the code approved in the web app.
+    // Paired as `shed nexus join` does it: the code it shows, typed into the
+    // web app (the list of waiting requests does not give it away).
     let base = hub.base.clone();
-    let pairing = tokio::spawn(async move { shed_link::pairing::pair(&base, "desk", None, |_| {}).await.unwrap() });
-    let pending: Vec<shed_api::http::PendingPairing> = loop {
-        let p: Vec<shed_api::http::PendingPairing> = hub.get("/api/v1/pair/pending", &account.browser).await;
-        if !p.is_empty() {
-            break p;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    };
-    let approve = shed_api::http::PairApprove { code: pending[0].code.clone(), name: "desk".into(), totp: account.auth.code().await };
+    let (shown_tx, shown_rx) = tokio::sync::oneshot::channel();
+    let pairing = tokio::spawn(async move {
+        shed_link::pairing::pair(&base, "desk", None, |s| {
+            let _ = shown_tx.send(s.code.clone());
+        })
+        .await
+        .unwrap()
+    });
+    let code = shown_rx.await.unwrap();
+    let pending: Vec<shed_api::http::PendingPairing> = hub.get("/api/v1/pair/pending", &account.browser).await;
+    assert!(pending.len() == 1 && pending[0].code.is_empty());
+    let approve = shed_api::http::PairApprove { code, name: "desk".into(), totp: account.auth.code().await };
     let _: serde_json::Value = hub.post("/api/v1/pair/approve", &approve, &account.browser).await;
     let shed_link::pairing::Paired::Approved(paired) = pairing.await.unwrap() else { panic!("not approved") };
 

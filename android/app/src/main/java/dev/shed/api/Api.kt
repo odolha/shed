@@ -1131,6 +1131,8 @@ data class OptionalFolder (
 
 @Serializable
 data class PairApprove (
+	/// The code `shed nexus join` printed on the workspace, as the person
+	/// typed it (case, spaces and dashes do not matter).
 	val code: String,
 	/// The name to give it (may differ from the one it asked for).
 	val name: String,
@@ -1151,7 +1153,10 @@ data class PairPoll (
 
 @Serializable
 data class PairReject (
-	val code: String
+	/// The request's code, if known; else empty and `id` set.
+	val code: String? = null,
+	/// The request's id from `PendingPairing`.
+	val id: String? = null
 )
 
 /// A workspace asks to be paired.
@@ -1164,7 +1169,7 @@ data class PairStart (
 
 @Serializable
 data class PairStarted (
-	/// What the person compares and approves in the web app: `K7QF-2M9D`.
+	/// What the person types in the web app to approve it: `K7QF-2M9D`.
 	val code: String,
 	/// What the workspace polls with; secret.
 	val poll: String,
@@ -1177,9 +1182,16 @@ data class PaneOnly (
 	val pane: String
 )
 
+/// A pairing request waiting, for information: which workspace asks and
+/// from where. It carries no code: approving takes the code `shed nexus
+/// join` printed, typed by the person, so a request someone else made
+/// cannot be approved by mistake.
 @Serializable
 data class PendingPairing (
+	/// Always empty (kept for older apps); see `PairApprove::code`.
 	val code: String,
+	/// Names it to reject it (`PairReject::id`).
+	val id: String? = null,
 	val name: String,
 	val version: String,
 	val address: String,
@@ -1535,7 +1547,8 @@ sealed class Call {
 	@Serializable
 	@SerialName("GitPush")
 	data class GitPush(val content: dev.shed.api.GitPush): Call()
-	/// Folders under a path, to choose where a tab works. → `Folder`
+	/// Folders under a path, to choose where a tab works. → `Folder`.
+	/// Refused (`Forbidden`) by a view-only workspace, which makes no tabs.
 	@Serializable
 	@SerialName("BrowseFolders")
 	data class BrowseFolders(val content: Browse): Call()
@@ -1801,8 +1814,8 @@ data class SetupConfirm (
 	val device: DeviceHello
 )
 
-/// The first step of setting up the account: the setup code from the
-/// nexus's log, a user name and a password.
+/// The first step of setting up the account: the setup code (the setup
+/// link's `#code=` fragment), a user name and a password.
 @Serializable
 data class SetupStart (
 	val code: String,
