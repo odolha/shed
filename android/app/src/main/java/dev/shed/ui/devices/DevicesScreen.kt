@@ -107,7 +107,7 @@ fun DevicesScreen(nav: NavController) {
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 24.dp)) {
             error?.let { item { Text(it, color = shed.danger, modifier = Modifier.padding(16.dp)) } }
             item {
-                TextButton(onClick = { approving = PendingPairing("", "", "", "", null, 0u) }, modifier = Modifier.padding(horizontal = 8.dp)) {
+                TextButton(onClick = { approving = PendingPairing(code = "", name = "", version = "", address = "", expires = 0u) }, modifier = Modifier.padding(horizontal = 8.dp)) {
                     Icon(Icons.Default.Add, null)
                     HSpace(6)
                     Text(stringResource(R.string.pair_workspace))
