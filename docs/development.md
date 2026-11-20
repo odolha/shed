@@ -260,6 +260,33 @@ code, a name and a TOTP code) and speak to `/api` with a WebSocket client.
 link against a fake nexus on a real socket (`tests/common/mod.rs`), and
 `tests/nexus.rs` the whole way through the real nexus, pairing included.
 
+## The Android app
+
+`android/` is a Gradle project (Kotlin, Jetpack Compose). No JDK or Android SDK
+is needed system-wide: `tools/android-env.sh` exports `JAVA_HOME` and
+`ANDROID_HOME` from `~/.cache/shed-dev/android` (or `$SHED_ANDROID_DIR`), and
+its header lists the one-time setup (a Temurin JDK 21, the Android command-line
+tools, `sdkmanager --licenses`, `platforms;android-36`, `build-tools;36.0.0`,
+`platform-tools`; no emulator images).
+
+```sh
+. tools/android-env.sh
+cd android
+./gradlew assembleDebug                      # app/build/outputs/apk/debug/app-debug.apk
+./gradlew testDebugUnitTest lintDebug        # JVM tests; lint must report no errors
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+`app/src/main/java/dev/shed/api/Api.kt` is generated (`cargo run -p
+shed-codegen`); the app reads it with the `Json` setup from that file's header
+(`net/ShedJson.kt`). The tests run on the JVM: JSON round-trips of frames, the
+WebSocket client against a fake nexus (OkHttp's MockWebServer), terminal
+re-wrapping and the Markdown reader. To try the app against a nexus on this
+computer, run the nexus as above and sign in at `http://10.0.2.2:7870` from an
+emulator, or `adb reverse tcp:7870 tcp:7870` and `http://localhost:7870` from a
+phone (plain `http` is accepted only for those). Debug builds only: release
+signing is not configured. More in [android/README.md](../android/README.md).
+
 ## Packages
 
 - `packaging/deb/build.sh` builds the Debian package into `target/debian/`.

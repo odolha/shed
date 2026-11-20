@@ -859,6 +859,22 @@ or renamed from them.
 `shed nexus status` reads `link.json` in the runtime folder, which the link
 keeps current (connecting, connected, offline, refused).
 
+**The Android app** (`android/`, Kotlin and Jetpack Compose) is a connector:
+HTTP for sign-in, devices, pairing and push, and one WebSocket to `/api` with
+the phone's device token as a bearer token. `NexusSocket` sends `Hello`, answers
+requests by id (with timeouts), turns subscriptions into flows, and on a lost
+connection dials again with a backoff and subscribes again under the same ids
+(the first event of each is the whole thing again); a subscription that
+`Ended` because its workspace went offline starts again when the workspace
+comes back; `Goodbye` with `Unauthorized` signs the phone out. The socket runs
+while the app is in the foreground and a minute after; notifications come by
+push. The device token is sealed with an AES-GCM key kept in the Android
+Keystore. Terminals arrive as `Screen` events: the app keeps the rows, joins
+those that wrap and cuts them again to the phone's width (the alternate screen
+is shown as a grid, fitted or panned). Push is UnifiedPush: the connector
+library keeps the RFC 8291 keys and decrypts; the app hands the distributor's
+endpoint to `POST /api/v1/push/subscribe`.
+
 ## The code
 
 | Crate | What it holds |

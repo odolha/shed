@@ -1,0 +1,314 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Shed</string>
+
+    <!-- Common -->
+    <string name="back">Back</string>
+    <string name="cancel">Cancel</string>
+    <string name="copy">Copy</string>
+    <string name="copied">Copied</string>
+    <string name="create">Create</string>
+    <string name="delete">Delete</string>
+    <string name="delete_ellipsis">Delete…</string>
+    <string name="more">More</string>
+    <string name="open">Open</string>
+    <string name="refresh">Refresh</string>
+    <string name="remove">Remove</string>
+    <string name="rename">Rename</string>
+    <string name="save">Save</string>
+    <string name="send">Send</string>
+    <string name="totp_code">Code from the authenticator</string>
+    <string name="folder_use_this">Use This Folder</string>
+    <string name="diff_binary">A binary file: not shown.</string>
+
+    <!-- Times -->
+    <string name="time_unknown">never</string>
+    <string name="time_now">just now</string>
+    <string name="time_minutes_ago">%1$d min ago</string>
+    <string name="time_hours_ago">%1$d h ago</string>
+    <string name="time_days_ago">%1$d d ago</string>
+
+    <!-- Errors -->
+    <string name="error_unauthorized">Not signed in</string>
+    <string name="error_forbidden">Not allowed</string>
+    <string name="error_not_found">Not there any more</string>
+    <string name="error_offline">The workspace is offline</string>
+    <string name="error_invalid">That did not make sense to the workspace</string>
+    <string name="error_unsupported">The workspace or nexus does not know this yet</string>
+    <string name="error_rate_limited">Too many attempts; try again later</string>
+    <string name="error_wrong_code">Wrong or already used code</string>
+    <string name="error_timeout">It took too long</string>
+    <string name="error_failed">Something failed</string>
+    <string name="error_network">Could not reach the nexus: %1$s</string>
+    <string name="connection_offline">Reconnecting… (%1$s)</string>
+    <string name="connection_closed">Disconnected by the nexus: %1$s</string>
+
+    <!-- Sign-in and lock -->
+    <string name="signin_title">Sign in to your nexus</string>
+    <string name="signin_intro">Shed on your phone reaches your workspaces through the nexus you host. Sign in with your account and a code from your authenticator.</string>
+    <string name="signin_nexus">Nexus address</string>
+    <string name="signin_username">User name</string>
+    <string name="signin_password">Password</string>
+    <string name="signin_totp">Code</string>
+    <string name="signin_totp_hint">From your authenticator, or a recovery code</string>
+    <string name="signin_button">Sign In</string>
+    <string name="signin_bad_url">The address must start with https:// (plain http only for this computer during development).</string>
+    <string name="signin_not_set_up">This nexus has no account yet: set it up in its web app first.</string>
+    <string name="lock_title">Unlock Shed</string>
+    <string name="lock_unlock">Unlock</string>
+
+    <!-- Workspaces -->
+    <string name="workspaces_empty">No workspaces yet. On a computer with Shed, run “shed nexus join” with your nexus’s address, then approve it under Devices.</string>
+    <string name="workspace_online">Online</string>
+    <string name="workspace_offline_since">Offline, last seen %1$s</string>
+    <string name="workspace_view_only">View only</string>
+    <string name="workspace_no_state">Nothing known about it yet.</string>
+    <string name="workspace_no_benches">No benches open.</string>
+    <plurals name="workspace_closed">
+        <item quantity="one">%1$d closed bench</item>
+        <item quantity="other">%1$d closed benches</item>
+    </plurals>
+    <string name="limit_five_hour">5-hour limit</string>
+    <string name="limit_week">Weekly limit</string>
+    <string name="limit_left">%1$s left</string>
+    <plurals name="ai_waiting_count">
+        <item quantity="one">%1$d waiting</item>
+        <item quantity="other">%1$d waiting</item>
+    </plurals>
+    <plurals name="ai_working_count">
+        <item quantity="one">%1$d working</item>
+        <item quantity="other">%1$d working</item>
+    </plurals>
+
+    <!-- Benches -->
+    <string name="bench_new">New Bench</string>
+    <string name="bench_name_optional">Name (optional)</string>
+    <string name="bench_gone">Bench closed</string>
+    <string name="bench_gone_text">This bench is not open any more.</string>
+    <string name="bench_rename">Rename Bench…</string>
+    <string name="bench_color">Bench Colour…</string>
+    <string name="bench_run_startup">Run Startup</string>
+    <string name="bench_run_teardown">Run Teardown</string>
+    <string name="bench_save">Save Now</string>
+    <string name="bench_close">Close Bench…</string>
+    <string name="bench_close_title">Close “%1$s”?</string>
+    <string name="bench_close_text">Its teardown runs and its shells and Claude Code sessions stop on the workspace. The bench is saved and can be loaded again.</string>
+    <string name="bench_closed_subtitle">Closed · %1$s</string>
+    <string name="bench_load">Load</string>
+    <string name="bench_load_start">Load and Start</string>
+    <string name="bench_delete">Delete Bench…</string>
+    <string name="bench_delete_title">Delete “%1$s”?</string>
+    <string name="bench_delete_text">Its saved file is deleted from the workspace, with its tabs and history of commands kept there.</string>
+    <string name="bench_no_tabs">No tabs.</string>
+    <plurals name="bench_tabs">
+        <item quantity="one">%1$d tab</item>
+        <item quantity="other">%1$d tabs</item>
+    </plurals>
+
+    <!-- Tabs -->
+    <string name="tab_new">New Tab</string>
+    <string name="tab_new_terminal">Terminal…</string>
+    <string name="tab_new_project">Project…</string>
+    <string name="tab_new_ai">AI…</string>
+    <string name="tab_new_remote">Remote Shell…</string>
+    <string name="tab_remote_host">Server (ssh host)</string>
+    <string name="tab_pick_folder">Where it works</string>
+    <string name="tab_rename">Rename Tab…</string>
+    <string name="tab_close">Close Tab…</string>
+    <string name="tab_close_title">Close “%1$s”?</string>
+    <string name="tab_close_text">What runs in it on the workspace stops.</string>
+    <string name="tab_gone">Tab closed</string>
+    <string name="tab_gone_text">This tab is not open any more.</string>
+    <string name="tab_private_note">A private tab: what is in it stays on its computer.</string>
+    <plurals name="tab_panes">
+        <item quantity="one">%1$d pane</item>
+        <item quantity="other">%1$d panes</item>
+    </plurals>
+
+    <!-- Terminals -->
+    <string name="terminal_panes">Panes</string>
+    <string name="terminal_take_size">Take the size (fit the program to this screen)</string>
+    <string name="terminal_type">Type, then Enter</string>
+    <string name="terminal_waiting">Waiting for the screen…</string>
+    <string name="terminal_ended">The pane is not reachable now.</string>
+    <string name="terminal_no_pane">No pane in this tab.</string>
+    <string name="terminal_fit">Fit</string>
+
+    <!-- Logbook -->
+    <string name="logbook_title">Logbook</string>
+    <string name="logbook_search">Search commands (tag:label works)</string>
+    <string name="logbook_scope_tab">This tab</string>
+    <string name="logbook_scope_bench">This bench</string>
+    <string name="logbook_scope_all">All</string>
+    <string name="logbook_empty">No commands found.</string>
+    <string name="logbook_exit">exit %1$d</string>
+
+    <!-- Projects -->
+    <string name="project_files">Files</string>
+    <string name="project_search">Search</string>
+    <string name="project_quick_open">Quick Open</string>
+    <string name="project_quick_open_hint">File name</string>
+    <string name="project_binary">A binary file: not shown.</string>
+    <string name="project_too_large">Too large to show here.</string>
+    <string name="search_hint">Search in files</string>
+    <string name="search_word">Word</string>
+    <string name="search_done">Done</string>
+    <string name="search_truncated">Stopped at the limit: there may be more</string>
+
+    <!-- Git -->
+    <string name="git_title">Git</string>
+    <string name="git_changes">Changes</string>
+    <string name="git_history">History</string>
+    <string name="git_branches">Branches</string>
+    <string name="git_not_repo">Not a Git repository.</string>
+    <string name="git_detached">(no branch)</string>
+    <string name="git_ahead_behind">%1$d to push, %2$d to pull</string>
+    <string name="git_operation">%1$s under way</string>
+    <string name="git_fetch">Fetch</string>
+    <string name="git_pull">Pull</string>
+    <string name="git_push">Push</string>
+    <string name="git_message">Commit message</string>
+    <string name="git_amend">Amend the last commit</string>
+    <string name="git_commit">Commit</string>
+    <string name="git_clean">Nothing changed.</string>
+    <string name="git_conflicts">Conflicts</string>
+    <string name="git_staged">Staged</string>
+    <string name="git_unstaged">Not staged</string>
+    <string name="git_stage">Stage</string>
+    <string name="git_unstage">Unstage</string>
+    <string name="git_discard">Discard…</string>
+    <string name="git_discard_file_title">Discard the changes?</string>
+    <string name="git_discard_hunk_title">Discard this hunk?</string>
+    <string name="git_discard_text">The changes to %1$s that are not staged are thrown away. This cannot be undone.</string>
+    <string name="git_new_branch">New Branch…</string>
+    <string name="git_local">Local</string>
+    <string name="git_remote">Remote</string>
+    <string name="git_switch">Switch</string>
+
+    <!-- AI tabs -->
+    <string name="ai_sessions">Sessions</string>
+    <string name="ai_new_session">New Session</string>
+    <string name="ai_rename_session">Rename Session</string>
+    <string name="ai_review">Review</string>
+    <string name="ai_drafts">Drafts</string>
+    <string name="ai_drafts_n">Drafts (%1$d)</string>
+    <string name="ai_no_drafts">No drafts in this session.</string>
+    <string name="ai_delete_draft">Delete this draft?</string>
+    <string name="ai_draft">Keep as Draft</string>
+    <string name="ai_copy_conversation">Copy the Whole Conversation</string>
+    <string name="ai_unavailable">The conversation is not reachable now.</string>
+    <string name="ai_empty">A new conversation. Write below.</string>
+    <string name="ai_working">Working</string>
+    <string name="ai_waiting">Waiting</string>
+    <string name="ai_waiting_for_you">Waiting for your answer</string>
+    <string name="ai_idle">Ready</string>
+    <string name="ai_context">%1$s context</string>
+    <string name="ai_context_of">%1$s / %2$s context</string>
+    <string name="ai_thinking">Thinking</string>
+    <plurals name="ai_pictures_missing">
+        <item quantity="one">%1$d picture not kept</item>
+        <item quantity="other">%1$d pictures not kept</item>
+    </plurals>
+    <string name="ai_permission_asks">Claude asks to use %1$s</string>
+    <string name="ai_allow">Allow</string>
+    <string name="ai_allow_session">Allow for This Session</string>
+    <string name="ai_deny">Deny</string>
+    <string name="ai_allowed">Allowed</string>
+    <string name="ai_denied">Denied</string>
+    <string name="ai_other_answer">Other: your own answer</string>
+    <string name="ai_send_answers">Send Answers</string>
+    <string name="ai_skip">Skip</string>
+    <string name="ai_your_message">Your message</string>
+    <string name="ai_edit">Edit</string>
+    <string name="ai_send_again">Send Again</string>
+    <string name="ai_revert">Revert…</string>
+    <string name="ai_revert_title">Go back to before this message?</string>
+    <string name="ai_revert_text">This message and everything after it leave the conversation; Claude goes on from there with what you send next. The conversation as it was stays in the sessions.</string>
+    <string name="ai_revert_files">Revert, Files Too</string>
+    <string name="ai_revert_conversation">Revert the Conversation Only</string>
+    <string name="ai_prompt">Message Claude</string>
+    <string name="ai_prompt_queue">Message Claude (sent when this turn ends)</string>
+    <string name="ai_queued">Queued</string>
+    <string name="ai_edit_queued">Edit the Queued Message</string>
+    <string name="ai_send_now">Send Now</string>
+    <string name="ai_stop">Stop</string>
+    <string name="ai_attach">Attach</string>
+    <string name="ai_attach_picture">Picture…</string>
+    <string name="ai_attach_photo">Take a Photo…</string>
+    <string name="ai_picture_failed">That picture could not be read.</string>
+    <string name="ai_default_model">Default model</string>
+    <string name="ai_effort">%1$s effort</string>
+    <plurals name="ai_prompts">
+        <item quantity="one">%1$d prompt</item>
+        <item quantity="other">%1$d prompts</item>
+    </plurals>
+    <plurals name="ai_drafts_kept">
+        <item quantity="one">%1$d draft</item>
+        <item quantity="other">%1$d drafts</item>
+    </plurals>
+    <string name="mode_default">Ask Before Edits</string>
+    <string name="mode_accept_edits">Accept Edits</string>
+    <string name="mode_auto">Auto</string>
+    <string name="mode_plan">Read Only (Plan)</string>
+    <string name="mode_full_auto">Full Auto</string>
+    <string name="mode_full_auto_title">Let Claude do everything without asking?</string>
+    <string name="mode_full_auto_text">In Full Auto, Claude changes files and runs commands on the workspace without asking first.</string>
+
+    <!-- Review -->
+    <string name="review_viewed">Viewed: %1$d of %2$d</string>
+    <string name="review_none">No changes to review.</string>
+    <string name="review_explain">Explain</string>
+    <string name="review_explaining">Explaining…</string>
+    <string name="review_explain_all">Explain All</string>
+    <string name="review_explain_unsupported">This workspace cannot explain changes yet.</string>
+    <string name="review_why">WHY</string>
+    <string name="review_uncommitted">Not committed</string>
+    <string name="review_in_commit">In commit %1$s</string>
+
+    <!-- Devices -->
+    <string name="devices_title">Devices</string>
+    <string name="devices_workspaces">Workspaces</string>
+    <string name="devices_phones">Phones</string>
+    <string name="devices_browsers">Browsers</string>
+    <string name="devices_this">This phone</string>
+    <string name="devices_seen">seen %1$s</string>
+    <string name="devices_rename">Rename Device</string>
+    <string name="devices_revoke">Revoke…</string>
+    <string name="devices_revoke_title">Revoke “%1$s”?</string>
+    <string name="devices_revoke_text">It is disconnected at once and has to sign in or pair again.</string>
+    <string name="pair_pending">Waiting to be paired</string>
+    <string name="pair_asks">%1$s (Shed %2$s) asks to be paired</string>
+    <string name="pair_approve">Approve</string>
+    <string name="pair_workspace">Approve a Workspace…</string>
+    <string name="pair_approve_ellipsis">Approve…</string>
+    <string name="pair_approve_title">Approve a workspace</string>
+    <string name="pair_approve_text">Type the code that “shed nexus join” printed on the workspace.</string>
+    <string name="pair_code">Pairing code</string>
+    <string name="pair_name">Name</string>
+    <string name="pair_reject">Reject</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_account">Account</string>
+    <string name="settings_signed_in">%1$s at %2$s</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="push_enable">Push notifications</string>
+    <string name="push_no_distributor">Notifications come through UnifiedPush, without Google. Install a distributor such as ntfy (from F-Droid), point it at your push server, then come back here.</string>
+    <string name="push_off_at_nexus">Push is off on this nexus ([push] enabled = false in its nexus.toml).</string>
+    <string name="channel_ai_waiting">Claude waits for an answer</string>
+    <string name="channel_ai_done">Claude finished a turn</string>
+    <string name="channel_command_done">A long command finished</string>
+    <string name="channel_workspace_offline">A workspace went offline</string>
+    <string name="settings_security">Security</string>
+    <string name="settings_biometric">Unlock with fingerprint or screen lock</string>
+    <string name="settings_biometric_none">This phone has no fingerprint or screen lock set up.</string>
+    <string name="settings_theme">Theme</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_system">As the System</string>
+    <string name="settings_about">About</string>
+    <string name="settings_version">Shed for Android %1$s · nexus %2$s</string>
+    <string name="sign_out">Sign Out…</string>
+    <string name="sign_out_title">Sign out?</string>
+    <string name="sign_out_text">This phone’s device token is revoked at the nexus and forgotten here. Signing in again needs your password and a code.</string>
+</resources>
