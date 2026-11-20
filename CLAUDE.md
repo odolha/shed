@@ -22,6 +22,7 @@ cargo test -p shed-save closed_benches_change_tab_by_tab
 tools/mac-check.sh                   # clippy for aarch64-apple-darwin from Linux (no linking)
 cargo run -p shed-codegen            # after changing crates/shed-api: regenerates the web/Android API types
 tools/check-codegen.sh               # fails if those generated types are stale
+cd web && npm run build && npm test  # the web app (Angular, Node 24.15+); npm run mock + npm start to try it
 ```
 
 Integration tests live in `crates/shed-keeper/tests/` (protocol, logout) and

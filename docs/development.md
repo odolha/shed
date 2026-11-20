@@ -78,6 +78,30 @@ samples of every frame against `api.ts` with `tsc --strict` when there is one
 (`tsc` on `PATH`, or `SHED_TSC="npx -y -p typescript@5 tsc"`); the Kotlin
 `Json` configuration to use is at the top of `Api.kt`.
 
+## The web app
+
+`web/` is the web connector: Angular 22 (standalone components, signals,
+zoneless), built against the generated `web/src/api/gen/api.ts`. It needs
+Node 24.15+ (or 22.22.3+); `web/README.md` has the details.
+
+```sh
+cd web
+npm install
+npm run mock         # a pretend nexus on 127.0.0.1:8787 (web/mock), sign in as you / shed
+npm start            # http://localhost:4200, /api proxied to the mock (proxy.conf.json)
+npm run build        # production build into web/dist/shed-web, which the nexus serves
+npm test             # unit tests (Vitest through ng test)
+npm run check:mock   # type-checks the mock against the API types
+```
+
+The mock (`web/mock/`, plain Node with `ws`) implements the HTTP routes of
+`shed-api/src/http.rs` and the `/api` socket with a made-up workspace: a fake
+shell per terminal pane, a scripted AI conversation with a tool call, a
+permission request and questions, a project with files, search and Git. Its
+switches (`MOCK_FRESH`, `MOCK_VIEW`, `MOCK_LATENCY`, `MOCK_NO_REVIEW`) are in
+`web/README.md`. Like the screenshots, it uses `you`, `devbox` and other
+made-up names only.
+
 ## Debugging
 
 - The keeper logs to `~/.local/state/shed/shedd.log`; `SHED_LOG=debug` raises the
