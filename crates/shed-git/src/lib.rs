@@ -26,6 +26,9 @@ impl std::fmt::Display for GitError {
 
 pub type Result<T> = std::result::Result<T, GitError>;
 
+/// An untracked folder with more new files than this shows as one entry.
+pub const LIST_UNTRACKED_UP_TO: usize = 300;
+
 /// A repository, by its working folder.
 #[derive(Clone, Debug)]
 pub struct Repo {
@@ -76,8 +79,26 @@ impl Repo {
     }
 
     pub fn status(&self) -> Result<Status> {
-        let out = self.run(&["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"])?;
+        // Untracked folders come as one entry each (`dir/`), so a folder of
+        // thousands of new files (an unignored `node_modules`) costs one row;
+        // folders small enough are listed file by file, as the files are.
+        let out = self.run(&["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal"])?;
         let mut status = parse_status(&out);
+        let mut entries = Vec::with_capacity(status.entries.len());
+        for e in std::mem::take(&mut status.entries) {
+            if !(e.untracked && e.path.ends_with('/')) {
+                entries.push(e);
+                continue;
+            }
+            let listed = self.run(&["ls-files", "--others", "--exclude-standard", "-z", "--", &e.path]).unwrap_or_default();
+            let files: Vec<&str> = listed.split('\0').filter(|f| !f.is_empty()).collect();
+            if files.is_empty() || files.len() > LIST_UNTRACKED_UP_TO {
+                entries.push(Entry { files: files.len().max(1) as u32, ..e });
+            } else {
+                entries.extend(files.into_iter().map(|f| Entry { path: f.to_string(), ..e.clone() }));
+            }
+        }
+        status.entries = entries;
         status.operation = self.operation();
         Ok(status)
     }
@@ -117,7 +138,7 @@ impl Repo {
     pub fn unstage(&self, paths: &[String]) -> Result<()> {
         // `restore --staged` needs a HEAD; before the first commit, `rm --cached`.
         if self.run(&["rev-parse", "--verify", "-q", "HEAD"]).is_err() {
-            let mut args = vec!["rm", "--cached", "-q", "--"];
+            let mut args = vec!["rm", "--cached", "-r", "-q", "--"];
             args.extend(paths.iter().map(String::as_str));
             return self.run(&args).map(drop);
         }
@@ -505,6 +526,28 @@ mod tests {
         assert_eq!(r.blame("f.txt").unwrap().len(), 10);
         r.discard(&[], &["new.txt".into()]).unwrap();
         assert!(r.status().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn a_huge_untracked_folder_is_one_entry_a_small_one_its_files() {
+        let (_d, r) = repo();
+        std::fs::create_dir_all(r.root.join("src/new")).unwrap();
+        std::fs::write(r.root.join("src/new/a.rs"), "a").unwrap();
+        std::fs::write(r.root.join("src/new/b.rs"), "b").unwrap();
+        std::fs::create_dir_all(r.root.join("node_modules/pkg")).unwrap();
+        for i in 0..=LIST_UNTRACKED_UP_TO {
+            std::fs::write(r.root.join(format!("node_modules/pkg/f{i}.js")), "x").unwrap();
+        }
+        let s = r.status().unwrap();
+        let mut paths: Vec<(&str, u32)> = s.entries.iter().map(|e| (e.path.as_str(), e.files)).collect();
+        paths.sort();
+        assert_eq!(paths, [("node_modules/", LIST_UNTRACKED_UP_TO as u32 + 1), ("src/new/a.rs", 0), ("src/new/b.rs", 0)]);
+        // Staging and discarding take the folder whole.
+        r.stage(&["node_modules/".into()]).unwrap();
+        assert_eq!(r.status().unwrap().staged().count(), LIST_UNTRACKED_UP_TO + 1);
+        r.unstage(&["node_modules/".into()]).unwrap();
+        r.discard(&[], &["node_modules/".into()]).unwrap();
+        assert!(!r.root.join("node_modules").exists());
     }
 
     #[test]

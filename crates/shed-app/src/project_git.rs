@@ -26,6 +26,9 @@ use crate::theme::{UiColors, current_ui, hsla, hsla_alpha};
 use crate::changes_ui::{DIFF_ROW, DiffRow, FolderRow, folder_rows, status_color};
 use crate::picture::Picture;
 
+/// The most rows a section of the Changes panel lists.
+const MAX_ROWS: usize = 1000;
+
 pub(super) use shed_git::session::DiffSource;
 
 /// A project tab's Git: the repository and what is known of it
@@ -903,23 +906,45 @@ impl ProjectView {
     }
 
     /// A section's files: a flat list, or by folder (`[git] tree`).
+    /// At most `MAX_ROWS` rows (files and folders): a change to thousands
+    /// of files lists the first ones and says how many more there are.
     fn section_rows(&self, base: usize, entries: &[GitEntry], section: Section, ui: &UiColors, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        if !self.settings.config.git.tree {
-            return entries.iter().enumerate().map(|(n, e)| self.file_row(base + n, e, section, None, ui, cx)).collect();
+        let (mut out, all): (Vec<AnyElement>, usize) = if !self.settings.config.git.tree {
+            let rows = entries.iter().take(MAX_ROWS).enumerate().map(|(n, e)| self.file_row(base + n, e, section, None, ui, cx)).collect();
+            (rows, entries.len())
+        } else {
+            let collapsed = self.git.as_ref().map(|g| &g.collapsed);
+            // An untracked folder shown whole (`dir/`) sits in the tree as one row.
+            let paths: Vec<&str> = entries.iter().map(|e| e.path.trim_end_matches('/')).collect();
+            let rows = folder_rows(&paths, |dir| collapsed.is_some_and(|c| c.contains(&(section, dir.to_string()))));
+            let all = rows.len();
+            let rows = rows
+                .into_iter()
+                .take(MAX_ROWS)
+                .enumerate()
+                .map(|(k, row)| match row {
+                    FolderRow::File { index, depth } => self.file_row(base + k, &entries[index], section, Some(depth), ui, cx),
+                    FolderRow::Folder { path, name, depth, files, open } => {
+                        let under: Vec<String> = files.iter().map(|&i| entries[i].path.clone()).collect();
+                        self.folder_row(base + k, path, name, depth, open, under, section, ui, cx)
+                    }
+                })
+                .collect();
+            (rows, all)
+        };
+        if all > MAX_ROWS {
+            out.push(
+                div()
+                    .h(px(ROW_HEIGHT * self.z()))
+                    .px_1()
+                    .flex()
+                    .items_center()
+                    .text_color(hsla(ui.text_dim))
+                    .child(format!("{} changed files: the first rows only are listed", entries.len()))
+                    .into_any_element(),
+            );
         }
-        let collapsed = self.git.as_ref().map(|g| &g.collapsed);
-        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
-        let rows = folder_rows(&paths, |dir| collapsed.is_some_and(|c| c.contains(&(section, dir.to_string()))));
-        rows.into_iter()
-            .enumerate()
-            .map(|(k, row)| match row {
-                FolderRow::File { index, depth } => self.file_row(base + index, &entries[index], section, Some(depth), ui, cx),
-                FolderRow::Folder { path, name, depth, files, open } => {
-                    let under: Vec<String> = files.iter().map(|&i| entries[i].path.clone()).collect();
-                    self.folder_row(base + 5_000 + k, path, name, depth, open, under, section, ui, cx)
-                }
-            })
-            .collect()
+        out
     }
 
     /// A folder in the tree of changed files: opens and closes; its box adds
@@ -993,7 +1018,14 @@ impl ProjectView {
         };
         let color = status_color(code, ui);
         let name = Path::new(&e.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let dir = Path::new(&e.path).parent().map(|p| p.display().to_string()).unwrap_or_default();
+        // A new folder too full to list: one row, staged or discarded whole.
+        let whole = e.files > 0;
+        let name = if whole { format!("{name}/") } else { name };
+        let dir = if whole {
+            format!("{} new files", e.files)
+        } else {
+            Path::new(&e.path).parent().map(|p| p.display().to_string()).unwrap_or_default()
+        };
         let (path, entry, entry2) = (e.path.clone(), e.clone(), e.clone());
         let action = |aid: (&'static str, usize), glyph: &'static str, tip: &'static str| {
             div()
@@ -1021,7 +1053,9 @@ impl ProjectView {
             .hover(|s| s.bg(hsla(ui.tab_hover)))
             // In the tree, under its folder (past the folder's box and arrow).
             .when_some(depth, |d, depth| d.pl(px(4.0 + depth as f32 * 14.0 + 12.0)))
+            .when(whole, |d| d.tooltip(menu::tooltip("A new folder with too many files to list: add it to the commit or discard it whole")))
             .on_click(cx.listener(move |this, _, _, cx| match section {
+                _ if whole => {}
                 Section::Conflict => {
                     let full = this.git.as_ref().map(|g| g.session.repo.root.join(&path)).unwrap_or_default();
                     this.open_path(full, None, cx);
@@ -1055,9 +1089,9 @@ impl ProjectView {
             })
             .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(code.to_string()))
             .child(div().flex_none().text_color(hsla(ui.text)).child(name))
-            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).when(depth.is_none(), |d| d.child(dir)));
+            .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).when(depth.is_none() || whole, |d| d.child(dir)));
         // Where the file is in the project (not for one deleted).
-        if let Some(full) = self.git.as_ref().map(|g| g.session.repo.root.join(&e.path)).filter(|_| code != 'D') {
+        if let Some(full) = self.git.as_ref().map(|g| g.session.repo.root.join(&e.path)).filter(|_| code != 'D' && !whole) {
             row = row.child(action(("go-to", id), "file", "Go to File").on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 this.go_to_file(full.clone(), cx);

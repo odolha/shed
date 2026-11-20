@@ -272,7 +272,8 @@ pub fn read(dirs: Vec<PathBuf>, since: Option<u64>) -> Found {
             changes.push(Change { repo: index, layer, path, code, hash: fingerprint(&old, &new), hunks, pictures });
         };
         if let Ok(status) = repo.status() {
-            for e in status.entries.iter().filter(|e| !e.conflict) {
+            // (A new folder too full to list file by file is left out.)
+            for e in status.entries.iter().filter(|e| !e.conflict && e.files == 0) {
                 if e.untracked || e.worktree != '.' {
                     let old = if e.untracked { String::new() } else { repo.show("", &e.path) };
                     let new = std::fs::read(repo.root.join(&e.path)).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
