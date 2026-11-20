@@ -1,0 +1,289 @@
+<div class="toolbar">
+  @if (status(); as st) {
+    @if (st.repo) {
+      <button
+        class="btn small ghost branch"
+        [shedMenu]="branchMenu"
+        [shedTip]="st.upstream ? ('git.upstream' | t: { upstream: st.upstream }) : ('git.branches' | t)"
+      >
+        <shed-icon name="branch" [size]="14" />
+        <span class="ellipsis">{{ st.branch ?? ('git.detached' | t) }}</span>
+        <shed-icon name="chevron-down" [size]="12" />
+      </button>
+      @if (st.ahead) {
+        <span class="chip" [shedTip]="'git.ahead' | t: { n: st.ahead }">↑{{ st.ahead }}</span>
+      }
+      @if (st.behind) {
+        <span class="chip warn" [shedTip]="'git.behind' | t: { n: st.behind }">↓{{ st.behind }}</span>
+      }
+    }
+  }
+  <span class="grow"></span>
+  @if (status()?.repo && canChange()) {
+    <button class="btn small ghost" (click)="remote('fetch')" [disabled]="!!busy()" [shedTip]="'git.fetch.tip' | t">
+      <shed-icon name="refresh" [size]="14" /><span class="label">{{ 'git.fetch' | t }}</span>
+    </button>
+    <button class="btn small ghost" (click)="remote('pull')" [disabled]="!!busy()" [shedTip]="'git.pull.tip' | t">
+      <shed-icon name="pull" [size]="14" /><span class="label">{{ 'git.pull' | t }}</span>
+    </button>
+    <button class="btn small ghost" (click)="remote('push')" [disabled]="!!busy()" [shedTip]="'git.push.tip' | t">
+      <shed-icon name="push" [size]="14" /><span class="label">{{ 'git.push' | t }}</span>
+    </button>
+  }
+  @if (status()?.repo) {
+    <div class="seg" role="tablist">
+      <button role="tab" class="btn small" [class.on]="mode() === 'changes'" [attr.aria-selected]="mode() === 'changes'" (click)="setMode('changes')">
+        {{ 'git.changes' | t }}
+      </button>
+      <button role="tab" class="btn small" [class.on]="mode() === 'history'" [attr.aria-selected]="mode() === 'history'" (click)="setMode('history')">
+        <shed-icon name="history" [size]="13" /><span class="label">{{ 'git.history' | t }}</span>
+      </button>
+    </div>
+  }
+  <button class="icon-btn small" (click)="load()" [shedTip]="'common.refresh' | t">
+    <shed-icon name="refresh" [size]="15" />
+  </button>
+</div>
+
+<shed-menu #branchMenu (opened)="loadBranches()">
+  @if (branches(); as b) {
+    @if (b.local.length) {
+      <div class="menu-label">{{ 'git.local' | t }}</div>
+    }
+    @for (name of b.local; track name) {
+      <button class="menu-item" [disabled]="!canChange() || name === b.current" (click)="switchTo(name)">
+        <shed-icon name="branch" />
+        <span class="ellipsis">{{ name }}</span>
+        @if (name === b.current) {
+          <shed-icon class="check-mark" name="check" />
+        }
+      </button>
+    }
+    @if (b.remote.length) {
+      <div class="menu-label">{{ 'git.remote' | t }}</div>
+    }
+    @for (name of b.remote; track name) {
+      <button class="menu-item" [disabled]="!canChange()" (click)="switchTo(name)">
+        <shed-icon name="globe" />
+        <span class="ellipsis">{{ name }}</span>
+      </button>
+    }
+    @if (canChange()) {
+      <div class="menu-sep"></div>
+      <button class="menu-item" (click)="newBranch()"><shed-icon name="plus" />{{ 'git.newBranch' | t }}</button>
+    }
+  } @else {
+    <div class="menu-label">{{ 'common.loading' | t }}</div>
+  }
+</shed-menu>
+
+@if (status()?.operation; as op) {
+  <div class="banner" role="status">
+    <shed-icon name="warning" [size]="15" />
+    {{ 'git.operation' | t: { op: op } }}
+  </div>
+}
+
+@if (output(); as o) {
+  <div class="output">
+    <div class="row">
+      <button class="btn small ghost grow out-title" (click)="outputOpen.set(!outputOpen())" [attr.aria-expanded]="outputOpen()">
+        <shed-icon [name]="outputOpen() ? 'chevron-down' : 'chevron-right'" [size]="12" />
+        <span class="ellipsis">{{ o.title }}</span>
+      </button>
+      <button class="icon-btn small" (click)="output.set(null)" [shedTip]="'common.close' | t">
+        <shed-icon name="close" [size]="13" />
+      </button>
+    </div>
+    @if (outputOpen()) {
+      <pre class="code">{{ o.text }}</pre>
+    }
+  </div>
+}
+
+@if (statusError(); as e) {
+  <div class="pad"><div class="error-box">{{ e }}</div></div>
+} @else if (!status()) {
+  <div class="empty">{{ 'common.loading' | t }}</div>
+} @else if (!status()!.repo) {
+  <div class="empty">{{ 'git.noRepo' | t }}</div>
+} @else {
+  <div class="main" [class.narrow]="narrow()" [class.detail-shown]="showDetail()">
+    <div class="side">
+      @if (mode() === 'changes') {
+        @if (conflicts().length) {
+          <section>
+            <h3 class="sec danger-text"><span class="grow">{{ 'git.conflicts' | t }} · {{ conflicts().length }}</span></h3>
+            @for (r of conflicts(); track r.path) {
+              <ng-container *ngTemplateOutlet="fileRow; context: { $implicit: r, side: 'unstaged' }" />
+            }
+          </section>
+        }
+        <section>
+          <h3 class="sec">
+            <span class="grow">{{ 'git.staged' | t }} · {{ staged().length }}</span>
+            @if (canChange() && staged().length) {
+              <button class="btn small ghost" [disabled]="!!busy()" (click)="unstage(paths(staged()))">
+                <shed-icon name="minus" [size]="13" />{{ 'git.unstageAll' | t }}
+              </button>
+            }
+          </h3>
+          @for (r of staged(); track r.path) {
+            <ng-container *ngTemplateOutlet="fileRow; context: { $implicit: r, side: 'staged' }" />
+          }
+        </section>
+        <section>
+          <h3 class="sec">
+            <span class="grow">{{ 'git.unstaged' | t }} · {{ unstaged().length }}</span>
+            @if (canChange() && unstaged().length) {
+              <button class="btn small ghost" [disabled]="!!busy()" (click)="stage(paths(unstaged()))">
+                <shed-icon name="plus" [size]="13" />{{ 'git.stageAll' | t }}
+              </button>
+              <button class="icon-btn small danger-text" [disabled]="!!busy()" (click)="discard(paths(unstaged()))" [shedTip]="'git.discardAll' | t">
+                <shed-icon name="discard" [size]="14" />
+              </button>
+            }
+          </h3>
+          @for (r of unstaged(); track r.path) {
+            <ng-container *ngTemplateOutlet="fileRow; context: { $implicit: r, side: 'unstaged' }" />
+          }
+        </section>
+        @if (!status()!.files.length) {
+          <div class="empty small">{{ 'git.clean' | t }}</div>
+        }
+        @if (canChange()) {
+          <form class="commit" (submit)="$event.preventDefault(); doCommit()">
+            <textarea
+              class="textarea"
+              rows="3"
+              name="message"
+              [(ngModel)]="message"
+              [placeholder]="'git.message' | t"
+              [attr.aria-label]="'git.message' | t"
+              (keydown.control.enter)="doCommit()"
+              (keydown.meta.enter)="doCommit()"
+            ></textarea>
+            <div class="row">
+              <label class="check small"><input type="checkbox" name="amend" [(ngModel)]="amend" />{{ 'git.amend' | t }}</label>
+              <span class="grow"></span>
+              <button class="btn primary" type="submit" [disabled]="!!busy() || !message.trim() || (!canCommit() && !amend)">
+                <shed-icon name="check" [size]="14" />{{ (amend ? 'git.amendCommit' : 'git.commit') | t }}
+              </button>
+            </div>
+          </form>
+        }
+      } @else {
+        @if (commitsError(); as e) {
+          <div class="pad"><div class="error-box">{{ e }}</div></div>
+        } @else if (!commits()) {
+          <div class="empty small">{{ 'common.loading' | t }}</div>
+        } @else {
+          @for (c of commits(); track c.hash) {
+            <button class="commit-row" [class.selected]="commit()?.hash === c.hash" (click)="openCommit(c)">
+              <span class="mono small accent">{{ c.short }}</span>
+              <span class="ellipsis grow">{{ c.subject }}</span>
+              <span class="dim small nowrap">{{ c.author }} · {{ c.time | ago }}</span>
+            </button>
+          } @empty {
+            <div class="empty small">{{ 'git.noCommits' | t }}</div>
+          }
+        }
+      }
+    </div>
+
+    <div class="detail">
+      @if (mode() === 'changes') {
+        @if (selected(); as sel) {
+          <div class="dhead">
+            @if (narrow()) {
+              <button class="icon-btn small" (click)="closeDetail()" [shedTip]="'common.back' | t">
+                <shed-icon name="arrow-left" [size]="16" />
+              </button>
+            }
+            <span class="mono ellipsis grow"><span class="dim">{{ splitPath(sel.path)[0] }}</span>{{ splitPath(sel.path)[1] }}</span>
+            <span class="chip">{{ (sel.side === 'staged' ? 'git.staged' : 'git.unstaged') | t }}</span>
+            @if (canChange()) {
+              @if (sel.side === 'staged') {
+                <button class="btn small ghost" [disabled]="!!busy()" (click)="unstage([sel.path])">
+                  <shed-icon name="minus" [size]="13" />{{ 'git.unstage' | t }}
+                </button>
+              } @else {
+                <button class="btn small ghost" [disabled]="!!busy()" (click)="stage([sel.path])">
+                  <shed-icon name="plus" [size]="13" />{{ 'git.stage' | t }}
+                </button>
+                <button class="btn small danger" [disabled]="!!busy()" (click)="discard([sel.path])">
+                  <shed-icon name="discard" [size]="13" />{{ 'git.discard' | t }}
+                </button>
+              }
+            }
+          </div>
+          <ng-container *ngTemplateOutlet="diffBody" />
+        } @else {
+          <div class="empty">{{ 'git.pickFile' | t }}</div>
+        }
+      } @else {
+        @if (commit(); as c) {
+          <div class="dhead">
+            <button class="icon-btn small" (click)="closeDetail()" [shedTip]="'common.back' | t" [class.hide-wide]="!commitFile()">
+              <shed-icon name="arrow-left" [size]="16" />
+            </button>
+            <span class="mono small accent">{{ c.short }}</span>
+            <span class="ellipsis grow">{{ commitFile() ?? c.subject }}</span>
+          </div>
+          @if (commitFile()) {
+            <ng-container *ngTemplateOutlet="diffBody" />
+          } @else {
+            <div class="commit-info dim small">{{ c.author }} · {{ c.time | ago }}</div>
+            @if (commitFiles(); as files) {
+              @for (f of files; track f.path) {
+                <button class="file" (click)="openCommitFile(f.path)">
+                  <span class="letter mono" [class]="letterClass(f.status.charAt(0))">{{ f.status.charAt(0) }}</span>
+                  <span class="ellipsis"><span>{{ splitPath(f.path)[1] }}</span> <span class="dim small">{{ splitPath(f.path)[0] }}</span></span>
+                </button>
+              }
+            } @else {
+              <div class="empty small">{{ 'common.loading' | t }}</div>
+            }
+          }
+        } @else {
+          <div class="empty">{{ 'git.pickCommit' | t }}</div>
+        }
+      }
+    </div>
+  </div>
+}
+
+<ng-template #fileRow let-r let-side="side">
+  <div class="file" [class.selected]="isSelected(r.path, side)">
+    <button class="file-main" (click)="select(r.path, side)" [title]="r.from ? r.from + ' → ' + r.path : r.path">
+      <span class="letter mono" [class]="letterClass(r.letter)">{{ r.letter }}</span>
+      <span class="ellipsis"><span>{{ r.name }}</span> <span class="dim small">{{ r.dir }}</span></span>
+    </button>
+    @if (canChange()) {
+      @if (side === 'staged') {
+        <button class="icon-btn small" [disabled]="!!busy()" (click)="unstage([r.path])" [shedTip]="'git.unstage' | t">
+          <shed-icon name="minus" [size]="14" />
+        </button>
+      } @else {
+        <button class="icon-btn small danger-text" [disabled]="!!busy()" (click)="discard([r.path])" [shedTip]="'git.discard' | t">
+          <shed-icon name="discard" [size]="14" />
+        </button>
+        <button class="icon-btn small" [disabled]="!!busy()" (click)="stage([r.path])" [shedTip]="'git.stage' | t">
+          <shed-icon name="plus" [size]="14" />
+        </button>
+      }
+    }
+  </div>
+</ng-template>
+
+<ng-template #diffBody>
+  <div class="dbody">
+    @if (diffError(); as e) {
+      <div class="error-box">{{ e }}</div>
+    } @else if (diff(); as d) {
+      <shed-diff [diff]="d" [actions]="hunkActions()" [disabled]="!!busy()" (hunk)="onHunk($event)" />
+    } @else {
+      <div class="empty small">{{ 'common.loading' | t }}</div>
+    }
+  </div>
+</ng-template>

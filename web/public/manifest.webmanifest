@@ -1,0 +1,17 @@
+{
+  "name": "Shed",
+  "short_name": "Shed",
+  "description": "Your benches, terminals, projects and AI tabs, from anywhere",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0e1116",
+  "theme_color": "#0e1116",
+  "icons": [
+    { "src": "icons/shed.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/shed-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/shed-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/shed-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
