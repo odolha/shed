@@ -244,6 +244,8 @@ pub struct AiView {
     open_steps: HashSet<(usize, String)>,
     /// Some agent or background task is running (its time keeps up).
     running: bool,
+    /// When the latest of them started (its seconds are counted for a minute).
+    newest_run: u64,
     _subs: Vec<Subscription>,
 }
 
@@ -272,10 +274,26 @@ impl Parsed {
 }
 
 /// A run's state in a word, and for how long: `running 3 min`, `done in 40 s`.
+/// A span still going, coarse past a minute (the view is drawn again every
+/// second only in the first minute): `40 s`, `3 min`, `2 h 5 min`; whole
+/// minutes rounded down (time gone) or up (time left).
+fn coarse(secs: u64, up: bool) -> String {
+    let minutes = if up { secs.div_ceil(60) } else { secs / 60 };
+    match secs {
+        0..60 => format!("{secs} s"),
+        _ if minutes < 60 => format!("{minutes} min"),
+        _ if minutes % 60 == 0 => format!("{} h", minutes / 60),
+        _ => format!("{} h {} min", minutes / 60, minutes % 60),
+    }
+}
+
+/// A wake-up past its time by more than this is not counted down any more.
+const OVERDUE: u64 = 60;
+
 fn run_time(run: &Run) -> String {
     let took = |a: u64, b: u64| shed_ai::span(b.saturating_sub(a));
     match run.state {
-        RunState::Running if run.started > 0 => format!("running {}", took(run.started, unix_now())),
+        RunState::Running if run.started > 0 => format!("running {}", coarse(unix_now().saturating_sub(run.started), false)),
         RunState::Running => "running".into(),
         RunState::Done if run.started > 0 && run.ended >= run.started => format!("done in {}", took(run.started, run.ended)),
         RunState::Done => "done".into(),
@@ -301,7 +319,7 @@ fn run_line(t: &shed_ai::Tool, run: &Run) -> String {
 /// When a timer fires, as a person says it: `in 18 min`, `every minute`.
 fn timer_when(t: &Timer) -> String {
     let now = unix_now();
-    let left = |at: u64| if at > now { format!("in {}", shed_ai::span(at - now)) } else { "due now".into() };
+    let left = |at: u64| if at > now { format!("in {}", coarse(at - now, true)) } else { "due now".into() };
     match t.kind {
         TimerKind::Watch if t.at > 0 => format!("ends {}", left(t.at)),
         TimerKind::Watch => "watching".into(),
@@ -440,6 +458,7 @@ impl AiView {
             prompts_bar: Default::default(),
             open_steps: HashSet::new(),
             running: false,
+            newest_run: 0,
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -550,7 +569,7 @@ impl AiView {
             let i = i as usize;
             let Some(slot) = self.entries.get_mut(i) else { continue };
             *slot = entry;
-            self.parsed.remove(&i);
+            // (What was parsed of it stays: each parse is keyed by what it read.)
             if i >= self.first {
                 let row = self.row(i);
                 self.list.remeasure_items(row..row + 1);
@@ -569,7 +588,12 @@ impl AiView {
             self.file_lookups.clear();
             self.parsed.clear();
         }
-        self.running = self.entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.run.as_ref().is_some_and(|r| r.running())));
+        let running = self.entries.iter().filter_map(|e| match e {
+            Entry::Tool(t) => t.run.as_ref().filter(|r| r.running()),
+            _ => None,
+        });
+        self.newest_run = running.clone().map(|r| r.started).max().unwrap_or(0);
+        self.running = running.count() > 0;
         self.tick(cx);
         cx.notify();
     }
@@ -837,10 +861,21 @@ impl AiView {
             return Some(Duration::from_millis(350));
         }
         let now = unix_now();
-        if self.running || self.status.timers.iter().any(|t| t.at > 0 && t.at <= now + 120) {
+        // Counting in seconds: a run in its first minute, a timer in its last.
+        let counted = |t: &&Timer| t.at > 0 && t.at + OVERDUE > now;
+        let fresh = self.running && self.newest_run + 60 > now;
+        if fresh || self.status.timers.iter().filter(counted).any(|t| t.at <= now + 60) {
             return Some(Duration::from_secs(1));
         }
-        (!self.status.timers.is_empty()).then_some(Duration::from_secs(20))
+        // In minutes, the rest: runs going on for long (a server in the
+        // background), timers further off. Nothing to count: no drawing.
+        (self.running || self.status.timers.iter().any(|t| counted(&t))).then_some(Duration::from_secs(30))
+    }
+
+    /// The mark of something running: turning while Claude works, still
+    /// otherwise (a server left running would keep the window drawing).
+    fn turning(&self) -> &'static str {
+        if self.status.state == AiState::Idle { "◐" } else { ["◐", "◓", "◑", "◒"][self.spin % 4] }
     }
 
     /// Keeps the "working for" time, agents' times and countdowns current.
@@ -2513,7 +2548,7 @@ impl AiView {
                 let run = t.run.as_deref();
                 let (mark, color) = match (run.map(|r| r.state), &t.result, t.error) {
                     // Going on (a sub-agent, a command in the background): turning.
-                    (Some(RunState::Running), _, _) => (["◐", "◓", "◑", "◒"][self.spin % 4], ui.ink(accent)),
+                    (Some(RunState::Running), _, _) => (self.turning(), ui.ink(accent)),
                     (Some(RunState::Done), _, _) => ("✓", ui.ink(accent)),
                     (Some(RunState::Failed), _, _) => ("✗", ui.danger),
                     (Some(RunState::Stopped), _, _) => ("■", ui.text_dim),
@@ -2737,7 +2772,7 @@ impl AiView {
         }
         let mut steps = div().flex().flex_col().gap_1().my_1().pl_3().border_l_2().border_color(hsla(ui.divider));
         if run.skipped > 0 {
-            steps = steps.child(div().text_color(hsla(ui.text_dim)).child(format!("{} earlier steps not kept", run.skipped)));
+            steps = steps.child(div().text_color(hsla(ui.text_dim)).child(format!("{} earlier steps not shown", run.skipped)));
         }
         if run.steps.is_empty() {
             let none = if run.running() { "No steps yet" } else { "Its steps are not known here" };
@@ -2749,7 +2784,7 @@ impl AiView {
                     let key = (i, s.id.clone());
                     let step_open = self.open_steps.contains(&key);
                     let (mark, color) = match (&s.result, s.error) {
-                        (None, _) if run.running() => (["◐", "◓", "◑", "◒"][self.spin % 4], ui.ink(accent)),
+                        (None, _) if run.running() => (self.turning(), ui.ink(accent)),
                         (None, _) => ("○", ui.text_dim),
                         (Some(_), false) => ("✓", ui.ink(accent)),
                         (Some(_), true) => ("✗", ui.danger),
@@ -4361,6 +4396,21 @@ mod tests {
         assert!(view.update(cx, |v, _| v.running));
         let parsed = view.update(cx, |v, _| v.parsed.get(&agent).cloned()).unwrap();
         assert_eq!(parsed.groups.len(), 5);
+        // Idle, a run going on for long (a server left in the background):
+        // drawn again now and then, its mark still.
+        let tick = view.update(cx, |v, _| {
+            v.status.timers.clear();
+            v.newest_run = unix_now() - 3600;
+            (v.tick_every(), v.turning())
+        });
+        assert_eq!(tick, (Some(Duration::from_secs(30)), "◐"));
+        // Nothing running, a wake-up long past its time: no drawing at all.
+        let tick = view.update(cx, |v, _| {
+            v.running = false;
+            v.status.timers = vec![Timer { kind: TimerKind::Wakeup, at: unix_now() - 600, ..Default::default() }, Timer { kind: TimerKind::Job, every: "Every minute".into(), ..Default::default() }];
+            v.tick_every()
+        });
+        assert_eq!(tick, None);
     }
 
     #[gpui::test]

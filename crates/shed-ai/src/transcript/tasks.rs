@@ -304,15 +304,17 @@ impl Transcript {
     /// and when it ran in the background, a note in the conversation.
     /// Live, an agent's summary is what it ended with.
     pub(super) fn task_note(&mut self, n: &TaskNote, live: bool) {
-        let key = format!("{}|{}|{}|{}", n.task, n.status, n.event, n.summary);
-        if !self.noted.insert(key) {
+        // A task ends once (a saved session may tell it twice); a watch may
+        // see the same line again, and each time is an event.
+        let event = n.status.is_empty() && !n.event.is_empty();
+        if !event && !self.noted.insert(format!("{}|{}|{}", n.task, n.status, n.summary)) {
             return;
         }
         self.woken = true;
         let i = n.tool.as_deref().and_then(|t| self.tools.get(t)).or_else(|| self.runs.get(&n.task)).copied();
         let now = self.now();
         // A watch's event: what it saw.
-        if n.status.is_empty() && !n.event.is_empty() {
+        if event {
             if let Some(run) = i.and_then(|i| self.tool_mut(i)).and_then(|t| t.run.as_mut()) {
                 run.last = first_line(&n.event, 120);
                 self.touch_one(i.unwrap_or_default());
@@ -857,6 +859,27 @@ mod tests {
         assert_eq!(shown, want);
         let Entry::Note(peer) = &t.entries[5] else { panic!() };
         assert_eq!(peer.detail, "All done.");
+    }
+
+    #[test]
+    fn a_watch_seeing_the_same_line_twice_is_two_events() {
+        let mut t = Transcript::new("/tmp");
+        let event = json!({"type": "user", "message": {"content": "<task-notification>\n<task-id>w1</task-id>\n<summary>Monitor event: \"log\"</summary>\n<event>ERROR</event>\n</task-notification>"}});
+        t.apply(&event);
+        t.apply(&event);
+        assert_eq!(notes(&t), ["Monitor event: \"log\": ERROR", "Monitor event: \"log\": ERROR"]);
+    }
+
+    /// A saved prompt that names Claude Code's tags reads back whole (and
+    /// so goes back whole into the prompt to edit it).
+    #[test]
+    fn a_prompt_naming_tags_reads_back_whole() {
+        let mut t = Transcript::new("/tmp");
+        let text = "sometimes i get some weird XML like <task-notification> printed that maybe we can interpret better";
+        t.apply(&json!({"type": "user", "uuid": "u1", "message": {"role": "user", "content": text}}));
+        assert_eq!(t.entries.len(), 1, "{:#?}", t.entries);
+        assert!(matches!(&t.entries[0], Entry::User { text: shown, .. } if shown == text));
+        assert!(t.prompt_mark(0).is_some());
     }
 
     #[test]

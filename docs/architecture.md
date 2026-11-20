@@ -399,14 +399,26 @@ the file); a background command's has `backgroundTaskId`. Saved sessions keep
 sub-agents apart: `<session>/subagents/agent-ID.jsonl` (`isSidechain` records)
 with `agent-ID.meta.json` naming the tool call (`toolUseId`, `finished`);
 `load_session` reads them as the agents' steps (`read_subagents`), and
-`finish_loading` marks what was still running as ended with its session.
+`finish_loading` marks what was still running as ended with its session. With
+its sub-agents a session can take a while to read, so the keeper reads it off
+its lock (`ai_load`, on a blocking thread) when a window first watches the tab
+or opens another session, and sends it once read.
 
 A run changing on an entry before the end (an agent working on while the
 conversation goes on) is changed in place: `Transcript::take_update` gives
 those entries apart from "everything from entry N", and the keeper sends them
-as `AiEntries` (each entry alone), so the window lays out one entry, not all
-after it. The window ticks (once a second, idle) while a run runs or a timer is
-near, for their times.
+as `AiEntries` (each entry alone; a running agent with its latest
+`LIVE_STEPS` steps only, the rest counted as skipped, all of them once it
+ends), so the window lays out one entry, not all after it, and keeps what it
+parsed (keyed by what it read). Idle, the window is drawn again once a second
+only while a run is in its first minute or a timer in its last, every 30 s while
+a run goes on longer or a timer is further off (their times show whole minutes
+then), and not at all otherwise; marks of runs turn only while Claude works.
+
+User messages are read as notes only when they start with one of Claude Code's
+tags, block after block; `<system-reminder>` and hook context are taken off the
+end only, as whole blocks; a tag in the user's own words, or one never closed,
+stays theirs.
 
 **Claude Code's notes.** Some user messages are Claude Code's, not the user's:
 `<task-notification>` (a background task finished, a watch's `<event>`; as a

@@ -571,7 +571,12 @@ impl Transcript {
             let detail = if detail == line { String::new() } else { detail };
             self.note(NoteKind::Command, line, detail, error);
         }
-        let words = read.command.unwrap_or(read.prompt);
+        // A slash command, and words of the user's after it: both.
+        let words = match read.command {
+            Some(command) if !read.prompt.is_empty() => format!("{command}\n\n{}", read.prompt),
+            Some(command) => command,
+            None => read.prompt,
+        };
         if !words.is_empty() || images > 0 {
             let at = self.now();
             let entry = self.push(Entry::User { text: words, images, at, pictures });

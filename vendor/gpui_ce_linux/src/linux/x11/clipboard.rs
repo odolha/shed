@@ -287,7 +287,9 @@ impl Inner {
     /// `formats` must be a slice of atoms, where each atom represents a target format.
     /// The first format from `formats`, which the clipboard owner supports will be the
     /// format of the return value.
-    fn read(&self, formats: &[Atom], selection: ClipboardKind) -> Result<ClipboardData> {
+    // Shed patch: `files`, when given, gets the files of a `text/uri-list` the
+    // owner offers (what a file manager copies), from the same TARGETS answer.
+    fn read(&self, formats: &[Atom], selection: ClipboardKind, files: Option<&mut Vec<std::path::PathBuf>>) -> Result<ClipboardData> {
         // if we are the current owner, we can get the current clipboard ourselves
         if self.is_owner(selection)? {
             let data = self.selection_of(selection).data.read();
@@ -304,7 +306,8 @@ impl Inner {
         }
         let reader = XContext::new(&self.display)?;
 
-        let highest_precedence_format =
+        // Shed patch: the formats offered, kept for the file list below.
+        let available_formats =
             match self.read_single(&reader, selection, self.atoms.TARGETS) {
                 Err(err) => {
                     log::trace!("Clipboard TARGETS query failed with {err:?}");
@@ -312,10 +315,7 @@ impl Inner {
                 }
                 Ok(ClipboardData { bytes, format }) => {
                     if format == self.atoms.ATOM {
-                        let available_formats = Self::parse_formats(&bytes);
-                        formats
-                            .iter()
-                            .find(|format| available_formats.contains(format))
+                        Some(Self::parse_formats(&bytes))
                     } else {
                         log::trace!(
                             "Unexpected clipboard TARGETS format {}",
@@ -325,6 +325,18 @@ impl Inner {
                     }
                 }
             };
+        // Shed patch: files copied in a file manager, as their paths.
+        if let Some(files) = files
+            && matches!(selection, ClipboardKind::Clipboard)
+            && available_formats.as_ref().is_some_and(|a| a.contains(&self.atoms.URI_LIST))
+            && let Ok(data) = self.read_single(&reader, selection, self.atoms.URI_LIST)
+            && let Ok(list) = String::from_utf8(data.bytes)
+        {
+            *files = crate::linux::file_paths_from_uri_list(&list);
+        }
+        let highest_precedence_format = available_formats
+            .as_ref()
+            .and_then(|available_formats| formats.iter().find(|format| available_formats.contains(format)));
 
         if let Some(&format) = highest_precedence_format {
             let data = self.read_single(&reader, selection, format)?;
@@ -366,26 +378,6 @@ impl Inner {
         }
         log::trace!("All conversions to supported formats failed.");
         Err(Error::ContentNotAvailable)
-    }
-
-    /// Shed patch: the files a file manager copied (`text/uri-list`), as
-    /// paths; none when the clipboard offers no such list.
-    fn read_files(&self, selection: ClipboardKind) -> Vec<std::path::PathBuf> {
-        if !matches!(selection, ClipboardKind::Clipboard) || self.is_owner(selection).unwrap_or(true) {
-            return Vec::new();
-        }
-        let Ok(reader) = XContext::new(&self.display) else { return Vec::new() };
-        let offered = match self.read_single(&reader, selection, self.atoms.TARGETS) {
-            Ok(ClipboardData { bytes, format }) if format == self.atoms.ATOM => Self::parse_formats(&bytes).contains(&self.atoms.URI_LIST),
-            _ => false,
-        };
-        if !offered {
-            return Vec::new();
-        }
-        match self.read_single(&reader, selection, self.atoms.URI_LIST) {
-            Ok(data) => String::from_utf8(data.bytes).map(|list| crate::linux::file_paths_from_uri_list(&list)).unwrap_or_default(),
-            Err(_) => Vec::new(),
-        }
     }
 
     fn parse_formats(bytes: &[u8]) -> Vec<Atom> {
@@ -1080,10 +1072,10 @@ impl Clipboard {
         format_atoms.extend_from_slice(text_format_atoms);
 
         // Shed patch: files copied in a file manager come as their paths too.
-        let files = self.inner.read_files(selection);
-        let result = match self.inner.read(&format_atoms, selection) {
+        let mut files = Vec::new();
+        let result = match self.inner.read(&format_atoms, selection, Some(&mut files)) {
             Ok(result) => result,
-            Err(e) => return crate::linux::with_files(None, files).ok_or(e),
+            Err(e) => return crate::linux::with_files(None, files).ok_or(e), // Shed patch
         };
 
         log::trace!(
@@ -1100,7 +1092,7 @@ impl Clipboard {
                     format: image_format,
                     bytes,
                 });
-                return Ok(crate::linux::plus_files(item, files));
+                return Ok(crate::linux::plus_files(item, files)); // Shed patch
             }
         }
 
@@ -1111,7 +1103,7 @@ impl Clipboard {
         } else {
             String::from_utf8(result.bytes).map_err(|_| Error::ConversionFailure)?
         };
-        Ok(crate::linux::plus_files(ClipboardItem::new_string(text), files))
+        Ok(crate::linux::plus_files(ClipboardItem::new_string(text), files)) // Shed patch
     }
 
     pub fn is_owner(&self, selection: ClipboardKind) -> bool {

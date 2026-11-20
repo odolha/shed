@@ -80,6 +80,7 @@ pub(crate) fn with_files(item: Option<gpui::ClipboardItem>, files: Vec<std::path
     Some(plus_files(item.unwrap_or(gpui::ClipboardItem { entries: Vec::new() }), files))
 }
 
+/// Shed patch: `item` with the files copied added after what it holds.
 #[allow(dead_code)]
 pub(crate) fn plus_files(mut item: gpui::ClipboardItem, files: Vec<std::path::PathBuf>) -> gpui::ClipboardItem {
     if !files.is_empty() {

@@ -52,5 +52,8 @@ Clipboard (`src/linux.rs`, `src/linux/x11/clipboard.rs`, `src/linux/x11/client.r
   are read as paths and added to the clipboard item as
   `ClipboardEntry::ExternalPaths`, after its text or picture (so whatever
   reads the text sees what it saw before), on X11 (the `CLIPBOARD` selection
-  only) and Wayland; as macOS already does. `file_paths_from_uri_list` and
-  `with_files` / `plus_files` in `src/linux.rs`.
+  only) and Wayland; as macOS already does. On X11 `Inner::read` checks for the
+  list in the same `TARGETS` answer it reads anyway, on the same connection, so
+  a paste with no files costs nothing more and one with files a single extra
+  request; on Wayland the offer's types are known already.
+  `file_paths_from_uri_list` and `with_files` / `plus_files` in `src/linux.rs`.
