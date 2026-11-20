@@ -26,6 +26,7 @@ cargo build -p shed-app --no-default-features --features tui   # shed without wi
 cargo clippy -p shed-app --no-default-features --features tui --all-targets   # must stay clean too
 cd web && npm run build && npm test  # the web app (Angular, Node 24.15+); npm run mock + npm start to try it
 . tools/android-env.sh; cd android; ./gradlew assembleDebug testDebugUnitTest lintDebug   # the Android app
+tools/e2e.sh                         # end to end, isolated in /tmp/shed-e2e: nexus, keeper, link, web app in headless Chrome
 ```
 
 Integration tests live in `crates/shed-keeper/tests/` (protocol, logout) and

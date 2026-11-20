@@ -260,6 +260,29 @@ code, a name and a TOTP code) and speak to `/api` with a WebSocket client.
 link against a fake nexus on a real socket (`tests/common/mod.rs`), and
 `tests/nexus.rs` the whole way through the real nexus, pairing included.
 
+### End to end
+
+`tools/e2e.sh` runs the whole way with real processes, apart from your own
+Shed: it builds `shed`, `shedd` and `shed-nexus` (release; `E2E_PROFILE=debug`
+for a debug build) and the web app (`E2E_WEB_BUILD=0` keeps the one built),
+makes a world in `/tmp/shed-e2e` (`E2E_DIR`; a home with a neutral prompt, a
+Git project with a change, a stand-in `claude` playing a recorded turn, a
+keeper that stays without windows), starts a nexus on `127.0.0.1:7871`
+(`E2E_PORT`) serving the web app, and a keeper of its own. Then
+`tools/e2e/e2e.mjs` sets up the account over HTTP (TOTP codes computed from
+the secret; each 30 s step is used once, so the run waits for fresh ones),
+pairs the keeper with `shed nexus join`, waits for the link, makes a bench
+with a terminal, a project and an AI tab through the API, and drives the web
+app in a headless Chrome over the DevTools protocol (`tools/e2e/cdp.mjs`, no
+packages): signing in, the overview, a reload, typing in the terminal, the
+logbook, a diff, a file, a prompt and its answer. Screenshots go to
+`$E2E_DIR/shots`; everything else is removed after a run that passed
+(`E2E_KEEP=1` keeps the logs), and only the processes it started are stopped
+(the keeper with `shed stop` in its own environment). Needs Node 24.15+ (or
+22.22+) on `PATH`, Chrome or Chromium (`CHROME=` to choose), `git`, `curl`
+and `python3`. It takes about a minute and a half, most of it waiting for
+authenticator codes.
+
 ## The Android app
 
 `android/` is a Gradle project (Kotlin, Jetpack Compose). No JDK or Android SDK
