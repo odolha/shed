@@ -22,6 +22,8 @@ cargo test -p shed-save closed_benches_change_tab_by_tab
 tools/mac-check.sh                   # clippy for aarch64-apple-darwin from Linux (no linking)
 cargo run -p shed-codegen            # after changing crates/shed-api: regenerates the web/Android API types
 tools/check-codegen.sh               # fails if those generated types are stale
+cargo build -p shed-app --no-default-features --features tui   # shed without windows (CLI + shed tui)
+cargo clippy -p shed-app --no-default-features --features tui --all-targets   # must stay clean too
 ```
 
 Integration tests live in `crates/shed-keeper/tests/` (protocol, logout) and
@@ -53,6 +55,8 @@ export SHED_RUNTIME_DIR=/tmp/shed-dev XDG_CONFIG_HOME=/tmp/shed-dev/config \
   it is safe while the user works. Keys reach that display; mouse clicks do not.
   Screenshots must not show usernames or hostnames.
 - Logs: `$XDG_STATE_HOME/shed/shedd.log`; `SHED_LOG=debug`; `shedd --foreground`.
+- `shed tui` with the same env talks to the dev keeper; test it through
+  `crates/shed-tui/tests/` (TestBackend), not in a terminal the user is using.
 
 ## Architecture
 
@@ -91,7 +95,13 @@ Crates (`crates/`), lowest first:
   `request`, the CLI's keeper commands: status, list, stop, …), `bench_edit.rs`
   (edits to running or closed benches), `pegboard.rs` (the pegboard's list and
   filter), `remote.rs` (remote shells over ssh).
-- `shed-app`: `shed` binary: GPUI windows and the CLI.
+- `shed-tui`: `shed tui`, Shed in a terminal (ratatui + crossterm): `App`
+  (`app.rs`) takes `Event`s and draws into a ratatui frame; `run.rs` is the
+  real terminal. Tested against an in-process keeper on `TestBackend`
+  (`tests/tui.rs`). Never run it in the user's terminal.
+- `shed-app`: `shed` binary: GPUI windows and the CLI. Features `gui` (GPUI,
+  the window modules, `gui.rs` starts them) and `tui`, both default; without
+  `gui` plain `shed` runs the TUI.
 - `shed-api`: the nexus API's JSON types (frames, state, calls, topics, HTTP).
 - `shed-link`: `shed link`, a workspace's link to a nexus (no GPUI): keeper
   client (`ClientKind::Link`) and WSS client; `run.rs` (the task owning tree,

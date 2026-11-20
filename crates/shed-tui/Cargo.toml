@@ -1,0 +1,28 @@
+[package]
+name = "shed-tui"
+description = "Shed in a terminal (`shed tui`): benches, terminal panes, AI, project and Git tabs, over the keeper"
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shed-model.workspace = true
+shed-proto.workspace = true
+shed-emu.workspace = true
+shed-client.workspace = true
+shed-logbook.workspace = true
+shed-ai.workspace = true
+shed-review.workspace = true
+shed-git.workspace = true
+shed-project.workspace = true
+ratatui.workspace = true
+unicode-width.workspace = true
+anyhow.workspace = true
+async-channel.workspace = true
+
+[dev-dependencies]
+shed-keeper.workspace = true
+shed-save.workspace = true
+tokio.workspace = true
+tempfile.workspace = true

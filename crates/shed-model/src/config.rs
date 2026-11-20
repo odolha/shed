@@ -46,6 +46,17 @@ pub struct Config {
     /// Linking this workspace to a nexus, to reach it from the web and
     /// Android apps (`shed nexus join`).
     pub nexus: NexusConfig,
+    pub keeper: KeeperSettings,
+}
+
+/// The keeper (`shedd`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeeperSettings {
+    /// Keep running when nothing runs and no window or `shed tui` is
+    /// connected (as `shedd --persist` does), for a server workspace
+    /// reached over ssh. Off: a keeper with nothing to keep exits.
+    pub stay: bool,
 }
 
 /// A nexus this workspace links to. The token it links with is not here
@@ -773,6 +784,13 @@ mod tests {
         assert!(tags[0].tint_tab);
         assert_eq!(tags[0].color, tag_color("red").unwrap());
         assert!(config.auto_tags([(None, Path::new("/"))].into_iter()).is_empty());
+    }
+
+    #[test]
+    fn a_keeper_can_stay() {
+        assert!(!Config::default().keeper.stay);
+        let config: Config = toml::from_str("[keeper]\nstay = true\n").unwrap();
+        assert!(config.keeper.stay);
     }
 
     #[test]

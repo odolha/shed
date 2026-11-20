@@ -308,6 +308,15 @@ impl State {
         self.clients.keys().copied().filter(is_window).min()
     }
 
+    /// Where to show what `asking` asked to show: a terminal client
+    /// (`shed tui`) shows it itself; anyone else's goes to a window.
+    fn show_client(&self, asking: ClientId) -> Option<ClientId> {
+        if self.clients.get(&asking).is_some_and(|c| c.kind == ClientKind::Tui) {
+            return Some(asking);
+        }
+        self.window_client(asking)
+    }
+
     fn pane_rt_ids_in(&self, bench: BenchId) -> Vec<PaneId> {
         self.panes.iter().filter(|(_, rt)| rt.bench == bench).map(|(id, _)| *id).collect()
     }
@@ -519,9 +528,14 @@ impl Keeper {
             return;
         }
         let st = self.lock();
+        // `[keeper] stay`: a server's keeper waits for the next `shed tui`.
+        if st.config.keeper.stay {
+            return;
+        }
         // A link follows the keeper: it does not keep it running.
         let clients = st.clients.values().filter(|c| c.kind != ClientKind::Link).count();
-        if st.panes.is_empty() && clients == 0 && !self.stopping.swap(true, Ordering::Relaxed) {
+        // A bench may run with no panes (an AI tab working on its own).
+        if st.panes.is_empty() && st.tree.benches.is_empty() && clients == 0 && !self.stopping.swap(true, Ordering::Relaxed) {
             info!("nothing left to keep; exiting");
             self.shutdown.notify_one();
         }
@@ -652,7 +666,8 @@ impl Keeper {
                     c.kind == ClientKind::Window
                 });
                 // A window detaching is hiding the bench: its window was closed.
-                if window {
+                // (A terminal client moving on leaves windows as they are.)
+                if window && !st.is_open(bench) {
                     st.shown.remove(&bench);
                 }
                 info!(client, ?bench, "detached");
@@ -1261,7 +1276,7 @@ impl Keeper {
                         }
                     }
                 }
-                match st.window_client(client) {
+                match st.show_client(client) {
                     Some(window) => {
                         // The tree first: it says where the Shed window was.
                         st.broadcast_tree();
@@ -1308,7 +1323,7 @@ impl Keeper {
             }
         };
         st.broadcast_tree();
-        match st.window_client(client) {
+        match st.show_client(client) {
             Some(window) => {
                 for bench in benches {
                     st.send(window, KeeperMsg::Show { bench });

@@ -17,6 +17,7 @@ settings file. Screenshots come from a demo setup (`tools/screenshots/`).
 - [Tags and private tabs](#tags-and-private-tabs)
 - [Colours and appearance](#colours-and-appearance)
 - [Keyboard shortcuts](#keyboard-shortcuts)
+- [Shed in a terminal (shed tui)](#shed-in-a-terminal-shed-tui)
 - [The `shed` command](#the-shed-command)
 - [Settings: shed.toml](#settings-shedtoml)
 - [Where things are kept](#where-things-are-kept)
@@ -926,6 +927,106 @@ does everywhere on a Mac; for shells' Alt keys (Alt+B, Alt+F) set
 
 Every key can be changed in [`shed.toml`](#settings-shedtoml).
 
+## Shed in a terminal (shed tui)
+
+`shed tui` shows Shed in the terminal it runs in: on a server over ssh
+(`ssh -t server shed tui`), or anywhere a window cannot open. It talks to the
+same keeper as the windows, so the benches, terminals and AI conversations are
+the same ones, and a window and a terminal can show a bench at once. Leaving
+it (`Ctrl+B d`), closing the terminal or a dropped connection ends only the
+interface: everything keeps running in the keeper, and the next `shed tui`
+finds it as it was. A Shed built without windows (see
+[Working on Shed](development.md#a-build-without-windows)) runs it for plain
+`shed`, and `shed new` and `shed load` too.
+
+It covers what a terminal can show: the benches, every kind of tab, terminal
+panes and splits, AI tabs, project tabs with Git, and the logbook. Pictures
+are described rather than shown; files are edited in `$EDITOR`; there are no
+drag and drop, launchers or desktop notifications.
+
+**Benches.** The first screen lists every bench, running or closed, with its
+tabs, as the Shed window does; the selected one's screen shows on the right
+when there is room. Enter opens a bench (a closed one loads), `L` loads it
+with its startup, `n` makes one (a name, then a folder), `r` renames, `c`
+colours, `x` closes (saved; asks), `D` deletes (asks), `/` filters, Esc goes
+back to the bench you were in.
+
+**A bench** has a tab bar on top (its name in its colour, then each tab: `▤`
+project, `✻` AI, `⇄` remote; `●` an AI tab at work, `!` one waiting for you)
+and a status line at the bottom: the bench, messages, whether the keeper is
+there. Click a tab to show it. Usage limits of Claude, when known, sit at the
+right of the tab bar. The tab and pane in front are the bench's, as in its
+window: switching here switches a window showing the same bench too, and a
+pane takes the size of whichever drew it last.
+
+**The prefix.** Shed's own keys come after **Ctrl+B**, as in tmux, so every
+other key (Ctrl+C included) goes to the program in the pane. `Ctrl+B Ctrl+B`
+sends Ctrl+B itself. `Ctrl+B ?` lists all keys.
+
+| Keys | Does |
+| --- | --- |
+| `C-b d` | Leave; everything keeps running |
+| `C-b s` | The benches |
+| `C-b c` / `C-b t` | New terminal tab here / new tab of any kind (terminal, project, AI, remote shell, command), asking for its folder |
+| `C-b n`, `C-b p`, `C-b 1`…`9` | Next, previous, numbered tab |
+| `C-b ,` / `C-b $` | Rename the tab / the bench |
+| `C-b <` / `C-b >` | Move the tab left / right (to another bench: `C-b m`) |
+| `C-b &` | Close the tab (asks; a remote tab can be let go or ended) |
+| `C-b m` | Everything for this tab and its bench, as a menu |
+| `C-b %` / `C-b "` | Split right / down |
+| `C-b` arrows, `C-b o` | Focus the pane that way / the next pane |
+| `C-b x` | Close the pane (asks) |
+| `C-b z` | Zoom the pane to the whole tab (again: back) |
+| `C-b [` | Scroll back: arrows, PgUp/PgDn, `g`/`G`, `[`/`]` from prompt to prompt, `/` search, `n`/`N`, `q` leaves |
+| `C-b r` | Search history (the logbook): Tab cycles this tab, bench, everything; Enter types the command into the pane, without running it |
+| `C-b e` | Edit a file in `$EDITOR`, in a new terminal tab |
+
+**Terminal panes** are drawn as the keeper sees them, splits with a line
+between them (the lines around the focused pane in the bench's colour). Each
+pane takes the size it is drawn at. Keys reach programs as they would in a
+window, the kitty keyboard protocol included when a program asks; pastes are
+bracketed when it asks. Programs that use the mouse get it (Shift+drag keeps
+it for your terminal's own selection); for others the wheel scrolls back.
+
+**AI tabs** show the conversation with Claude's Markdown set in bold, lists,
+code (coloured) and tables. Tools are one line each; click one (or `Alt+T`
+for all) to unfold its input, diff and result. Type below and Enter sends;
+while Claude works it is queued (`Alt+Q` lists the queue: send now or take
+out). Esc stops the turn. `/` completes Claude Code's commands (Tab takes
+one). When Claude asks for a permission or asks questions, the choices show
+above the prompt: arrows or `1`–`9`, Enter (Allow, Allow for this session,
+Deny; for questions their options, your own answer, or skip); Tab types a
+prompt instead. The line above the prompt says whether Claude works or waits,
+the model, the mode (Full Auto in red), effort, cost, how full the context
+is, and the usage limits.
+
+| Keys | Does |
+| --- | --- |
+| `Alt+Enter` | A new line in the prompt |
+| `PgUp` / `PgDn` | Scroll the conversation |
+| `Alt+S` / `Alt+N` | The sessions (Enter opens, → shows a conversation's files, `r` renames, `n` new) / a new session |
+| `Alt+M` / `Alt+O` / `Alt+E` | Model / mode (Full Auto asks first) / effort |
+| `Alt+D` / `Alt+P` | Keep the prompt as a draft / the drafts (send, put back in the prompt, delete) |
+| `Alt+I` / `Alt+X` | Attach a picture by its path / remove the pictures |
+| `Alt+R` | Review the changes: by layer, each file's diff; `v` marks it viewed, `e` asks Claude to explain it (`E` all not yet explained), `t` this turn or the whole session |
+
+**Project tabs** list the folder as a tree on the left (Enter opens folders
+and files, ← closes) and show the file on the right, coloured as in the
+windows; Tab moves between them. `o` (or Ctrl+P) opens a file by name, `/`
+(or Ctrl+F) searches the files (results stream in; Esc stops; Alt+R regular
+expression, Alt+C case, Alt+W whole word), `e` edits the file in `$EDITOR`.
+`g` shows Git: the files changed, staged and not, and the selected one's
+diff. `s`, `u`, `d` stage, unstage and discard a file (`S` stages everything;
+discarding asks); in the diff (Enter), `[` and `]` go from hunk to hunk and
+`s`, `u`, `d` do the same to one hunk. `c` commits what is staged, `C`
+amends, `l` shows the history (Enter: a commit's files and diffs), `b` the
+branches (switch, merge, rebase, delete, new, stash), `f` fetches, `F` pulls,
+`p` pushes after showing what goes where (`P` force-pushes).
+
+**Colours** are Shed's theme (`theme` in `shed.toml`; dark unless the terminal
+says it is light through `COLORFGBG`), drawn as 24-bit colours. With
+`NO_COLOR` set, nothing is coloured.
+
 ## The `shed` command
 
 | Command | Does |
@@ -951,6 +1052,7 @@ Every key can be changed in [`shed.toml`](#settings-shedtoml).
 | `shed backup [list \| restore NAME]` | Backs up your setup now, lists the backups, or puts one back (see [Backups](#backups)) |
 | `shed init bash`, `shed init zsh` | Prints the shell integration, for a shell Shed did not start |
 | `shed nexus join URL [--name N]`, `status`, `leave` | Links this machine to a nexus, says how the link is doing, or unlinks it (see [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere)) |
+| `shed tui [BENCH]` | Shed in this terminal (see [Shed in a terminal](#shed-in-a-terminal-shed-tui)); a build without windows runs it for plain `shed` |
 
 ## Settings: shed.toml
 
@@ -976,6 +1078,9 @@ theme_dark = "shed-dark"       # and when it is dark
 auto_restore = false           # reopen what was open or hidden when Shed last closed
 start_on_open = false          # opening a bench runs its startup (off: it opens quietly)
 autosave_seconds = 60
+
+[keeper]
+stay = false                   # keep the keeper running with nothing open (a server's)
 
 [font]
 family = "DejaVu Sans Mono"

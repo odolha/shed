@@ -1,51 +1,77 @@
 //! `shed`: the bench windows, plus the CLI.
 
+#[cfg(feature = "gui")]
 mod actions;
+#[cfg(feature = "gui")]
 mod ai_text;
+#[cfg(feature = "gui")]
 mod ai_view;
+#[cfg(feature = "gui")]
 mod assets;
 mod browser;
+#[cfg(feature = "gui")]
+mod gui;
+#[cfg(feature = "gui")]
 mod picture;
+#[cfg(feature = "gui")]
 mod bench_window;
+#[cfg(feature = "gui")]
 mod changes_ui;
+#[cfg(feature = "gui")]
 mod emoji;
+#[cfg(feature = "gui")]
 mod line_editor;
+#[cfg(feature = "gui")]
 mod links;
 mod logbook;
+#[cfg(feature = "gui")]
 mod logbook_view;
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "gui", target_os = "macos"))]
 mod macos;
+#[cfg(feature = "gui")]
 mod menu;
+#[cfg(feature = "gui")]
 mod notify;
+#[cfg(feature = "gui")]
 mod pegboard;
+#[cfg(feature = "gui")]
 mod project_view;
+#[cfg(feature = "gui")]
 mod prompt;
+#[cfg(feature = "gui")]
 mod scrollbar;
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "gui", target_os = "linux"))]
 mod selection;
+#[cfg(feature = "gui")]
 mod settings;
 mod setup_cli;
+#[cfg(feature = "gui")]
 mod settings_panel;
+#[cfg(feature = "gui")]
 mod setup_panel;
+#[cfg(feature = "gui")]
 mod shed_window;
+#[cfg(feature = "gui")]
 mod state;
+#[cfg(feature = "gui")]
 mod terminal_view;
+#[cfg(feature = "gui")]
 mod text_view;
+#[cfg(feature = "gui")]
 mod theme;
+#[cfg(feature = "gui")]
 mod window_place;
 
 use std::time::Duration;
 
 use anyhow::bail;
 use clap::{Parser, Subcommand};
-use gpui::{App, AppContext, QuitMode};
-use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, PROTOCOL_VERSION, ShowTarget};
+use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, ShowTarget};
 use tracing_subscriber::EnvFilter;
 
-use shed_client::cli::{recv_timeout, request};
+use shed_client::cli::request;
 use shed_client::{cli, keeper_conn, remote};
 
-use crate::state::AppState;
 
 #[derive(Parser)]
 #[command(name = "shed", version, about = "A terminal whose shells outlive its windows")]
@@ -251,6 +277,13 @@ enum Command {
         #[arg(long)]
         answer: Option<String>,
     },
+    /// Shed in this terminal (over ssh too: ssh -t host shed tui): benches,
+    /// terminals, AI and project tabs. Ctrl+B d leaves; everything keeps running.
+    #[cfg(feature = "tui")]
+    Tui {
+        /// Open this bench (loading it if it is closed).
+        bench: Option<String>,
+    },
     /// Called by the shell hook.
     #[command(hide = true)]
     Hook {
@@ -451,6 +484,8 @@ fn main() -> anyhow::Result<()> {
             other => bail!("no integration for {other:?} yet; bash and zsh have one"),
         },
         Some(Command::Log { scope, count, tag, query }) => logbook::print_log(&scope, count, tag.as_deref(), query.as_deref()),
+        #[cfg(feature = "tui")]
+        Some(Command::Tui { bench }) => shed_tui::run(bench.map_or(ShowTarget::Shed, |name| ShowTarget::Load { name })),
         Some(Command::Hook { action: HookAction::Walk { scope, pos, prefix } }) => {
             // The hook treats any failure as "nothing to show".
             match logbook::hook_walk(&scope, pos, &prefix) {
@@ -483,94 +518,19 @@ fn log_panics() {
     }));
 }
 
+/// Shows `target`: in a window (see `gui::run_app`), or, built without
+/// windows, in this terminal.
 fn run_app(target: ShowTarget) -> anyhow::Result<()> {
-    let (conn, rx) = keeper_conn::connect(ClientKind::Cli, true)?;
-    conn.send_msg(ClientMsg::Status);
-    let windows = loop {
-        match rx.recv_blocking() {
-            Ok(Frame::Keeper(KeeperMsg::Status(s))) => break s.windows,
-            Ok(Frame::Keeper(KeeperMsg::Error(e))) if keeper_conn::is_other_version(&e) => {
-                if offer_restart(&e)? {
-                    return run_app(target);
-                }
-                bail!("{e}. Run `shed stop` to restart it (benches are saved first).");
-            }
-            Ok(Frame::Keeper(KeeperMsg::Error(e))) => bail!("keeper: {e}. Run `shed stop` to restart it."),
-            Ok(_) => {}
-            Err(_) => bail!(
-                "the keeper closed the connection. If Shed was just rebuilt or updated, \
-                 run `shed stop` to restart it (benches are saved first)."
-            ),
-        }
-    };
-    if windows > 0 {
-        conn.send_msg(ClientMsg::Show(target));
-        // Errors come back at once; silence means the window process has it.
-        if let Some(Ok(Frame::Keeper(KeeperMsg::Error(e)))) = recv_timeout(&rx, Duration::from_millis(300)) {
-            bail!("keeper: {e}");
-        }
-        return Ok(());
+    #[cfg(feature = "gui")]
+    return gui::run_app(target);
+    #[cfg(all(not(feature = "gui"), feature = "tui"))]
+    return shed_tui::run(target);
+    #[cfg(not(any(feature = "gui", feature = "tui")))]
+    {
+        let _ = target;
+        bail!("this shed was built without windows or a terminal interface (features gui, tui)")
     }
-
-    conn.send_msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Window });
-    // Shed's window first, so a bench asked for opens in front of it.
-    conn.send_msg(ClientMsg::Show(ShowTarget::Shed));
-    if target != ShowTarget::Shed {
-        conn.send_msg(ClientMsg::Show(target));
-    }
-    let app = gpui_platform::application().with_assets(assets::Assets).with_quit_mode(QuitMode::Explicit);
-    #[cfg(target_os = "macos")]
-    app.on_reopen(macos::reopen);
-    app.run(move |cx: &mut App| {
-        prompt::install(cx);
-        #[cfg(target_os = "linux")]
-        selection::watch();
-        // `theme = "auto"` follows the desktop, which can change while Shed runs.
-        let dark = theme::is_dark(cx.window_appearance());
-        let settings = settings::Settings::load(&settings::Settings { dark, ..Default::default() });
-        conn.send_msg(ClientMsg::SetAppearance { dark });
-        let state = cx.new(|_| AppState::new(conn, settings.clone()));
-        cx.set_global(state::AppHandle(state.downgrade()));
-        state.update(cx, |state, cx| state.apply_settings(settings, cx));
-        let quitting = state.clone();
-        cx.on_action(move |_: &actions::Quit, cx| quitting.update(cx, |state, cx| state.request_quit(cx)));
-        #[cfg(target_os = "macos")]
-        macos::install(state.clone(), cx);
-        let receiving = state.clone();
-        cx.spawn(async move |cx| AppState::receive(receiving, rx, cx).await).detach();
-        cx.spawn(async move |cx| AppState::watch_config(state, cx).await).detach();
-        if terminal_view::perf::enabled() {
-            cx.spawn(async move |cx| loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                eprintln!("perf: {}", terminal_view::perf::report());
-            })
-            .detach();
-        }
-        cx.activate(true);
-    });
-    Ok(())
 }
-
-/// From a terminal, asks to restart a keeper from another version of Shed;
-/// returns whether it was stopped.
-fn offer_restart(error: &str) -> anyhow::Result<bool> {
-    use std::io::IsTerminal;
-    if !std::io::stdin().is_terminal() {
-        return Ok(false);
-    }
-    eprint!(
-        "{error}.\nRestart it now? Every bench is saved first; programs running in them stop, \
-         and come back as a load brings them. [y/N] "
-    );
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer)?;
-    if !answer.trim().eq_ignore_ascii_case("y") {
-        return Ok(false);
-    }
-    cli::stop()?;
-    Ok(true)
-}
-
 fn project(dir: Option<std::path::PathBuf>, bench: Option<String>, ai: bool) -> anyhow::Result<()> {
     let here = std::env::current_dir()?;
     let root = match dir {
