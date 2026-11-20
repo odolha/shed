@@ -911,7 +911,9 @@ back to the bench you were in.
 project, `✻` AI, `⇄` remote; `●` an AI tab at work, `!` one waiting for you)
 and a status line at the bottom: the bench, messages, whether the keeper is
 there. Click a tab to show it. Usage limits of Claude, when known, sit at the
-right of the tab bar.
+right of the tab bar. The tab and pane in front are the bench's, as in its
+window: switching here switches a window showing the same bench too, and a
+pane takes the size of whichever drew it last.
 
 **The prefix.** Shed's own keys come after **Ctrl+B**, as in tmux, so every
 other key (Ctrl+C included) goes to the program in the pane. `Ctrl+B Ctrl+B`
