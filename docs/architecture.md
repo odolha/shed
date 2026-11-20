@@ -464,6 +464,12 @@ tool's result (Claude reading a screenshot) go to `Tool.pictures` the same way,
 and Claude Code's `[Image: original …]` notes that follow them, sent as user
 messages, are not shown as prompts. The keeper deletes pictures there unseen for
 60 days (`prune_pictures`, by modification time, which `keep_picture` renews).
+Other files and folders go with a prompt as their paths (an "Attached files:"
+list after its text, for Claude to read with its own tools): dropped, picked
+(**Attach**, `prompt_for_paths`) or pasted. A paste of files copied in a file
+manager is a `ClipboardEntry::ExternalPaths`: macOS's clipboard gives one, and
+the patched Linux one (`gpui_ce_linux`, X11 and Wayland) adds one when the
+clipboard offers `text/uri-list`.
 
 Each entry the conversation list draws is an `EntryView` of its own (it asks
 the `AiView` to draw it, and follows the `AiView`'s notifications), so its layout

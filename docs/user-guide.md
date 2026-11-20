@@ -396,9 +396,12 @@ terminal of the bench.
   Shed keeps a copy in `~/.local/state/shed/ai-pictures` (deleted after 60 days
   unseen; showing the session again brings it back), and a picture missing from
   there says so instead. Screenshots and other pictures Claude reads show
-  the same way under the step that read them. Other dropped files show
-  by name (the path on hover, a × to leave one out) and go as their paths, for
-  Claude to read. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
+  the same way under the step that read them. **Attach** (the paperclip below
+  the prompt) picks files to go with the message (**Attach a Folder…** in the
+  **⋯** menu, a folder); files copied in a file manager and pasted with Ctrl+V
+  go too, as do dropped ones. Pictures go as pictures; other files (PDFs,
+  documents, code) and folders show by name (the path on hover, a × to leave
+  one out) and go as their paths, for Claude to read with its own tools. In a project tab, **Ctrl+Shift+A** sends the editor's selection (with
   its file and lines) or the file to the AI tab; **Send to AI** in the tree's menu
   sends a file or folder.
 - **Files Claude names** (`src/main.rs`, `src/main.rs:42`, a path from its

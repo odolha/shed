@@ -40,6 +40,54 @@ pub(crate) fn shed_html(item: &gpui::ClipboardItem) -> Option<String> {
     })
 }
 
+/// Shed patch: the local files of a `text/uri-list` (what a file manager
+/// copies), as paths; `file://` URIs only, percent-escapes undone.
+#[allow(dead_code)]
+pub(crate) fn file_paths_from_uri_list(list: &str) -> Vec<std::path::PathBuf> {
+    list.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.strip_prefix("file://"))
+        // `file://host/path`: only this machine's.
+        .filter_map(|rest| rest.strip_prefix("localhost").or(Some(rest)).filter(|p| p.starts_with('/')))
+        .filter_map(|p| {
+            let bytes = p.as_bytes();
+            let mut out = Vec::with_capacity(bytes.len());
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'%' && i + 2 < bytes.len() {
+                    let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+                    out.push(u8::from_str_radix(hex, 16).ok()?);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            use std::os::unix::ffi::OsStringExt;
+            Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(out)))
+        })
+        .collect()
+}
+
+/// Shed patch: a clipboard item with the files copied, beside what it held
+/// (after it: text readers still find its text first).
+#[allow(dead_code)]
+pub(crate) fn with_files(item: Option<gpui::ClipboardItem>, files: Vec<std::path::PathBuf>) -> Option<gpui::ClipboardItem> {
+    if files.is_empty() {
+        return item;
+    }
+    Some(plus_files(item.unwrap_or(gpui::ClipboardItem { entries: Vec::new() }), files))
+}
+
+#[allow(dead_code)]
+pub(crate) fn plus_files(mut item: gpui::ClipboardItem, files: Vec<std::path::PathBuf>) -> gpui::ClipboardItem {
+    if !files.is_empty() {
+        item.entries.push(gpui::ClipboardEntry::ExternalPaths(gpui::ExternalPaths(files.into())));
+    }
+    item
+}
+
 /// Returns the default platform implementation for the current OS.
 ///
 /// A windowed platform connects to the display server the process environment names, or starts

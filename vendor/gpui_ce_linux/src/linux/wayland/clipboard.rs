@@ -214,7 +214,18 @@ impl Clipboard {
 
         let item = offer
             .read_text(&self.connection)
-            .or_else(|| offer.read_image(&self.connection))?;
+            .or_else(|| offer.read_image(&self.connection));
+        // Shed patch: files copied in a file manager come as their paths too.
+        let files = if offer.has_mime_type(FILE_LIST_MIME_TYPE) {
+            offer
+                .read_bytes(&self.connection, FILE_LIST_MIME_TYPE)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(|list| crate::linux::file_paths_from_uri_list(&list))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let item = crate::linux::with_files(item, files)?;
 
         self.cached_read = Some(item.clone());
         Some(item)

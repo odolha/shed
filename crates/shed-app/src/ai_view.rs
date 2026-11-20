@@ -809,6 +809,8 @@ impl AiView {
             } else {
                 menu::item("Connect to the Browser", |this: &mut Self, _, _| this.set_browser(true)).icon("globe")
             },
+            menu::item("Attach Files…", |this: &mut Self, _, cx| this.attach(false, cx)).icon("paperclip"),
+            menu::item("Attach a Folder…", |this: &mut Self, _, cx| this.attach(true, cx)).icon("folder"),
             menu::item("Insert a File's Text…", |this: &mut Self, _, cx| this.insert_file(cx)).icon("file"),
             menu::item("Save the Prompt…", move |this: &mut Self, _, cx| this.save_as("prompt.md", prompt.clone(), cx)),
             menu::item("Save the Conversation…", move |this: &mut Self, _, cx| this.save_as("conversation.md", conversation.clone(), cx)),
@@ -1161,6 +1163,21 @@ impl AiView {
             }
             "v" if sec => {
                 let Some(item) = cx.read_from_clipboard() else { return };
+                // Files copied in a file manager: attached, as when dropped.
+                let files: Vec<PathBuf> = item
+                    .entries()
+                    .iter()
+                    .filter_map(|e| match e {
+                        ClipboardEntry::ExternalPaths(p) => Some(p.paths().to_vec()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                if !files.is_empty() {
+                    self.attach_paths(&files, cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 let image = item.entries().iter().find_map(|e| match e {
                     ClipboardEntry::Image(i) => Some(i.clone()),
                     _ => None,
@@ -1175,11 +1192,28 @@ impl AiView {
         cx.stop_propagation();
     }
 
-    /// Dropped files go into the prompt as their paths.
     /// Dropped files go with the prompt: pictures as pictures (with a
     /// thumbnail), the others as their paths.
     fn on_drop(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
-        for path in paths.paths() {
+        self.attach_paths(paths.paths(), cx);
+    }
+
+    /// Asks for files (or a folder) to go with the prompt.
+    fn attach(&mut self, folder: bool, cx: &mut Context<Self>) {
+        let options = gpui::PathPromptOptions { files: !folder, directories: folder, multiple: true, prompt: Some("Attach".into()) };
+        let answer = cx.prompt_for_paths(options);
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = answer.await {
+                this.update(cx, |this, cx| this.attach_paths(&paths, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Files and folders to go with the prompt (dropped, pasted, picked):
+    /// pictures as pictures, the rest as their paths for Claude to read.
+    fn attach_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        for path in paths {
             let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
             let media_type = match ext.as_deref() {
                 Some("png") => Some("image/png"),
@@ -3297,6 +3331,25 @@ impl AiView {
                         })),
                 )
             })
+            .child(
+                div()
+                    .id("ai-attach")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hsla(ui.divider))
+                    .text_color(hsla(ui.text))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .tooltip(menu::tooltip("Attach files to the message: pictures go as pictures, other files (PDFs, documents, code) as their paths for Claude to read. Dropping or pasting files does the same."))
+                    .on_click(cx.listener(|this, _, _, cx| this.attach(false, cx)))
+                    .child(svg().path(icon("paperclip")).size(px(13.0)).text_color(hsla(ui.text_dim)))
+                    .child("Attach"),
+            )
             .child(
                 div()
                     .id("ai-draft")

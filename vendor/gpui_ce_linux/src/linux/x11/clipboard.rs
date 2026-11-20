@@ -79,7 +79,8 @@ x11rb::atom_manager! {
 
         // Shed patch: offered beside text when a copy carries HTML.
         HTML: b"text/html",
-        // URI_LIST: b"text/uri-list",
+        // Shed patch: files copied in a file manager.
+        URI_LIST: b"text/uri-list",
 
         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
         JPEG_MIME: ImageFormat::mime_type(ImageFormat::Jpeg).as_bytes(),
@@ -365,6 +366,26 @@ impl Inner {
         }
         log::trace!("All conversions to supported formats failed.");
         Err(Error::ContentNotAvailable)
+    }
+
+    /// Shed patch: the files a file manager copied (`text/uri-list`), as
+    /// paths; none when the clipboard offers no such list.
+    fn read_files(&self, selection: ClipboardKind) -> Vec<std::path::PathBuf> {
+        if !matches!(selection, ClipboardKind::Clipboard) || self.is_owner(selection).unwrap_or(true) {
+            return Vec::new();
+        }
+        let Ok(reader) = XContext::new(&self.display) else { return Vec::new() };
+        let offered = match self.read_single(&reader, selection, self.atoms.TARGETS) {
+            Ok(ClipboardData { bytes, format }) if format == self.atoms.ATOM => Self::parse_formats(&bytes).contains(&self.atoms.URI_LIST),
+            _ => false,
+        };
+        if !offered {
+            return Vec::new();
+        }
+        match self.read_single(&reader, selection, self.atoms.URI_LIST) {
+            Ok(data) => String::from_utf8(data.bytes).map(|list| crate::linux::file_paths_from_uri_list(&list)).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
     }
 
     fn parse_formats(bytes: &[u8]) -> Vec<Atom> {
@@ -1058,7 +1079,12 @@ impl Clipboard {
         format_atoms.extend(image_entries.iter().map(|(atom, _)| *atom));
         format_atoms.extend_from_slice(text_format_atoms);
 
-        let result = self.inner.read(&format_atoms, selection)?;
+        // Shed patch: files copied in a file manager come as their paths too.
+        let files = self.inner.read_files(selection);
+        let result = match self.inner.read(&format_atoms, selection) {
+            Ok(result) => result,
+            Err(e) => return crate::linux::with_files(None, files).ok_or(e),
+        };
 
         log::trace!(
             "read clipboard as format {:?}",
@@ -1069,11 +1095,12 @@ impl Clipboard {
             if result.format == format_atom {
                 let bytes = result.bytes;
                 let id = hash(&bytes);
-                return Ok(ClipboardItem::new_image(&Image {
+                let item = ClipboardItem::new_image(&Image {
                     id,
                     format: image_format,
                     bytes,
-                }));
+                });
+                return Ok(crate::linux::plus_files(item, files));
             }
         }
 
@@ -1084,7 +1111,7 @@ impl Clipboard {
         } else {
             String::from_utf8(result.bytes).map_err(|_| Error::ConversionFailure)?
         };
-        Ok(ClipboardItem::new_string(text))
+        Ok(crate::linux::plus_files(ClipboardItem::new_string(text), files))
     }
 
     pub fn is_owner(&self, selection: ClipboardKind) -> bool {

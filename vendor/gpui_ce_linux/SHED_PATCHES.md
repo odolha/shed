@@ -47,3 +47,10 @@ Clipboard (`src/linux.rs`, `src/linux/x11/clipboard.rs`, `src/linux/x11/client.r
 - **X11 serves the plain-text names it lists.** `TARGETS` listed
   `text/plain;charset=utf-8` and friends, but a request for them was refused;
   they are now answered from the `UTF8_STRING` data.
+- **Files copied in a file manager paste as files.** When the clipboard
+  offers `text/uri-list` (Files, Dolphin, Thunar…), its local `file://` URIs
+  are read as paths and added to the clipboard item as
+  `ClipboardEntry::ExternalPaths`, after its text or picture (so whatever
+  reads the text sees what it saw before), on X11 (the `CLIPBOARD` selection
+  only) and Wayland; as macOS already does. `file_paths_from_uri_list` and
+  `with_files` / `plus_files` in `src/linux.rs`.
