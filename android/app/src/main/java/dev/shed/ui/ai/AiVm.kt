@@ -10,6 +10,7 @@ import dev.shed.api.AiSession
 import dev.shed.api.AiStatus
 import dev.shed.api.AiTopic
 import dev.shed.api.AiTranscript
+import dev.shed.api.AiUpload
 import dev.shed.api.Call
 import dev.shed.api.Event
 import dev.shed.api.Reply
@@ -21,6 +22,7 @@ import dev.shed.ui.common.decodePicture
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.util.Base64
 
 /** A conversation as a list: `AiTranscript` events replace entries from `from` on. */
 fun applyTranscript(entries: List<AiEntry>, update: AiTranscript): List<AiEntry> =
@@ -41,6 +43,13 @@ class AiVm(private val socket: NexusSocket, private val ws: String, val tab: Str
     private val _pictures = MutableStateFlow<Map<String, ImageBitmap?>>(emptyMap())
     val pictures: StateFlow<Map<String, ImageBitmap?>> = _pictures
 
+    /** Keeps a file on the workspace for a prompt; answers the path it was kept at. */
+    suspend fun upload(name: String, data: ByteArray): String {
+        // Up to 16 MB over a phone's connection: more time than a call usually gets.
+        val reply = socket.call(ws, Call.AiUpload(AiUpload(tab, name, Base64.getEncoder().encodeToString(data))), timeoutMs = 180_000)
+        return (reply as? Reply.Text)?.content ?: error("the workspace kept no file")
+    }
+
     init {
         viewModelScope.launch {
             socket.subscribe(ws, Topic.Ai(AiTopic(tab))).collect { ev ->
@@ -52,6 +61,11 @@ class AiVm(private val socket: NexusSocket, private val ws: String, val tab: Str
                             _status.value = e.content.status
                             _ended.value = false
                             if (before != e.content.status.session) loadSessions()
+                        }
+                        // A sub-agent's progress: entries changed in place.
+                        is Event.AiEntries -> {
+                            _entries.value?.let { _entries.value = applyEntries(it, e.content) }
+                            _status.value = e.content.status
                         }
                         is Event.AiInfo -> _info.value = e.content
                         else -> {}

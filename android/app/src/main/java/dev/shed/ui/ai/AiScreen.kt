@@ -1,6 +1,23 @@
 package dev.shed.ui.ai
 
 import android.net.Uri
+import android.text.format.Formatter
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import dev.shed.api.AiStatus
+import dev.shed.api.AiTimer
+import dev.shed.api.AiTimerKind
+import dev.shed.api.MAX_UPLOAD
+import dev.shed.ui.common.errorText
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -161,6 +178,18 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
     var reverting by remember { mutableStateOf<UserAction?>(null) }
     var bigPicture by remember { mutableStateOf<ImageBitmap?>(null) }
     val context = LocalContext.current
+    var timer by remember { mutableStateOf<AiTimer?>(null) }
+    // Runs' times and timers' countdowns: every second while one is in its
+    // first (or last) minute, else every 30 s; nothing to count, no ticking.
+    val now = remember { mutableLongStateOf(nowSeconds()) }
+    LaunchedEffect(entries, status) {
+        now.longValue = nowSeconds()
+        while (true) {
+            val every = tickEvery(entries.orEmpty(), status, nowSeconds()) ?: break
+            delay(every * 1000)
+            now.longValue = nowSeconds()
+        }
+    }
 
     fun call(c: Call) = runner.run { session.socket.call(ws, c) }
 
@@ -203,6 +232,8 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
                     list.isEmpty() -> EmptyNote(stringResource(R.string.ai_empty))
                     else -> Transcript(
                         list,
+                        status,
+                        { now.longValue },
                         pictures,
                         vm::picture,
                         canChange,
@@ -213,8 +244,23 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
                     )
                 }
             }
+            Timers(status, { now.longValue }) { timer = it }
             if (canChange) Prompt(ws, tabId, ai, vm)
         }
+    }
+
+    timer?.let { t ->
+        AlertDialog(
+            onDismissRequest = { timer = null },
+            title = { Text(timerLabel(t, now.longValue)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(timerDetail(t))
+                    Text(stringResource(R.string.ai_timer_note), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = { timer = null }) { Text(stringResource(R.string.close)) } },
+        )
     }
 
     if (showSessions) SessionsSheet(ws, tabId, vm, sessions, currentKey, canChange) { showSessions = false }
@@ -331,6 +377,8 @@ private fun k(tokens: Double): String = when {
 @Composable
 private fun Transcript(
     entries: List<AiEntry>,
+    status: AiStatus?,
+    now: () -> Long,
     pictures: Map<String, ImageBitmap?>,
     loadPicture: (String) -> Unit,
     canChange: Boolean,
@@ -362,7 +410,7 @@ private fun Transcript(
                 is AiEntry.User -> UserEntry(entry.content, pictures, loadPicture, { onUserLongPress(index, entry.content.text) }, onPicture)
                 is AiEntry.Assistant -> MarkdownView(entry.content.text)
                 is AiEntry.Thinking -> ThinkingEntry(entry.content.text)
-                is AiEntry.Tool -> ToolEntry(entry.content, pictures, loadPicture, onPicture)
+                is AiEntry.Tool -> ToolEntry(entry.content, status, now, pictures, loadPicture, onPicture)
                 is AiEntry.Permission -> PermissionEntry(
                     entry.content,
                     canChange,
@@ -370,6 +418,9 @@ private fun Transcript(
                     onAnswers = { onAnswers(entry.content.request, it) },
                 )
                 is AiEntry.Notice -> NoticeEntry(entry.content.text, entry.content.error == true)
+                is AiEntry.Note -> NoteEntry(entry.content)
+                // An entry a newer workspace sends that this version does not know: kept in its place, shown as nothing.
+                AiEntry.Unknown -> {}
             }
         }
     }
@@ -384,6 +435,41 @@ fun conversationText(entries: List<AiEntry>): String = entries.mapNotNull {
         else -> null
     }
 }.joinToString("\n\n")
+
+/** What Claude set to happen later: wake-ups, scheduled jobs, watches; tap one for what it tells Claude. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Timers(status: AiStatus?, now: () -> Long, onOpen: (AiTimer) -> Unit) {
+    val timers = status?.timers.orEmpty()
+    if (timers.isEmpty()) return
+    val shed = LocalShed.current
+    Column(
+        Modifier.fillMaxWidth().background(shed.surface).padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        for (t in timers) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, shed.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .combinedClickable(onClick = { onOpen(t) }, onLongClick = { onOpen(t) })
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val ink = shed.ink(shed.accent)
+                Icon(if (t.kind == AiTimerKind.Watch) Icons.Default.Visibility else Icons.Default.Schedule, null, tint = ink, modifier = Modifier.size(14.dp))
+                HSpace(6)
+                Text(timerLabel(t, now()), color = ink, fontSize = 12.sp, maxLines = 1)
+                HSpace(8)
+                Text(t.what, color = shed.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** A file going with the prompt: its name, and where the workspace keeps it once uploaded. */
+private data class PromptFile(val key: Long, val name: String, val path: String? = null)
 
 @Composable
 private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm) {
@@ -401,6 +487,8 @@ private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm) {
     var editQueued by remember { mutableStateOf<Int?>(null) }
     var cameraTarget by remember { mutableStateOf<Uri?>(null) }
     val pictureFailed = stringResource(R.string.ai_picture_failed)
+    val files = remember { mutableStateListOf<PromptFile>() }
+    var fileKey by remember { mutableLongStateOf(0L) }
 
     fun call(c: Call) = runner.run { session.socket.call(ws, c) }
 
@@ -412,7 +500,52 @@ private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm) {
         }
     }
 
+    // Any file: a picture goes as a picture; the rest is kept on the workspace
+    // and goes as its path there, for Claude to read.
+    fun attachFile(uri: Uri) {
+        scope.launch {
+            val picked = runCatching { pickedFile(context, uri) }.getOrElse {
+                snackbar.showSnackbar(context.getString(R.string.ai_file_unreadable))
+                return@launch
+            }
+            if (picked.mime?.startsWith("image/") == true) {
+                val picture = runCatching { pictureForPrompt(context, uri) }.getOrNull()
+                if (picture != null) {
+                    attached.add(picture)
+                    return@launch
+                }
+            }
+            val max = MAX_UPLOAD.toLong()
+            fun tooBig(size: Long) = context.getString(
+                R.string.ai_file_too_big,
+                picked.name,
+                Formatter.formatShortFileSize(context, size),
+                Formatter.formatShortFileSize(context, max),
+            )
+            if (picked.size != null && picked.size > max) {
+                snackbar.showSnackbar(tooBig(picked.size))
+                return@launch
+            }
+            val key = fileKey++
+            files.add(PromptFile(key, picked.name))
+            try {
+                val data = readPicked(context, uri, max)
+                val path = vm.upload(picked.name, data)
+                val i = files.indexOfFirst { it.key == key }
+                if (i >= 0) files[i] = files[i].copy(path = path)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                files.removeAll { it.key == key }
+                snackbar.showSnackbar(
+                    if (e is TooBigException) tooBig(max + 1) else context.getString(R.string.ai_file_failed, picked.name, errorText(context, e)),
+                )
+            }
+        }
+    }
+
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { attach(it) }
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> uris.forEach(::attachFile) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if (ok) attach(cameraTarget) }
 
     // Text put in the prompt from elsewhere (a draft to edit) fills an empty field.
@@ -463,6 +596,27 @@ private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm) {
                 }
             }
         }
+        if (files.isNotEmpty()) {
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (f in files) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(8.dp)).border(1.dp, shed.divider, RoundedCornerShape(8.dp)).padding(start = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (f.path == null) {
+                            CircularProgressIndicator(Modifier.size(12.dp).semantics { contentDescription = context.getString(R.string.ai_uploading, f.name) }, strokeWidth = 1.5.dp)
+                        } else {
+                            Icon(Icons.Default.AttachFile, null, tint = shed.textDim, modifier = Modifier.size(14.dp))
+                        }
+                        HSpace(4)
+                        Text(f.name, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 200.dp), color = if (f.path == null) shed.textDim else shed.text)
+                        IconButton(onClick = { files.removeAll { it.key == f.key } }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Close, stringResource(R.string.remove), Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+        }
         // Slash commands, while one is being typed.
         if (text.startsWith("/") && ' ' !in text) {
             val matches = info.commands.filter { it.name.startsWith(text.drop(1)) }.take(6)
@@ -478,8 +632,12 @@ private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm) {
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.Bottom) {
             Box {
-                IconButton(onClick = { attachMenu = true }) { Icon(Icons.Default.AddPhotoAlternate, stringResource(R.string.ai_attach)) }
+                IconButton(onClick = { attachMenu = true }) { Icon(Icons.Default.AttachFile, stringResource(R.string.ai_attach)) }
                 DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                    MenuItem(Icons.Default.AttachFile, stringResource(R.string.ai_attach_file)) {
+                        attachMenu = false
+                        pickFiles.launch(arrayOf("*/*"))
+                    }
                     MenuItem(Icons.Default.AddPhotoAlternate, stringResource(R.string.ai_attach_picture)) {
                         attachMenu = false
                         pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -507,18 +665,24 @@ private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm) {
                     call(Call.AiAddDraft(AiAddDraft(tabId, keep, null)))
                 }) { Icon(Icons.Default.Save, stringResource(R.string.ai_draft)) }
             }
-            if (working && text.isBlank() && attached.isEmpty()) {
+            if (working && text.isBlank() && attached.isEmpty() && files.isEmpty()) {
                 IconButton(onClick = { call(Call.AiStop(TabOnly(tabId))) }) {
                     Icon(Icons.Default.Stop, stringResource(R.string.ai_stop), tint = shed.danger)
                 }
             } else {
                 IconButton(
-                    enabled = text.isNotBlank() || attached.isNotEmpty(),
+                    enabled = text.isNotBlank() || attached.isNotEmpty() || files.isNotEmpty(),
                     onClick = {
-                        val send = AiSend(tabId, text, attached.toList().ifEmpty { null })
+                        // Files go once the workspace has them, as their paths, for Claude to read.
+                        if (files.any { it.path == null }) {
+                            scope.launch { snackbar.showSnackbar(context.getString(R.string.ai_files_uploading)) }
+                            return@IconButton
+                        }
+                        val send = AiSend(tabId, withAttachedFiles(text, files.mapNotNull { it.path }), attached.toList().ifEmpty { null })
                         text = ""
                         typed = true
                         attached.clear()
+                        files.clear()
                         call(Call.AiSend(send))
                     },
                 ) { Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.send), tint = shed.accent) }

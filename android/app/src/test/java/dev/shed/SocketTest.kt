@@ -193,6 +193,23 @@ class SocketTest {
         assertEquals(1, server.requestCount)
     }
 
+    @Test
+    fun unknownEventsAreLeftOut() = runBlocking {
+        val fake = Fake()
+        server.enqueue(MockResponse().withWebSocketUpgrade(fake))
+        val socket = socket()
+        socket.start()
+        val events = async(Dispatchers.Default) { socket.subscribe("w1", Topic.Ai(AiTopic("t1"))).take(1).toList() }
+        assertTrue(fake.next() is ClientFrame.Hello)
+        val sub = fake.next() as ClientFrame.Subscribe
+        // A newer workspace's event, then one this version knows.
+        fake.socket!!.send("""{"type":"Event","content":{"sub":${sub.content.id},"event":{"type":"Fireworks","content":{"bang":true}}}}""")
+        send(fake.socket!!, ServerFrame.Event(EventFrame(sub.content.id, Event.GitChanged)))
+        assertEquals(listOf(SubEvent.Data(Event.GitChanged)), withTimeout(5_000) { events.await() })
+        assertEquals(Connection.Online, socket.connection.value)
+        socket.stop()
+    }
+
     private companion object {
         val WS = WorkspaceInfo("w1", "desk", true, 1u, Policy.Full, "0.1.0")
     }

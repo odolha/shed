@@ -1209,8 +1209,15 @@ Settings.
 - **AI tabs** work as on the computer: the conversation with its steps
   (tap one for the command, the change and what came back), permission cards
   (**Allow**, **Allow for This Session**, **Deny**), Claude's questions, and the
-  prompt, which takes pictures from the gallery or the camera. While Claude
-  works, messages queue. Drafts, sessions, the model, effort and mode (**Full
+  prompt. The paperclip attaches a **File…** (the system's file picker: any
+  file up to 16 MB, copied to the workspace, its path sent with the message for
+  Claude to read), a **Picture…** or **Take a Photo…**. A sub-agent or a task in
+  the background says how it does under its line (`running 3 min · 4 tool
+  calls`, `done in 40 s`); tap it for its kind, steps and report. Claude
+  Code's own notes are rows of their own (tap for the detail), and wake-ups,
+  scheduled jobs and watches wait above the prompt, counting down (tap one for
+  what it will tell Claude). While Claude works, messages queue. Drafts,
+  sessions, the model, effort and mode (**Full
   Auto…** asks first), and **Review** with Viewed and **Explain** are there too.
   A long press on one of your messages offers Edit, Send Again and Revert….
 - **Terminals** show the active pane's screen, its lines re-wrapped to the

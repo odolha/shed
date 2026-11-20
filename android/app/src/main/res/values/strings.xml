@@ -5,6 +5,7 @@
     <!-- Common -->
     <string name="back">Back</string>
     <string name="cancel">Cancel</string>
+    <string name="close">Close</string>
     <string name="copy">Copy</string>
     <string name="copied">Copied</string>
     <string name="create">Create</string>
@@ -236,6 +237,21 @@
     <string name="ai_attach_picture">Picture…</string>
     <string name="ai_attach_photo">Take a Photo…</string>
     <string name="ai_picture_failed">That picture could not be read.</string>
+    <string name="ai_attach_file">File…</string>
+    <string name="ai_file_too_big">%1$s is too big to attach (%2$s; at most %3$s).</string>
+    <string name="ai_file_failed">%1$s could not be attached: %2$s</string>
+    <string name="ai_file_unreadable">That file could not be read.</string>
+    <string name="ai_files_uploading">Wait until the attached files are uploaded.</string>
+    <string name="ai_uploading">Uploading %1$s</string>
+    <string name="ai_background">background</string>
+    <string name="ai_no_steps_yet">No steps yet</string>
+    <string name="ai_steps_unknown">Its steps are not known here</string>
+    <string name="ai_its_report">Its report</string>
+    <plurals name="ai_steps_skipped">
+        <item quantity="one">%1$d earlier step not shown</item>
+        <item quantity="other">%1$d earlier steps not shown</item>
+    </plurals>
+    <string name="ai_timer_note">Claude Code does it while it keeps running for this tab. Closing the tab or its bench, changing the tab’s folders or effort, or stopping Shed’s keeper cancels it.</string>
     <string name="ai_default_model">Default model</string>
     <string name="ai_effort">%1$s effort</string>
     <string name="ai_effort_default">Default effort</string>

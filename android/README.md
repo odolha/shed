@@ -2,8 +2,9 @@
 
 The Android app reaches your Shed workspaces through your nexus (see
 [Reaching Shed from elsewhere](../docs/user-guide.md#reaching-shed-from-elsewhere)):
-benches and tabs, AI tabs (the conversation, permissions, questions, prompts
-with photos, sessions, drafts, review), terminals, the logbook, project files,
+benches and tabs, AI tabs (the conversation, sub-agents and background tasks,
+Claude Code's notes and timers, permissions, questions, prompts with photos and
+files, sessions, drafts, review), terminals, the logbook, project files,
 search and Git. Native Kotlin with Jetpack Compose; no Google Play Services, so
 it builds from source and suits F-Droid.
 
@@ -91,12 +92,13 @@ Without a distributor installed, Settings says how to get one.
 | Where | What |
 | --- | --- |
 | `api/Api.kt` | The API's types, generated from `crates/shed-api` (`cargo run -p shed-codegen`); never edited by hand |
-| `net/` | `ShedJson` (the JSON setup), `NexusHttp` (`/api/v1/…`, bearer token), `NexusSocket` (the `/api` WebSocket: requests by id, subscriptions as flows, reconnects) |
+| `net/` | `ShedJson` (the JSON setup; entries, events and enum values a newer workspace sends read as unknown), `NexusHttp` (`/api/v1/…`, bearer token), `NexusSocket` (the `/api` WebSocket: requests by id, subscriptions as flows, reconnects) |
 | `data/` | The account (token sealed with a Keystore AES-GCM key) and the app's settings |
 | `push/` | UnifiedPush: registering, the endpoint to the nexus, notifications |
 | `ui/` | Compose screens: `Nav.kt` (routes and `shed://` links), `workspaces/`, `bench/`, `ai/` (transcript, Markdown, prompt, sessions, drafts, review), `terminal/` (screen model and re-wrapping), `logbook/`, `project/`, `git/`, `devices/`, `settings/`, `common/` |
 | `ShedApp.kt`, `MainActivity.kt` | The session (connects in the foreground, rests a minute after), the lock |
 
-Tests (`app/src/test`) run on the JVM: JSON round-trips, the socket against a
-fake nexus (MockWebServer), terminal re-wrapping, the Markdown reader, text
+Tests (`app/src/test`) run on the JVM: JSON round-trips (and what a newer
+workspace may send), the socket against a fake nexus (MockWebServer), sub-agent
+and timer wording, terminal re-wrapping, the Markdown reader, text
 ranges from the API (UTF-16 positions, used as Kotlin strings index them).

@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.core.content.FileProvider
 import androidx.core.graphics.scale
@@ -55,4 +56,44 @@ fun cameraUri(context: Context): Uri {
     dir.listFiles()?.forEach { it.delete() }
     val file = File(dir, "photo-${System.currentTimeMillis()}.jpg")
     return FileProvider.getUriForFile(context, context.packageName + ".files", file)
+}
+
+/** A file picked to go with a prompt: its name and size (null: not known). */
+data class PickedFile(val name: String, val size: Long?, val mime: String?)
+
+/** What the system says of a picked document: its display name, size and type. */
+suspend fun pickedFile(context: Context, uri: Uri): PickedFile = withContext(Dispatchers.IO) {
+    val resolver = context.contentResolver
+    var name: String? = null
+    var size: Long? = null
+    runCatching {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val n = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val s = c.getColumnIndex(OpenableColumns.SIZE)
+                if (n >= 0 && !c.isNull(n)) name = c.getString(n)
+                if (s >= 0 && !c.isNull(s)) size = c.getLong(s)
+            }
+        }
+    }
+    PickedFile(name?.takeIf { it.isNotBlank() } ?: uri.lastPathSegment?.substringAfterLast('/') ?: "file", size, resolver.getType(uri))
+}
+
+/** A picked file turned out larger than it may be (its size was not known before reading). */
+class TooBigException : Exception()
+
+/** A picked file's bytes; [TooBigException] past [limit]. */
+suspend fun readPicked(context: Context, uri: Uri, limit: Long): ByteArray = withContext(Dispatchers.IO) {
+    val input = context.contentResolver.openInputStream(uri) ?: throw java.io.FileNotFoundException(uri.toString())
+    input.use {
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val n = it.read(buffer)
+            if (n < 0) break
+            out.write(buffer, 0, n)
+            if (out.size() > limit) throw TooBigException()
+        }
+        out.toByteArray()
+    }
 }

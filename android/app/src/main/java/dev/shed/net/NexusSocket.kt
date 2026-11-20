@@ -273,7 +273,10 @@ class NexusSocket(
                 _connection.value = Connection.Online
             }
             is ServerFrame.Response -> pending.remove(frame.content.id)?.complete(frame.content)
-            is ServerFrame.Event -> subs[frame.content.sub]?.out?.trySend(SubEvent.Data(frame.content.event))
+            // An event a newer workspace sends that this version does not know: nothing to show.
+            is ServerFrame.Event -> if (frame.content.event != Event.Unknown) {
+                subs[frame.content.sub]?.out?.trySend(SubEvent.Data(frame.content.event))
+            }
             is ServerFrame.Ended -> subs[frame.content.sub]?.let {
                 it.ended = true
                 it.out.trySend(SubEvent.Ended(frame.content.error))

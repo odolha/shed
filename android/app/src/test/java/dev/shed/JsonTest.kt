@@ -1,6 +1,9 @@
 package dev.shed
 
 import dev.shed.api.AiActivity
+import dev.shed.api.AiEntry
+import dev.shed.api.AiRunState
+import dev.shed.api.AiTimerKind
 import dev.shed.api.Call
 import dev.shed.api.ClientFrame
 import dev.shed.api.Event
@@ -138,5 +141,70 @@ class JsonTest {
             """{"type":"Mouse","content":{"kind":"wheelUp","col":3,"row":4}}""",
             ShedJson.encodeToString(dev.shed.api.InputItem.serializer(), item),
         )
+    }
+
+    @Test
+    fun unknownEntryKeepsItsPlace() {
+        val text = """
+            {"type":"Event","content":{"sub":2,"event":{"type":"AiTranscript","content":{"from":0,"entries":[
+              {"type":"User","content":{"text":"hi"}},
+              {"type":"Sparkle","content":{"glitter":[1,2,3],"nested":{"type":"Tool"}}},
+              {"type":"Rainbow"},
+              {"type":"Note","content":{"kind":"sparkle","title":"Background task done","detail":"**ok**","at":1763500000}}
+            ],"status":{"state":"idle","timers":[{"kind":"alarm","what":"check the build","at":1763500600,"tool":"t1"}]}}}}}
+        """
+        val event = (ShedJson.decodeFromString(ServerFrame.serializer(), text) as ServerFrame.Event).content.event
+        val transcript = (event as Event.AiTranscript).content
+        assertEquals(4, transcript.entries.size)
+        assertTrue(transcript.entries[0] is AiEntry.User)
+        assertEquals(AiEntry.Unknown, transcript.entries[1])
+        assertEquals(AiEntry.Unknown, transcript.entries[2])
+        // An enum value this version does not know, in a field with a default: null.
+        val note = (transcript.entries[3] as AiEntry.Note).content
+        assertNull(note.kind)
+        assertEquals("Background task done", note.title)
+        val timer = transcript.status.timers!!.single()
+        assertNull(timer.kind)
+        assertEquals(1763500600u, timer.at)
+    }
+
+    @Test
+    fun unknownEventIsUnknown() {
+        val frame = ShedJson.decodeFromString(
+            ServerFrame.serializer(),
+            """{"type":"Event","content":{"sub":5,"event":{"type":"Fireworks","content":{"bang":true}}}}""",
+        )
+        assertEquals(5u, (frame as ServerFrame.Event).content.sub)
+        assertEquals(Event.Unknown, frame.content.event)
+        val unit = ShedJson.decodeFromString(ServerFrame.serializer(), """{"type":"Event","content":{"sub":5,"event":{"type":"Quiet"}}}""")
+        assertEquals(Event.Unknown, (unit as ServerFrame.Event).content.event)
+    }
+
+    @Test
+    fun toolWithARunAndEntriesChanged() {
+        val text = """
+            {"type":"Event","content":{"sub":1,"event":{"type":"AiEntries","content":{"entries":[{"index":3,"entry":
+              {"type":"Tool","content":{"id":"t1","name":"Agent","summary":"Agent: look around","run":{
+                "state":"running","agent":"Explore","started":1763500000,"last":"Reading x","tools":4,"tokens":12000,
+                "steps":[{"type":"Tool","content":{"id":"s1","name":"Read","summary":"Read x","result":"ok"}},
+                         {"type":"Assistant","content":{"text":"Found it"}},{"type":"Hologram"}],
+                "skipped":2}}}}],
+              "status":{"state":"working","timers":[{"kind":"wakeup","what":"look again","at":1763500600}]}}}}}
+        """
+        val changed = ((ShedJson.decodeFromString(ServerFrame.serializer(), text) as ServerFrame.Event).content.event as Event.AiEntries).content
+        val at = changed.entries.single()
+        assertEquals(3u, at.index)
+        val run = (at.entry as AiEntry.Tool).content.run!!
+        assertEquals(AiRunState.Running, run.state)
+        assertEquals("Explore", run.agent)
+        assertEquals(3, run.steps!!.size)
+        assertEquals(AiEntry.Unknown, run.steps!![2])
+        assertEquals(AiTimerKind.Wakeup, changed.status.timers!!.single().kind)
+    }
+
+    @Test
+    fun uploadCall() {
+        val call = Call.AiUpload(dev.shed.api.AiUpload("t", "notes.txt", "aGk="))
+        same("""{"type":"AiUpload","content":{"tab":"t","name":"notes.txt","data":"aGk="}}""", ShedJson.encodeToString(Call.serializer(), call))
     }
 }
