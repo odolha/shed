@@ -171,6 +171,15 @@ impl AppState {
                     self.tell_about_ai(tab, &view, after, cx);
                 }
             }
+            Frame::Keeper(KeeperMsg::AiEntries { tab, entries, status }) => {
+                let Some(view) = self.ai_views.get(&tab).cloned() else { return };
+                let before = view.read(cx).state();
+                view.update(cx, |v, cx| v.replace(entries, status, cx));
+                let after = view.read(cx).state();
+                if before != after && (after == shed_ai::State::Waiting || (after == shed_ai::State::Idle && before == shed_ai::State::Working)) {
+                    self.tell_about_ai(tab, &view, after, cx);
+                }
+            }
             Frame::Keeper(KeeperMsg::AiInfo { tab, commands, models }) => {
                 if let Some(view) = self.ai_views.get(&tab) {
                     view.update(cx, |v, cx| v.set_info(commands, models, cx));

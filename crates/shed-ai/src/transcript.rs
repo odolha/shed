@@ -1,13 +1,46 @@
 //! A conversation built event by event.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
 
-use crate::{Entry, Limits, Permission, State, Status, Tool, parse_limits, summarize};
+use crate::{Entry, Limits, Note, NoteKind, Permission, State, Status, Tool, parse_limits, summarize};
+
+mod tasks;
 
 /// A tool's output beyond this is cut.
 const MAX_RESULT: usize = 20_000;
+
+/// `text` cut to at most `max` bytes (on a character's edge), marked so.
+pub(crate) fn cut(mut text: String, max: usize) -> String {
+    if text.len() > max {
+        let mut at = max;
+        while !text.is_char_boundary(at) {
+            at -= 1;
+        }
+        text.truncate(at);
+        text.push_str("\n…");
+    }
+    text
+}
+
+/// A tool result's text: a string, or the text of its blocks.
+pub(crate) fn result_text(b: &Value) -> String {
+    match b.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => parts.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// A message's text: a string, or the text of its blocks.
+fn message_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(blocks)) => blocks.iter().filter(|b| b.get("type").and_then(Value::as_str) == Some("text")).filter_map(|b| b.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct Transcript {
@@ -46,6 +79,23 @@ pub struct Transcript {
     /// Where the pictures of prompts are kept, to show them again (none:
     /// only their number is known).
     pub picture_dir: Option<std::path::PathBuf>,
+    /// Entries changed in place since `take_update` (a sub-agent's progress
+    /// on an earlier step), apart from `changed_from`; and the status alone.
+    touched: BTreeSet<usize>,
+    status_changed: bool,
+    /// Tools that go on after their call (agents, background commands,
+    /// watches) by Claude Code's task id: their entry.
+    runs: HashMap<String, usize>,
+    /// Tools a sub-agent called, by id: the entry of the agent they belong to.
+    owners: HashMap<String, usize>,
+    /// The inputs of tools whose results say more than their text (agents,
+    /// timers, background commands), by tool id.
+    inputs: HashMap<String, Value>,
+    /// Notifications taken in already (a saved session can carry one twice).
+    noted: HashSet<String>,
+    /// Something (a notification, a wake-up) told Claude to go on since the
+    /// last turn ended.
+    woken: bool,
 }
 
 /// The file name a picture is kept under: its content's hash, its kind.
@@ -150,9 +200,36 @@ impl Transcript {
         self.changed_from = Some(self.changed_from.map_or(i, |c| c.min(i)));
     }
 
+    /// An entry changed in place, the ones after it not: it alone goes out
+    /// (a background agent's progress, while the conversation goes on).
+    fn touch_one(&mut self, i: usize) {
+        if self.changed_from.is_none_or(|c| c > i) {
+            self.touched.insert(i);
+        }
+    }
+
+    /// The state or the timers changed, maybe no entry.
+    fn touch_status(&mut self) {
+        self.status_changed = true;
+    }
+
     /// The first entry that changed since last asked, if any did; then forgets.
     pub fn take_changes(&mut self) -> Option<usize> {
-        self.changed_from.take()
+        let (one, from) = self.take_update();
+        one.into_iter().chain(from).min()
+    }
+
+    /// What changed since last asked: entries changed in place (each alone),
+    /// and the first entry from which everything changed (the end, when only
+    /// the status did); then forgets.
+    pub fn take_update(&mut self) -> (Vec<usize>, Option<usize>) {
+        let mut from = self.changed_from.take();
+        if std::mem::take(&mut self.status_changed) && from.is_none() {
+            from = Some(self.entries.len());
+        }
+        let len = self.entries.len();
+        let one = std::mem::take(&mut self.touched).into_iter().filter(|&i| i < len && from.is_none_or(|f| i < f)).collect();
+        (one, from)
     }
 
     /// Marks everything changed, for a window that needs it all.
@@ -191,6 +268,9 @@ impl Transcript {
         self.entries.truncate(entry);
         self.prompts.retain(|p| p.entry < entry);
         self.tools.retain(|_, i| *i < entry);
+        self.runs.retain(|_, i| *i < entry);
+        self.owners.retain(|_, i| *i < entry);
+        self.touched.retain(|i| *i < entry);
         self.streaming.clear();
         self.streamed.clear();
         self.stream_message = None;
@@ -201,6 +281,12 @@ impl Transcript {
 
     pub fn notice(&mut self, text: impl Into<String>, error: bool) {
         self.push(Entry::Notice { text: text.into(), error });
+    }
+
+    /// One of Claude Code's notes, in the conversation.
+    fn note(&mut self, kind: NoteKind, text: impl Into<String>, detail: impl Into<String>, error: bool) {
+        let at = self.now();
+        self.push(Entry::Note(Note { kind, text: text.into(), detail: detail.into(), error, at }));
     }
 
     /// Keeps a prompt's picture in `picture_dir` (once: the same picture is
@@ -250,10 +336,12 @@ impl Transcript {
         self.suggestions.remove(request);
     }
 
-    /// The turn ended without a result (the process stopped).
+    /// The turn ended without a result (the process stopped). What it ran
+    /// in the background stopped with it, and its timers will not fire.
     pub fn stopped(&mut self) {
         self.status.state = State::Idle;
         self.status.since = None;
+        self.touch_status();
         for i in 0..self.entries.len() {
             if let Entry::Permission(p) = &mut self.entries[i]
                 && p.answer.is_none()
@@ -262,26 +350,51 @@ impl Transcript {
                 self.touch(i);
             }
         }
+        self.end_runs("Claude Code stopped");
+        if !self.status.timers.is_empty() {
+            let list = self.status.timers.iter().map(|t| format!("- {}", t.what)).collect::<Vec<_>>().join("\n");
+            self.status.timers.clear();
+            self.note(NoteKind::Wakeup, "Claude Code stopped: its wake-ups, scheduled jobs and watches are cancelled", list, false);
+        }
     }
 
     /// Takes one event from Claude Code's stream (or one record of a saved
     /// session). Returns the usage limits if the event told them.
     pub fn apply(&mut self, m: &Value) -> Option<Limits> {
         let kind = m.get("type").and_then(Value::as_str).unwrap_or("");
-        // Side conversations (sub-agents) and injected context are not shown.
-        if m.get("isSidechain").and_then(Value::as_bool) == Some(true) || m.get("isMeta").and_then(Value::as_bool) == Some(true) {
+        self.applying_time = m.get("timestamp").and_then(Value::as_str).and_then(parse_timestamp);
+        // A sub-agent's own messages, as they stream: steps of its Agent
+        // tool, never entries of their own.
+        if let Some(parent) = m.get("parent_tool_use_id").and_then(Value::as_str) {
+            if matches!(kind, "assistant" | "user") {
+                self.sub_message(parent, kind, m);
+            }
+            return None;
+        }
+        // A saved session's side conversations: sub-agents, read from their
+        // own files (`read_subagents`).
+        if m.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            return None;
+        }
+        // Context Claude Code adds is not shown; a wake-up firing and a
+        // message from another session are notes.
+        if m.get("isMeta").and_then(Value::as_bool) == Some(true) {
+            if kind == "user" {
+                self.meta_message(m);
+            }
             return None;
         }
         self.applying_uuid = m.get("uuid").and_then(Value::as_str).map(String::from);
-        self.applying_time = m.get("timestamp").and_then(Value::as_str).and_then(parse_timestamp);
         match kind {
             "stream_event" => self.stream(m.get("event")?),
             "assistant" => self.assistant(m.get("message")?),
-            "user" => self.user_message(m.get("message")?),
+            "user" => self.user_message(m),
             "result" => self.result(m),
             "system" => self.system(m),
             "control_request" => self.control(m),
             "rate_limit_event" => return parse_limits(m),
+            "attachment" => self.attachment(m),
+            "command_lifecycle" => self.lifecycle(m),
             _ => {}
         }
         // Messages in Claude Code's record (not stream fragments or notes).
@@ -376,7 +489,12 @@ impl Transcript {
                     let name = block.get("name").and_then(Value::as_str).unwrap_or("").to_string();
                     let input = block.get("input").cloned().unwrap_or(Value::Null);
                     let (summary, detail, file, diff) = summarize(&name, &input, &self.cwd);
-                    let i = self.push(Entry::Tool(Tool { id: tool_id.clone(), name, summary, detail, file, diff, result: None, error: false, pictures: Vec::new() }));
+                    let summary = self.name_tasks(&name, &input, summary);
+                    let run = self.run_for(&name, &input);
+                    if tasks::KEEP_INPUT.contains(&name.as_str()) && (name != "Bash" || run.is_some()) {
+                        self.inputs.insert(tool_id.clone(), input);
+                    }
+                    let i = self.push(Entry::Tool(Tool { id: tool_id.clone(), name, summary, detail, file, diff, result: None, error: false, pictures: Vec::new(), run }));
                     self.tools.insert(tool_id, i);
                 }
                 _ => {}
@@ -384,16 +502,26 @@ impl Transcript {
         }
     }
 
-    fn user_message(&mut self, msg: &Value) {
+    fn user_message(&mut self, m: &Value) {
+        let Some(msg) = m.get("message") else { return };
+        // What a compaction left: the conversation so far, summed up.
+        if m.get("isCompactSummary").and_then(Value::as_bool) == Some(true) {
+            let summary = message_text(msg.get("content"));
+            return self.note(NoteKind::Compacted, "The conversation was compacted: Claude goes on from a summary of it", summary, false);
+        }
         match msg.get("content") {
             Some(Value::String(text)) => self.prompt(text, 0, Vec::new()),
             Some(Value::Array(blocks)) => {
                 let mut text = String::new();
                 let mut images = 0;
                 let mut pictures = Vec::new();
+                // What the tool said beyond its text (an agent's id, a timer's
+                // time), when the record holds one result.
+                let results = blocks.iter().filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result")).count();
+                let extra = m.get("tool_use_result").or_else(|| m.get("toolUseResult")).filter(|_| results == 1);
                 for b in blocks {
                     match b.get("type").and_then(Value::as_str).unwrap_or("") {
-                        "tool_result" => self.tool_result(b),
+                        "tool_result" => self.tool_result(b, extra),
                         "text" => text.push_str(b.get("text").and_then(Value::as_str).unwrap_or("")),
                         "image" => {
                             images += 1;
@@ -426,56 +554,45 @@ impl Transcript {
         }
     }
 
-    /// A user's message from a saved session: a prompt, or one of Claude
-    /// Code's own notes.
+    /// A user's message (from a saved session, mostly): a prompt, or one
+    /// of Claude Code's own notes, which never show as the user's words.
     fn prompt(&mut self, text: &str, images: u32, pictures: Vec<String>) {
         if images == 0 && is_picture_note(text) {
             return;
         }
-        if text.starts_with("[Request interrupted") {
+        let read = crate::notes::read_user_text(text);
+        if read.interrupted {
             return self.notice("Stopped", false);
         }
-        // Command echoes and their output, as the terminal UI records them.
-        if text.starts_with("<local-command") || text.starts_with("<command-message>") || text.starts_with("<bash-") {
-            return;
+        for task in &read.tasks {
+            self.task_note(task, false);
         }
-        if let Some(rest) = text.strip_prefix("<command-name>") {
-            let name = rest.split("</command-name>").next().unwrap_or("");
-            let args = text.split("<command-args>").nth(1).and_then(|a| a.split("</command-args>").next()).unwrap_or("");
+        for (line, detail, error) in read.outputs {
+            let detail = if detail == line { String::new() } else { detail };
+            self.note(NoteKind::Command, line, detail, error);
+        }
+        let words = read.command.unwrap_or(read.prompt);
+        if !words.is_empty() || images > 0 {
             let at = self.now();
-            let entry = self.push(Entry::User { text: format!("{name} {args}").trim().to_string(), images, at, pictures });
+            let entry = self.push(Entry::User { text: words, images, at, pictures });
             let uuid = self.applying_uuid.clone();
             self.mark_prompt(entry, uuid);
-            return;
         }
-        let at = self.now();
-        let entry = self.push(Entry::User { text: text.to_string(), images, at, pictures });
-        let uuid = self.applying_uuid.clone();
-        self.mark_prompt(entry, uuid);
+        if !read.hook.is_empty() {
+            self.note(NoteKind::Hook, "A hook added context to the prompt", read.hook, false);
+        }
     }
 
-    fn tool_result(&mut self, b: &Value) {
+    fn tool_result(&mut self, b: &Value, extra: Option<&Value>) {
         let id = b.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
         let Some(&i) = self.tools.get(id) else { return };
-        let text = match b.get("content") {
-            Some(Value::String(s)) => s.clone(),
-            Some(Value::Array(parts)) => parts.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
-            _ => String::new(),
-        };
-        let mut text = text;
-        if text.len() > MAX_RESULT {
-            let mut cut = MAX_RESULT;
-            while !text.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            text.truncate(cut);
-            text.push_str("\n…");
-        }
+        let text = cut(result_text(b), MAX_RESULT);
         // A picture it returned (Read of a screenshot) is kept to show.
         let pictures: Vec<String> = match b.get("content") {
             Some(Value::Array(parts)) => parts.iter().filter(|p| p.get("type").and_then(Value::as_str) == Some("image")).filter_map(|p| self.keep_block_picture(p)).collect(),
             _ => Vec::new(),
         };
+        let error = b.get("is_error").and_then(Value::as_bool) == Some(true);
         if let Entry::Tool(t) = &mut self.entries[i] {
             for p in pictures {
                 if !t.pictures.contains(&p) {
@@ -483,14 +600,16 @@ impl Transcript {
                 }
             }
             t.result = Some(text);
-            t.error = b.get("is_error").and_then(Value::as_bool) == Some(true);
+            t.error = error;
         }
+        self.task_result(i, id, error, extra);
         self.touch(i);
     }
 
     fn result(&mut self, m: &Value) {
         self.status.state = State::Idle;
         self.status.since = None;
+        self.woken = false;
         // The context window: the conversation's model's, else the largest.
         if let Some(usage) = m.get("modelUsage").and_then(Value::as_object) {
             let window = |v: &Value| v.get("contextWindow").and_then(Value::as_u64);
@@ -526,12 +645,18 @@ impl Transcript {
                 if let Some(cwd) = m.get("cwd").and_then(Value::as_str) {
                     self.cwd = cwd.to_string();
                 }
+                // A turn no prompt of the user's started: a background task
+                // told Claude something, or a wake-up fired.
+                if self.status.state == State::Idle {
+                    self.turn_by_itself();
+                }
             }
             "compact_boundary" => self.notice("The conversation was compacted", false),
             "permission_denied" => {
                 let why = m.get("message").and_then(Value::as_str).unwrap_or("Permission denied");
                 self.notice(why.to_string(), true);
             }
+            "task_started" | "task_progress" | "task_updated" | "task_notification" => self.task_event(m),
             _ => {}
         }
     }
@@ -649,6 +774,7 @@ mod tests {
                 Entry::Tool(_) => "tool",
                 Entry::Permission(_) => "permission",
                 Entry::Notice { .. } => "notice",
+                Entry::Note(_) => "note",
             })
             .collect();
         assert_eq!(kinds, ["tool", "tool", "permission", "tool", "text", "notice"], "{:#?}", t.entries);

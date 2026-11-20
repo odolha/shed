@@ -422,6 +422,37 @@ terminal of the bench.
   entries; scrolling to the top brings in the next ones (or **Show Earlier**,
   **Show All**), and searching, the prompt list and the block jumps bring in what
   they need.
+- **Sub-agents**: when Claude hands work to an agent of its own, its line
+  says how it is doing as it goes: turning while it runs, with how long, what
+  it is doing now and how many tool calls it has made ("Agent: Check every link
+  in the guides · running 4 min · $ curl … · 4 tool calls"), then done (and in
+  how long), failed or stopped. Opened, it shows the prompt Claude gave it, its
+  steps (each tool call a line that opens to what it did and what came back,
+  what it said in between) and its report. An agent's own messages never show
+  as yours or Claude's. Agents and commands Claude leaves running **in the
+  background** say so; they keep going while you write, and a note in the
+  conversation says when one finishes ("Agent “Check every link…” finished",
+  "Background command "Build the docs site" completed"). Sessions opened again
+  show their agents' steps too (Claude Code keeps them beside the session).
+
+  ![A sub-agent at work in the background, a finished command, and a wake-up waiting above the prompt](images/ai-agents.png)
+
+- **Claude Code's notes**: what Claude Code adds to a conversation shows as a
+  note of its own, never as if you had typed it: a background task finishing,
+  a watch seeing something, a wake-up firing, a command run in Claude Code's
+  own interface and its output (`/compact`, `! git status`), the summary left
+  when a long conversation was compacted, context a hook added. A note with
+  more to it opens with a click. Its internal reminders are left out.
+- **Wake-ups, scheduled jobs and watches**: Claude can set itself to come back
+  later (a wake-up, a scheduled job, maybe repeating) or watch a command's
+  output. What is waiting shows above the prompt ("Wakes up in 18 min · read the
+  link check's report", "Scheduled job, every minute · …", "Watching, ends in 28
+  min · …"), counting down; the step that set it says when it fires. When it
+  fires, Claude goes on by itself: a note says why, and the tab shows Claude
+  working (a message you send meanwhile waits its turn). They belong to the
+  tab's running Claude Code: closing the tab or its bench, changing the tab's
+  folders or effort, or stopping Shed's keeper cancels them, and a note says
+  so.
 - **Going back**: hover one of your messages for **Edit**, **Send Again** and
   **Copy** (also in its right-click menu). **Edit** puts it in the prompt field;
   sending it goes back to that message: the messages after it go, the files

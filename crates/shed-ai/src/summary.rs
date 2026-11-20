@@ -56,6 +56,28 @@ pub fn summarize(name: &str, input: &Value, cwd: &str) -> (String, String, Optio
         "WebFetch" => (format!("Fetch {}", s("url")), s("prompt"), None),
         "WebSearch" => (format!("Search the web for “{}”", s("query")), String::new(), None),
         "Task" | "Agent" => (format!("Agent: {}", s("description")), s("prompt"), None),
+        "ScheduleWakeup" if input.get("stop").and_then(Value::as_bool) == Some(true) => ("Stop the wake-ups".into(), String::new(), None),
+        "ScheduleWakeup" => {
+            let after = input.get("delaySeconds").and_then(Value::as_u64).map(span).unwrap_or_default();
+            let why = Some(s("reason")).filter(|r| !r.is_empty()).unwrap_or_else(|| first_line(&s("prompt")));
+            (format!("Wake up in {after}: {why}"), s("prompt"), None)
+        }
+        "CronCreate" => {
+            let how = if input.get("recurring").and_then(Value::as_bool) == Some(false) { "once" } else { "repeating" };
+            (format!("Schedule ({}, {how}): {}", s("cron"), first_line(&s("prompt"))), s("prompt"), None)
+        }
+        "CronDelete" => (format!("Cancel the scheduled job {}", s("id")), String::new(), None),
+        "CronList" => ("List the scheduled jobs".into(), String::new(), None),
+        "Monitor" => (format!("Watch: {}", s("description")), s("command"), None),
+        "TaskStop" => (format!("Stop task {}", s("task_id")), String::new(), None),
+        "KillShell" => (format!("Stop task {}", s("shell_id")), String::new(), None),
+        "TaskOutput" | "BashOutput" => {
+            let id = ["task_id", "bash_id", "shell_id"].iter().map(|k| s(k)).find(|x| !x.is_empty()).unwrap_or_default();
+            (format!("Read the output of task {id}"), String::new(), None)
+        }
+        "SendMessage" => (format!("Message to {}: {}", s("to"), first_line(&s("summary"))), s("message"), None),
+        "ToolSearch" => (format!("Load tools: {}", s("query").trim_start_matches("select:").replace(',', ", ")), String::new(), None),
+        "Skill" => (format!("Skill: {}", s("skill")), s("args"), None),
         "TodoWrite" => {
             let todos = input.get("todos").and_then(Value::as_array).cloned().unwrap_or_default();
             let list = todos
@@ -80,6 +102,17 @@ pub fn summarize(name: &str, input: &Value, cwd: &str) -> (String, String, Optio
         }
     };
     (summary, detail, file, diff)
+}
+
+/// A span of time, short: `45 s`, `5 min`, `1 h 30 min`.
+pub fn span(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} s"),
+        60..300 if !secs.is_multiple_of(60) => format!("{} min {} s", secs / 60, secs % 60),
+        60..3600 => format!("{} min", (secs + 30) / 60),
+        _ if (secs / 60).is_multiple_of(60) => format!("{} h", secs / 3600),
+        _ => format!("{} h {} min", secs / 3600, (secs / 60) % 60),
+    }
 }
 
 /// The prefix of Claude in Chrome's tools.

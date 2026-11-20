@@ -16,7 +16,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, SharedString, StyledText, Subscription, Task, TextLayout, UniformListScrollHandle,
     Window, div, list, prelude::*, px, relative, svg, uniform_list,
 };
-use shed_ai::{Command, Entry, Limits, Model, SessionInfo, State as AiState, Status};
+use shed_ai::{Command, Entry, Limits, Model, NoteKind, Run, RunState, SessionInfo, State as AiState, Status, Timer, TimerKind};
 use shed_model::{AiTab, BenchId, Rgb, TabId};
 use shed_proto::{AiImage, ClientMsg};
 
@@ -240,6 +240,10 @@ pub struct AiView {
     show_prompts: bool,
     prompts_scroll: UniformListScrollHandle,
     prompts_bar: crate::scrollbar::State,
+    /// A sub-agent's steps opened to their output: (entry, the step's tool id).
+    open_steps: HashSet<(usize, String)>,
+    /// Some agent or background task is running (its time keeps up).
+    running: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -249,6 +253,9 @@ struct Parsed {
     source: String,
     pieces: Vec<Piece>,
     code: Vec<Option<CodeColors>>,
+    /// An opened sub-agent: the pieces of each of its steps (none for a
+    /// tool call), then of its report.
+    groups: Vec<Range<usize>>,
 }
 
 /// Byte ranges of a code block and their colours.
@@ -256,7 +263,52 @@ type CodeColors = Vec<(Range<usize>, Rgb)>;
 
 impl Parsed {
     fn plain(text: String) -> Self {
-        Parsed { source: String::new(), pieces: vec![Piece { kind: Kind::Para, text: shed_ai::markdown::Text::plain(text) }], code: vec![None] }
+        Parsed { source: String::new(), pieces: vec![Piece { kind: Kind::Para, text: shed_ai::markdown::Text::plain(text) }], code: vec![None], groups: Vec::new() }
+    }
+
+    fn empty() -> Self {
+        Parsed { source: String::new(), pieces: Vec::new(), code: Vec::new(), groups: Vec::new() }
+    }
+}
+
+/// A run's state in a word, and for how long: `running 3 min`, `done in 40 s`.
+fn run_time(run: &Run) -> String {
+    let took = |a: u64, b: u64| shed_ai::span(b.saturating_sub(a));
+    match run.state {
+        RunState::Running if run.started > 0 => format!("running {}", took(run.started, unix_now())),
+        RunState::Running => "running".into(),
+        RunState::Done if run.started > 0 && run.ended >= run.started => format!("done in {}", took(run.started, run.ended)),
+        RunState::Done => "done".into(),
+        RunState::Failed => "failed".into(),
+        RunState::Stopped => "stopped".into(),
+    }
+}
+
+/// A sub-agent's or background task's line after its tool's: how it is
+/// doing, what it does now, how many tool calls.
+fn run_line(t: &shed_ai::Tool, run: &Run) -> String {
+    let mut parts = vec![run_time(run)];
+    let agent = matches!(t.name.as_str(), "Agent" | "Task");
+    if run.running() && !run.last.is_empty() && run.last != "Starting" {
+        parts.push(run.last.clone());
+    }
+    if agent && run.tools > 0 {
+        parts.push(format!("{} tool call{}", run.tools, if run.tools == 1 { "" } else { "s" }));
+    }
+    parts.join(" · ")
+}
+
+/// When a timer fires, as a person says it: `in 18 min`, `every minute`.
+fn timer_when(t: &Timer) -> String {
+    let now = unix_now();
+    let left = |at: u64| if at > now { format!("in {}", shed_ai::span(at - now)) } else { "due now".into() };
+    match t.kind {
+        TimerKind::Watch if t.at > 0 => format!("ends {}", left(t.at)),
+        TimerKind::Watch => "watching".into(),
+        _ if !t.every.is_empty() && t.at > now => format!("{}, next {}", t.every.to_lowercase(), left(t.at)),
+        _ if !t.every.is_empty() => t.every.to_lowercase(),
+        _ if t.at > 0 => left(t.at),
+        _ => "later".into(),
     }
 }
 
@@ -386,6 +438,8 @@ impl AiView {
             show_prompts: false,
             prompts_scroll: UniformListScrollHandle::new(),
             prompts_bar: Default::default(),
+            open_steps: HashSet::new(),
+            running: false,
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -486,6 +540,26 @@ impl AiView {
             let old_rows = old_len - self.first + self.head();
             self.list.splice(self.row(from)..old_rows, len - from);
         }
+        self.open_steps.retain(|(e, _)| *e < from);
+        self.set_status(status, cx);
+    }
+
+    /// Entries changed in place (a sub-agent's progress), from the keeper.
+    pub fn replace(&mut self, changed: Vec<(u32, Entry)>, status: Status, cx: &mut Context<Self>) {
+        for (i, entry) in changed {
+            let i = i as usize;
+            let Some(slot) = self.entries.get_mut(i) else { continue };
+            *slot = entry;
+            self.parsed.remove(&i);
+            if i >= self.first {
+                let row = self.row(i);
+                self.list.remeasure_items(row..row + 1);
+            }
+        }
+        self.set_status(status, cx);
+    }
+
+    fn set_status(&mut self, status: Status, cx: &mut Context<Self>) {
         let finished = self.status.state != AiState::Idle && status.state == AiState::Idle;
         self.status = status;
         if finished {
@@ -495,6 +569,7 @@ impl AiView {
             self.file_lookups.clear();
             self.parsed.clear();
         }
+        self.running = self.entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.run.as_ref().is_some_and(|r| r.running())));
         self.tick(cx);
         cx.notify();
     }
@@ -509,7 +584,14 @@ impl AiView {
     fn turn_changes(&self) -> Vec<String> {
         let start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap_or(0);
         let mut files: Vec<String> = Vec::new();
-        for e in &self.entries[start..] {
+        // A sub-agent's edits are the turn's too.
+        fn steps(e: &Entry) -> &[Entry] {
+            match e {
+                Entry::Tool(t) => t.run.as_ref().map_or(&[][..], |r| &r.steps[..]),
+                _ => &[],
+            }
+        }
+        for e in self.entries[start..].iter().flat_map(|e| steps(e).iter().chain(std::iter::once(e))) {
             if let Entry::Tool(t) = e
                 && t.diff.is_some()
                 && t.result.is_some()
@@ -555,8 +637,17 @@ impl AiView {
     fn entry_text(e: &Entry) -> String {
         match e {
             Entry::User { text, .. } | Entry::Assistant { text, .. } | Entry::Thinking { text } | Entry::Notice { text, .. } => text.clone(),
-            Entry::Tool(t) => format!("{} {} {}", t.summary, t.detail, t.result.clone().unwrap_or_default()),
+            Entry::Tool(t) => {
+                let mut text = format!("{} {} {}", t.summary, t.detail, t.result.clone().unwrap_or_default());
+                // An agent's steps are found in it too.
+                for step in t.run.iter().flat_map(|r| &r.steps) {
+                    text.push(' ');
+                    text.push_str(&Self::entry_text(step));
+                }
+                text
+            }
             Entry::Permission(p) => format!("{} {}", p.summary, p.detail),
+            Entry::Note(n) => format!("{} {}", n.text, n.detail),
         }
     }
 
@@ -735,9 +826,24 @@ impl AiView {
             .collect()
     }
 
-    /// Keeps the "working for" time current while a turn runs.
+    /// How often the view is drawn again by itself: a few times a second
+    /// while Claude works (its dots and time), every second while an agent
+    /// runs in the background or a wake-up is near, now and then while one
+    /// waits further off; never otherwise.
+    fn tick_every(&self) -> Option<Duration> {
+        if self.status.state != AiState::Idle {
+            return Some(Duration::from_millis(350));
+        }
+        let now = unix_now();
+        if self.running || self.status.timers.iter().any(|t| t.at > 0 && t.at <= now + 120) {
+            return Some(Duration::from_secs(1));
+        }
+        (!self.status.timers.is_empty()).then_some(Duration::from_secs(20))
+    }
+
+    /// Keeps the "working for" time, agents' times and countdowns current.
     fn tick(&mut self, cx: &mut Context<Self>) {
-        if self.status.state == AiState::Idle {
+        if self.tick_every().is_none() {
             self.ticker = None;
             return;
         }
@@ -746,9 +852,14 @@ impl AiView {
         }
         self.ticker = Some(cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_millis(350)).await;
+                let Ok(Some(every)) = this.update(cx, |this, _| this.tick_every()) else { break };
+                cx.background_executor().timer(every).await;
                 let ticked = this.update(cx, |this, cx| {
                     this.spin = this.spin.wrapping_add(1);
+                    // Nothing to keep up any more: a later change starts it again.
+                    if this.tick_every().is_none() {
+                        this.ticker = None;
+                    }
                     cx.notify();
                 });
                 if ticked.is_err() {
@@ -1226,6 +1337,7 @@ impl AiView {
             Some(Entry::User { text, .. } | Entry::Assistant { text, .. } | Entry::Thinking { text } | Entry::Notice { text, .. }) => text.clone(),
             Some(Entry::Tool(t)) => format!("{}\n{}\n{}", t.summary, t.detail, t.result.clone().unwrap_or_default()),
             Some(Entry::Permission(p)) => format!("{}\n{}", p.summary, p.detail),
+            Some(Entry::Note(n)) => format!("{}\n{}", n.text, n.detail).trim_end().to_string(),
             None => String::new(),
         };
         let all = self.transcript_markdown();
@@ -1256,7 +1368,7 @@ impl AiView {
         entries.push(menu::item("Copy Message", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(text.clone(), &text))).icon("copy"));
         entries.push(menu::item("Copy Message as Plain Text", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(plain.clone()))));
         entries.push(menu::item("Copy the Whole Conversation", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(all.clone(), &all))));
-        if self.expanded.iter().any(|&e| matches!(self.entries.get(e), Some(Entry::Tool(_) | Entry::Thinking { .. }))) {
+        if self.expanded.iter().any(|&e| matches!(self.entries.get(e), Some(Entry::Tool(_) | Entry::Thinking { .. } | Entry::Note(_)))) {
             entries.push(MenuEntry::Separator);
             entries.push(menu::item("Collapse All Steps", |this: &mut Self, _, cx| this.collapse_all(cx)));
         }
@@ -1279,7 +1391,7 @@ impl AiView {
     /// Closes every opened step and thinking (your long messages stay as they are).
     fn collapse_all(&mut self, cx: &mut Context<Self>) {
         let entries = &self.entries;
-        self.expanded.retain(|&e| !matches!(entries.get(e), Some(Entry::Tool(_) | Entry::Thinking { .. })));
+        self.expanded.retain(|&e| !matches!(entries.get(e), Some(Entry::Tool(_) | Entry::Thinking { .. } | Entry::Note(_))));
         self.list.remeasure();
         cx.notify();
     }
@@ -1676,33 +1788,92 @@ impl AiView {
     }
 
     /// An entry's selectable text, as drawn.
+    /// Markdown as pieces to draw, files it names made links, code coloured.
+    fn markdown_pieces(&mut self, text: &str) -> (Vec<Piece>, Vec<Option<CodeColors>>) {
+        let mut pieces = ai_text::pieces(shed_ai::markdown::parse(text));
+        // Files Claude names become links to them (not in code blocks).
+        let mut bases = vec![self.ai.folder.clone()];
+        bases.extend(self.ai.add_dirs.iter().cloned());
+        bases.extend(self.projects.iter().cloned());
+        let known = &mut self.file_exists;
+        let mut exists = |p: &std::path::Path| *known.entry(p.to_path_buf()).or_insert_with(|| p.is_file());
+        let (lookups, projects) = (&mut self.file_lookups, &self.project_files);
+        let mut find = |rel: &std::path::Path| lookups.entry(rel.to_path_buf()).or_insert_with(|| ai_text::find_in_projects(rel, projects)).clone();
+        for piece in pieces.iter_mut().filter(|p| !matches!(p.kind, Kind::Code { .. })) {
+            ai_text::link_files(&mut piece.text, &bases, &mut exists, &mut find);
+        }
+        let palette = &self.settings.palette;
+        let code = pieces
+            .iter()
+            .map(|p| match &p.kind {
+                Kind::Code { lang, .. } => code_colors(lang, &p.text.text, palette),
+                _ => None,
+            })
+            .collect();
+        (pieces, code)
+    }
+
     fn entry_pieces(&mut self, i: usize) -> Rc<Parsed> {
         match self.entries.get(i) {
             Some(Entry::Assistant { text, .. }) => {
                 if let Some(p) = self.parsed.get(&i).filter(|p| p.source == *text) {
                     return p.clone();
                 }
-                let mut pieces = ai_text::pieces(shed_ai::markdown::parse(text));
-                // Files Claude names become links to them (not in code blocks).
-                let mut bases = vec![self.ai.folder.clone()];
-                bases.extend(self.ai.add_dirs.iter().cloned());
-                bases.extend(self.projects.iter().cloned());
-                let known = &mut self.file_exists;
-                let mut exists = |p: &std::path::Path| *known.entry(p.to_path_buf()).or_insert_with(|| p.is_file());
-                let (lookups, projects) = (&mut self.file_lookups, &self.project_files);
-                let mut find = |rel: &std::path::Path| lookups.entry(rel.to_path_buf()).or_insert_with(|| ai_text::find_in_projects(rel, projects)).clone();
-                for piece in pieces.iter_mut().filter(|p| !matches!(p.kind, Kind::Code { .. })) {
-                    ai_text::link_files(&mut piece.text, &bases, &mut exists, &mut find);
+                let text = text.clone();
+                let (pieces, code) = self.markdown_pieces(&text);
+                let parsed = Rc::new(Parsed { source: text, pieces, code, groups: Vec::new() });
+                self.parsed.insert(i, parsed.clone());
+                parsed
+            }
+            // An opened sub-agent: its prompt, what it said along the way
+            // (its tool calls are drawn as lines between), and its report.
+            Some(Entry::Tool(t)) if self.expanded.contains(&i) && matches!(t.name.as_str(), "Agent" | "Task") && t.run.is_some() => {
+                let run = t.run.as_deref().cloned().unwrap_or_default();
+                let report = Some(run.report.clone()).filter(|r| !r.is_empty()).or_else(|| t.result.clone().filter(|_| !run.running())).unwrap_or_default();
+                let key = format!("agent:{}:{}:{}:{}", run.skipped, run.steps.len(), report.len(), t.detail.len());
+                if let Some(p) = self.parsed.get(&i).filter(|p| p.source == key) {
+                    return p.clone();
                 }
-                let palette = &self.settings.palette;
-                let code = pieces
-                    .iter()
-                    .map(|p| match &p.kind {
-                        Kind::Code { lang, .. } => code_colors(lang, &p.text.text, palette),
-                        _ => None,
-                    })
-                    .collect();
-                let parsed = Rc::new(Parsed { source: text.clone(), pieces, code });
+                let detail = t.detail.clone();
+                let mut pieces = Vec::new();
+                let mut code = Vec::new();
+                if !detail.is_empty() {
+                    code.push(None);
+                    pieces.push(Piece { kind: Kind::Code { lang: "prompt".into(), depth: 0 }, text: shed_ai::markdown::Text::plain(detail) });
+                }
+                let mut groups = Vec::new();
+                for step in &run.steps {
+                    let start = pieces.len();
+                    if let Entry::Assistant { text, .. } = step {
+                        let (p, c) = self.markdown_pieces(text);
+                        pieces.extend(p);
+                        code.extend(c);
+                    }
+                    groups.push(start..pieces.len());
+                }
+                let start = pieces.len();
+                if !report.is_empty() {
+                    let (p, c) = self.markdown_pieces(&report);
+                    pieces.extend(p);
+                    code.extend(c);
+                }
+                groups.push(start..pieces.len());
+                let parsed = Rc::new(Parsed { source: key, pieces, code, groups });
+                self.parsed.insert(i, parsed.clone());
+                parsed
+            }
+            Some(Entry::Note(n)) if self.expanded.contains(&i) && !n.detail.is_empty() => {
+                if let Some(p) = self.parsed.get(&i).filter(|p| p.source == n.detail) {
+                    return p.clone();
+                }
+                let detail = n.detail.clone();
+                let parsed = if matches!(n.kind, NoteKind::Command | NoteKind::Hook) {
+                    Parsed { source: detail.clone(), pieces: vec![Piece { kind: Kind::Code { lang: "output".into(), depth: 0 }, text: shed_ai::markdown::Text::plain(detail) }], code: vec![None], groups: Vec::new() }
+                } else {
+                    let (pieces, code) = self.markdown_pieces(&detail);
+                    Parsed { source: detail, pieces, code, groups: Vec::new() }
+                };
+                let parsed = Rc::new(parsed);
                 self.parsed.insert(i, parsed.clone());
                 parsed
             }
@@ -1732,9 +1903,9 @@ impl AiView {
                     let lang = if t.error { "error" } else { "output" };
                     pieces.push(Piece { kind: Kind::Code { lang: lang.into(), depth: 0 }, text: shed_ai::markdown::Text::plain(shown) });
                 }
-                Rc::new(Parsed { source: String::new(), pieces, code })
+                Rc::new(Parsed { source: String::new(), pieces, code, groups: Vec::new() })
             }
-            _ => Rc::new(Parsed { source: String::new(), pieces: Vec::new(), code: Vec::new() }),
+            _ => Rc::new(Parsed::empty()),
         }
     }
 
@@ -1914,10 +2085,15 @@ impl AiView {
 
     /// The pieces of an entry, drawn: Markdown blocks, tables, code.
     fn render_pieces(&mut self, i: usize, parsed: &Rc<Parsed>, ui: &UiColors, mono: &str, cx: &mut Context<Self>) -> gpui::Div {
+        self.render_range(i, parsed, 0..parsed.pieces.len(), ui, mono, cx)
+    }
+
+    /// Some of an entry's pieces (a sub-agent's step), drawn as `render_pieces` does.
+    fn render_range(&mut self, i: usize, parsed: &Rc<Parsed>, range: Range<usize>, ui: &UiColors, mono: &str, cx: &mut Context<Self>) -> gpui::Div {
         let ink = ui.ink(self.accent);
         let mut out = div().flex().flex_col().gap_2().line_height(relative(1.45)).text_color(hsla(ui.text));
-        let mut j = 0;
-        let n = parsed.pieces.len();
+        let mut j = range.start;
+        let n = range.end.min(parsed.pieces.len());
         while j < n {
             let piece = &parsed.pieces[j];
             let styles = ai_text::highlights(&piece.text, ink, ui.divider);
@@ -1947,7 +2123,7 @@ impl AiView {
                 Kind::Item { .. } => {
                     // A list: its items closer together than paragraphs.
                     let mut items = div().flex().flex_col().gap_1();
-                    while let Some(Piece { kind: Kind::Item { depth, marker }, text }) = parsed.pieces.get(j) {
+                    while j < n && let Some(Piece { kind: Kind::Item { depth, marker }, text }) = parsed.pieces.get(j) {
                         let styles = ai_text::highlights(text, ink, ui.divider);
                         let numbered = marker.ends_with('.');
                         let bullet = div()
@@ -1958,7 +2134,7 @@ impl AiView {
                         items = items.child(div().flex().gap_1p5().pl(px(4.0 + *depth as f32 * 18.0)).child(bullet).child(div().flex_1().min_w_0().child(self.sel_text(i, j, parsed, styles, cx))));
                         j += 1;
                         // A code block inside an item stays in the list.
-                        while let Some(Piece { kind: Kind::Code { depth, .. }, .. }) = parsed.pieces.get(j) {
+                        while j < n && let Some(Piece { kind: Kind::Code { depth, .. }, .. }) = parsed.pieces.get(j) {
                             let indent = 4.0 + *depth as f32 * 18.0;
                             items = items.child(div().pl(px(indent)).child(self.render_code(i, j, parsed, ui, mono, cx)));
                             j += 1;
@@ -1974,7 +2150,7 @@ impl AiView {
                     let cols = *cols;
                     let mut table = div().flex().flex_col().rounded_sm().border_1().border_color(hsla(ui.divider)).text_size(px(12.5 * self.z()));
                     let mut row_el: Option<(usize, gpui::Div)> = None;
-                    while let Some(Piece { kind: Kind::Cell { row, align, .. }, text }) = parsed.pieces.get(j) {
+                    while j < n && let Some(Piece { kind: Kind::Cell { row, align, .. }, text }) = parsed.pieces.get(j) {
                         let (row, align) = (*row, *align);
                         if row_el.as_ref().is_none_or(|(r, _)| *r != row) {
                             if let Some((_, el)) = row_el.take() {
@@ -2299,11 +2475,24 @@ impl AiView {
                         .tooltip(menu::tooltip(if t.name == "Bash" { "Copy the command" } else { "Copy the input" }))
                 });
                 let open_file = t.file.clone().filter(|f| *self.file_exists.entry(PathBuf::from(f)).or_insert_with(|| std::path::Path::new(f).is_file()));
-                let (mark, color) = match (&t.result, t.error) {
-                    (None, _) => ("○", ui.text_dim),
-                    (Some(_), false) => ("✓", ui.ink(accent)),
-                    (Some(_), true) => ("✗", ui.danger),
+                let agent = matches!(t.name.as_str(), "Agent" | "Task");
+                let run = t.run.as_deref();
+                let (mark, color) = match (run.map(|r| r.state), &t.result, t.error) {
+                    // Going on (a sub-agent, a command in the background): turning.
+                    (Some(RunState::Running), _, _) => (["◐", "◓", "◑", "◒"][self.spin % 4], ui.ink(accent)),
+                    (Some(RunState::Done), _, _) => ("✓", ui.ink(accent)),
+                    (Some(RunState::Failed), _, _) => ("✗", ui.danger),
+                    (Some(RunState::Stopped), _, _) => ("■", ui.text_dim),
+                    (None, None, _) => ("○", ui.text_dim),
+                    (None, Some(_), false) => ("✓", ui.ink(accent)),
+                    (None, Some(_), true) => ("✗", ui.danger),
                 };
+                // After its line: how a run is doing; when a timer it set fires.
+                let info = match run {
+                    Some(r) => Some(run_line(&t, r)),
+                    None => self.status.timers.iter().find(|x| x.tool == t.id).map(|x| format!("fires {}", timer_when(x))),
+                };
+                let background = run.is_some_and(|r| r.background);
                 let mut el = div().id(("tool", i)).flex().flex_col().text_size(px(12.0 * self.z())).child(
                     div()
                         .id(("tool-head", i))
@@ -2317,7 +2506,23 @@ impl AiView {
                         .on_click(toggle)
                         .child(div().flex_none().w(px(10.0)).text_color(hsla(ui.text_dim)).child(if open { "▾" } else { "▸" }))
                         .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(mark))
-                        .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_color(hsla(ui.text_dim)).child(t.summary.clone()))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(mono.clone())
+                                .text_color(hsla(if agent { ui.text } else { ui.text_dim }))
+                                .when(info.is_some(), |d| d.flex_shrink(1.0).max_w(relative(0.6)))
+                                .when(info.is_none(), |d| d.flex_1())
+                                .child(t.summary.clone()),
+                        )
+                        .when(background, |d| {
+                            d.child(div().flex_none().px_1().rounded_sm().border_1().border_color(hsla(ui.divider)).text_size(px(10.5 * self.z())).text_color(hsla(ui.text_dim)).child("background"))
+                        })
+                        .when_some(info, |d, info| {
+                            let live = run.is_some_and(|r| r.running());
+                            d.child(div().flex_1().min_w_0().truncate().text_color(hsla(if live { ui.ink(accent) } else { ui.text_dim })).child(info))
+                        })
                         .children(copy)
                         // The file it read or changed, in its project tab.
                         .when_some(open_file, |d, file| {
@@ -2347,7 +2552,10 @@ impl AiView {
                 if !t.pictures.is_empty() {
                     el = el.child(div().pl(px(20.0)).child(thumbnails(i, &t.pictures, 120.0, &ui, self.z())));
                 }
-                if open {
+                if open && agent && let Some(run) = t.run.as_deref() {
+                    el = el.child(self.render_agent(i, &t, run, &ui, &mono, cx));
+                }
+                if open && !(agent && run.is_some()) {
                     let parsed = self.entry_pieces(i);
                     let mut j = 0;
                     if !t.detail.is_empty() {
@@ -2431,6 +2639,38 @@ impl AiView {
                 .text_color(hsla(if error { ui.danger } else { ui.text_dim }))
                 .child(text)
                 .into_any_element(),
+            // Claude Code's own note: a line of its own kind, its detail folded.
+            Entry::Note(n) => {
+                let foldable = !n.detail.is_empty();
+                let (glyph, color) = match n.kind {
+                    _ if n.error => ("alert", ui.danger),
+                    NoteKind::Task => ("tool", ui.text_dim),
+                    NoteKind::Wakeup => ("clock", ui.ink(accent)),
+                    NoteKind::Command => ("terminal", ui.text_dim),
+                    NoteKind::Compacted => ("history", ui.text_dim),
+                    NoteKind::Message => ("send", ui.text_dim),
+                    NoteKind::Hook => ("settings", ui.text_dim),
+                };
+                let line = div()
+                    .id(("note", i))
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .rounded_sm()
+                    .text_size(px(12.0 * self.z()))
+                    .text_color(hsla(if n.error { ui.danger } else { ui.text_dim }))
+                    .when(foldable, |d| d.cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover))).on_click(toggle))
+                    .when(foldable, |d| d.child(div().flex_none().w(px(10.0)).child(if open { "▾" } else { "▸" })))
+                    .child(svg().path(icon(glyph)).flex_none().size(px(12.0 * self.z())).text_color(hsla(color)))
+                    .child(div().flex_1().min_w_0().truncate().child(n.text.clone()))
+                    .children((n.at > 0).then(|| div().flex_none().text_size(px(11.0 * self.z())).text_color(hsla_alpha(ui.text_dim, 0.85)).child(local_time(n.at))));
+                let mut el = div().flex().flex_col().child(line);
+                if open && foldable {
+                    let parsed = self.entry_pieces(i);
+                    el = el.child(div().pl(px(20.0)).my_1().text_size(px(12.5 * self.z())).child(self.render_pieces(i, &parsed, &ui, &mono, cx)));
+                }
+                el.into_any_element()
+            }
         };
         let found = self.find.as_ref().is_some_and(|f| f.1 == Some(i));
         div()
@@ -2445,6 +2685,104 @@ impl AiView {
             }))
             .child(body)
             .into_any_element()
+    }
+
+    /// An opened sub-agent: its prompt, its steps (tool calls as lines that
+    /// open to what they returned, what it said in between), its report.
+    fn render_agent(&mut self, i: usize, t: &shed_ai::Tool, run: &Run, ui: &UiColors, mono: &str, cx: &mut Context<Self>) -> gpui::Div {
+        let z = self.z();
+        let accent = self.accent;
+        let parsed = self.entry_pieces(i);
+        let mut el = div().flex().flex_col();
+        if !t.detail.is_empty() {
+            el = el.child(div().my_1().child(self.render_code(i, 0, &parsed, ui, mono, cx)));
+        }
+        let what = [Some(run.agent.clone()).filter(|a| !a.is_empty()), (run.tokens > 0).then(|| format!("{} tokens", tokens(run.tokens)))].into_iter().flatten().collect::<Vec<_>>();
+        if !what.is_empty() {
+            el = el.child(div().text_color(hsla(ui.text_dim)).child(what.join(" · ")));
+        }
+        let mut steps = div().flex().flex_col().gap_1().my_1().pl_3().border_l_2().border_color(hsla(ui.divider));
+        if run.skipped > 0 {
+            steps = steps.child(div().text_color(hsla(ui.text_dim)).child(format!("{} earlier steps not kept", run.skipped)));
+        }
+        if run.steps.is_empty() {
+            let none = if run.running() { "No steps yet" } else { "Its steps are not known here" };
+            steps = steps.child(div().text_color(hsla(ui.text_dim)).child(none));
+        }
+        for (k, step) in run.steps.iter().enumerate() {
+            match step {
+                Entry::Tool(s) => {
+                    let key = (i, s.id.clone());
+                    let step_open = self.open_steps.contains(&key);
+                    let (mark, color) = match (&s.result, s.error) {
+                        (None, _) if run.running() => (["◐", "◓", "◑", "◒"][self.spin % 4], ui.ink(accent)),
+                        (None, _) => ("○", ui.text_dim),
+                        (Some(_), false) => ("✓", ui.ink(accent)),
+                        (Some(_), true) => ("✗", ui.danger),
+                    };
+                    let has_more = s.result.is_some() || s.diff.is_some() || !s.detail.is_empty();
+                    steps = steps.child(
+                        div()
+                            .id(SharedString::from(format!("step-{i}-{k}")))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded_sm()
+                            .when(has_more, |d| d.cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover))))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.open_steps.remove(&key) {
+                                    this.open_steps.insert(key.clone());
+                                }
+                                if i >= this.first {
+                                    let row = this.row(i);
+                                    this.list.remeasure_items(row..row + 1);
+                                }
+                                cx.notify();
+                            }))
+                            .child(div().flex_none().w(px(10.0)).text_color(hsla(ui.text_dim)).child(if !has_more { "" } else if step_open { "▾" } else { "▸" }))
+                            .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(mark))
+                            .child(div().flex_1().min_w_0().truncate().font_family(mono.to_string()).text_color(hsla(ui.text_dim)).child(s.summary.clone())),
+                    );
+                    if step_open {
+                        let mut more = div().pl(px(20.0)).flex().flex_col();
+                        if let Some(diff) = &s.diff {
+                            more = more.child(diff_view(&diff.old, &diff.new, ui, mono, z));
+                        } else if !s.detail.is_empty() {
+                            more = more.child(pre(&s.detail, ui, mono, None, z));
+                        }
+                        if let Some(result) = &s.result {
+                            more = more.child(pre(result, ui, mono, s.error.then_some(ui.danger), z));
+                        }
+                        steps = steps.child(more);
+                    }
+                }
+                Entry::Assistant { .. } => {
+                    let range = parsed.groups.get(k).cloned().unwrap_or_default();
+                    if !range.is_empty() {
+                        steps = steps.child(div().text_size(px(12.5 * z)).child(self.render_range(i, &parsed, range, ui, mono, cx)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        el = el.child(steps);
+        if let Some(range) = parsed.groups.last().filter(|r| !r.is_empty()).cloned() {
+            let report = self.render_range(i, &parsed, range, ui, mono, cx);
+            el = el.child(div().mt_1().text_color(hsla(ui.text_dim)).child("Its report")).child(div().my_1().child(report));
+        }
+        el.child(
+            div().flex().child(
+                div()
+                    .id(("tool-collapse", i))
+                    .px_1p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(hsla(ui.text_dim))
+                    .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.collapse(i, cx)))
+                    .child("▴ Collapse"),
+            ),
+        )
     }
 
     fn render_sessions(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -3135,6 +3473,34 @@ impl AiView {
                         .child(action(("draft-delete", n), "Delete…", ui.danger).on_click(cx.listener(move |this, _, window, cx| this.delete_draft(n, window, cx)))),
                 );
             }
+        }
+        // What Claude set to happen later: wake-ups, scheduled jobs, watches.
+        for (n, t) in self.status.timers.iter().enumerate() {
+            any = true;
+            let (glyph, label) = match t.kind {
+                TimerKind::Wakeup => ("clock", format!("Wakes up {}", timer_when(t))),
+                TimerKind::Job => ("clock", format!("Scheduled job, {}", timer_when(t))),
+                TimerKind::Watch => ("eye", format!("Watching, {}", timer_when(t))),
+            };
+            let detail = if t.prompt.is_empty() { t.what.clone() } else { format!("{}\n\nIt tells Claude: {}", t.what, t.prompt) };
+            out = out.child(
+                div()
+                    .id(("timer", n))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hsla_alpha(accent, 0.4))
+                    .tooltip(menu::tooltip_text(format!(
+                        "{detail}\n\nClaude Code does it while it keeps running for this tab. Closing the tab or its bench, changing the tab's folders or effort, or stopping Shed's keeper cancels it."
+                    )))
+                    .child(svg().path(icon(glyph)).size(px(12.0)).flex_none().text_color(hsla(ui.ink(accent))))
+                    .child(div().flex_none().text_color(hsla(ui.ink(accent))).child(label))
+                    .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(t.what.clone())),
+            );
         }
         // Waiting for Claude to be free (kept by the keeper, with the bench).
         let idle = self.status.state == AiState::Idle;
@@ -3876,6 +4242,72 @@ mod tests {
         });
         frame(cx, "steps opened (first)", 3);
         frame(cx, "steps opened (steady)", 30);
+    }
+
+    /// A recorded conversation with sub-agents, a background command, notes
+    /// and a wake-up waiting, drawn with every agent, step and note opened,
+    /// then changed in place as a background agent's progress is.
+    #[gpui::test]
+    fn agents_notes_and_timers_draw(cx: &mut gpui::TestAppContext) {
+        let mut t = shed_ai::Transcript::new("/tmp/shed-cap-b");
+        let stream = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../shed-ai/tests/streams/agents.jsonl")).unwrap();
+        for line in stream.lines() {
+            t.apply(&serde_json::from_str(line).unwrap());
+        }
+        t.apply(&serde_json::json!({"type": "user", "isCompactSummary": true, "message": {"content": "Summary:\n- **one**\n- two"}}));
+        t.apply(&serde_json::json!({"type": "user", "message": {"content": "<local-command-stdout>Compacted\nwith 2 lines</local-command-stdout>"}}));
+        let mut status = t.status.clone();
+        status.timers = vec![
+            Timer { kind: TimerKind::Wakeup, what: "check back".into(), at: unix_now() + 600, tool: "x".into(), ..Default::default() },
+            Timer { kind: TimerKind::Job, what: "tick".into(), every: "Every minute".into(), ..Default::default() },
+            Timer { kind: TimerKind::Watch, what: "the log".into(), at: unix_now() + 30, ..Default::default() },
+        ];
+        let entries = t.entries.clone();
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let ai = shed_model::AiTab { folder: "/tmp/shed-cap-b".into(), ..Default::default() };
+            AiView::new(BenchId::new(), TabId::new(), ai, Rgb::hex(0xFF8A57), crate::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default(), cx)
+        });
+        cx.simulate_resize(gpui::size(px(1400.0), px(3000.0)));
+        view.update(cx, |v, cx| v.update(0, entries, status.clone(), cx));
+        cx.run_until_parked();
+        view.update(cx, |v, _| {
+            for i in 0..v.entries.len() {
+                if let Entry::Tool(tool) = &v.entries[i] {
+                    for s in tool.run.iter().flat_map(|r| &r.steps) {
+                        if let Entry::Tool(s) = s {
+                            v.open_steps.insert((i, s.id.clone()));
+                        }
+                    }
+                }
+                if matches!(v.entries[i], Entry::Tool(_) | Entry::Note(_)) {
+                    v.expanded.insert(i);
+                }
+            }
+            v.list.remeasure();
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let agent = view.update(cx, |v, _| v.entries.iter().position(|e| matches!(e, Entry::Tool(t) if t.summary == "Agent: Echo twice")).unwrap());
+        let parsed = view.update(cx, |v, _| v.parsed.get(&agent).cloned()).expect("the opened agent was drawn");
+        assert_eq!(parsed.groups.len(), 4, "three steps and the report");
+        assert!(view.update(cx, |v, _| v.tick_every()) == Some(Duration::from_secs(1)), "a watch ends soon: its countdown keeps up");
+        // A step more for the agent, in place: drawn again, the rest kept.
+        let mut changed = view.update(cx, |v, _| v.entries[agent].clone());
+        if let Entry::Tool(tool) = &mut changed {
+            let run = tool.run.as_mut().unwrap();
+            run.steps.push(Entry::Assistant { text: "and **more**".into(), at: 0 });
+            run.state = RunState::Running;
+        }
+        view.update(cx, |v, cx| v.replace(vec![(agent as u32, changed)], status, cx));
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(view.update(cx, |v, _| v.running));
+        let parsed = view.update(cx, |v, _| v.parsed.get(&agent).cloned()).unwrap();
+        assert_eq!(parsed.groups.len(), 5);
     }
 
     #[gpui::test]

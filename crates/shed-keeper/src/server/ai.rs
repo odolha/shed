@@ -758,7 +758,14 @@ impl Keeper {
             let tabs: Vec<TabId> = st.ai.keys().copied().collect();
             for tab in tabs {
                 let rt = st.ai.get_mut(&tab).unwrap();
-                if let Some(from) = rt.transcript.take_changes() {
+                let (one, from) = rt.transcript.take_update();
+                // Entries changed in place (a background agent's progress) go
+                // alone, not with everything after them.
+                if !one.is_empty() {
+                    let entries = one.iter().map(|&i| (i as u32, rt.transcript.entries[i].clone())).collect();
+                    updates.push(KeeperMsg::AiEntries { tab, entries, status: rt.transcript.status.clone() });
+                }
+                if let Some(from) = from {
                     let entries = rt.transcript.entries[from.min(rt.transcript.entries.len())..].to_vec();
                     updates.push(KeeperMsg::AiUpdate { tab, from: from as u32, entries, status: rt.transcript.status.clone() });
                 }

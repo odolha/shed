@@ -146,6 +146,41 @@ add("user", "The setup guide only says to run ./dev.sh. Make it walk a new contr
 add("assistant", [{"type": "text", "text": "I'll look at what the project needs first."}])
 tool("Bash", {"command": "ls guides && cat guides/setup.md"}, "intro.md\nsetup.md\n# Setup\n\nInstall the tools, then run `./dev.sh`.")
 tool("Read", {"file_path": folder + "/guides/intro.md"}, "1\t# Introduction")
+# A sub-agent that tried the guide's commands (its own record is in
+# <session>/subagents/, as Claude Code keeps it), and a command left running
+# in the background, whose end Claude Code notes.
+aid, atid, btid = "a" + uuid.uuid4().hex[:16], "toolu_" + uuid.uuid4().hex[:8], "toolu_" + uuid.uuid4().hex[:8]
+add("assistant", [{"type": "tool_use", "id": atid, "name": "Agent", "input": {"description": "Try the setup commands", "subagent_type": "general-purpose", "prompt": "Run each command in guides/setup.md in a scratch clone, and say which fail and why."}}])
+sub, sub_last = [], None
+def sub_add(kind, content):
+    global sub_last
+    u = str(uuid.uuid4())
+    msg = {"role": kind, "content": content}
+    if kind == "assistant":
+        msg.update({"id": "msg_" + u[:8], "model": "claude-opus-5-5"})
+    sub.append({"type": kind, "uuid": u, "parentUuid": sub_last, "isSidechain": True, "agentId": aid, "timestamp": stamp(), "sessionId": sid, "cwd": folder, "message": msg})
+    sub_last = u
+def sub_tool(name, inp, result):
+    tid = "toolu_" + uuid.uuid4().hex[:8]
+    sub_add("assistant", [{"type": "tool_use", "id": tid, "name": name, "input": inp}])
+    sub_add("user", [{"type": "tool_result", "tool_use_id": tid, "content": result}])
+sub_add("user", "Run each command in guides/setup.md in a scratch clone, and say which fail and why.")
+sub_tool("Bash", {"command": "git clone -q ~/projects/board /tmp/board-try && cd /tmp/board-try"}, "")
+sub_tool("Read", {"file_path": folder + "/guides/setup.md"}, "1\t# Setup\n2\t\n3\tInstall the tools, then run `./dev.sh`.")
+sub_tool("Bash", {"command": "node -v"}, "v20.11.0")
+sub_add("assistant", [{"type": "text", "text": "Node is 20 here; the app wants 22. Trying `./dev.sh` anyway."}])
+sub_tool("Bash", {"command": "./dev.sh --check"}, "error: Node 22 or later is needed (found 20.11.0)")
+add("user", [{"type": "tool_result", "tool_use_id": atid, "content": [{"type": "text", "text": "Every command works on a fresh clone except `./dev.sh`, which stops at once: it needs **Node 22**, and says so. The guide should name the version.\nagentId: " + aid}]}],
+    toolUseResult={"status": "completed", "agentId": aid, "totalDurationMs": 95000, "totalToolUseCount": 4, "totalTokens": 23100})
+add("assistant", [{"type": "tool_use", "id": btid, "name": "Bash", "input": {"command": "./dev.sh", "description": "Start the app as the guide says", "run_in_background": True}}])
+add("user", [{"type": "tool_result", "tool_use_id": btid, "content": "Command running in background with ID: b4x9k2. Output is being written to: /tmp/claude/tasks/b4x9k2.output."}], toolUseResult={"backgroundTaskId": "b4x9k2"})
+add("user", "<task-notification>\n<task-id>b4x9k2</task-id>\n<tool-use-id>" + btid + "</tool-use-id>\n<status>completed</status>\n<summary>Background command \"Start the app as the guide says\" completed (exit code 0)</summary>\n</task-notification>", origin={"kind": "task-notification"})
+import os
+os.makedirs(os.path.join(os.path.dirname(out), sid, "subagents"), exist_ok=True)
+with open(os.path.join(os.path.dirname(out), sid, "subagents", f"agent-{aid}.jsonl"), "w") as f:
+    f.writelines(json.dumps(r) + "\n" for r in sub)
+with open(os.path.join(os.path.dirname(out), sid, "subagents", f"agent-{aid}.meta.json"), "w") as f:
+    json.dump({"agentType": "general-purpose", "description": "Try the setup commands", "toolUseId": atid, "finished": True}, f)
 tool("Edit", {"file_path": folder + "/guides/setup.md", "old_string": "Install the tools, then run `./dev.sh`.", "new_string": "## 1. Get the code\n\n```sh\ngit clone git@example.com:you/board.git\n```\n\n## 2. Install the tools\n\n## 3. Run it"}, "The file guides/setup.md has been updated successfully.")
 add("assistant", [{"type": "text", "text": "The guide now walks through the whole path in four steps:\n\n1. **Get the code**: clone, and the branches that matter.\n2. **Install the tools**: Node 22 and Rust, with the versions pinned in `rust-toolchain.toml`.\n3. **Run it**: `./dev.sh` starts the API and the web app; the board opens at `localhost:5173`.\n4. **Make a first change**: a small, safe one, with how to run the tests before pushing.\n\n| Step | Takes |\n| --- | --- |\n| Clone and install | about 10 minutes |\n| First run | under a minute |\n\nWant me to add a troubleshooting section for the usual first-run problems?"}])
 add("user", "Yes, and keep it short.")

@@ -43,13 +43,20 @@ cargo clippy --all-targets
 - `crates/shed-app/tests/` runs whole flows with real bash: the logbook, saving and
   loading, setup and teardown, aliases, closing Shed. `tests/zsh.rs` does the same
   with zsh when there is one (`zsh` on `PATH`, or `SHED_TEST_ZSH=/path/to/zsh`), and
-  is skipped otherwise. `ai_tabs.rs` and `ai_questions.rs` run AI tabs against a
-  stand-in `claude` (a script named by `SHED_CLAUDE` that answers the control
-  protocol and plays a recorded stream); `remote_tabs.rs` runs remote tabs against
+  is skipped otherwise. `ai_tabs.rs`, `ai_questions.rs` and `ai_agents.rs` run AI
+  tabs against a stand-in `claude` (a script named by `SHED_CLAUDE` that answers
+  the control protocol and plays a recorded stream); `remote_tabs.rs` runs remote tabs against
   a stand-in `ssh` (`SHED_SSH`) that runs the "server" locally, with its own
   home.
 - `crates/shed-ai/tests/streams/` holds recorded Claude Code streams the
-  transcript tests replay; `shed-git`'s tests make throwaway repositories (and a
+  transcript tests replay (`agents.jsonl`: sub-agents and a background command;
+  `timers.jsonl`: a wake-up, a scheduled job and a watch firing), and
+  `tests/sessions/` the session files Claude Code saved for the same runs, with
+  their `subagents/`. They were recorded from the real `claude -p
+  --input-format stream-json --output-format stream-json --verbose
+  --include-partial-messages` (a cheap model, in a scratch folder, stdin kept
+  open so timers could fire) and cleaned of names, paths and account details;
+  record new ones the same way. `shed-git`'s tests make throwaway repositories (and a
   bare remote) with the real `git`.
 - Some window code is tested headless with GPUI's test platform
   (`#[gpui::test]`): text layout and selection, scrollbars, the usage bars, a
