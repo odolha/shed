@@ -223,6 +223,9 @@ async function main() {
   check(hit, 'quick open finds a file with an emoji in its name');
   // UTF-16 positions: the 'e' of "emoji" comes after "docs/" (5) and the crab (2 units) and "-" (1).
   check(hit.hits[0] === 8, `quick open's hits are UTF-16 positions (got ${hit.hits})`);
+  const upload = await api.call(ws.id, { type: 'AiUpload', content: { tab: aiTab, name: '../notes.txt', data: Buffer.from('for Claude\n').toString('base64') } });
+  check(upload.type === 'Text' && upload.content.startsWith(`${DIR}/state/shed/ai-files/${aiTab}/`) && upload.content.endsWith('/notes.txt'), `AiUpload keeps a file under the tab's uploads (got ${upload.content})`);
+  check(readFileSync(upload.content, 'utf8') === 'for Claude\n', 'the uploaded file reads back');
 
   say('signing in to the web app (password and TOTP)');
   const browser = await Browser.launch(`${DIR}/chrome`);
@@ -285,6 +288,7 @@ async function main() {
     await browser.waitFor(`document.querySelector('shed-ai-tab')?.innerText.includes('count the lines')`, 'the prompt in the conversation');
     await browser.waitFor(`document.querySelector('shed-ai-tab')?.innerText.includes('has 3 lines now')`, "Claude's answer", 30000);
     await browser.screenshot(`${SHOTS}/07-ai.png`);
+    await browser.waitFor(`[...document.querySelectorAll('shed-ai-prompt button')].some((b) => b.innerText.includes('Attach'))`, 'the Attach button');
 
     const errors = browser.console.filter((l) => l.startsWith('exception') || l.startsWith('error'));
     if (errors.length) console.log(`the page logged:\n  ${errors.join('\n  ')}`);

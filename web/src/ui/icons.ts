@@ -7,6 +7,7 @@ export interface IconEl {
 
 export const ICONS: Record<string, IconEl[]> = {
   "ai": [{"t":"path","a":{"d":"M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"}},{"t":"path","a":{"d":"M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"}}],
+  "alert": [{"t":"path","a":{"d":"M10.3 3.9 2.4 17.5A2 2 0 0 0 4.1 20.5h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"}},{"t":"path","a":{"d":"M12 9v4"}},{"t":"path","a":{"d":"M12 17h.01"}}],
   "arrow-down": [{"t":"path","a":{"d":"M12 5v14"}},{"t":"path","a":{"d":"M6 13l6 6 6-6"}}],
   "arrow-up": [{"t":"path","a":{"d":"M12 19V5"}},{"t":"path","a":{"d":"M6 11l6-6 6 6"}}],
   "bench-color": [{"t":"circle","a":{"cx":"12","cy":"12","r":"9"}},{"t":"circle","a":{"cx":"8","cy":"10","r":"1.25"}},{"t":"circle","a":{"cx":"12","cy":"7.5","r":"1.25"}},{"t":"circle","a":{"cx":"16","cy":"10","r":"1.25"}},{"t":"path","a":{"d":"M13 21c-1.5-1-1.5-4 1-4h2.5a3.5 3.5 0 0 0 3.3-2.4"}}],
@@ -15,6 +16,7 @@ export const ICONS: Record<string, IconEl[]> = {
   "bench-save": [{"t":"rect","a":{"x":"3","y":"12","width":"18","height":"3","rx":"1"}},{"t":"path","a":{"d":"M5 15v6M19 15v6M5 18.5h14"}},{"t":"path","a":{"d":"M12 2v7"}},{"t":"path","a":{"d":"M9 6.5l3 3 3-3"}}],
   "bench": [{"t":"rect","a":{"x":"4","y":"2.5","width":"16","height":"11","rx":"2"}},{"t":"path","a":{"d":"M4 6h16"}},{"t":"path","a":{"d":"M7.5 8.25l2 1.5-2 1.5M11.5 11.25h3"}},{"t":"path","a":{"d":"M2 16.5h20M5 16.5V21M19 16.5V21"}}],
   "branch": [{"t":"circle","a":{"cx":"6","cy":"5","r":"2"}},{"t":"circle","a":{"cx":"6","cy":"19","r":"2"}},{"t":"circle","a":{"cx":"18","cy":"7","r":"2"}},{"t":"path","a":{"d":"M6 7v10"}},{"t":"path","a":{"d":"M18 9c0 5-6 4-11.5 8.5"}}],
+  "clock": [{"t":"circle","a":{"cx":"12","cy":"13","r":"8"}},{"t":"path","a":{"d":"M12 9v4l2.5 2"}},{"t":"path","a":{"d":"M5 3 2 6"}},{"t":"path","a":{"d":"m22 6-3-3"}}],
   "close": [{"t":"path","a":{"d":"M6 6l12 12M18 6L6 18"}}],
   "copy": [{"t":"rect","a":{"x":"8","y":"8","width":"12","height":"13","rx":"1.5"}},{"t":"path","a":{"d":"M16 8V4.5A1.5 1.5 0 0 0 14.5 3h-9A1.5 1.5 0 0 0 4 4.5v11A1.5 1.5 0 0 0 5.5 17H8"}}],
   "detach": [{"t":"rect","a":{"x":"3","y":"3","width":"13","height":"11","rx":"2"}},{"t":"path","a":{"d":"M11 10l9 9"}},{"t":"path","a":{"d":"M15 19h5v-5"}}],
@@ -32,6 +34,7 @@ export const ICONS: Record<string, IconEl[]> = {
   "minus": [{"t":"path","a":{"d":"M5 12h14"}}],
   "more": [{"t":"circle","a":{"cx":"5.5","cy":"12","r":"1.1","fill":"currentColor"}},{"t":"circle","a":{"cx":"12","cy":"12","r":"1.1","fill":"currentColor"}},{"t":"circle","a":{"cx":"18.5","cy":"12","r":"1.1","fill":"currentColor"}}],
   "pane": [{"t":"rect","a":{"x":"3","y":"4","width":"18","height":"16","rx":"2"}},{"t":"path","a":{"d":"M7 10l3 2-3 2"}},{"t":"path","a":{"d":"M12 15h5"}}],
+  "paperclip": [{"t":"path","a":{"d":"m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"}}],
   "pegboard": [{"t":"rect","a":{"x":"3","y":"3","width":"18","height":"18","rx":"2"}},{"t":"circle","a":{"cx":"8","cy":"8","r":"0.9","fill":"currentColor"}},{"t":"circle","a":{"cx":"12","cy":"8","r":"0.9","fill":"currentColor"}},{"t":"circle","a":{"cx":"16","cy":"8","r":"0.9","fill":"currentColor"}},{"t":"circle","a":{"cx":"8","cy":"12","r":"0.9","fill":"currentColor"}},{"t":"circle","a":{"cx":"12","cy":"12","r":"0.9","fill":"currentColor"}},{"t":"circle","a":{"cx":"16","cy":"12","r":"0.9","fill":"currentColor"}},{"t":"circle","a":{"cx":"8","cy":"16","r":"0.9","fill":"currentColor"}},{"t":"circle","a":{"cx":"12","cy":"16","r":"0.9","fill":"currentColor"}},{"t":"circle","a":{"cx":"16","cy":"16","r":"0.9","fill":"currentColor"}}],
   "pencil": [{"t":"path","a":{"d":"M4.5 19.5h4l10-10-4-4-10 10z"}},{"t":"path","a":{"d":"M12.5 7.5l4 4"}}],
   "plus": [{"t":"path","a":{"d":"M12 5v14M5 12h14"}}],

@@ -1138,10 +1138,20 @@ What the web app shows:
 - **AI tabs**, as in Shed: the conversation with its steps (click one for its
   detail, change and result), thinking folded, permission cards (**Allow**,
   **Allow for This Session**, **Deny**) and questions (pick options, or write
-  your own answer). The prompt sends with Enter on a computer (Shift+Enter
+  your own answer). A sub-agent or a task in the background says how it does
+  after its line (`running 3 min · Read src/main.rs · 4 tool calls`, `done in
+  40 s`); click it for the kind of agent, its steps (each opens to its change
+  and result) and its report. Claude Code's own notes (a background task
+  finished, a wake-up, a command's output, a compaction) are lines of their
+  own, their detail folded. Wake-ups, scheduled jobs and watches Claude set wait
+  above the prompt, counting down ("Wakes up in 18 min"; hover for what it will
+  tell Claude). The prompt sends with Enter on a computer (Shift+Enter
   breaks the line) and with its button on a phone; `/` lists Claude Code's
-  commands; pictures can be added with the clip, pasted, dropped, or taken with
-  the camera on a phone. While Claude works, sending queues the message
+  commands. **Attach** adds files (as can pasting or dropping them): pictures
+  go as pictures (they can be taken with the camera on a phone too); any other
+  file, up to 16 MB, is copied to the workspace and its path goes with the
+  message for Claude to read (the copies are deleted after 30 days unused).
+  While Claude works, sending queues the message
   (**Edit**, **Send Now**, **Remove**); **Draft** keeps it for later; **Stop**
   interrupts. Below the prompt: the model, its effort, the mode (**Full Auto…**
   asks first), and the follow and browser switches. The clock button lists the

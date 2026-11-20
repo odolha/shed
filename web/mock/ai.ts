@@ -9,8 +9,10 @@ import type {
   AiModel,
   AiQuestion,
   AiSession,
+  AiRun,
   AiStatus,
   AiTab,
+  AiTimer,
   Call,
   Event,
   Picture,
@@ -18,7 +20,7 @@ import type {
   Review,
   ReviewChange,
 } from '../src/api/gen/api.ts';
-import { Fail, env, hex, now, sleep, uid } from './util.ts';
+import { Fail, HOME, env, hex, now, sleep, uid } from './util.ts';
 import { gradientPng } from './png.ts';
 
 const COMMANDS: AiCommand[] = [
@@ -92,6 +94,75 @@ function seedEntries(t0: number): AiEntry[] {
     { type: 'Tool', content: { id: 'tool-4', name: 'Bash', summary: '$ cargo test', detail: 'cargo test', result: TEST_OUTPUT, error: false } },
     { type: 'Assistant', content: { text: 'Done: `Bench::len` is in `src/lib.rs`, and the tests pass. Clippy asks for an `is_empty` beside it; say if you want that too.', at: t0 + 102 } },
     { type: 'Notice', content: { text: 'Turn done · 42 s · $0.08', error: false } },
+    {
+      type: 'Note',
+      content: {
+        kind: 'task',
+        title: 'Background command "cargo build --release" finished',
+        detail: 'Exit code **0**.\n\n```\n   Compiling shed v0.1.0\n    Finished `release` profile in 1m 12s\n```',
+        at: t0 + 300,
+      },
+    },
+    { type: 'User', content: { text: 'Have an agent look for other places that count tabs, and check the CI again later.', at: t0 + 3400, pictures: [], images: 0 } },
+    {
+      type: 'Tool',
+      content: {
+        id: 'tool-wake',
+        name: 'ScheduleWakeup',
+        summary: 'Wake up later: check CI',
+        detail: '{"delay": "18m", "reason": "Check whether CI passed"}',
+        result: 'Scheduled.',
+        error: false,
+      },
+    },
+    { type: 'Tool', content: { id: AGENT_ID, name: 'Agent', summary: 'Agent: Find where tabs are counted', detail: 'Find every place in src/ that counts the tabs of a bench, and say which could use Bench::len.', result: null, error: false, run: agentRun(t0 + 3400) } },
+    {
+      type: 'Tool',
+      content: {
+        id: 'tool-watch',
+        name: 'Bash',
+        summary: '$ npm run dev',
+        detail: 'npm run dev',
+        result: 'Started in the background.',
+        error: false,
+        run: { state: 'running', background: true, agent: '', started: t0 + 3410, last: 'Listening on :5173', tools: 0, tokens: 0, steps: [], skipped: 0 },
+      },
+    },
+  ];
+}
+
+const AGENT_ID = 'tool-agent';
+
+/** `MAX_UPLOAD` of the API (not imported: the mock takes only types from it). */
+const MAX_UPLOAD = 16 * 1024 * 1024;
+
+/** What the mock's sub-agent does, step by step (then it reports). */
+const AGENT_STEPS: { tool?: [string, string, string]; said?: string }[] = [
+  { tool: ['Grep', 'Grep "tabs.len()" in src', 'src/bench.rs:42:    self.tabs.len()\nsrc/pegboard.rs:118:    bench.tabs.len()'] },
+  { said: 'Two places so far; looking at the pegboard more closely.' },
+  { tool: ['Read', 'Read src/pegboard.rs', '   118→    let n = bench.tabs.len();\n   119→    format!("{n} tabs")'] },
+  { tool: ['Grep', 'Grep "tabs.iter().count()" in src', 'src/state.rs:77:    b.tabs.iter().count()'] },
+  { tool: ['Read', 'Read src/state.rs', '    77→    b.tabs.iter().count()'] },
+  { said: 'One more uses `iter().count()`, which `len()` would replace.' },
+  { tool: ['Bash', '$ cargo check', '    Finished `dev` profile in 3.2s'] },
+];
+
+const AGENT_REPORT = `Three places count tabs:
+
+- \`src/bench.rs:42\`: already \`Bench::len\`.
+- \`src/pegboard.rs:118\`: \`bench.tabs.len()\`, could be \`bench.len()\`.
+- \`src/state.rs:77\`: \`b.tabs.iter().count()\`, could be \`b.len()\`.`;
+
+function agentRun(started: number): AiRun {
+  return { state: 'running', background: false, agent: 'Explore', started, ended: 0, last: 'Starting', tools: 0, tokens: 0, steps: [], skipped: 0, report: '' };
+}
+
+/** The mock's timers: a wake-up set by `tool-wake`, a job every minute, a watch. */
+function seedTimers(t: number): AiTimer[] {
+  return [
+    { kind: 'wakeup', what: 'Check whether CI passed', at: t + 18 * 60, recurring: false, every: '', prompt: 'Check the CI run of the last push and say if it passed.', tool: 'tool-wake' },
+    { kind: 'job', what: 'Look for new review comments', at: (Math.floor(t / 60) + 1) * 60, recurring: true, every: 'Every minute', prompt: 'Look for new review comments on the pull request.', tool: '' },
+    { kind: 'watch', what: 'Watching the dev server for errors', at: t + 5 * 60, recurring: false, every: '', prompt: '', tool: 'tool-watch' },
   ];
 }
 
@@ -117,6 +188,9 @@ export class AiRuntime {
   private turn: { cancelled: boolean } | null = null;
   private waiting: Waiting | null = null;
   private review: Review;
+  /** The sub-agent's progress, sent as entries changed in place. */
+  private live: ReturnType<typeof setInterval> | null = null;
+  private agentStep = 0;
 
   constructor(tabId: string, ai: AiTab, changed: () => void, seeded: boolean) {
     this.tabId = tabId;
@@ -144,8 +218,59 @@ export class AiRuntime {
     }
     this.entries = seeded ? seedEntries(t - 3600) : [];
     this.pictures.set('shot-1.png', { mediaType: 'image/png', data: gradientPng(160, 100, '#5CB2FF', '#B48BFF') });
-    this.status = { session: ai.session ?? null, model: 'claude-opus-5-5', state: 'idle', cost: seeded ? 0.08 : 0, context: seeded ? 84000 : 0, contextMax: 1000000, since: null };
+    this.status = { session: ai.session ?? null, model: 'claude-opus-5-5', state: 'idle', cost: seeded ? 0.08 : 0, context: seeded ? 84000 : 0, contextMax: 1000000, since: null, timers: seeded ? seedTimers(t) : [] };
     this.review = makeReview();
+    if (seeded) this.live = setInterval(() => this.progress(), 4000);
+  }
+
+  /** Now and then: the sub-agent takes a step (and ends), timers move on. */
+  private progress(): void {
+    const changed: { index: number; entry: AiEntry }[] = [];
+    const index = this.entries.findIndex((e) => e.type === 'Tool' && e.content.id === AGENT_ID);
+    const e = this.entries[index];
+    if (e?.type === 'Tool' && e.content.run && e.content.run.state === 'running') {
+      const run: AiRun = { ...e.content.run, steps: [...(e.content.run.steps ?? [])] };
+      const step = AGENT_STEPS[this.agentStep];
+      // The step before is done once the next starts.
+      const last = run.steps!.at(-1);
+      if (last?.type === 'Tool' && (last.content.result === null || last.content.result === undefined)) {
+        const done = AGENT_STEPS.find((s) => s.tool?.[1] === last.content.summary);
+        run.steps![run.steps!.length - 1] = { type: 'Tool', content: { ...last.content, result: done?.tool?.[2] ?? '', error: false } };
+      }
+      if (step?.tool) {
+        const [name, summary] = step.tool;
+        run.steps!.push({ type: 'Tool', content: { id: uid('step'), name, summary, detail: '', result: null, error: false } });
+        run.last = summary;
+        run.tools = (run.tools ?? 0) + 1;
+      } else if (step?.said) {
+        run.steps!.push({ type: 'Assistant', content: { text: step.said, at: now() } });
+      } else {
+        run.state = 'done';
+        run.ended = now();
+        run.last = 'Done';
+        run.report = AGENT_REPORT;
+      }
+      run.tokens = (run.tokens ?? 0) + 2300;
+      // Only the latest steps travel; the earlier ones are counted.
+      if (run.steps!.length > 4) {
+        run.skipped = (run.skipped ?? 0) + run.steps!.length - 4;
+        run.steps = run.steps!.slice(-4);
+      }
+      this.agentStep += 1;
+      this.entries[index] = { type: 'Tool', content: { ...e.content, run, result: run.state === 'done' ? run.report : null } };
+      changed.push({ index, entry: this.entries[index]! });
+    }
+    // The job comes round again; a wake-up due wakes Claude.
+    const t = now();
+    const timers = this.status.timers ?? [];
+    for (const x of timers) if (x.recurring && (x.at ?? 0) <= t) x.at = (Math.floor(t / 60) + 1) * 60;
+    const due = timers.filter((x) => x.kind === 'wakeup' && (x.at ?? 0) > 0 && (x.at ?? 0) <= t);
+    this.status.timers = timers.filter((x) => !due.includes(x));
+    for (const x of due) this.push({ type: 'Note', content: { kind: 'wakeup', title: `Woke up: ${x.what}`, detail: x.prompt ?? '', error: false, at: t } });
+    if (changed.length || due.length) {
+      const content = { entries: changed, status: { ...this.status } };
+      for (const emit of this.subs) emit({ type: 'AiEntries', content });
+    }
   }
 
   // ---------------------------------------------------------------- topic
@@ -490,6 +615,14 @@ export class AiRuntime {
         }
         return { type: 'Done' };
       }
+      case 'AiUpload': {
+        const { name, data } = call.content;
+        const size = Math.floor((data.length * 3) / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
+        if (size > MAX_UPLOAD) throw new Fail('invalid', `${name} is larger than 16 MB`);
+        await sleep(600);
+        const safe = name.replace(/[/\\]/g, '_') || 'file';
+        return { type: 'Text', content: `${HOME}/.local/state/shed/ai-files/${this.tabId}/${hex(4)}/${safe}` };
+      }
       case 'AiPicture': {
         const p = this.pictures.get(call.content.name);
         if (!p) throw new Fail('notFound', `no picture ${call.content.name}`);
@@ -534,6 +667,7 @@ export class AiRuntime {
   }
 
   dispose(): void {
+    if (this.live) clearInterval(this.live);
     if (this.turn) this.turn.cancelled = true;
     this.subs.clear();
   }

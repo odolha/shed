@@ -19,7 +19,7 @@ npm start        # the app on http://localhost:4200, /api proxied to the mock
 
 Sign in as `you` with the password `shed`; any six-digit code works but
 `000000`. The mock has a workspace `devbox` (two benches: terminals with a tiny
-fake shell, an AI tab with a scripted conversation, a project tab with files and
+fake shell, an AI tab with a scripted conversation, a sub-agent at work, Claude Code's notes and timers, files attached kept at a pretend path, a project tab with files and
 Git; a closed bench) and an offline `laptop`. A workspace `buildbox` asks to
 pair: approve it under Devices by typing its code `K7QF-2M9D`, or reject it
 from its row. Its switches:

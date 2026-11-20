@@ -740,7 +740,8 @@ async function dispatch(call: Call): Promise<Reply> {
     case 'AiAddDraft':
     case 'AiRemoveDraft':
     case 'AiSetViewed':
-    case 'AiExplain': {
+    case 'AiExplain':
+    case 'AiUpload': {
       const { tab } = runningTab(call.content.tab);
       return aiFor(tab).call(call);
     }

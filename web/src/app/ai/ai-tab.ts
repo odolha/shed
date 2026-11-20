@@ -18,14 +18,15 @@ import { Dialogs } from '../../ui/dialog';
 import { Icon } from '../../ui/icon';
 import { Menu, MenuTrigger } from '../../ui/menu';
 import { Notices } from '../../ui/notices';
-import { span } from '../../ui/time';
+import { nowSecs, span } from '../../ui/time';
 import { Tooltip } from '../../ui/tooltip';
 import { tildify } from '../shared/tabs';
 import { AiEntryView, type UserAction } from './entries';
 import { AiPrompt } from './prompt';
 import { AiReviewView } from './review';
 import { AiSessionsPanel } from './sessions';
-import { applyTranscript, workingOn } from './transcript';
+import { AiLive, runningStarts, tickEvery, timerLabel, timerTip } from './runs';
+import { applyAiEvent, workingOn } from './transcript';
 
 /** Claude Code's permission modes: its value, the menu's label key. */
 export const MODES: { value: string; key: string }[] = [
@@ -43,6 +44,7 @@ const PAGE = 150;
   selector: 'shed-ai-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [TPipe, Icon, Tooltip, Menu, MenuTrigger, AiEntryView, AiPrompt, AiSessionsPanel, AiReviewView],
+  providers: [AiLive],
   template: `
     @let a = ai();
     <header class="head">
@@ -157,6 +159,17 @@ const PAGE = 150;
               <span class="grow">{{ 'ai.browserOn' | t }}</span>
               @if (canChange()) {
                 <button class="btn ghost small" (click)="settings({ browser: false })">{{ 'ai.disconnect' | t }}</button>
+              }
+            </div>
+          }
+          @if (timers().length) {
+            <div class="timers">
+              @for (tm of timers(); track $index) {
+                <div class="timer small" tabindex="0" [shedTip]="timerTip(tm)">
+                  <shed-icon [name]="tm.kind === 'watch' ? 'eye' : 'clock'" [size]="14" />
+                  <span class="when">{{ timerLabel(tm, now()) }}</span>
+                  <span class="ellipsis grow">{{ tm.what }}</span>
+                </div>
               }
             </div>
           }
@@ -402,6 +415,27 @@ const PAGE = 150;
       border-radius: var(--radius-sm);
       background: color-mix(in srgb, var(--info) 12%, transparent);
     }
+    .timers {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .timer {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      padding: 2px 8px;
+      border-radius: var(--radius-sm);
+      border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+      color: var(--accent);
+    }
+    .timer .grow {
+      color: var(--text);
+    }
+    .when {
+      flex: none;
+    }
     .queue,
     .drafts {
       display: flex;
@@ -500,10 +534,13 @@ export class AiTab {
   private readonly clip = inject(Clipboard);
   private readonly scroller = viewChild<ElementRef<HTMLElement>>('scroller');
   private readonly prompt = viewChild<AiPrompt>('prompt');
+  private readonly live = inject(AiLive);
 
   protected readonly PAGE = PAGE;
   protected readonly FULL_AUTO = FULL_AUTO;
   protected readonly modes = MODES;
+  protected readonly timerLabel = timerLabel;
+  protected readonly timerTip = timerTip;
 
   protected readonly tabId = computed(() => this.tab().id);
   protected readonly ai = computed<AiTabState>(() => {
@@ -529,6 +566,11 @@ export class AiTab {
   protected readonly editing = signal<number | null>(null);
   private readonly resub = signal(0);
   private readonly tick = signal(0);
+
+  protected readonly now = this.live.now;
+  protected readonly timers = computed(() => this.status().timers ?? []);
+  /** When the runs going on started: what the clock counts besides timers. */
+  private readonly starts = computed(() => runningStarts(this.entries()));
 
   protected readonly offset = computed(() => Math.max(0, this.entries().length - this.shown()));
   protected readonly visible = computed(() => this.entries().slice(this.offset()));
@@ -596,15 +638,26 @@ export class AiTab {
       });
       const sub = this.store.socket.subscribe(ws, { type: 'Ai', content: { tab } }, {
         event: (e) => {
-          if (e.type === 'AiTranscript') {
-            const before = this.entries().length;
-            this.entries.update((old) => applyTranscript(old, e.content));
-            this.status.set(e.content.status);
-            this.loaded.set(true);
-            this.paused.set(false);
-            if (this.atBottom() || before === 0) this.scrollDown(false);
-          } else if (e.type === 'AiInfo') {
-            this.info.set(e.content);
+          switch (e?.type) {
+            case 'AiTranscript':
+            case 'AiEntries': {
+              const before = this.entries().length;
+              const next = applyAiEvent({ entries: this.entries(), status: this.status() }, e);
+              this.entries.set(next.entries);
+              this.status.set(next.status);
+              if (e.type === 'AiTranscript') {
+                this.loaded.set(true);
+                this.paused.set(false);
+                if (this.atBottom() || before === 0) this.scrollDown(false);
+              }
+              break;
+            }
+            case 'AiInfo':
+              this.info.set(e.content);
+              break;
+            default:
+              // Events of a newer workspace: not for this version.
+              break;
           }
         },
         paused: () => this.paused.set(true),
@@ -624,11 +677,25 @@ export class AiTab {
       if (el.firstElementChild) ro.observe(el.firstElementChild);
       onCleanup(() => ro.disconnect());
     });
-    // A clock for "working for 12s".
+    // What the entries need to know besides their own: Claude working, timers.
+    effect(() => {
+      this.live.busy.set(this.busy());
+      this.live.timers.set(this.timers());
+    });
+    // A clock for "working for 12s", runs' times and timers' countdowns:
+    // every second while they change by the second, else every 30 s, else none.
     effect((onCleanup) => {
-      if (!this.busy()) return;
-      const timer = setInterval(() => this.tick.update((n) => n + 1), 1000);
-      onCleanup(() => clearInterval(timer));
+      this.tick();
+      const now = nowSecs();
+      // Fresh for what just changed (a timer set, a run started).
+      untracked(() => this.live.now.set(now));
+      const every = tickEvery(this.busy(), this.starts(), this.timers(), now);
+      if (every === null) return;
+      const timer = setTimeout(() => {
+        this.live.now.set(nowSecs());
+        this.tick.update((n) => n + 1);
+      }, every);
+      onCleanup(() => clearTimeout(timer));
     });
     // The sessions list follows turns ending and drafts changing.
     effect(() => {
@@ -767,6 +834,7 @@ export class AiTab {
       if (e.type === 'User') parts.push(`> ${e.content.text.replace(/\n/g, '\n> ')}`);
       else if (e.type === 'Assistant') parts.push(e.content.text);
       else if (e.type === 'Tool') parts.push(`· ${e.content.summary}`);
+      else if (e.type === 'Note') parts.push(`· ${e.content.title}`);
     }
     void this.clip.copy(parts.join('\n\n'));
   }

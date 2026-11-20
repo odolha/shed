@@ -61,3 +61,9 @@ function readAsDataUrl(file: Blob): Promise<string> {
     r.readAsDataURL(file);
   });
 }
+
+/** A file's bytes as base64 (an upload's `data`). */
+export async function readBase64(file: Blob): Promise<string> {
+  const url = await readAsDataUrl(file);
+  return url.slice(url.indexOf(',') + 1);
+}

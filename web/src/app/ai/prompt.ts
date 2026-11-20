@@ -12,19 +12,34 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
-import type { AiCommand, AiInfo, AiTab, Picture } from '../../api/gen/api';
+import { MAX_UPLOAD, type AiCommand, type AiInfo, type AiTab, type Picture } from '../../api/gen/api';
 import { WorkspacesStore } from '../../api/workspaces.store';
 import { TPipe, t } from '../../i18n/i18n';
 import { Icon } from '../../ui/icon';
 import { Notices } from '../../ui/notices';
 import { Tooltip } from '../../ui/tooltip';
-import { dataUrl, readPicture } from './pictures';
+import { dataUrl, readBase64, readPicture } from './pictures';
+import { withAttachedFiles } from './runs';
 
 interface Attached {
   id: number;
   name: string;
   picture: Picture;
   url: string;
+}
+
+/** A file kept on the workspace for the prompt (`AiUpload`): its path once there. */
+interface AttachedFile {
+  id: number;
+  name: string;
+  path: string | null;
+}
+
+/** Pictures Claude reads as pictures; other files go as files. */
+const PICTURES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+export function isPicture(file: { type: string }): boolean {
+  return PICTURES.has(file.type);
 }
 
 /** The commands matching what is typed after `/`, best first. */
@@ -77,6 +92,23 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
         }
       </ul>
     }
+    @if (files().length) {
+      <div class="files">
+        @for (f of files(); track f.id) {
+          <span class="file" [class.pending]="f.path === null" [shedTip]="f.path ?? ('ai.prompt.uploading' | t: { name: f.name })">
+            @if (f.path === null) {
+              <span class="spinner" [attr.aria-label]="'ai.prompt.uploading' | t: { name: f.name }"></span>
+            } @else {
+              <shed-icon name="file" [size]="13" />
+            }
+            <span class="ellipsis">{{ f.name }}</span>
+            <button class="x" (click)="unattachFile(f.id)" [attr.aria-label]="'ai.prompt.removeFile' | t: { name: f.name }">
+              <shed-icon name="close" [size]="12" />
+            </button>
+          </span>
+        }
+      </div>
+    }
     @if (attached().length) {
       <div class="pics">
         @for (a of attached(); track a.id) {
@@ -104,10 +136,11 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
         enterkeyhint="enter"
       ></textarea>
       <div class="buttons">
-        <input #file type="file" accept="image/*" multiple hidden (change)="onFiles($event)" />
+        <input #file type="file" multiple hidden (change)="onFiles($event)" />
         <input #camera type="file" accept="image/*" capture="environment" hidden (change)="onFiles($event)" />
-        <button class="icon-btn" (click)="file.click()" [disabled]="!canChange()" [shedTip]="'ai.prompt.attach' | t">
-          <shed-icon name="attach" [size]="18" />
+        <button class="btn ghost" (click)="file.click()" [disabled]="!canChange()" [shedTip]="'ai.prompt.attachTip' | t">
+          <shed-icon name="paperclip" />
+          <span class="label">{{ 'ai.prompt.attach' | t }}</span>
         </button>
         @if (coarse) {
           <button class="icon-btn" (click)="camera.click()" [disabled]="!canChange()" [shedTip]="'ai.prompt.camera' | t">
@@ -121,7 +154,7 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
             <span class="label">{{ 'ai.prompt.draft' | t }}</span>
           </button>
         }
-        @if (working() && !text().trim() && !attached().length) {
+        @if (working() && !text().trim() && !attached().length && !files().length) {
           <button class="btn" (click)="stop()" [disabled]="!canChange()">
             <shed-icon name="stop" />{{ 'ai.prompt.stop' | t }}
           </button>
@@ -196,6 +229,57 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
     .complete .sel {
       background: var(--hover);
     }
+    .files {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .file {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 260px;
+      height: 26px;
+      padding: 0 2px 0 8px;
+      border: 1px solid var(--divider);
+      border-radius: 13px;
+      background: var(--surface);
+      font-size: 12.5px;
+    }
+    .file.pending {
+      color: var(--text-dim);
+    }
+    .file .x {
+      width: 20px;
+      height: 20px;
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: 50%;
+      background: none;
+      color: var(--text-dim);
+      cursor: pointer;
+    }
+    .file .x:hover {
+      background: var(--hover);
+      color: var(--text);
+    }
+    .spinner {
+      width: 10px;
+      height: 10px;
+      flex: none;
+      border: 2px solid var(--divider);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
     .pics {
       display: flex;
       flex-wrap: wrap;
@@ -252,6 +336,7 @@ export class AiPrompt implements OnDestroy {
 
   protected readonly text = signal('');
   protected readonly attached = signal<Attached[]>([]);
+  protected readonly files = signal<AttachedFile[]>([]);
   protected readonly dragging = signal(false);
   protected readonly selected = signal(0);
   protected readonly coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -266,8 +351,14 @@ export class AiPrompt implements OnDestroy {
     return matchCommands(this.info()?.commands ?? [], text);
   });
 
+  /** Files still on their way to the workspace: sending waits for them. */
+  protected readonly uploading = computed(() => this.files().some((f) => f.path === null));
+
   protected readonly canSend = computed(
-    () => this.canChange() && (this.text().trim() !== '' || this.attached().length > 0),
+    () =>
+      this.canChange() &&
+      !this.uploading() &&
+      (this.text().trim() !== '' || this.attached().length > 0 || this.files().length > 0),
   );
 
   constructor() {
@@ -397,7 +488,7 @@ export class AiPrompt implements OnDestroy {
   }
 
   protected onPaste(e: ClipboardEvent): void {
-    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
+    const files = Array.from(e.clipboardData?.files ?? []);
     if (!files.length) return;
     e.preventDefault();
     void this.attach(files);
@@ -414,9 +505,7 @@ export class AiPrompt implements OnDestroy {
     const files = Array.from(e.dataTransfer?.files ?? []);
     if (!files.length) return;
     e.preventDefault();
-    const pictures = files.filter((f) => f.type.startsWith('image/'));
-    if (pictures.length < files.length) this.notices.info(t('ai.prompt.onlyPictures'));
-    void this.attach(pictures);
+    void this.attach(files);
   }
 
   protected onFiles(e: Event): void {
@@ -426,9 +515,14 @@ export class AiPrompt implements OnDestroy {
     void this.attach(files);
   }
 
+  /** Pictures as pictures; other files kept on the workspace, by their path. */
   private async attach(files: File[]): Promise<void> {
     if (!this.canChange()) return;
     for (const f of files) {
+      if (!isPicture(f)) {
+        void this.upload(f);
+        continue;
+      }
       if (f.size > 20_000_000) {
         this.notices.info(t('ai.prompt.tooLarge', { name: f.name }));
         continue;
@@ -446,10 +540,47 @@ export class AiPrompt implements OnDestroy {
     this.attached.update((a) => a.filter((x) => x.id !== id));
   }
 
+  private async upload(f: File): Promise<void> {
+    const name = f.name || 'file';
+    // Refused before it is read: the workspace keeps no more than this.
+    if (f.size > MAX_UPLOAD) {
+      this.notices.info(t('ai.prompt.fileTooLarge', { name, max: `${Math.round(MAX_UPLOAD / (1024 * 1024))} MB` }));
+      return;
+    }
+    const id = this.nextId++;
+    this.files.update((a) => [...a, { id, name, path: null }]);
+    try {
+      const data = await readBase64(f);
+      const path = await this.store.call(
+        this.workspace(),
+        { type: 'AiUpload', content: { tab: this.tab(), name, data } },
+        'Text',
+        120_000,
+      );
+      // Taken out while it went: left out.
+      this.files.update((a) => a.map((x) => (x.id === id ? { ...x, path } : x)));
+    } catch (e) {
+      this.files.update((a) => a.filter((x) => x.id !== id));
+      this.notices.error(e);
+    }
+  }
+
+  protected unattachFile(id: number): void {
+    this.files.update((a) => a.filter((x) => x.id !== id));
+  }
+
   async send(): Promise<void> {
+    if (this.uploading()) {
+      this.notices.info(t('ai.prompt.waitUploads'));
+      return;
+    }
     if (!this.canSend()) return;
-    const text = this.text().trim();
-    const pictures = this.attached().map((a) => a.picture);
+    const typed = this.text().trim();
+    const attached = this.attached();
+    const files = this.files();
+    // Files go as their paths on the workspace, for Claude to read.
+    const text = withAttachedFiles(typed, files.flatMap((f) => (f.path ? [f.path] : [])));
+    const pictures = attached.map((a) => a.picture);
     const editing = this.editing();
     const work =
       editing !== null
@@ -458,10 +589,13 @@ export class AiPrompt implements OnDestroy {
     // Cleared at once; put back if it did not go.
     this.setText('');
     this.attached.set([]);
+    this.files.set([]);
     this.editing.set(null);
     const r = await this.notices.run(work);
     if (r === undefined) {
-      this.setText(text);
+      this.setText(typed);
+      this.attached.set(attached);
+      this.files.set(files);
       return;
     }
     if (this.unsentTimer) clearTimeout(this.unsentTimer);

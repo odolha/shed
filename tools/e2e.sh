@@ -4,7 +4,7 @@
 # a keeper of its own (with a stand-in claude) and its link, pairs them with
 # `shed nexus join`, then drives the web app in a headless Chrome: signing in
 # with TOTP, the overview, a terminal, the logbook, a project's diff and file,
-# an AI tab. Screenshots go to $E2E_DIR/shots. Cleans up after itself,
+# an AI tab (and a file uploaded for it). Screenshots go to $E2E_DIR/shots. Cleans up after itself,
 # stopping only what it started.
 #
 #   tools/e2e.sh              # E2E_DIR=/tmp/shed-e2e, port 7871, release build
