@@ -20,6 +20,7 @@ settings file. Screenshots come from a demo setup (`tools/screenshots/`).
 - [The `shed` command](#the-shed-command)
 - [Settings: shed.toml](#settings-shedtoml)
 - [Where things are kept](#where-things-are-kept)
+- [Shed on your phone](#shed-on-your-phone)
 - [Troubleshooting](#troubleshooting)
 
 ## The idea
@@ -1043,6 +1044,45 @@ shed backup restore 2026-11-12
 A restore puts that backup's files back, after backing up what is there now (a
 `…-before-restore` backup), so it can be undone. Benches saved since then and not
 in the backup stay as they are.
+
+## Shed on your phone
+
+The Android app shows and drives your workspaces from anywhere, through a
+[nexus](nexus-deploy.md) you host. Build and install it as
+[android/README.md](../android/README.md) says, then sign in with the nexus's
+address (`https://nexus.example.com`), your user name, password and a code from
+your authenticator. Fingerprint unlock is in its Settings.
+
+- **Workspaces**: each linked computer, online or when it was last seen, with
+  its benches (in their colours), how many AI tabs work or wait for you, and
+  your usage limits. Closed benches can be loaded from there.
+- **A bench**: its tabs in order, with tags; **New Tab** opens a terminal,
+  project, AI or remote tab in a folder you pick; a long press renames or
+  closes a tab (closing asks first).
+- **AI tabs** work as on the computer: the conversation with its steps
+  (tap one for the command, the change and what came back), permission cards
+  (**Allow**, **Allow for This Session**, **Deny**), Claude's questions, and the
+  prompt, which takes pictures from the gallery or the camera. While Claude
+  works, messages queue. Drafts, sessions, the model, effort and mode (**Full
+  Auto…** asks first), and **Review** with Viewed and **Explain** are there too.
+  A long press on one of your messages offers Edit, Send Again and Revert….
+- **Terminals** show the active pane's screen, its lines re-wrapped to the
+  phone; scrolling up fetches earlier lines. Type in the field (Enter sends) and
+  use the key bar for Esc, Tab, Ctrl, Alt and the arrows. For a full-screen
+  program (vim, htop), **Take the size** makes the program draw for the phone
+  while you look; leaving gives the size back.
+- **Logbook**, **project files** (tree, Quick Open, search, a file viewer with
+  colours) and **Git** (stage, unstage or discard by hunk, commit, history,
+  branches, fetch, pull, push).
+- **Devices**: everything signed in or paired, revoking (with a code), and
+  approving a workspace's pairing by typing the code it showed.
+- **Notifications** come through UnifiedPush (the ntfy app, with your own ntfy
+  server), never through Google: Claude waiting for you, a turn done, a long
+  command finished, a workspace gone offline, each on or off. Tapping one opens
+  its tab.
+
+Private tabs show as private: what is in them never leaves the computer. A
+workspace that allows viewing only shows everything and offers no changes.
 
 ## Troubleshooting
 

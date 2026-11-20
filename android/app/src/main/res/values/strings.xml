@@ -294,7 +294,7 @@
     <string name="settings_notifications">Notifications</string>
     <string name="push_enable">Push notifications</string>
     <string name="push_no_distributor">Notifications come through UnifiedPush, without Google. Install a distributor such as ntfy (from F-Droid), point it at your push server, then come back here.</string>
-    <string name="push_off_at_nexus">Push is off on this nexus (no push settings in its nexus.toml).</string>
+    <string name="push_off_at_nexus">Push is off on this nexus ([push] enabled = false in its nexus.toml).</string>
     <string name="channel_ai_waiting">Claude waits for an answer</string>
     <string name="channel_ai_done">Claude finished a turn</string>
     <string name="channel_command_done">A long command finished</string>
