@@ -1,6 +1,6 @@
 # Roadmap
 
-What is still open, as of 2026-11-16. Shed as it is now is described in the
+What is still open, as of 2026-11-20. Shed as it is now is described in the
 [User Guide](user-guide.md) and [How Shed works](architecture.md); how it got
 here, and why, is in [History](history/README.md).
 
@@ -8,8 +8,25 @@ Nothing here is promised or ordered; items move into Shed as they are wanted.
 
 ## Shed from anywhere
 
-- **A nexus, web and Android apps, and a server workspace with a TUI**: being
-  planned and built, see [the plan](nexus-plan.md).
+The nexus, the link, the web and Android apps and the server workspace with
+`shed tui` are in (see [the plan](nexus-plan.md) for the decisions behind
+them). Still open:
+
+- **Who holds a pane's size.** An app can take a pane's size for a
+  full-screen program on a phone (**Take the size**). The plan had the Shed window
+  then show the pane at that size and say which device holds it; now the window
+  keeps its own size for the pane (the program draws for the phone's), and
+  resizing the window takes the size back.
+- **A record on the workspace of what came from afar.** The nexus records
+  sign-ins, pairings and revocations; the workspace does not yet log each
+  remote action with the device that sent it.
+- **Packaging the server side**: a static `shed` (built without windows) and
+  `shedd` for servers, the nexus with its web app built in or packaged beside
+  it, and a signed Android release (now: debug builds only; F-Droid later).
+- **Editing files from the apps** beyond writing a small text file whole,
+  through `shed-text` as the editor does.
+- **Settings and themes from the apps**, **more than one user** on a nexus, and
+  **Claude in Chrome** controlled from them (now: shown, not controlled).
 
 ## Projects and Git
 

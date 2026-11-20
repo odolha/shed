@@ -9,7 +9,6 @@ settings file. Screenshots come from a demo setup (`tools/screenshots/`).
 - [Project tabs](#project-tabs)
 - [AI tabs](#ai-tabs)
 - [Remote tabs](#remote-tabs)
-- [Shed from a browser](#shed-from-a-browser)
 - [Opening, hiding, closing](#opening-hiding-closing)
 - [Setup: startup, teardown and aliases](#setup-startup-teardown-and-aliases)
 - [History and the logbook](#history-and-the-logbook)
@@ -19,10 +18,13 @@ settings file. Screenshots come from a demo setup (`tools/screenshots/`).
 - [Colours and appearance](#colours-and-appearance)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Shed in a terminal (shed tui)](#shed-in-a-terminal-shed-tui)
+- [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere)
+- [Shed in a browser](#shed-in-a-browser)
+- [Shed on your phone](#shed-on-your-phone)
+- [A workspace on a server](#a-workspace-on-a-server)
 - [The `shed` command](#the-shed-command)
 - [Settings: shed.toml](#settings-shedtoml)
 - [Where things are kept](#where-things-are-kept)
-- [Shed on your phone](#shed-on-your-phone)
 - [Troubleshooting](#troubleshooting)
 
 ## The idea
@@ -48,6 +50,9 @@ whether or not you are looking.
 - **The keeper** (`shedd`), a background process that holds every shell, program
   and Claude Code session. You never deal with it directly; it is why closing a
   window does not stop anything.
+- **Elsewhere**, optionally: a terminal interface (`shed tui`), and, through a
+  server you host (a nexus), a web app and an Android app that reach your
+  benches from anywhere (see [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere)).
 
 A bench is always in one of three states:
 
@@ -602,76 +607,6 @@ older servers, other architectures, or when Shed runs on a Mac, put a static
 build beside `shed` as `shedd-x86_64-static` or `shedd-aarch64-static` (see
 [Development](development.md#remote-tabs)) and Shed copies that instead.
 
-## Shed from a browser
-
-With a **nexus** (a server you host, see the [plan](nexus-plan.md)), your
-workspaces can be reached from a browser, on a computer or a phone. A workspace
-links to the nexus with `shed nexus join https://nexus.example.com`, which
-prints a code; in the web app, **Devices** → **Approve a Workspace…**, type
-that code (only someone who sees the workspace can), a name for it and a code
-from your authenticator. The list of workspaces asking to pair shows their
-name, version and address, never their code.
-
-**Setting up** happens once: the nexus writes a setup link to its log (the
-code in it after `#`, so it stays out of servers' logs). Open it,
-choose a user name and password, scan the QR code with an authenticator app,
-type the code it shows, and keep the recovery codes (each signs you in once if
-the authenticator is lost). **Signing in** always asks for the password and a
-code.
-
-What the web app shows:
-
-- **Workspaces**: each linked workspace with its benches as cards in their
-  colours, each tab with its icon, tags, what runs in it and, for terminals,
-  its last lines; AI tabs that work or wait for you say so. Usage limits are
-  beside each workspace. Closed benches can be opened (or opened with their
-  startup), renamed, recoloured or deleted. A workspace that is offline still
-  shows, read only, as it was when it was last seen. A workspace set to allow
-  viewing only says **View only**, and nothing there can be changed.
-- **A bench**: its tabs on a bar in its colour; **+** makes a terminal,
-  project, AI or remote tab (choosing a folder on the workspace); a tab's
-  menu (right-click, or the arrow after the tabs) renames it, makes it private
-  or closes it, after asking. The bench's name opens its menu: rename, badge,
-  colour, Run Startup, Run Teardown, the logbook, Close Bench…. A link to a tab
-  (`…/w/<workspace>/b/<bench>/t/<tab>`) opens that tab.
-- **AI tabs**, as in Shed: the conversation with its steps (click one for its
-  detail, change and result), thinking folded, permission cards (**Allow**,
-  **Allow for This Session**, **Deny**) and questions (pick options, or write
-  your own answer). The prompt sends with Enter on a computer (Shift+Enter
-  breaks the line) and with its button on a phone; `/` lists Claude Code's
-  commands; pictures can be added with the clip, pasted, dropped, or taken with
-  the camera on a phone. While Claude works, sending queues the message
-  (**Edit**, **Send Now**, **Remove**); **Draft** keeps it for later; **Stop**
-  interrupts. Below the prompt: the model, its effort, the mode (**Full Auto…**
-  asks first), and the follow and browser switches. The clock button lists the
-  sessions (draft sessions first; double-click to rename); **Review** shows
-  what Claude changed, with **Viewed** and **Explain**.
-- **Terminals** show the text of the screen, re-flowed to the width of the
-  browser, so a shell's output reads well on a phone; full-screen programs
-  (vim, htop) show as they are, scaled to fit or panned. Scroll up for older
-  lines. Tap the terminal to type; on a phone a bar of keys (Esc, Tab, Ctrl,
-  Alt, arrows, `|`, `~`, `/`) sits above the keyboard. **Take size** makes the
-  terminal the size of your screen while you look at it (for a full-screen
-  program on a phone); leaving gives the size back. The logbook button finds
-  earlier commands and types one in.
-- **Project tabs**: the file tree, files with their colours, **Go to File**
-  (Ctrl+P), search in files, and **Changes**: stage, unstage or discard files
-  and hunks (discarding asks), commit (or amend), branches, history, Fetch,
-  Pull and Push. Files are read only, apart from small text files.
-- **Logbook** (on each workspace, and in a bench's menu): commands with their
-  exit status, folder and time; search a tab, its bench, or everything, and
-  `tag:label`.
-- **Devices**: browsers, phones and workspaces with when and where they were
-  last seen; rename or revoke them (revoking asks for a code); workspaces
-  asking to pair; the record of sign-ins and changes.
-- **Settings**: notifications in this browser (Claude waiting for you, a turn
-  done, a long command finished, a workspace gone offline: each can be on or
-  off); clicking one opens its tab. Change the password, sign out.
-
-On a phone, **Add to Home Screen** installs it as an app (on iPhone, needed for
-notifications). Private tabs are listed, never shown: what is in them stays on
-their workspace.
-
 ## Opening, hiding, closing
 
 **Hiding** a bench closes its window and nothing else. Its programs keep running,
@@ -882,48 +817,6 @@ never show in the bench's or the global one. It also never leaves the machine:
 the web and Android apps (see [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere))
 show that it is there, not what is in it.
 
-## Reaching Shed from elsewhere
-
-A **nexus** is a server you host that the web and Android apps connect to (see
-[Deploying a nexus](nexus-deploy.md)). Link this machine to it once:
-
-```sh
-shed nexus join https://nexus.example.com
-```
-
-It shows a code; type that code in the web app (Devices) to approve it (the web
-app lists waiting requests but not their codes, so only the machine you are at
-can be approved). The address must be `https://` (plain `http://` only for a
-nexus on this same machine). From then on, while Shed runs, a small background process (the link) keeps
-this workspace on the nexus: its benches, tabs, terminals, projects, history and
-AI tabs, reachable from the apps. It connects again by itself after a network
-drop. The Shed window's header says how it is doing (**Linked** with the
-workspace's name, **Linking…**, **Link off**); clicking it switches the link off,
-or on again, keeping the pairing. `shed nexus status` says the same; `shed nexus leave`
-unlinks the machine (remove it in the web app's Devices too).
-
-In `shed.toml`:
-
-```toml
-[nexus]
-url = "https://nexus.example.com"   # set by `shed nexus join`; must stay the paired nexus
-enabled = true                      # false keeps the pairing but does not link
-control = "full"                    # "view": the apps can look at tabs but change nothing
-# ca_file = "~/nexus-ca.pem"        # for a nexus with a certificate of your own making
-```
-
-The pairing's token is not in `shed.toml` (which backups copy): it is in
-`~/.local/share/shed/nexus.json`, readable only by you, with the nexus it belongs
-to. The link sends it only there: if `url` is changed to another nexus, the link
-does not connect (`shed nexus status` says why) until you pair with that one.
-Private tabs show in the apps as "Private", with nothing of their folders,
-screens, commands (also those run before the tab was made private), files or
-Claude Code sessions, and cannot be made public from there; making a tab private
-ends what the apps were watching of it. A project or AI tab's Git, seen from the
-apps, covers only that tab's folder, even when the repository is larger. A
-view-only workspace does not let the apps browse the machine's folders. Whoever runs the nexus can see and type into
-what it relays, so host it yourself.
-
 ## Colours and appearance
 
 Each bench takes the next free colour when it is made. Pick another from its colour
@@ -1009,7 +902,8 @@ it (`Ctrl+B d`), closing the terminal or a dropped connection ends only the
 interface: everything keeps running in the keeper, and the next `shed tui`
 finds it as it was. A Shed built without windows (see
 [Working on Shed](development.md#a-build-without-windows)) runs it for plain
-`shed`, and `shed new` and `shed load` too.
+`shed`, and `shed new` and `shed load` too. For a server that keeps a
+workspace of its own, see [A workspace on a server](#a-workspace-on-a-server).
 
 It covers what a terminal can show: the benches, every kind of tab, terminal
 panes and splits, AI tabs, project tabs with Git, and the logbook. Pictures
@@ -1098,6 +992,205 @@ branches (switch, merge, rebase, delete, new, stash), `f` fetches, `F` pulls,
 **Colours** are Shed's theme (`theme` in `shed.toml`; dark unless the terminal
 says it is light through `COLORFGBG`), drawn as 24-bit colours. With
 `NO_COLOR` set, nothing is coloured.
+
+## Reaching Shed from elsewhere
+
+Shed can be reached from anywhere, and can run where you are not. The pieces:
+
+- a **nexus**: a server you host (see [Deploying a nexus](nexus-deploy.md)). It
+  holds your account and the devices you paired, keeps the last state of each
+  workspace, relays between them and the apps, and serves the web app;
+- **workspaces**: the machines running Shed that you link to it, a PC, a
+  laptop or a server;
+- the **web app** ([Shed in a browser](#shed-in-a-browser)) and the **Android
+  app** ([Shed on your phone](#shed-on-your-phone)), which see and drive the
+  linked workspaces through the nexus;
+- a **server workspace** ([A workspace on a server](#a-workspace-on-a-server)):
+  Shed on a server, reached with `shed tui` over ssh, so benches and Claude Code
+  keep working while your PCs are off.
+
+None of it is needed: without a nexus, Shed works just the same on its own.
+
+**The account** is made once. On its first start the nexus writes a one-time
+setup link to a file in its data folder and its log says where ([Deploying a
+nexus](nexus-deploy.md#4-systemd)); the code is in the link after `#`, so it
+stays out of servers' logs. Open it, choose a user name and password, scan the
+QR code with an authenticator app, type the code it shows, and keep the
+recovery codes (each signs you in once if the authenticator is lost).
+**Signing in**, in the web app or the Android app, always asks for the user
+name, the password and a code.
+
+### Linking a workspace
+
+Link each machine to the nexus once:
+
+```sh
+shed nexus join https://nexus.example.com
+```
+
+It shows a code. In the web app or the Android app, **Devices** → **Approve a
+Workspace…**, type that code, a name for the workspace and a code from your
+authenticator. The list of workspaces asking to pair shows their name, version
+and address, never their code, so only someone who sees the machine can approve
+it. The address must be `https://` (plain `http://` only for a nexus on this
+same machine).
+
+From then on, while Shed runs, a small background process (the link) keeps
+this workspace on the nexus: its benches, tabs, terminals, projects, history and
+AI tabs, reachable from the apps. It connects again by itself after a network
+drop. The Shed window's header says how it is doing (**Linked** with the
+workspace's name, **Linking…**, **Link off**); clicking it switches the link off,
+or on again, keeping the pairing. `shed nexus status` says the same; `shed nexus leave`
+unlinks the machine (remove it in the apps' Devices too). Revoking a workspace
+in Devices cuts it off at once.
+
+In `shed.toml`:
+
+```toml
+[nexus]
+url = "https://nexus.example.com"   # set by `shed nexus join`; must stay the paired nexus
+enabled = true                      # false keeps the pairing but does not link
+control = "full"                    # "view": the apps can look at tabs but change nothing
+# ca_file = "~/nexus-ca.pem"        # for a nexus with a certificate of your own making
+```
+
+The pairing's token is not in `shed.toml` (which backups copy): it is in
+`~/.local/share/shed/nexus.json`, readable only by you, with the nexus it belongs
+to. The link sends it only there: if `url` is changed to another nexus, the link
+does not connect (`shed nexus status` says why) until you pair with that one.
+
+Private tabs show in the apps as "Private", with nothing of their folders,
+screens, commands (also those run before the tab was made private), files or
+Claude Code sessions, and cannot be made public from there; making a tab private
+ends what the apps were watching of it. A project or AI tab's Git, seen from the
+apps, covers only that tab's folder, even when the repository is larger. A
+view-only workspace shows everything in the apps but offers no changes, and
+does not let them browse the machine's folders. Whoever runs the nexus can see
+and type into what it relays, so host it yourself.
+
+## Shed in a browser
+
+The web app is served by the nexus, at its address
+(`https://nexus.example.com`), on a computer or a phone. Sign in as
+[Reaching Shed from elsewhere](#reaching-shed-from-elsewhere) says; it shows
+every workspace linked there.
+
+What the web app shows:
+
+- **Workspaces**: each linked workspace with its benches as cards in their
+  colours, each tab with its icon, tags, what runs in it and, for terminals,
+  its last lines; AI tabs that work or wait for you say so. Usage limits are
+  beside each workspace. Closed benches can be opened (or opened with their
+  startup), renamed, recoloured or deleted. A workspace that is offline still
+  shows, read only, as it was when it was last seen. A workspace set to allow
+  viewing only says **View only**, and nothing there can be changed.
+- **A bench**: its tabs on a bar in its colour; **+** makes a terminal,
+  project, AI or remote tab (choosing a folder on the workspace); a tab's
+  menu (right-click, or the arrow after the tabs) renames it, makes it private
+  or closes it, after asking. The bench's name opens its menu: rename, badge,
+  colour, Run Startup, Run Teardown, the logbook, Close Bench…. A link to a tab
+  (`…/w/<workspace>/b/<bench>/t/<tab>`) opens that tab.
+- **AI tabs**, as in Shed: the conversation with its steps (click one for its
+  detail, change and result), thinking folded, permission cards (**Allow**,
+  **Allow for This Session**, **Deny**) and questions (pick options, or write
+  your own answer). The prompt sends with Enter on a computer (Shift+Enter
+  breaks the line) and with its button on a phone; `/` lists Claude Code's
+  commands; pictures can be added with the clip, pasted, dropped, or taken with
+  the camera on a phone. While Claude works, sending queues the message
+  (**Edit**, **Send Now**, **Remove**); **Draft** keeps it for later; **Stop**
+  interrupts. Below the prompt: the model, its effort, the mode (**Full Auto…**
+  asks first), and the follow and browser switches. The clock button lists the
+  sessions (draft sessions first; double-click to rename); **Review** shows
+  what Claude changed, with **Viewed** and **Explain**.
+- **Terminals** show the text of the screen, re-flowed to the width of the
+  browser, so a shell's output reads well on a phone; full-screen programs
+  (vim, htop) show as they are, scaled to fit or panned. Scroll up for older
+  lines. Tap the terminal to type; on a phone a bar of keys (Esc, Tab, Ctrl,
+  Alt, arrows, `|`, `~`, `/`) sits above the keyboard. **Take the size** makes the
+  terminal the size of your screen while you look at it (for a full-screen
+  program on a phone); leaving gives the size back. The logbook button finds
+  earlier commands and types one in.
+- **Project tabs**: the file tree, files with their colours, **Go to File**
+  (Ctrl+P), search in files, and **Changes**: stage, unstage or discard files
+  and hunks (discarding asks), commit (or amend), branches, history, Fetch,
+  Pull and Push. Files are read only, apart from small text files.
+- **Logbook** (on each workspace, and in a bench's menu): commands with their
+  exit status, folder and time; search a tab, its bench, or everything, and
+  `tag:label`.
+- **Devices**: browsers, phones and workspaces with when and where they were
+  last seen; rename or revoke them (revoking asks for a code); workspaces
+  asking to pair, and **Approve a Workspace…** (see
+  [Linking a workspace](#linking-a-workspace)); the record of sign-ins and
+  changes.
+- **Settings**: notifications in this browser (Claude waiting for you, a turn
+  done, a long command finished, a workspace gone offline: each can be on or
+  off); clicking one opens its tab. Change the password, sign out.
+
+On a phone, **Add to Home Screen** installs it as an app (on iPhone, needed for
+notifications). Private tabs are listed, never shown: what is in them stays on
+their workspace.
+
+## Shed on your phone
+
+The Android app shows and drives your workspaces from anywhere, through your
+nexus (see [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere)).
+Build and install it as [android/README.md](../android/README.md) says, then
+sign in with the nexus's address (`https://nexus.example.com`), your user name,
+password and a code from your authenticator. Fingerprint unlock is in its
+Settings.
+
+- **Workspaces**: each linked computer, online or when it was last seen, with
+  its benches (in their colours), how many AI tabs work or wait for you, and
+  your usage limits. Closed benches can be loaded from there.
+- **A bench**: its tabs in order, with tags; **New Tab** opens a terminal,
+  project, AI or remote tab in a folder you pick; a long press renames or
+  closes a tab (closing asks first).
+- **AI tabs** work as on the computer: the conversation with its steps
+  (tap one for the command, the change and what came back), permission cards
+  (**Allow**, **Allow for This Session**, **Deny**), Claude's questions, and the
+  prompt, which takes pictures from the gallery or the camera. While Claude
+  works, messages queue. Drafts, sessions, the model, effort and mode (**Full
+  Auto…** asks first), and **Review** with Viewed and **Explain** are there too.
+  A long press on one of your messages offers Edit, Send Again and Revert….
+- **Terminals** show the active pane's screen, its lines re-wrapped to the
+  phone; scrolling up fetches earlier lines. Type in the field (Enter sends) and
+  use the key bar for Esc, Tab, Ctrl, Alt and the arrows. For a full-screen
+  program (vim, htop), **Take the size** makes the program draw for the phone
+  while you look; leaving gives the size back.
+- **Logbook**, **project files** (tree, Quick Open, search, a file viewer with
+  colours) and **Git** (stage, unstage or discard by hunk, commit, history,
+  branches, fetch, pull, push).
+- **Devices**: everything signed in or paired, revoking (with a code), and
+  **Approve a Workspace…** with the code it showed (see
+  [Linking a workspace](#linking-a-workspace)).
+- **Notifications** come through UnifiedPush (the ntfy app, with your own ntfy
+  server), never through Google: Claude waiting for you, a turn done, a long
+  command finished, a workspace gone offline, each on or off. Tapping one opens
+  its tab.
+
+Private tabs show as private: what is in them never leaves the computer. A
+workspace that allows viewing only shows everything and offers no changes.
+
+## A workspace on a server
+
+A server can run Shed itself, as a user of its own, so benches, terminals and
+Claude Code keep working while your PCs are off. There, Shed is built without
+windows (the CLI, `shed tui` and the keeper), the keeper runs as a user service
+that stays up with nothing open, and Claude Code is signed in once (its usage
+limits are the account's, shown on every workspace using it). [Deploying a
+nexus](nexus-deploy.md#8-a-server-workspace-optional) has the steps. Then, from
+anywhere:
+
+```sh
+ssh -t shed@server.example.com shed       # a build without windows runs shed tui
+```
+
+Leaving (`Ctrl+B d`) or a dropped connection ends only the interface; see
+[Shed in a terminal](#shed-in-a-terminal-shed-tui) for its keys. `shed nexus
+join` on the server links it like any workspace (see
+[Linking a workspace](#linking-a-workspace)), so it shows in the web and
+Android apps too. Remote tabs from your PCs to that user on the server use the
+same keeper, so they show up there as benches of their own.
 
 ## The `shed` command
 
@@ -1266,45 +1359,6 @@ shed backup restore 2026-11-12
 A restore puts that backup's files back, after backing up what is there now (a
 `…-before-restore` backup), so it can be undone. Benches saved since then and not
 in the backup stay as they are.
-
-## Shed on your phone
-
-The Android app shows and drives your workspaces from anywhere, through a
-[nexus](nexus-deploy.md) you host. Build and install it as
-[android/README.md](../android/README.md) says, then sign in with the nexus's
-address (`https://nexus.example.com`), your user name, password and a code from
-your authenticator. Fingerprint unlock is in its Settings.
-
-- **Workspaces**: each linked computer, online or when it was last seen, with
-  its benches (in their colours), how many AI tabs work or wait for you, and
-  your usage limits. Closed benches can be loaded from there.
-- **A bench**: its tabs in order, with tags; **New Tab** opens a terminal,
-  project, AI or remote tab in a folder you pick; a long press renames or
-  closes a tab (closing asks first).
-- **AI tabs** work as on the computer: the conversation with its steps
-  (tap one for the command, the change and what came back), permission cards
-  (**Allow**, **Allow for This Session**, **Deny**), Claude's questions, and the
-  prompt, which takes pictures from the gallery or the camera. While Claude
-  works, messages queue. Drafts, sessions, the model, effort and mode (**Full
-  Auto…** asks first), and **Review** with Viewed and **Explain** are there too.
-  A long press on one of your messages offers Edit, Send Again and Revert….
-- **Terminals** show the active pane's screen, its lines re-wrapped to the
-  phone; scrolling up fetches earlier lines. Type in the field (Enter sends) and
-  use the key bar for Esc, Tab, Ctrl, Alt and the arrows. For a full-screen
-  program (vim, htop), **Take the size** makes the program draw for the phone
-  while you look; leaving gives the size back.
-- **Logbook**, **project files** (tree, Quick Open, search, a file viewer with
-  colours) and **Git** (stage, unstage or discard by hunk, commit, history,
-  branches, fetch, pull, push).
-- **Devices**: everything signed in or paired, revoking (with a code), and
-  approving a workspace's pairing by typing the code it showed.
-- **Notifications** come through UnifiedPush (the ntfy app, with your own ntfy
-  server), never through Google: Claude waiting for you, a turn done, a long
-  command finished, a workspace gone offline, each on or off. Tapping one opens
-  its tab.
-
-Private tabs show as private: what is in them never leaves the computer. A
-workspace that allows viewing only shows everything and offers no changes.
 
 ## Troubleshooting
 

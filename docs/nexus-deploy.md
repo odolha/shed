@@ -25,8 +25,17 @@ or from a checkout, `cargo build --release -p shed-nexus` and install
 `target/release/shed-nexus`. It needs no C libraries at run time (SQLite and
 TLS are built in).
 
-The web app, once built, goes in a folder the nexus serves, such as
-`/usr/local/share/shed-nexus/web`.
+The web app is built from the checkout's `web/` folder (Node 24.15 or newer;
+see [web/README.md](../web/README.md)) into a folder the nexus serves:
+
+```sh
+cd web && npm ci && npm run build && cd ..
+sudo install -d /usr/local/share/shed-nexus
+sudo cp -r web/dist/shed-web /usr/local/share/shed-nexus/web
+```
+
+and `web_dir = "/usr/local/share/shed-nexus/web"` in the settings (below).
+Without it, the nexus serves only the API.
 
 ## 2. A user of its own
 
@@ -48,7 +57,8 @@ sudo install -m 0644 packaging/nexus/nexus.toml /etc/shed-nexus/
 sudoedit /etc/shed-nexus/nexus.toml
 ```
 
-At least set `public_url = "https://nexus.example.com"`. The sample
+At least set `public_url = "https://nexus.example.com"`, and `web_dir` for
+the web app. The sample
 (`packaging/nexus/nexus.toml`) lists every setting with its default. With nginx
 in front as below, keep `listen` on `127.0.0.1` and `trusted_proxy = true`: the
 nexus then believes `X-Forwarded-For` from loopback only (set
@@ -167,14 +177,18 @@ The nexus sets its own security headers (a strict Content-Security-Policy,
 ## 6. Linking workspaces
 
 On each machine running Shed, `shed nexus join https://nexus.example.com`
-prints a code such as `K7QF-2M9D`. In the web app, under devices, type that
-code (the list of waiting requests shows which machine asks and from where,
+prints a code such as `K7QF-2M9D`. In the web app (or the Android app), under
+**Devices** → **Approve a Workspace…**, type that code (the list of waiting requests shows which machine asks and from where,
 but not the code, so a request someone else made cannot be approved by
 mistake), give the workspace a name and approve it with a code from your
 authenticator. The workspace keeps its token in a 0600 file in Shed's data
 folder (`nexus.json`, with the nexus's address: the link dials only that
 nexus, and only over `https`, plain `http` being for a nexus on the same
-machine). Revoke it there to cut it off at once.
+machine). From then on the keeper runs the link (`shed link`) while Shed
+runs; `shed nexus status` says how it is doing. Revoke the workspace under
+Devices to cut it off at once; `shed nexus leave` unlinks it from its side. The
+[user guide](user-guide.md#linking-a-workspace) has the rest (view-only
+workspaces, private tabs).
 
 ## 7. Push to Android with ntfy (optional)
 
@@ -263,6 +277,8 @@ https://nexus.example.com` links the workspace as in [6](#6-linking-workspaces).
 
 Back up `/var/lib/shed-nexus` (`nexus.db` with `sqlite3 nexus.db ".backup
 /path/to/nexus.db"` while it runs, and `vapid.key`; without the key, browsers
-and phones must subscribe to push again). To upgrade, install the new binary
-and `sudo systemctl restart shed-nexus`; the database is migrated when it
-opens. Workspaces reconnect on their own.
+and phones must subscribe to push again). To upgrade, install the new binary,
+build the web app again and put it in place of the old folder (`sudo rm -r
+/usr/local/share/shed-nexus/web` first, then the `cp` above), and `sudo
+systemctl restart shed-nexus`; the database is migrated when it opens.
+Workspaces reconnect on their own.

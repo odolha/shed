@@ -8,10 +8,17 @@ diffs and, above all, AI tabs. A server can also run a workspace of its own,
 with a terminal interface, so Claude Code keeps working while the PCs are off.
 This document records the decisions, their reasons and the order of work.
 
-> **Status:** agreed 2026-11-19. The API's types (`shed-api`), the nexus
-> server (`shed-nexus`), `shed tui` and the build without windows are in; the
-> rest is not started. Open points are marked
-> **Open**. Once done, this file moves to [History](history/README.md).
+> **Status:** agreed 2026-11-19; phases 0–5 built on 2026-11-20: the API's
+> types (`shed-api`, with `shed-codegen` for TypeScript and Kotlin), the nexus
+> (`shed-nexus`), the link (`shed-link`: `shed link`, `shed nexus
+> join/status/leave`, the keeper starting it, the link's state in the Shed
+> window), the web app (`web/`), the server workspace with `shed tui` and the
+> build without windows, and the Android app (`android/`). How it works now is
+> in [How Shed works](architecture.md#the-nexus), how to use it in the
+> [User Guide](user-guide.md#reaching-shed-from-elsewhere), how to host it in
+> [Deploying a nexus](nexus-deploy.md). What is still open is on the
+> [Roadmap](roadmap.md#shed-from-anywhere); this file stays as the record of
+> what was decided and why.
 
 ## The picture
 
@@ -249,9 +256,9 @@ hardened instead:
 | Git | status, ahead/behind, diff per file, stage/unstage per hunk, commit, branches, log, fetch/pull/push |
 | Notifications | which events push, per device |
 
-Not in the first versions: editing files from a connector (later, through
-`shed-text`), editing settings and themes, multiple users, Claude in Chrome
-(shown, not controlled).
+Not in the first versions (now on the [Roadmap](roadmap.md#shed-from-anywhere)):
+editing files from a connector (later, through `shed-text`), editing settings
+and themes, multiple users, Claude in Chrome (shown, not controlled).
 
 ### Notifications
 
@@ -389,8 +396,8 @@ The same order as the web app, plus UnifiedPush.
 
 ## Open
 
-- Terminals as content (above), instead of raw bytes to an emulator in each
-  app. Recommended; to confirm.
-- How far the GUI should show which device holds a pane's size.
-- Packaging the server build (a static `shed`/`shedd`; see the
-  [Roadmap](roadmap.md)).
+Terminals as content (above) was settled: the link sends a pane's screen as
+styled text (`crates/shed-link/src/screen.rs`), and no app has a terminal
+emulator. The points still open (which device holds a pane's size, packaging
+the server build, what was left out of the first versions) are on the
+[Roadmap](roadmap.md#shed-from-anywhere).

@@ -25,13 +25,17 @@ tools/check-codegen.sh               # fails if those generated types are stale
 cargo build -p shed-app --no-default-features --features tui   # shed without windows (CLI + shed tui)
 cargo clippy -p shed-app --no-default-features --features tui --all-targets   # must stay clean too
 cd web && npm run build && npm test  # the web app (Angular, Node 24.15+); npm run mock + npm start to try it
+. tools/android-env.sh; cd android; ./gradlew assembleDebug testDebugUnitTest lintDebug   # the Android app
 ```
 
 Integration tests live in `crates/shed-keeper/tests/` (protocol, logout) and
 `crates/shed-app/tests/` (benches, workspace, logbook). Both drive an in-process
 keeper over a real socket with a fake window client (`crates/shed-app/tests/common/mod.rs`:
 `start_in`, `Client::connect`, `Client::until`; small helpers such as `tree_until`
-are repeated per test file).
+are repeated per test file). `crates/shed-nexus/tests/` (account, pairing, relay,
+limits) run the nexus in-process with fake links and connectors;
+`crates/shed-link/tests/` run a keeper and the link against a fake nexus (one
+against the real one).
 `crates/shed-emu/tests/replay.rs` replays recordings in `crates/shed-emu/tests/recordings/`.
 
 ## Running a dev build safely
@@ -104,6 +108,8 @@ Crates (`crates/`), lowest first:
   the window modules, `gui.rs` starts them) and `tui`, both default; without
   `gui` plain `shed` runs the TUI.
 - `shed-api`: the nexus API's JSON types (frames, state, calls, topics, HTTP).
+- `shed-codegen`: generates the TypeScript (`web/src/api/gen/`) and Kotlin
+  (`android/…/api/Api.kt`) types from `shed-api`; never edit those by hand.
 - `shed-link`: `shed link`, a workspace's link to a nexus (no GPUI): keeper
   client (`ClientKind::Link`) and WSS client; `run.rs` (the task owning tree,
   subscriptions, watched terminals), `state.rs` (tree → `shed_api` state,
@@ -115,6 +121,11 @@ Crates (`crates/`), lowest first:
 - `shed-nexus`: `shed-nexus` binary, the server workspaces link to (axum,
   SQLite); reads only the API's envelope (`src/raw.rs`). See `docs/nexus-plan.md`,
   `docs/nexus-deploy.md`.
+
+Outside `crates/`: `web/` is the web app the nexus serves (Angular, signals,
+zoneless; `web/README.md`, `web/mock/` a pretend nexus); `android/` the Android
+app (Kotlin, Compose, UnifiedPush; `android/README.md`). Both are connectors:
+they speak only the nexus API.
 
 ### How a change flows
 

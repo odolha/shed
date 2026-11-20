@@ -1,6 +1,7 @@
 # Shed for Android
 
-The Android app reaches your Shed workspaces through your [nexus](../docs/nexus-plan.md):
+The Android app reaches your Shed workspaces through your nexus (see
+[Reaching Shed from elsewhere](../docs/user-guide.md#reaching-shed-from-elsewhere)):
 benches and tabs, AI tabs (the conversation, permissions, questions, prompts
 with photos, sessions, drafts, review), terminals, the logbook, project files,
 search and Git. Native Kotlin with Jetpack Compose; no Google Play Services, so
@@ -48,9 +49,10 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
    `10.0.2.2` and `localhost` (an emulator or `adb reverse` reaching a nexus on
    your computer during development).
 3. Link a workspace: on the computer, `shed nexus join https://nexus.example.com`
-   prints a code (the link, `shed link`, is still being built; see the plan).
-   In the app, **Devices → Approve a Workspace…**, type that
-   code, give the workspace a name and a fresh authenticator code.
+   prints a code. In the app (or the web app), **Devices → Approve a
+   Workspace…**, type that code, give the workspace a name and a fresh
+   authenticator code. See
+   [Linking a workspace](../docs/user-guide.md#linking-a-workspace).
 4. **Settings → Unlock with fingerprint or screen lock** asks for it whenever
    the app comes back. **Sign Out…** revokes this phone's token at the nexus and
    forgets it here. Devices lists every device; revoking one asks for a code.

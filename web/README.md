@@ -1,6 +1,8 @@
 # Shed's web app
 
-Shed in a browser, through a nexus (`docs/nexus-plan.md`): the linked
+Shed in a browser, through a nexus (see
+[Shed in a browser](../docs/user-guide.md#shed-in-a-browser) and
+[Deploying a nexus](../docs/nexus-deploy.md)): the linked
 workspaces with their benches, AI tabs, terminals, projects and Git, the
 logbook, devices and notifications. Angular 22 (standalone components, signals,
 zoneless), with a small UI kit of its own; no other UI library.

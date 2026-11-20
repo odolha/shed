@@ -893,8 +893,10 @@ endpoint to `POST /api/v1/push/subscribe`.
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows; a Git panel's data and operations (`session`) |
 | `shed-review` | An AI tab's review as data: changes since a turn or the session by how far they went, their keys and fingerprints, Viewed marks, explanations and the request for them |
 | `shed-client` | Talking to the keeper without GPUI: the connection (starting `shedd`), blocking requests, the CLI's keeper commands, bench edits routed to running or closed benches, the pegboard's list, remote shells over ssh |
-| `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI |
+| `shed-tui` | `shed tui`: Shed in a terminal (ratatui over crossterm) |
+| `shed-app` | `shed`: the Shed and bench windows, terminal views, menus, the CLI (features `gui` and `tui`) |
 | `shed-api` | The nexus API's types: frames, workspace state, calls, topics, HTTP bodies, errors |
+| `shed-codegen` | The TypeScript and Kotlin API types for the web and Android apps, generated from `shed-api` |
 | `shed-nexus` | `shed-nexus`: the account, devices, pairing, relaying, snapshots, push |
 
 `web/` is the web app the nexus serves (Angular, `web/README.md`): it speaks
