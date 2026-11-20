@@ -148,10 +148,12 @@ impl Default for PushConfig {
 }
 
 /// Only the nexus's own files; inline styles for the web app's components;
-/// pictures may be data or blob URLs; no frames, no plugins.
+/// pictures may be data or blob URLs; no frames, no plugins. The web app's
+/// `<base href="/">` must count (`base-uri 'self'`), or a page loaded at a
+/// deep link (`/w/…/b/…`) looks for its scripts under that path.
 pub const DEFAULT_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
      img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; \
-     manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+     manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
 impl Config {
     /// Reads `path`; a missing file gives the defaults.

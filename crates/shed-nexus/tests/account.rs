@@ -173,6 +173,11 @@ async fn the_web_app_falls_back_to_its_index() {
     assert!(page.headers().contains_key("content-security-policy"));
     assert_eq!(page.text().await.unwrap(), "<html>shed</html>");
     assert_eq!(nexus.get_raw("/app.js", &Auth::None).await.text().await.unwrap(), "1");
+    // A deep link gets the page too, and its `<base href="/">` counts.
+    let deep = nexus.get_raw("/w/abc/b/def/t/ghi", &Auth::None).await;
+    let csp = deep.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("base-uri 'self'"), "{csp}");
+    assert_eq!(deep.text().await.unwrap(), "<html>shed</html>");
 }
 
 #[tokio::test]
