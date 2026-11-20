@@ -239,6 +239,12 @@ impl Logbook {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Marks every command `tab` ran private (the tab became private): they
+    /// show only in that tab from now on. The number marked.
+    pub fn mark_private(&self, tab: &str) -> Result<usize, Error> {
+        self.conn.execute("UPDATE entries SET private = 1 WHERE tab = ?1 AND private = 0", params![tab])
+    }
+
     /// The `pos`-th most recent distinct command in `scope` that starts with
     /// `prefix` (clamped to the oldest), or `None` if nothing matches.
     pub fn walk(&self, scope: Scope, cx: Context, prefix: &str, pos: usize) -> Result<Option<Walked>, Error> {
@@ -455,6 +461,23 @@ mod tests {
         assert!(f.book.walk(Scope::Bench, from_other, "", 1).unwrap().is_none());
         assert!(f.book.walk(Scope::Global, from_other, "", 1).unwrap().is_none());
         assert!(f.book.walk(Scope::Bench, from_secret, "", 1).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_tab_made_private_takes_its_past_commands_along() {
+        let f = fixture();
+        let b = BenchId::new();
+        let (tab, other) = (TabId::new(), TabId::new());
+        f.book.insert(&entry("export TOKEN=x", tab, b)).unwrap();
+        f.book.insert(&entry("ls", other, b)).unwrap();
+        let from_other = Context { tab: other, bench: b };
+        assert_eq!(f.book.search(Scope::Global, from_other, "TOKEN", None, 10).unwrap().len(), 1);
+        assert_eq!(f.book.mark_private(&tab.to_string()).unwrap(), 1);
+        assert!(f.book.search(Scope::Global, from_other, "TOKEN", None, 10).unwrap().is_empty());
+        assert!(f.book.search(Scope::Bench, from_other, "TOKEN", None, 10).unwrap().is_empty());
+        let from_tab = Context { tab, bench: b };
+        assert_eq!(f.book.search(Scope::Local, from_tab, "TOKEN", None, 10).unwrap().len(), 1);
+        assert_eq!(f.book.search(Scope::Global, from_other, "ls", None, 10).unwrap().len(), 1);
     }
 
     #[test]

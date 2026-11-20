@@ -62,6 +62,13 @@ const TREE_FLUSH_DELAY: Duration = Duration::from_millis(50);
 const PREVIEW_LINES: usize = 12;
 const PREVIEW_COLS: usize = 100;
 
+/// What the logbook writer thread does, in order.
+enum LogOp {
+    Insert(Box<NewEntry>),
+    /// A tab became private: mark its commands so.
+    MarkPrivate(TabId),
+}
+
 pub struct KeeperConfig {
     pub socket: PathBuf,
     /// `shed.toml`, reloaded when it changes.
@@ -109,8 +116,9 @@ pub struct Keeper {
     tree_dirty: Notify,
     /// Wakes the task that sends what changed in AI conversations.
     ai_dirty: Notify,
-    /// Finished commands, on their way to the logbook writer thread.
-    logbook: Option<std::sync::mpsc::Sender<NewEntry>>,
+    /// Finished commands (and tabs made private), on their way to the
+    /// logbook writer thread.
+    logbook: Option<std::sync::mpsc::Sender<LogOp>>,
     /// The bash startup file that loads ~/.bashrc and then Shed's hook.
     bash_rc: Option<PathBuf>,
     /// The `ZDOTDIR` for zsh, whose `.zshenv` loads the user's startup files
@@ -311,12 +319,16 @@ impl Keeper {
         let limits_file = cfg.state_dir.join("ai-limits.json");
         let logbook = cfg.logbook.as_ref().and_then(|path| match Logbook::open(path) {
             Ok(book) => {
-                let (tx, rx) = std::sync::mpsc::channel::<NewEntry>();
+                let (tx, rx) = std::sync::mpsc::channel::<LogOp>();
                 std::thread::Builder::new()
                     .name("logbook".into())
                     .spawn(move || {
-                        while let Ok(entry) = rx.recv() {
-                            if let Err(e) = book.insert(&entry) {
+                        while let Ok(op) = rx.recv() {
+                            let done = match &op {
+                                LogOp::Insert(entry) => book.insert(entry).map(drop),
+                                LogOp::MarkPrivate(tab) => book.mark_private(&tab.to_string()).map(drop),
+                            };
+                            if let Err(e) = done {
                                 warn!("logbook write failed: {e}");
                             }
                         }
@@ -958,7 +970,12 @@ impl Keeper {
                 self.edit_tab(tab, |t| t.tags = tags);
                 self.save_soon.notify_one();
             }
-            ClientMsg::SetPrivate { tab, private } => self.edit_tab(tab, |t| t.private = private),
+            ClientMsg::SetPrivate { tab, private } => {
+                self.edit_tab(tab, |t| t.private = private);
+                if private {
+                    self.log_private(tab);
+                }
+            }
             ClientMsg::SetZoom { tab, zoom } => self.edit_tab(tab, |t| t.zoom = zoom.clamp(-20.0, 60.0)),
             ClientMsg::StartNow { pane } => {
                 let mut st = self.lock();
@@ -1171,6 +1188,14 @@ impl Keeper {
         }
     }
 
+    /// A tab became private: so do the commands it ran before, which other
+    /// tabs' (and connectors') histories showed until now.
+    fn log_private(&self, tab: TabId) {
+        if let Some(tx) = &self.logbook {
+            let _ = tx.send(LogOp::MarkPrivate(tab));
+        }
+    }
+
     fn edit_tab(&self, tab: TabId, edit: impl FnOnce(&mut Tab)) {
         let mut st = self.lock();
         if let Some(t) = st.tree.tab_mut(tab) {
@@ -1370,6 +1395,9 @@ impl Keeper {
             }
             SavedEdit::TabPrivate { tab, private } => {
                 saved.tab_mut(tab).ok_or("no such tab")?.private = private;
+                if private {
+                    self.log_private(tab);
+                }
                 format!("changed a tab of {name}")
             }
             SavedEdit::NewTab => {
@@ -2648,7 +2676,7 @@ impl Keeper {
                     host: self.host.clone(),
                     private: tab.private,
                 };
-                let _ = tx.send(entry);
+                let _ = tx.send(LogOp::Insert(Box::new(entry)));
             }
             Mark::Ask(request) => self.ask(st, pane, request),
             Mark::PromptStart | Mark::Walk(_) | Mark::WalkEnd => {}
