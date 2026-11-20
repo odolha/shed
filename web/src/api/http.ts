@@ -1,7 +1,8 @@
 /**
  * The nexus's HTTP API (`crates/shed-api/src/http.rs`): the account, signing
  * in, devices, pairing and push. A browser signs in with a session cookie;
- * changes carry `X-Shed-Csrf` with the token `SignedIn` gave.
+ * changes carry `X-Shed-Csrf` with the token `SignedIn` gave. That token is
+ * kept in memory only: after a reload it comes again from `GET /session`.
  */
 
 import { Injectable, signal } from '@angular/core';
@@ -28,41 +29,52 @@ import type {
 import { ApiFailure } from './errors';
 
 const BASE = '/api/v1';
-const CSRF_KEY = 'shed.csrf';
 
 type Empty = Record<string, never>;
 
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
+/** Calls made before signing in, or that ask for a password or code again. */
+const OPEN = ['/status', '/login', '/setup', '/setup/confirm'];
 
-function writeStored(key: string, value: string | null): void {
-  try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
-  } catch {
-    // Private mode: kept for this page only.
-  }
+/** The nexus refused a change for its CSRF token (lost or from another sign-in). */
+function csrfRefused(f: ApiFailure): boolean {
+  return f.code === 'forbidden' && /csrf/i.test(f.message);
 }
 
 @Injectable({ providedIn: 'root' })
 export class NexusHttp {
-  /** The CSRF token for changes; kept across reloads of this browser. */
-  private readonly csrf = signal<string | null>(readStored(CSRF_KEY));
+  /** The CSRF token for changes, for this page only. */
+  private readonly csrf = signal<string | null>(null);
+  /** A `GET /session` under way, so changes at once wait for one answer. */
+  private recovering: Promise<string | null> | null = null;
   /** Called when the nexus says we are not signed in (any call). */
   onUnauthorized: (() => void) | null = null;
 
+  constructor() {
+    // Earlier versions kept the token across reloads; it is fetched now.
+    try {
+      localStorage.removeItem('shed.csrf');
+    } catch {
+      // Private mode.
+    }
+  }
+
   setCsrf(token: string | null | undefined): void {
     this.csrf.set(token ?? null);
-    writeStored(CSRF_KEY, token ?? null);
+  }
+
+  hasCsrf(): boolean {
+    return this.csrf() !== null;
   }
 
   status(): Promise<NexusStatus> {
     return this.get('/status');
+  }
+
+  /** Who is signed in, with the session's CSRF token (after a reload). */
+  async session(): Promise<SignedIn> {
+    const s = await this.get<SignedIn>('/session');
+    if (s.csrf) this.setCsrf(s.csrf);
+    return s;
   }
 
   setup(body: SetupStart): Promise<SetupTotp> {
@@ -117,6 +129,10 @@ export class NexusHttp {
     return this.post('/push/subscribe', body);
   }
 
+  pushUnsubscribe(): Promise<Empty> {
+    return this.post('/push/unsubscribe', {});
+  }
+
   pushPrefs(body: PushPrefs): Promise<Empty> {
     return this.post('/push/prefs', body);
   }
@@ -134,6 +150,29 @@ export class NexusHttp {
   }
 
   private async send<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+    const change = method !== 'GET' && !OPEN.includes(path);
+    if (change && this.csrf() === null) await this.recoverCsrf();
+    try {
+      return await this.sendOnce<T>(method, path, body);
+    } catch (e) {
+      // A token from before (another tab signed in again): fetch it and try once more.
+      if (!change || !(e instanceof ApiFailure) || !csrfRefused(e)) throw e;
+      this.csrf.set(null);
+      if ((await this.recoverCsrf()) === null) throw e;
+      return this.sendOnce<T>(method, path, body);
+    }
+  }
+
+  /** The session's CSRF token again, or null when the nexus does not say. */
+  private recoverCsrf(): Promise<string | null> {
+    this.recovering ??= this.session()
+      .then((s) => s.csrf ?? null)
+      .catch(() => null)
+      .finally(() => (this.recovering = null));
+    return this.recovering;
+  }
+
+  private async sendOnce<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const csrf = this.csrf();

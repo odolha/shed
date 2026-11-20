@@ -53,7 +53,7 @@ const devices: Device[] = [
 ];
 
 const pending: PendingPairing[] = [
-  { code: 'K7QF-2M9D', name: 'buildbox', version: '0.1.0', address: '192.0.2.15', country: 'NL', expires: t0 + 15 * 60 },
+  { code: 'K7QF-2M9D', id: 'p-buildbox', name: 'buildbox', version: '0.1.0', address: '192.0.2.15', country: 'NL', expires: t0 + 15 * 60 },
 ];
 
 const audit: AuditEntry[] = [
@@ -207,6 +207,9 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
       note('login', req, out.device);
       return out;
     }
+    case 'GET /session':
+      // A browser that reloaded gets its session's CSRF token again.
+      return { username: account.username, device: session!.device, token: null, csrf: session!.csrf, recoveryCodes: [] } satisfies SignedIn;
     case 'POST /logout': {
       sessions.delete(session!.token);
       const i = devices.findIndex((d) => d.id === session!.device);
@@ -275,10 +278,10 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
     }
     case 'POST /pair/reject': {
       const b = await body<PairReject>(req);
-      const i = pending.findIndex((p) => sameCode(p.code, b.code));
+      const i = pending.findIndex((p) => (b.id ? p.id === b.id : sameCode(p.code, b.code ?? '')));
       if (i < 0) throw new Fail('notFound', 'no such pairing request');
-      pending.splice(i, 1);
-      note('pair-rejected', req, session!.device, b.code);
+      const p = pending.splice(i, 1)[0]!;
+      note('pair-rejected', req, session!.device, p.name);
       return {};
     }
     case 'POST /pair/start':
@@ -286,7 +289,7 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
       throw new Fail('unsupported', 'the mock has no workspaces to pair');
 
     case 'GET /push':
-      return { vapidKey, prefs: { kinds: pushPrefs.get(session!.device) ?? ['aiWaiting', 'aiDone'] } };
+      return { vapidKey, prefs: { kinds: pushPrefs.get(session!.device) ?? ['aiWaiting', 'aiDone'] }, subscribed: pushSubs.has(session!.device) };
     case 'POST /push/subscribe': {
       const b = await body<PushSubscribe>(req);
       if (!b.endpoint || !b.p256dh || !b.auth) throw new Fail('invalid', 'endpoint, p256dh and auth are needed');
@@ -294,6 +297,10 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
       console.log(`push: ${session!.device} subscribed (${new URL(b.endpoint).host})`);
       return {};
     }
+    case 'POST /push/unsubscribe':
+      pushSubs.delete(session!.device);
+      console.log(`push: ${session!.device} unsubscribed`);
+      return {};
     case 'POST /push/prefs': {
       const b = await body<PushPrefs>(req);
       pushPrefs.set(session!.device, b.kinds ?? []);

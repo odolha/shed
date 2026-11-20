@@ -9,7 +9,7 @@ import {
 } from '@angular/core';
 import { AuthService } from '../../api/auth';
 import { errorText } from '../../api/errors';
-import type { AuditEntry, Device, DeviceKind, PendingPairing } from '../../api/gen/api';
+import type { AuditEntry, Device, DeviceKind, PairReject, PendingPairing } from '../../api/gen/api';
 import { NexusHttp } from '../../api/http';
 import { TPipe, t } from '../../i18n/i18n';
 import { Dialogs } from '../../ui/dialog';
@@ -34,6 +34,11 @@ export function auditText(what: string): string {
   return text === key ? what : text;
 }
 
+/** How to reject a pending request: by its id (the list never carries the code); null when the nexus gave none. */
+export function rejectBody(p: PendingPairing): PairReject | null {
+  return p.id ? { id: p.id } : null;
+}
+
 function where(address: string | undefined, country: string | null | undefined): string {
   return [address, country].filter(Boolean).join(' · ');
 }
@@ -54,7 +59,7 @@ function where(address: string | undefined, country: string | null | undefined):
             <shed-icon name="check" [size]="14" />{{ 'devices.approveOne' | t }}
           </button>
         </div>
-        @for (p of pending(); track $index) {
+        @for (p of pending(); track p.id ?? $index) {
           <div class="card item pairing">
             <shed-icon name="server" [size]="22" />
             <div class="grow col tight">
@@ -65,7 +70,14 @@ function where(address: string | undefined, country: string | null | undefined):
               </span>
             </div>
             <div class="row actions">
-              <button class="btn small" (click)="approve(p)">{{ 'devices.approveEllipsis' | t }}</button>
+              @if (p.id) {
+                <button class="btn small danger" (click)="reject(p)">
+                  <shed-icon name="close" [size]="14" />{{ 'devices.rejectEllipsis' | t }}
+                </button>
+              }
+              <button class="btn small" (click)="approve(p)">
+                <shed-icon name="check" [size]="14" />{{ 'devices.approveEllipsis' | t }}
+              </button>
             </div>
           </div>
         }
@@ -295,23 +307,37 @@ export class DevicesPage implements OnInit {
     return left > 0 ? t('devices.expiresIn', { span: span(left) }) : t('devices.expired');
   }
 
-  /** Approve (or reject) by the code shown on the workspace, typed here. */
+  /** Approve by the code shown on the workspace, typed here. */
   protected async approve(p?: PendingPairing): Promise<void> {
     const r = await this.dialogs.open<ApproveData, ApproveResult>(ApproveDialog, { name: p?.name ?? '' });
     if (!r) return;
     try {
-      if (r.action === 'reject') {
-        await this.http.rejectPairing({ code: r.code });
-        this.notices.info(t('devices.rejected'));
-        await this.loadPending();
-      } else {
-        await this.http.approvePairing({ code: r.code, name: r.name, totp: r.totp });
-        this.notices.info(t('devices.approved', { name: r.name }));
-        await this.load();
-      }
+      await this.http.approvePairing({ code: r.code, name: r.name, totp: r.totp });
+      this.notices.info(t('devices.approved', { name: r.name }));
+      await this.load();
     } catch (e) {
       this.notices.error(e);
     }
+  }
+
+  /** Reject a request from the list (no code needed: rejecting gives nothing away). */
+  protected async reject(p: PendingPairing): Promise<void> {
+    const body = rejectBody(p);
+    if (!body) return;
+    const ok = await this.dialogs.confirm({
+      title: t('devices.rejectTitle', { name: p.name }),
+      body: t('devices.rejectBody'),
+      ok: t('devices.reject'),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await this.http.rejectPairing(body);
+      this.notices.info(t('devices.rejected'));
+    } catch (e) {
+      this.notices.error(e);
+    }
+    await this.loadPending();
   }
 
   protected async rename(d: Device): Promise<void> {

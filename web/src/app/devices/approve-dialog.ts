@@ -9,7 +9,6 @@ export interface ApproveData {
 }
 
 export interface ApproveResult {
-  action: 'approve' | 'reject';
   code: string;
   name: string;
   totp: string;
@@ -31,7 +30,7 @@ export function normalizePairCode(code: string): string {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule, TPipe],
   template: `
-    <form class="dialog-body" (ngSubmit)="submit('approve')">
+    <form class="dialog-body" (ngSubmit)="submit()">
       <h2>{{ 'devices.approveTitle' | t }}</h2>
       <p class="dim" style="margin: 0">{{ 'devices.approveBody' | t }}</p>
       <label class="field">
@@ -68,10 +67,6 @@ export function normalizePairCode(code: string): string {
         />
       </label>
       <div class="dialog-actions">
-        <button type="button" class="btn danger" [disabled]="!codeOk()" (click)="submit('reject')">
-          {{ 'devices.reject' | t }}
-        </button>
-        <span class="grow"></span>
         <button type="button" class="btn ghost" (click)="ref.close(null)">{{ 'common.cancel' | t }}</button>
         <button type="submit" class="btn primary" [disabled]="!ok()">{{ 'devices.approve' | t }}</button>
       </div>
@@ -90,15 +85,16 @@ export class ApproveDialog {
   protected readonly code = signal('');
   protected readonly name = signal(this.ref.data.name);
   protected readonly totp = signal('');
-  protected readonly codeOk = computed(() => this.code().replace(/[\s-]/g, '').length >= 6);
   protected readonly ok = computed(
-    () => this.codeOk() && !!this.name().trim() && this.totp().replace(/\s/g, '').length >= 6,
+    () =>
+      this.code().replace(/[\s-]/g, '').length >= 6 &&
+      !!this.name().trim() &&
+      this.totp().replace(/\s/g, '').length >= 6,
   );
 
-  protected submit(action: ApproveResult['action']): void {
-    if (action === 'approve' ? !this.ok() : !this.codeOk()) return;
+  protected submit(): void {
+    if (!this.ok()) return;
     this.ref.close({
-      action,
       code: normalizePairCode(this.code()),
       name: this.name().trim(),
       totp: this.totp().replace(/\s/g, ''),

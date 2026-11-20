@@ -1,7 +1,7 @@
 // A tiny fake shell per pane, kept as logical lines of styled cells and sent as
 // screens of rows (`Screen` events), the way the link sends a real emulator's.
 
-import type { InputItem, Screen, ScreenLine, ScreenRow, Span } from '../src/api/gen/api.ts';
+import type { InputItem, Mouse, Screen, ScreenLine, ScreenRow, Span } from '../src/api/gen/api.ts';
 
 type Style = Omit<Span, 'text'>;
 
@@ -66,7 +66,8 @@ export class Shell {
   private pastIndex = -1;
   /** The index in `history` of the line a `clear` put at the top. */
   private clearAt = 0;
-  private alt: { timer: ReturnType<typeof setInterval>; tick: number } | null = null;
+  /** `top`: it asks for the mouse; a click or the wheel picks a process. */
+  private alt: { timer: ReturnType<typeof setInterval>; tick: number; picked: number; mouse: string } | null = null;
   private readonly subs = new Set<Emit>();
   private prevRows: string[] = [];
   private prevTop = 0;
@@ -143,6 +144,10 @@ export class Shell {
         }
         case 'Key':
           this.key(item.content.key, item.content.ctrl ?? false, item.content.alt ?? false);
+          break;
+        case 'Mouse':
+          // Only a program that asked for the mouse gets it, as with the link.
+          if (this.alt) this.mouse(item.content);
           break;
       }
     }
@@ -303,7 +308,7 @@ export class Shell {
           '  seq N     N lines (scrollback)',
           '  long      a very long line (wrapping)',
           '  colors    the 16 colours and styles',
-          '  top       a full-screen program (q quits)',
+          '  top       a full-screen program, with the mouse (q quits)',
         ])
           this.out(cells(l));
         break;
@@ -337,8 +342,20 @@ export class Shell {
     }
   }
 
+  private mouse(m: Mouse): void {
+    const alt = this.alt!;
+    const first = 4;
+    const procs = this.rows - 1 - first;
+    alt.mouse = `${m.kind}${m.button ? ' ' + m.button : ''} at ${m.col},${m.row}`;
+    if (m.kind === 'press' && m.row >= first && m.row < first + procs) alt.picked = m.row - first;
+    if (m.kind === 'wheelUp') alt.picked = Math.max(0, alt.picked - 1);
+    if (m.kind === 'wheelDown') alt.picked = Math.min(procs - 1, alt.picked + 1);
+  }
+
   private enterAlt(): void {
     this.alt = {
+      picked: 0,
+      mouse: '',
       tick: 0,
       timer: setInterval(() => {
         if (this.alt) this.alt.tick++;
@@ -369,9 +386,11 @@ export class Shell {
     for (let i = 0; rows.length < this.rows - 1; i++) {
       const p = procs[i % procs.length]!;
       const cpu = ((Math.sin(tick + i) + 1) * 12).toFixed(1).padStart(5);
-      rows.push(cells(`${String(1000 + i * 37).padStart(7)} you      ${cpu}  ${(i * 0.7).toFixed(1).padStart(4)} ${p}`, i === 0 ? { bold: true } : {}));
+      const text = `${String(1000 + i * 37).padStart(7)} you      ${cpu}  ${(i * 0.7).toFixed(1).padStart(4)} ${p}`;
+      rows.push(cells(i === this.alt?.picked ? text.padEnd(this.cols) : text, i === this.alt?.picked ? { bg: '4', fg: '0' } : {}));
     }
-    rows.push(cells('q: quit', { fg: '8' }));
+    const mouse = this.alt?.mouse ? `  ·  mouse: ${this.alt.mouse}` : '';
+    rows.push(cells(`q: quit  ·  click or wheel: pick${mouse}`, { fg: '8' }));
     return rows.map((r) => r.slice(0, this.cols));
   }
 
@@ -433,7 +452,7 @@ export class Shell {
         cursor: { row: 0, col: 0, visible: false },
         title: this.title,
         scrollback: 0,
-        mouse: false,
+        mouse: true,
         scrolled: 0,
       };
     }

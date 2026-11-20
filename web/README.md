@@ -21,7 +21,8 @@ Sign in as `you` with the password `shed`; any six-digit code works but
 `000000`. The mock has a workspace `devbox` (two benches: terminals with a tiny
 fake shell, an AI tab with a scripted conversation, a project tab with files and
 Git; a closed bench) and an offline `laptop`. A workspace `buildbox` asks to
-pair: approve it under Devices by typing its code `K7QF-2M9D`. Its switches:
+pair: approve it under Devices by typing its code `K7QF-2M9D`, or reject it
+from its row. Its switches:
 
 | Variable | Does |
 |---|---|

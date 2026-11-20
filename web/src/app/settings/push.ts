@@ -57,6 +57,20 @@ export async function subscribe(vapidKey: string): Promise<PushSubscribe> {
   return { endpoint: sub.endpoint, p256dh: json.keys?.['p256dh'] ?? '', auth: json.keys?.['auth'] ?? '' };
 }
 
+/**
+ * Stops this browser's subscription at its push service, if it has one.
+ * The nexus is told separately (`push/unsubscribe`).
+ */
+export async function unsubscribe(): Promise<void> {
+  const sub = await currentSubscription();
+  if (sub) await sub.unsubscribe();
+}
+
+/** Whether pushes reach this browser: the nexus has its subscription, and the browser still has it. */
+export function pushOn(nexusSubscribed: boolean, browserSubscribed: boolean, permission: NotificationPermission): boolean {
+  return nexusSubscribed && browserSubscribed && permission === 'granted';
+}
+
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }

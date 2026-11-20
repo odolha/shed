@@ -37,7 +37,25 @@ export class AuthService {
     if (known && !force) return known;
     const status = await this.http.status();
     this.status.set(status);
-    return status;
+    if (status.signedIn && !this.http.hasCsrf()) await this.resume();
+    // Resuming may have found the session gone.
+    return this.status() ?? status;
+  }
+
+  /**
+   * Signed in from before (a reload): the session's CSRF token, which lives
+   * in memory only, and who we are. If the nexus does not answer now, the
+   * first change asks again.
+   */
+  private async resume(): Promise<void> {
+    try {
+      const s = await this.http.session();
+      this.username.set(s.username);
+      localStorage.setItem(USER_KEY, s.username);
+      if (s.device) this.device.set(s.device);
+    } catch {
+      // Asked again before the first change.
+    }
   }
 
   /** After signing in or finishing setup. */

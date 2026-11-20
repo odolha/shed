@@ -22,10 +22,28 @@ describe('segment', () => {
     ]);
   });
 
-  it('counts characters, not UTF-16 units', () => {
-    expect(segment('😀 ok', [{ start: 2, end: 4, cls: 'k' }])).toEqual([
+  it('counts UTF-16 code units, as the API does (an emoji is two)', () => {
+    expect(segment('😀 ok', [{ start: 3, end: 5, cls: 'k' }])).toEqual([
       { text: '😀 ', cls: null },
       { text: 'ok', cls: 'k' },
+    ]);
+    expect(segment('a😀b', [{ start: 1, end: 3, cls: 'e' }])).toEqual([
+      { text: 'a', cls: null },
+      { text: '😀', cls: 'e' },
+      { text: 'b', cls: null },
+    ]);
+  });
+
+  it('never splits an emoji in two', () => {
+    // Quick open marks a matched emoji by its first unit only.
+    expect(segment('x😀y', positionMarks([1], 'm'))).toEqual([
+      { text: 'x', cls: null },
+      { text: '😀', cls: 'm' },
+      { text: 'y', cls: null },
+    ]);
+    expect(segment('x😀y', [{ start: 2, end: 4, cls: 'm' }])).toEqual([
+      { text: 'x', cls: null },
+      { text: '😀y', cls: 'm' },
     ]);
   });
 });

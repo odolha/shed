@@ -1,8 +1,9 @@
 // Shed's service worker: shows push notifications and opens the tab they are
 // about when clicked. It caches nothing; the app needs the nexus anyway.
 //
-// A push's payload is the workspace's `Notification` (crates/shed-api wire.rs:
-// kind, title, body, bench, tab) with the workspace's id added by the nexus.
+// A push's payload is a `PushPayload` (crates/shed-api/src/http.rs: kind,
+// title, body, workspace, workspaceName, bench, tab), the workspace's
+// `Notification` with the workspace's id and name added by the nexus.
 
 /* eslint-env serviceworker */
 

@@ -17,7 +17,7 @@ export interface FolderPickerData {
   suggestions: string[];
 }
 
-/** Choose a folder on the workspace, through `BrowseFolders`. */
+/** Choose a folder on the workspace, through `Browse` (which says where it is, absolute, and its parent). */
 @Component({
   selector: 'shed-folder-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -41,7 +41,7 @@ export interface FolderPickerData {
         <button class="btn" type="submit">{{ 'folder.go' | t }}</button>
       </form>
       <div class="list card">
-        <button class="menu-item" (click)="up()" [disabled]="path() === '/'">
+        <button class="menu-item" (click)="up()" [disabled]="!parent()">
           <shed-icon name="arrow-up" />..
         </button>
         @if (loading()) {
@@ -61,7 +61,7 @@ export interface FolderPickerData {
       </div>
       <div class="dialog-actions">
         <button class="btn ghost" (click)="ref.close(null)">{{ 'common.cancel' | t }}</button>
-        <button class="btn primary" (click)="ref.close(path())">
+        <button class="btn primary" [disabled]="!path()" (click)="ref.close(path())">
           {{ 'folder.choose' | t: { name: tilde(path()) } }}
         </button>
       </div>
@@ -79,7 +79,9 @@ export class FolderPicker {
   protected readonly ref = inject<DialogRef<FolderPickerData, string>>(DialogRef);
   private readonly store = inject(WorkspacesStore);
   protected readonly d = this.ref.data;
-  protected readonly path = signal(this.d.start || '/');
+  /** Where we are, absolute, as the workspace said. */
+  protected readonly path = signal(this.d.start || '');
+  protected readonly parent = signal<string | null>(null);
   protected typed = this.d.start;
   protected readonly entries = signal<FolderEntry[]>([]);
   protected readonly loading = signal(false);
@@ -101,27 +103,24 @@ export class FolderPicker {
   }
 
   protected up(): void {
-    const p = this.path().replace(/\/+$/, '');
-    const i = p.lastIndexOf('/');
-    void this.go(i <= 0 ? '/' : p.slice(0, i));
+    const parent = this.parent();
+    if (parent) this.go(parent);
   }
 
+  /** A path as typed: absolute, `~/…`, or empty for home (the workspace makes it absolute). */
   protected go(p: string): void {
-    let path = p.trim();
-    const home = this.home();
-    if (home && (path === '~' || path.startsWith('~/'))) path = home + path.slice(1);
-    if (!path) path = home || '/';
-    void this.load(path);
+    void this.load(p.trim());
   }
 
   private async load(path: string): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
     try {
-      const list = await this.store.call(this.d.workspace, { type: 'BrowseFolders', content: { path } }, 'Folder');
-      this.entries.set([...list].sort((a, b) => a.name.localeCompare(b.name)));
-      this.path.set(path);
-      this.typed = this.tilde(path);
+      const b = await this.store.call(this.d.workspace, { type: 'Browse', content: { path } }, 'Browsed');
+      this.entries.set([...b.entries].sort((a, c) => a.name.localeCompare(c.name)));
+      this.path.set(b.path);
+      this.parent.set(b.parent ?? null);
+      this.typed = b.path;
     } catch (e) {
       this.error.set(errorText(e));
     } finally {

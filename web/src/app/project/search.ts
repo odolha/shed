@@ -21,7 +21,7 @@ import { ApiFailure, errorText } from '../../api/errors';
 import { TPipe, t } from '../../i18n/i18n';
 import { Icon } from '../../ui/icon';
 import { Tooltip } from '../../ui/tooltip';
-import { type Segment, rangeMarks, segment, splitPath } from './highlight';
+import { type Segment, rangeMarks, safeCut, segment, splitPath } from './highlight';
 
 export interface OpenAt {
   path: string;
@@ -37,12 +37,14 @@ interface FileHits {
 }
 
 /** Long lines are cut around the first match. */
-function trimHit(text: string, ranges: number[]): { text: string; ranges: number[] } {
-  const chars = Array.from(text);
+export function trimHit(text: string, ranges: number[]): { text: string; ranges: number[] } {
+  // Positions are UTF-16 code units, as `slice` counts.
   const first = ranges[0] ?? 0;
-  if (chars.length <= 200 || first < 60) return { text: chars.slice(0, 400).join(''), ranges };
-  const cut = first - 40;
-  return { text: '…' + chars.slice(cut, cut + 360).join(''), ranges: ranges.map((r) => r - cut + 1) };
+  if (text.length <= 200 || first < 60) return { text: text.slice(0, safeCut(text, 400)), ranges };
+  const cut = safeCut(text, first - 40);
+  const end = safeCut(text, cut + 360);
+  // The ellipsis is one code unit.
+  return { text: '…' + text.slice(cut, end), ranges: ranges.map((r) => r - cut + 1) };
 }
 
 @Component({

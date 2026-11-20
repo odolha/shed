@@ -1085,7 +1085,8 @@ What the web app shows:
   shows, read only, as it was when it was last seen. A workspace set to allow
   viewing only says **View only**, and nothing there can be changed.
 - **A bench**: its tabs on a bar in its colour; **+** makes a terminal,
-  project, AI or remote tab (choosing a folder on the workspace); a tab's
+  project, AI or remote tab (choosing a folder on the workspace: its full
+  path shows, `..` goes up, and a path can be typed, `~/…` too); a tab's
   menu (right-click, or the arrow after the tabs) renames it, makes it private
   or closes it, after asking. The bench's name opens its menu: rename, badge,
   colour, Run Startup, Run Teardown, the logbook, Close Bench…. A link to a tab
@@ -1108,8 +1109,11 @@ What the web app shows:
   lines. Tap the terminal to type; on a phone a bar of keys (Esc, Tab, Ctrl,
   Alt, arrows, `|`, `~`, `/`) sits above the keyboard. **Take the size** makes the
   terminal the size of your screen while you look at it (for a full-screen
-  program on a phone); leaving gives the size back. The logbook button finds
-  earlier commands and types one in.
+  program on a phone); leaving gives the size back. A full-screen program that
+  takes the mouse (htop, mc, vim with `mouse=a`) gets clicks and the wheel (a
+  tap on a phone); hold Shift to select text instead. In less and man pages
+  the wheel scrolls the page. The logbook button finds earlier commands and
+  types one in.
 - **Project tabs**: the file tree, files with their colours, **Go to File**
   (Ctrl+P), search in files, and **Changes**: stage, unstage or discard files
   and hunks (discarding asks), commit (or amend), branches, history, Fetch,
@@ -1119,12 +1123,15 @@ What the web app shows:
   `tag:label`.
 - **Devices**: browsers, phones and workspaces with when and where they were
   last seen; rename or revoke them (revoking asks for a code); workspaces
-  asking to pair, and **Approve a Workspace…** (see
+  asking to pair, each with **Reject…** (asks first) and **Approve…**
+  (approving needs the code the workspace printed; see
   [Linking a workspace](#linking-a-workspace)); the record of sign-ins and
   changes.
 - **Settings**: notifications in this browser (Claude waiting for you, a turn
   done, a long command finished, a workspace gone offline: each can be on or
-  off); clicking one opens its tab. Change the password, sign out.
+  off); clicking one opens its tab. **Turn On** subscribes this browser,
+  **Turn Off** stops them here (your choices are kept for turning them on
+  again). Change the password, sign out.
 
 On a phone, **Add to Home Screen** installs it as an app (on iPhone, needed for
 notifications). Private tabs are listed, never shown: what is in them stays on

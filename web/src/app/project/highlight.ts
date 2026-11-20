@@ -1,10 +1,10 @@
 /**
- * Cutting a line of text into styled pieces, from character ranges: code
- * colours (`Highlight`), matched characters in quick open, search hits.
+ * Cutting a line of text into styled pieces, from ranges: code colours
+ * (`Highlight`), matched characters in quick open, search hits.
  *
- * Positions count characters as Rust does (Unicode scalar values, what
- * `Array.from` gives), not UTF-16 units, so text beyond the BMP (emoji) does
- * not shift the colours after it.
+ * Positions are UTF-16 code units, as the API gives them and as JavaScript
+ * strings index (an emoji counts two), so they go straight to `slice`. A cut
+ * never splits an emoji's two halves.
  */
 
 import type { Highlight } from '../../api/gen/api';
@@ -24,20 +24,41 @@ export interface Mark {
 /** Pieces of `text`; overlapping marks: the one starting first wins. */
 export function segment(text: string, marks: readonly Mark[]): Segment[] {
   if (!marks.length) return text ? [{ text, cls: null }] : [];
-  const chars = Array.from(text);
   const sorted = marks.filter((m) => m.end > m.start).sort((a, b) => a.start - b.start || b.end - a.end);
   const out: Segment[] = [];
   let pos = 0;
   for (const m of sorted) {
-    const s = Math.max(m.start, pos);
-    const e = Math.min(m.end, chars.length);
+    const s = Math.max(snapStart(text, m.start), pos);
+    const e = snapEnd(text, Math.min(m.end, text.length));
     if (e <= s) continue;
-    if (s > pos) out.push({ text: chars.slice(pos, s).join(''), cls: null });
-    out.push({ text: chars.slice(s, e).join(''), cls: m.cls });
+    if (s > pos) out.push({ text: text.slice(pos, s), cls: null });
+    out.push({ text: text.slice(s, e), cls: m.cls });
     pos = e;
   }
-  if (pos < chars.length) out.push({ text: chars.slice(pos).join(''), cls: null });
+  if (pos < text.length) out.push({ text: text.slice(pos), cls: null });
   return out;
+}
+
+/** The second half of a surrogate pair (an emoji's), at `i`. */
+function lowHalf(text: string, i: number): boolean {
+  const c = text.charCodeAt(i);
+  const before = text.charCodeAt(i - 1);
+  return i > 0 && c >= 0xdc00 && c <= 0xdfff && before >= 0xd800 && before <= 0xdbff;
+}
+
+/** A start inside a pair moves back to its first half. */
+function snapStart(text: string, i: number): number {
+  return lowHalf(text, i) ? i - 1 : i;
+}
+
+/** An end inside a pair moves on past its second half. */
+function snapEnd(text: string, i: number): number {
+  return i < text.length && lowHalf(text, i) ? i + 1 : i;
+}
+
+/** A cut at `i` that keeps pairs whole (for trimming long lines). */
+export function safeCut(text: string, i: number): number {
+  return snapStart(text, Math.max(0, Math.min(i, text.length)));
 }
 
 /** `string.special` → `hl-string.special`; anything odd is dropped. */

@@ -7,7 +7,7 @@ import { NexusHttp } from '../../api/http';
 import { TPipe, t } from '../../i18n/i18n';
 import { Icon } from '../../ui/icon';
 import { Notices } from '../../ui/notices';
-import { KINDS, currentSubscription, pushSupport, subscribe } from './push';
+import { KINDS, currentSubscription, pushOn, pushSupport, subscribe, unsubscribe } from './push';
 
 const MIN_PASSWORD = 10;
 const WEB_VERSION = '0.1.0';
@@ -40,12 +40,19 @@ const WEB_VERSION = '0.1.0';
               <span class="chip ok"><shed-icon name="check" [size]="12" />{{ 'push.on' | t }}</span>
             } @else if (denied()) {
               <span class="chip danger">{{ 'push.denied' | t }}</span>
+            } @else {
+              <span class="chip">{{ 'push.offHere' | t }}</span>
             }
             <span class="grow"></span>
-            <button class="btn" [class.primary]="!subscribed()" [disabled]="busy()" (click)="enable()">
-              <shed-icon name="bell" [size]="14" />
-              {{ (subscribed() ? 'push.renew' : 'push.enable') | t }}
-            </button>
+            @if (subscribed()) {
+              <button class="btn" [disabled]="busy()" (click)="disable()">
+                <shed-icon name="bell-off" [size]="14" />{{ 'push.disable' | t }}
+              </button>
+            } @else {
+              <button class="btn primary" [disabled]="busy()" (click)="enable()">
+                <shed-icon name="bell" [size]="14" />{{ 'push.enable' | t }}
+              </button>
+            }
           </div>
           @if (pushError(); as e) {
             <div class="error-box" role="alert">{{ e }}</div>
@@ -223,7 +230,8 @@ export class SettingsPage implements OnInit {
       const info = await this.http.push();
       this.info.set(info);
       this.chosen.set(info.prefs.kinds);
-      this.subscribed.set(!!(await currentSubscription()));
+      const here = !!(await currentSubscription());
+      this.subscribed.set(pushOn(!!info.subscribed, here, Notification.permission));
     } catch (e) {
       this.pushError.set(errorText(e));
     }
@@ -239,12 +247,30 @@ export class SettingsPage implements OnInit {
       await this.http.pushSubscribe(sub);
       if (!this.chosen().length) await this.savePrefs(KINDS.filter((k) => k !== 'commandDone'));
       this.subscribed.set(true);
+      this.info.update((i) => (i ? { ...i, subscribed: true } : i));
       this.notices.info(t('push.enabled'));
     } catch (e) {
       if (e instanceof Error && e.message === 'denied') {
         this.denied.set(Notification.permission === 'denied');
         this.pushError.set(t('push.notAllowed'));
       } else this.pushError.set(errorText(e));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  /** No more notifications here: the nexus forgets this browser's subscription, and the browser drops it. */
+  protected async disable(): Promise<void> {
+    this.busy.set(true);
+    this.pushError.set(null);
+    try {
+      await this.http.pushUnsubscribe();
+      this.subscribed.set(false);
+      this.info.update((i) => (i ? { ...i, subscribed: false } : i));
+      await unsubscribe().catch(() => undefined);
+      this.notices.info(t('push.disabled'));
+    } catch (e) {
+      this.pushError.set(errorText(e));
     } finally {
       this.busy.set(false);
     }

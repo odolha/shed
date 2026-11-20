@@ -1,7 +1,9 @@
 /**
  * One terminal pane: its screen as text (the `Screen` topic), re-wrapped to
  * this view's width on the normal screen and fitted on the alternate one;
- * scrollback fetched when scrolling up; keys and text sent as `Input`.
+ * scrollback fetched when scrolling up; keys and text sent as `Input`. On the
+ * alternate screen, clicks go to a program that asked for the mouse (Shift
+ * selects text instead), and the wheel goes to it in notches.
  */
 
 import {
@@ -20,7 +22,7 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
-import type { InputItem, Pane, ScreenLine } from '../../api/gen/api';
+import type { InputItem, MouseButton, Pane, ScreenLine } from '../../api/gen/api';
 import { WorkspacesStore } from '../../api/workspaces.store';
 import { TPipe } from '../../i18n/i18n';
 import { Clipboard } from '../../ui/clipboard';
@@ -29,6 +31,7 @@ import { Notices } from '../../ui/notices';
 import { Tooltip } from '../../ui/tooltip';
 import { tildify } from '../shared/tabs';
 import { type Mods, clipboardShortcut, keyToInput, mergeInput, textToInput } from './keys';
+import { type Cell, type GridGeom, type MouseMods, WheelNotches, buttonOf, cellAt, mouseItem, wheelItems } from './mouse';
 import { joinRows, locate, rewrap } from './rewrap';
 import { BLANK, ScreenModel } from './screen-model';
 import { type RSpan, drawSpans } from './style';
@@ -38,6 +41,8 @@ interface ScreenSnap {
   cols: number;
   rows: number;
   alt: boolean;
+  /** The program asked for mouse events. */
+  mouse: boolean;
   cursor: { row: number; col: number; visible: boolean };
   title: string | null;
   hasMore: boolean;
@@ -102,8 +107,16 @@ function emptyRow(l: ScreenLine): boolean {
       role="region"
       [attr.aria-label]="'term.screen' | t"
       [class.alt]="snap().alt"
+      [class.mouse]="snap().alt && snap().mouse && canType()"
       (scroll)="onScroll()"
       (click)="onClick()"
+      (mousedown)="onMouseDown($event)"
+      (pointerdown)="onPointerDown($event)"
+      (pointermove)="onPointerMove($event)"
+      (pointerup)="onPointerUp($event)"
+      (pointercancel)="onPointerCancel($event)"
+      (contextmenu)="onContextMenu($event)"
+      (wheel)="onWheel($event)"
     >
       <span class="measure" #measure aria-hidden="true">MMMMMMMMMMMMMMMMMMMM</span>
       @if (status() === 'paused') {
@@ -115,7 +128,7 @@ function emptyRow(l: ScreenLine): boolean {
       }
       @if (snap().alt) {
         @let a = alt();
-        <div class="grid" [style.font-size.px]="altFont()">
+        <div class="grid" #grid [style.font-size.px]="altFont()">
           @for (row of a.lines; track $index; let r = $index) {
             <div class="l">
               @for (s of row; track $index) {
@@ -231,6 +244,9 @@ function emptyRow(l: ScreenLine): boolean {
       cursor: text;
       overscroll-behavior: contain;
     }
+    .screen.mouse {
+      cursor: default;
+    }
     @media (max-width: 500px) {
       .screen {
         font-size: 12px;
@@ -344,6 +360,7 @@ export class TerminalView {
   private readonly screenEl = viewChild.required<ElementRef<HTMLElement>>('screen');
   private readonly measureEl = viewChild.required<ElementRef<HTMLElement>>('measure');
   private readonly catcher = viewChild.required<ElementRef<HTMLTextAreaElement>>('catcher');
+  private readonly gridEl = viewChild<ElementRef<HTMLElement>>('grid');
 
   private model = new ScreenModel();
   protected readonly snap = signal<ScreenSnap>(this.snapshot());
@@ -427,6 +444,11 @@ export class TerminalView {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private sizeTimer: ReturnType<typeof setTimeout> | null = null;
   private failed = false;
+  private readonly wheel = new WheelNotches();
+  /** A button held down over the grid, sent as pressed. */
+  private pressed: { button: MouseButton; cell: Cell; pointer: number } | null = null;
+  /** A finger down over the grid: a tap is a click, a drag scrolls. */
+  private touch: { x: number; y: number; pointer: number } | null = null;
 
   constructor() {
     const destroy = inject(DestroyRef);
@@ -523,6 +545,7 @@ export class TerminalView {
       cols: m.cols,
       rows: m.rows,
       alt: m.alt,
+      mouse: m.mouse,
       cursor: m.cursor,
       title: m.title,
       hasMore: m.ready && m.hasMore,
@@ -585,6 +608,111 @@ export class TerminalView {
     const sel = getSelection();
     if (sel && !sel.isCollapsed) return;
     this.focus();
+  }
+
+  /**
+   * Clicks go to the program: it asked for the mouse, its grid is shown, we
+   * may type, and Shift is not held (Shift selects text, as in Shed's window).
+   */
+  private mouseToProgram(e: MouseMods): boolean {
+    const s = this.snap();
+    return s.alt && s.mouse && this.canType() && !e.shiftKey;
+  }
+
+  /** The alternate screen's grid, where it is and how big its cells are now. */
+  private geom(): GridGeom | null {
+    const grid = this.gridEl()?.nativeElement;
+    if (!grid) return null;
+    const r = grid.getBoundingClientRect();
+    const s = this.snap();
+    const scale = this.altFont() / Math.max(1, this.basePx());
+    return {
+      left: r.left,
+      top: r.top,
+      cellW: this.cellW() * scale,
+      cellH: s.rows > 0 && r.height > 0 ? r.height / s.rows : this.lineH() * scale,
+      cols: s.cols,
+      rows: s.rows,
+    };
+  }
+
+  private cellOf(e: MouseEvent): Cell | null {
+    const g = this.geom();
+    return g ? cellAt(g, e.clientX, e.clientY) : null;
+  }
+
+  protected onMouseDown(e: MouseEvent): void {
+    // The program gets the click: no text selection starts.
+    if (this.mouseToProgram(e)) e.preventDefault();
+  }
+
+  protected onContextMenu(e: MouseEvent): void {
+    if (this.mouseToProgram(e)) e.preventDefault();
+  }
+
+  protected onPointerDown(e: PointerEvent): void {
+    if (!this.mouseToProgram(e)) return;
+    if (e.pointerType === 'touch') {
+      this.touch = { x: e.clientX, y: e.clientY, pointer: e.pointerId };
+      return;
+    }
+    const button = buttonOf(e.button);
+    const cell = this.cellOf(e);
+    if (!button || !cell) return;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    this.pressed = { button, cell, pointer: e.pointerId };
+    this.send([mouseItem('press', cell, e, button)]);
+  }
+
+  protected onPointerMove(e: PointerEvent): void {
+    const p = this.pressed;
+    if (!p || p.pointer !== e.pointerId) return;
+    const cell = this.cellOf(e);
+    if (!cell || (cell.col === p.cell.col && cell.row === p.cell.row)) return;
+    p.cell = cell;
+    this.send([mouseItem('move', cell, e, p.button)]);
+  }
+
+  protected onPointerUp(e: PointerEvent): void {
+    const t = this.touch;
+    if (t && t.pointer === e.pointerId) {
+      this.touch = null;
+      // A tap, not a drag: a click where it was.
+      const cell = this.cellOf(e);
+      if (cell && Math.hypot(e.clientX - t.x, e.clientY - t.y) < 10 && this.mouseToProgram(e)) {
+        this.send([mouseItem('press', cell, e, 'left'), mouseItem('release', cell, e, 'left')]);
+      }
+      return;
+    }
+    const p = this.pressed;
+    if (!p || p.pointer !== e.pointerId) return;
+    this.pressed = null;
+    this.send([mouseItem('release', this.cellOf(e) ?? p.cell, e, p.button)]);
+  }
+
+  protected onPointerCancel(e: PointerEvent): void {
+    if (this.touch?.pointer === e.pointerId) this.touch = null;
+    const p = this.pressed;
+    if (!p || p.pointer !== e.pointerId) return;
+    this.pressed = null;
+    this.send([mouseItem('release', p.cell, e, p.button)]);
+  }
+
+  /**
+   * The wheel on the alternate screen goes to the program in notches: as the
+   * mouse when it asked for it, else the link makes arrow keys of it (less).
+   * Shift keeps the browser's own scrolling, as does a grid taller than the
+   * view when the program did not ask for the mouse.
+   */
+  protected onWheel(e: WheelEvent): void {
+    const s = this.snap();
+    if (!s.alt || !this.canType() || e.shiftKey || !e.deltaY) return;
+    const el = this.screenEl().nativeElement;
+    if (!s.mouse && el.scrollHeight > el.clientHeight + 1) return;
+    e.preventDefault();
+    const n = this.wheel.add(e.deltaY, e.deltaMode);
+    if (!n) return;
+    this.send(wheelItems(n, this.cellOf(e) ?? { col: 0, row: 0 }, e));
   }
 
   protected keepFocus(e: PointerEvent): void {

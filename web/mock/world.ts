@@ -6,6 +6,7 @@ import type {
   AiTab,
   Bench,
   BenchRef,
+  Browsed,
   Call,
   ClosedBench,
   Event,
@@ -45,6 +46,7 @@ const LOOKING = new Set<Call['type']>([
   'GitCommitFiles',
   'GitBranches',
   'BrowseFolders',
+  'Browse',
 ]);
 
 const NAMED_COLORS: Record<string, string> = {
@@ -375,11 +377,28 @@ function color(c: string): string {
 
 const FOLDERS = ['shed', 'shed/crates', 'shed/crates/shed-model', 'shed/crates/shed-app', 'shed/web', 'shed/docs', 'notes', 'website', 'website/src', 'Downloads', 'thesis'];
 
-function browse(path: string): { name: string; dir: boolean; ignored: boolean }[] {
+/** A path as `Browse` takes it (absolute, `~/…`, `""` for home), made absolute. */
+function absolute(path: string): string {
   let p = path.trim();
   if (p === '' || p === '~') p = HOME;
   else if (p.startsWith('~/')) p = HOME + p.slice(1);
-  p = p.replace(/\/+$/, '') || '/';
+  const parts: string[] = [];
+  for (const part of p.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return '/' + parts.join('/');
+}
+
+function browsed(path: string): Browsed {
+  const p = absolute(path);
+  const i = p.lastIndexOf('/');
+  return { path: p, parent: p === '/' ? null : i <= 0 ? '/' : p.slice(0, i), entries: browse(p) };
+}
+
+function browse(path: string): { name: string; dir: boolean; ignored: boolean }[] {
+  const p = absolute(path);
   if (p === '/' || p === '/home') return [{ name: p === '/' ? 'home' : 'you', dir: true, ignored: false }];
   if (p !== HOME && !p.startsWith(HOME + '/')) throw new Fail('notFound', `no folder ${path}`);
   const rel = p === HOME ? '' : p.slice(HOME.length + 1);
@@ -702,6 +721,8 @@ async function dispatch(call: Call): Promise<Reply> {
     // ---- the machine
     case 'BrowseFolders':
       return { type: 'Folder', content: browse(call.content.path) };
+    case 'Browse':
+      return { type: 'Browsed', content: browsed(call.content.path) };
 
     // ---- AI tabs
     case 'AiPicture':
