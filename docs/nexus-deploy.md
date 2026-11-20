@@ -190,7 +190,7 @@ in the nexus's `[push]`.
 
 A server can run Shed itself, so benches and Claude Code keep working while
 your PCs are off: a keeper for a user of its own, reached with `shed tui` over
-ssh (and linked to the nexus, once the link is in). It needs no display: build
+ssh, and linked to the nexus. It needs no display: build
 Shed without windows. The placeholders here are `server.example.com` and the
 user `shed`.
 
@@ -229,7 +229,7 @@ ssh -t shed@server.example.com shed       # a build without windows runs shed tu
 running for the next `ssh`. [The user guide](user-guide.md#shed-in-a-terminal-shed-tui)
 has its keys. Remote tabs from your PCs to this server (`shed remote new
 shed@server.example.com`) use the same keeper, so they show up there as
-benches of their own. Once the link is built, `shed nexus join
+benches of their own. To reach it from the web and Android apps too, `shed nexus join
 https://nexus.example.com` links the workspace as in [6](#6-linking-workspaces).
 
 ## Backups and upgrades
