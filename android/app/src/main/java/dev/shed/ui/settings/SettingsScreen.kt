@@ -71,9 +71,14 @@ fun SettingsScreen(nav: NavController) {
     val distributors = remember { Push.distributors(context) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-    LaunchedEffect(Unit) {
+    val pushChanged by Push.changed.collectAsState()
+    LaunchedEffect(pushChanged) {
         try {
-            info = session.http.get("/push", PushInfo.serializer())
+            val got = session.http.get("/push", PushInfo.serializer())
+            info = got
+            // The nexus knows whether it pushes here (older ones do not say).
+            got.subscribed?.let { pushOn = it }
+            pushError = null
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             pushError = errorText(context, e)
@@ -109,9 +114,17 @@ fun SettingsScreen(nav: NavController) {
                                 Push.enable(activity, vapid) { ok -> pushOn = ok }
                             }
                         } else {
-                            Push.unregister(context)
                             pushOn = false
+                            Push.disable(context) { ok -> if (!ok) pushError = context.getString(R.string.push_unsubscribe_failed) }
                         }
+                    }
+                    if (!pushOn && info?.subscribed == false && app.settings.pushEnabled) {
+                        Text(
+                            stringResource(R.string.push_not_subscribed),
+                            color = shed.textDim,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
                     }
                     val prefs = info?.prefs?.kinds.orEmpty()
                     if (pushOn) {

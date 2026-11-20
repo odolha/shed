@@ -581,9 +581,17 @@ private fun Settings(ws: String, tabId: String, ai: AiTab, info: dev.shed.api.Ai
             Box {
                 AssistChip(
                     onClick = { effortMenu = true },
-                    label = { Text(stringResource(R.string.ai_effort, ai.effort ?: efforts.first()), fontSize = 12.sp) },
+                    label = {
+                        val effort = ai.effort?.takeIf { it.isNotEmpty() }
+                        Text(if (effort != null) stringResource(R.string.ai_effort, effort) else stringResource(R.string.ai_effort_default), fontSize = 12.sp)
+                    },
                 )
                 DropdownMenu(expanded = effortMenu, onDismissRequest = { effortMenu = false }) {
+                    // "": back to the model's own effort.
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text(stringResource(R.string.ai_effort_default) + if (ai.effort.isNullOrEmpty()) "  ✓" else "") },
+                        onClick = { effortMenu = false; set(AiSettings(tabId, effort = "")) },
+                    )
                     for (e in efforts) {
                         androidx.compose.material3.DropdownMenuItem(
                             text = { Text(e + if (e == ai.effort) "  ✓" else "") },

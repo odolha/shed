@@ -55,6 +55,7 @@ import dev.shed.api.Revoke
 import dev.shed.net.Empty
 import dev.shed.ui.LocalSession
 import dev.shed.ui.common.Chip
+import dev.shed.ui.common.ConfirmDialog
 import dev.shed.ui.common.Dot
 import dev.shed.ui.common.HSpace
 import dev.shed.ui.common.Loading
@@ -81,6 +82,7 @@ fun DevicesScreen(nav: NavController) {
     var revoking by remember { mutableStateOf<Device?>(null) }
     var renaming by remember { mutableStateOf<Device?>(null) }
     var approving by remember { mutableStateOf<PendingPairing?>(null) }
+    var rejecting by remember { mutableStateOf<PendingPairing?>(null) }
 
     LaunchedEffect(refresh) {
         try {
@@ -128,7 +130,15 @@ fun DevicesScreen(nav: NavController) {
                                 color = shed.textDim,
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            TextButton(onClick = { approving = p }) { Text(stringResource(R.string.pair_approve_ellipsis)) }
+                            Row {
+                                TextButton(onClick = { approving = p }) { Text(stringResource(R.string.pair_approve_ellipsis)) }
+                                if (p.id != null) {
+                                    TextButton(
+                                        onClick = { rejecting = p },
+                                        colors = ButtonDefaults.textButtonColors(contentColor = shed.danger),
+                                    ) { Text(stringResource(R.string.pair_reject_ellipsis)) }
+                                }
+                            }
                         }
                     }
                 }
@@ -229,13 +239,21 @@ fun DevicesScreen(nav: NavController) {
                     refresh++
                 }
             },
-            onReject = { code ->
+            onDismiss = { approving = null },
+        )
+    }
+    rejecting?.let { p ->
+        ConfirmDialog(
+            title = stringResource(R.string.pair_reject_title),
+            text = stringResource(R.string.pair_reject_text, p.name),
+            confirm = stringResource(R.string.pair_reject),
+            onConfirm = {
                 runner.run {
-                    http.post("/pair/reject", PairReject(code), PairReject.serializer(), Empty.serializer())
+                    http.post("/pair/reject", PairReject(code = "", id = p.id), PairReject.serializer(), Empty.serializer())
                     refresh++
                 }
             },
-            onDismiss = { approving = null },
+            onDismiss = { rejecting = null },
         )
     }
 }
@@ -254,10 +272,8 @@ fun normalizePairCode(typed: String): String {
 private fun PairDialog(
     initialName: String,
     onApprove: (code: String, name: String, totp: String) -> Unit,
-    onReject: (code: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val shed = LocalShed.current
     var code by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable { mutableStateOf(initialName) }
     var totp by rememberSaveable { mutableStateOf("") }
@@ -303,18 +319,6 @@ private fun PairDialog(
                 },
             ) { Text(stringResource(R.string.pair_approve)) }
         },
-        dismissButton = {
-            Row {
-                TextButton(
-                    enabled = codeOk,
-                    onClick = {
-                        onDismiss()
-                        onReject(normalizePairCode(code))
-                    },
-                    colors = ButtonDefaults.textButtonColors(contentColor = shed.danger),
-                ) { Text(stringResource(R.string.pair_reject)) }
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-            }
-        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
 }

@@ -1,6 +1,8 @@
 package dev.shed.ui.terminal
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,11 +46,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -73,6 +78,9 @@ import dev.shed.api.Call
 import dev.shed.api.Input
 import dev.shed.api.InputItem
 import dev.shed.api.Key
+import dev.shed.api.Mouse
+import dev.shed.api.MouseButton
+import dev.shed.api.MouseKind
 import dev.shed.api.PaneOnly
 import dev.shed.api.Reply
 import dev.shed.api.Scrollback
@@ -212,7 +220,8 @@ fun TerminalScreen(nav: NavController, ws: String, bench: Bench, tab: Tab) {
         val vm: TerminalVm = viewModel(key = "term-${pane.id}") { TerminalVm(session.socket, ws, pane.id) }
         fun send(items: List<InputItem>) = runner.run { session.socket.call(ws, Call.Input(Input(pane.id, items))) }
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
-            TerminalView(vm, Modifier.weight(1f), takeSize) { cols, rows ->
+            val onMouse: ((List<Mouse>) -> Unit)? = if (canChange) { m -> send(m.map { InputItem.Mouse(it) }) } else null
+            TerminalView(vm, Modifier.weight(1f), takeSize, onMouse) { cols, rows ->
                 runner.run { session.socket.call(ws, Call.TakeSize(TakeSize(pane.id, cols.toUInt(), rows.toUInt()))) }
             }
             if (canChange) InputBar(::send)
@@ -229,7 +238,13 @@ fun TerminalScreen(nav: NavController, ws: String, bench: Bench, tab: Tab) {
 }
 
 @Composable
-private fun TerminalView(vm: TerminalVm, modifier: Modifier, takeSize: Boolean, onSize: (Int, Int) -> Unit) {
+private fun TerminalView(
+    vm: TerminalVm,
+    modifier: Modifier,
+    takeSize: Boolean,
+    onMouse: ((List<Mouse>) -> Unit)?,
+    onSize: (Int, Int) -> Unit,
+) {
     val shed = LocalShed.current
     val version by vm.version.collectAsState()
     val ended by vm.ended.collectAsState()
@@ -253,7 +268,7 @@ private fun TerminalView(vm: TerminalVm, modifier: Modifier, takeSize: Boolean, 
                 return@BoxWithConstraints
             }
             if (model.alt) {
-                AltScreen(model, style, widthPx, charW, shed)
+                AltScreen(model, style, widthPx, charW, lineH, shed, onMouse)
             } else {
                 NormalScreen(vm, version, cols, style, shed)
             }
@@ -299,7 +314,15 @@ private fun NormalScreen(vm: TerminalVm, version: Int, cols: Int, style: TextSty
 }
 
 @Composable
-private fun AltScreen(model: TerminalModel, style: TextStyle, widthPx: Float, charW: Float, shed: ShedColors) {
+private fun AltScreen(
+    model: TerminalModel,
+    style: TextStyle,
+    widthPx: Float,
+    charW: Float,
+    lineH: Float,
+    shed: ShedColors,
+    onMouse: ((List<Mouse>) -> Unit)?,
+) {
     var fit by rememberSaveable { mutableStateOf(true) }
     val scale = if (fit) (widthPx / (model.cols * charW)).coerceIn(0.4f, 1f) else 1f
     val small = style.copy(fontSize = style.fontSize * scale, lineHeight = style.lineHeight * scale)
@@ -313,8 +336,47 @@ private fun AltScreen(model: TerminalModel, style: TextStyle, widthPx: Float, ch
             )
         }
         val scroll = rememberScrollState()
-        Column(Modifier.fillMaxSize().then(if (fit) Modifier else Modifier.horizontalScroll(scroll))) {
+        val mouse = if (onMouse != null && model.mouse) {
+            Modifier.mouseInput(model, charW * scale, lineH * scale, onMouse)
+        } else {
+            Modifier
+        }
+        Column(Modifier.fillMaxSize().then(if (fit) Modifier else Modifier.horizontalScroll(scroll)).then(mouse)) {
             for (line in lines) Text(line, style = small, softWrap = false, maxLines = 1)
+        }
+    }
+}
+
+/**
+ * The program asked for the mouse (`Screen.mouse`): a tap is a left click at
+ * its cell, a vertical drag turns the wheel a notch per row dragged (finger
+ * down: wheel up, as content follows the finger).
+ */
+@Composable
+private fun Modifier.mouseInput(model: TerminalModel, cellW: Float, cellH: Float, onMouse: (List<Mouse>) -> Unit): Modifier {
+    val send by rememberUpdatedState(onMouse)
+    fun cell(at: Offset): Pair<UInt, UInt> {
+        val col = (at.x / cellW).toInt().coerceIn(0, model.cols - 1)
+        val row = (at.y / cellH).toInt().coerceIn(0, model.rows - 1)
+        return col.toUInt() to row.toUInt()
+    }
+    return pointerInput(cellW, cellH) {
+        detectTapGestures { at ->
+            val (col, row) = cell(at)
+            send(listOf(Mouse(MouseKind.Press, MouseButton.Left, col, row), Mouse(MouseKind.Release, MouseButton.Left, col, row)))
+        }
+    }.pointerInput(cellW, cellH) {
+        var dragged = 0f
+        detectVerticalDragGestures(onDragStart = { dragged = 0f }) { change, dy ->
+            change.consume()
+            dragged += dy
+            val notches = (dragged / cellH).toInt()
+            if (notches != 0) {
+                dragged -= notches * cellH
+                val (col, row) = cell(change.position)
+                val kind = if (notches > 0) MouseKind.WheelUp else MouseKind.WheelDown
+                send(List(kotlin.math.abs(notches)) { Mouse(kind, null, col, row) })
+            }
         }
     }
 }

@@ -56,6 +56,7 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 4. **Settings → Unlock with fingerprint or screen lock** asks for it whenever
    the app comes back. **Sign Out…** revokes this phone's token at the nexus and
    forgets it here. Devices lists every device; revoking one asks for a code.
+   A pairing request you did not make: **Reject…** on its row.
 
 A workspace that allows viewing only (its policy is `view`) shows everything
 but offers no changes.
@@ -77,6 +78,9 @@ nexus sends to the endpoint it gives. Messages are encrypted for the app
    long command finished, a workspace went offline. Each has its own Android
    notification channel; tapping a notification opens its tab
    (`shed://w/{workspace}/b/{bench}/t/{tab}`).
+4. Settings shows whether the nexus pushes to this phone. Turning push off
+   unregisters from the distributor and tells the nexus
+   (`POST /api/v1/push/unsubscribe`); turning it on again registers anew.
 
 Without a distributor installed, Settings says how to get one.
 
@@ -94,4 +98,5 @@ Without a distributor installed, Settings says how to get one.
 | `ShedApp.kt`, `MainActivity.kt` | The session (connects in the foreground, rests a minute after), the lock |
 
 Tests (`app/src/test`) run on the JVM: JSON round-trips, the socket against a
-fake nexus (MockWebServer), terminal re-wrapping, the Markdown reader.
+fake nexus (MockWebServer), terminal re-wrapping, the Markdown reader, text
+ranges from the API (UTF-16 positions, used as Kotlin strings index them).

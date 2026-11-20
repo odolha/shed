@@ -15,18 +15,29 @@ import java.util.Date
 fun nowSeconds(): Long = System.currentTimeMillis() / 1000
 
 /**
- * The UTF-16 index of the character at [charPos] in [text], where positions
- * count Unicode characters (as Rust's `chars()` does), clamped to the text.
+ * A range of [text] the API gives (highlights, search ranges): positions in
+ * UTF-16 code units, which is how Kotlin strings index, so used as they are;
+ * only clamped to the text. `null` when nothing is left of it.
  */
-fun charToIndex(text: String, charPos: Int): Int {
-    var index = 0
-    var chars = 0
-    while (index < text.length && chars < charPos) {
-        index += Character.charCount(text.codePointAt(index))
-        chars++
-    }
-    return index
+fun textRange(text: String, start: Int, end: Int): IntRange? {
+    val s = start.coerceIn(0, text.length)
+    val e = end.coerceIn(s, text.length)
+    return if (e > s) s until e else null
 }
+
+/**
+ * The character at [pos] (a UTF-16 position, as quick open's hits give),
+ * whole: both halves of a surrogate pair (most emoji). `null` past the end.
+ */
+fun charRange(text: String, pos: Int): IntRange? {
+    if (pos !in text.indices) return null
+    val start = if (pos > 0 && text[pos].isLowSurrogate() && text[pos - 1].isHighSurrogate()) pos - 1 else pos
+    return start until start + Character.charCount(text.codePointAt(start))
+}
+
+/** Every start, end pair of [ranges] (`SearchHit.ranges`) as a range of [text]. */
+fun textRanges(text: String, ranges: List<UInt>): List<IntRange> =
+    ranges.chunked(2).mapNotNull { if (it.size == 2) textRange(text, it[0].toInt(), it[1].toInt()) else null }
 
 /** How many terminal cells a character takes: 2 for wide (CJK, emoji), else 1. */
 fun cellWidth(codePoint: Int): Int = when {

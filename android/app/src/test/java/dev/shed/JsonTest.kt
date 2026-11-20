@@ -118,4 +118,25 @@ class JsonTest {
         assertNull(response.ok)
         assertEquals(dev.shed.api.ErrorCode.Forbidden, response.error!!.code)
     }
+
+    @Test
+    fun pushPayloadAsTheNexusSendsIt() {
+        val p = ShedJson.decodeFromString(
+            dev.shed.api.PushPayload.serializer(),
+            """{"kind":"aiWaiting","title":"Claude asks","body":"","workspace":"w1","workspaceName":"laptop","bench":"b2","tab":"t3"}""",
+        )
+        assertEquals(dev.shed.api.NotificationKind.AiWaiting, p.kind)
+        assertEquals(Triple("w1", "b2", "t3"), Triple(p.workspace, p.bench, p.tab))
+        val bare = ShedJson.decodeFromString(dev.shed.api.PushPayload.serializer(), """{"kind":"workspaceOffline","title":"x","workspace":"w1"}""")
+        assertNull(bare.tab)
+    }
+
+    @Test
+    fun mouseInput() {
+        val item: dev.shed.api.InputItem = dev.shed.api.InputItem.Mouse(dev.shed.api.Mouse(dev.shed.api.MouseKind.WheelUp, null, 3u, 4u))
+        same(
+            """{"type":"Mouse","content":{"kind":"wheelUp","col":3,"row":4}}""",
+            ShedJson.encodeToString(dev.shed.api.InputItem.serializer(), item),
+        )
+    }
 }

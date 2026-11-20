@@ -20,6 +20,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,7 @@ import dev.shed.api.LoadBench
 import dev.shed.api.RenameBench
 import dev.shed.api.Reply
 import dev.shed.api.TabKind
+import dev.shed.net.Connection
 import dev.shed.ui.LocalSession
 import dev.shed.ui.Routes
 import dev.shed.ui.ai.AiScreen
@@ -44,6 +46,7 @@ import dev.shed.ui.canChange
 import dev.shed.ui.common.ConfirmDialog
 import dev.shed.ui.common.EmptyNote
 import dev.shed.ui.common.HSpace
+import dev.shed.ui.common.Loading
 import dev.shed.ui.common.ShedScaffold
 import dev.shed.ui.common.TextDialog
 import dev.shed.ui.common.benchColor
@@ -60,6 +63,12 @@ import dev.shed.ui.workspaceState
 fun TabScreen(nav: NavController, ws: String, tabId: String) {
     val state = workspaceState(ws)
     val found = state?.findTab(tabId)
+    val connection by LocalSession.current.socket.connection.collectAsState()
+    if (found == null && state == null && connection !is Connection.Online) {
+        // Opened from a notification before the workspaces came: wait for them.
+        ShedScaffold(title = "", onBack = { nav.popBackStack() }) { Loading(Modifier.padding(it)) }
+        return
+    }
     if (found == null) {
         ShedScaffold(title = stringResource(R.string.tab_gone), onBack = { nav.popBackStack() }) {
             EmptyNote(stringResource(R.string.tab_gone_text), Modifier.padding(it))

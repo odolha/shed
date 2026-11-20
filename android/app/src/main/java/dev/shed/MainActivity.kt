@@ -49,7 +49,8 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        link.value = intent?.data
+        // A link opens once: not again when the activity is made anew (rotation).
+        if (savedInstanceState == null) link.value = intent?.data
         locked.value = shed.settings.biometricLock && canUnlock()
         setContent { Root(this) }
     }

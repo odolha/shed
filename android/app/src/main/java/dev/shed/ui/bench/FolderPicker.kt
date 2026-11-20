@@ -31,16 +31,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.shed.R
 import dev.shed.api.Browse
+import dev.shed.api.Browsed
 import dev.shed.api.Call
+import dev.shed.api.ErrorCode
 import dev.shed.api.FolderEntry
 import dev.shed.api.Reply
+import dev.shed.net.ApiException
+import dev.shed.net.NexusSocket
 import dev.shed.ui.LocalSession
 import dev.shed.ui.common.HSpace
 import dev.shed.ui.common.errorText
-import dev.shed.ui.common.tildePath
 import dev.shed.ui.theme.LocalShed
 
-/** Chooses a folder on the workspace (`BrowseFolders`), starting at [start]. */
+/**
+ * Chooses a folder on the workspace (`Browse`), starting at [start]: shows
+ * where it is as an absolute path and goes up through the folder above.
+ */
 @Composable
 fun FolderPicker(
     ws: String,
@@ -54,27 +60,26 @@ fun FolderPicker(
     val context = LocalContext.current
     val shed = LocalShed.current
     var path by rememberSaveable { mutableStateOf(start) }
-    var entries by remember { mutableStateOf<List<FolderEntry>?>(null) }
+    var shown by remember { mutableStateOf<Browsed?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(path) {
-        entries = null
         error = null
-        try {
-            val reply = socket.call(ws, Call.BrowseFolders(Browse(path)))
-            entries = (reply as? Reply.Folder)?.content?.filter { it.dir }.orEmpty()
+        shown = try {
+            browse(socket, ws, path, home)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             error = errorText(context, e)
-            entries = emptyList()
+            worked(path, home, emptyList())
         }
     }
+    val here = shown
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column {
                 Text(
-                    tildePath(path.ifEmpty { home }, home),
+                    here?.path ?: path.ifEmpty { home },
                     style = MaterialTheme.typography.bodySmall,
                     color = shed.textDim,
                     maxLines = 2,
@@ -82,29 +87,55 @@ fun FolderPicker(
                 )
                 error?.let { Text(it, color = shed.danger) }
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
-                    item {
-                        FolderRow(Icons.Default.ArrowUpward, "..") {
-                            val current = path.ifEmpty { home }.trimEnd('/')
-                            path = current.substringBeforeLast('/', "").ifEmpty { "/" }
-                        }
+                    here?.parent?.let { parent ->
+                        item { FolderRow(Icons.Default.ArrowUpward, "..") { path = parent } }
                     }
-                    items(entries.orEmpty(), key = { it.name }) { entry ->
+                    items(here?.entries.orEmpty().filter { it.dir }, key = { it.name }) { entry ->
                         FolderRow(Icons.Default.Folder, entry.name, dim = entry.ignored == true) {
-                            val current = path.ifEmpty { home }.trimEnd('/')
-                            path = "$current/${entry.name}"
+                            path = here!!.path.trimEnd('/') + "/" + entry.name
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                onDismiss()
-                onPick(path.ifEmpty { home })
-            }) { Text(stringResource(R.string.folder_use_this)) }
+            TextButton(
+                enabled = here != null && error == null,
+                onClick = {
+                    onDismiss()
+                    onPick(here!!.path)
+                },
+            ) { Text(stringResource(R.string.folder_use_this)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
+}
+
+/**
+ * A folder's folders, its absolute path and the folder above. A workspace
+ * whose Shed predates `Browse` answers `BrowseFolders` only: the path is then
+ * worked out here.
+ */
+private suspend fun browse(socket: NexusSocket, ws: String, path: String, home: String): Browsed {
+    try {
+        val reply = socket.call(ws, Call.Browse(Browse(path)))
+        return (reply as? Reply.Browsed)?.content ?: Browsed(path, null, emptyList())
+    } catch (e: ApiException) {
+        if (e.code != ErrorCode.Unsupported) throw e
+    }
+    val reply = socket.call(ws, Call.BrowseFolders(Browse(path)))
+    return worked(path, home, (reply as? Reply.Folder)?.content.orEmpty())
+}
+
+/** [path] made absolute here (`~`, `""`: [home]) with the folder above. */
+private fun worked(path: String, home: String, entries: List<FolderEntry>): Browsed {
+    val absolute = when {
+        path.isEmpty() || path == "~" -> home
+        path.startsWith("~/") -> home.trimEnd('/') + path.removePrefix("~")
+        else -> path
+    }.ifEmpty { "/" }
+    val parent = if (absolute == "/") null else absolute.trimEnd('/').substringBeforeLast('/', "").ifEmpty { "/" }
+    return Browsed(absolute, parent, entries)
 }
 
 @Composable

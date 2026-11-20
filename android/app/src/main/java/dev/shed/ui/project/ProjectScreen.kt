@@ -86,7 +86,9 @@ import dev.shed.ui.common.Loading
 import dev.shed.ui.common.PictureView
 import dev.shed.ui.common.ShedScaffold
 import dev.shed.ui.common.benchColor
-import dev.shed.ui.common.charToIndex
+import dev.shed.ui.common.charRange
+import dev.shed.ui.common.textRange
+import dev.shed.ui.common.textRanges
 import dev.shed.ui.common.errorText
 import dev.shed.ui.theme.LocalShed
 import dev.shed.ui.theme.Mono
@@ -226,13 +228,12 @@ fun highlightStyle(kind: String, shed: ShedColors): SpanStyle = when (kind.subst
     else -> SpanStyle()
 }
 
-/** A line of code with its highlights (character ranges) coloured. */
+/** A line of code with its highlights (UTF-16 ranges) coloured. */
 fun highlightLine(text: String, highlights: List<Highlight>, shed: ShedColors): AnnotatedString = buildAnnotatedString {
     append(text)
     for (h in highlights) {
-        val start = charToIndex(text, h.start.toInt())
-        val end = charToIndex(text, h.end.toInt())
-        if (end > start) addStyle(highlightStyle(h.kind, shed), start, end)
+        val r = textRange(text, h.start.toInt(), h.end.toInt()) ?: continue
+        addStyle(highlightStyle(h.kind, shed), r.first, r.last + 1)
     }
 }
 
@@ -315,9 +316,8 @@ private fun QuickOpenDialog(ws: String, tab: String, onPick: (String) -> Unit, o
                         val label = buildAnnotatedString {
                             append(m.path)
                             for (hit in m.hits) {
-                                val s = charToIndex(m.path, hit.toInt())
-                                val e = charToIndex(m.path, hit.toInt() + 1)
-                                if (e > s) addStyle(SpanStyle(color = shed.accent, fontWeight = FontWeight.Bold), s, e)
+                                val r = charRange(m.path, hit.toInt()) ?: continue
+                                addStyle(SpanStyle(color = shed.accent, fontWeight = FontWeight.Bold), r.first, r.last + 1)
                             }
                         }
                         Text(
@@ -390,12 +390,8 @@ private fun SearchPage(ws: String, tab: String, onOpen: (String, Int) -> Unit) {
                     val text = hit.text.trimEnd()
                     val label = buildAnnotatedString {
                         append(text)
-                        hit.ranges.chunked(2).forEach { r ->
-                            if (r.size == 2) {
-                                val s = charToIndex(text, r[0].toInt())
-                                val e = charToIndex(text, r[1].toInt())
-                                if (e > s) addStyle(SpanStyle(background = shed.accent.copy(alpha = 0.3f)), s, e)
-                            }
+                        for (r in textRanges(text, hit.ranges)) {
+                            addStyle(SpanStyle(background = shed.accent.copy(alpha = 0.3f)), r.first, r.last + 1)
                         }
                     }
                     Row(Modifier.fillMaxWidth().clickable { onOpen(file.path, hit.line.toInt()) }.padding(horizontal = 12.dp, vertical = 4.dp)) {

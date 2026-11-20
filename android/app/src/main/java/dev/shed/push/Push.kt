@@ -18,26 +18,15 @@ import dev.shed.MainActivity
 import dev.shed.R
 import dev.shed.api.NotificationKind
 import dev.shed.api.PushInfo
+import dev.shed.api.PushPayload
 import dev.shed.api.PushSubscribe
 import dev.shed.net.Empty
 import dev.shed.net.ShedJson
 import dev.shed.shed
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
 import org.unifiedpush.android.connector.UnifiedPush
 import org.unifiedpush.android.connector.data.PushEndpoint
-
-/** What the nexus pushes, once decrypted (`shed-nexus/src/push.rs`, `Payload`). */
-@Serializable
-data class PushPayload(
-    val kind: NotificationKind,
-    val title: String,
-    val body: String = "",
-    val workspace: String,
-    val workspaceName: String = "",
-    val bench: String? = null,
-    val tab: String? = null,
-)
 
 /** A place in Shed, as a link: `shed://w/{workspace}/b/{bench}/t/{tab}`. */
 fun shedLink(workspace: String, bench: String? = null, tab: String? = null): Uri {
@@ -57,6 +46,9 @@ fun shedLink(workspace: String, bench: String? = null, tab: String? = null): Uri
  */
 object Push {
     private const val TAG = "ShedPush"
+
+    /** Bumped when this phone's subscription at the nexus changed, for Settings to look again. */
+    val changed = MutableStateFlow(0)
 
     fun channelId(kind: NotificationKind) = "shed-" + kind.string
 
@@ -106,10 +98,29 @@ object Push {
         }
     }
 
+    /** Unregisters from the distributor, here only (signing out: the nexus drops the device). */
     fun unregister(context: Context) {
         runCatching { UnifiedPush.unregister(context) }
         context.shed.settings.pushEnabled = false
         context.shed.settings.pushEndpoint = null
+    }
+
+    /**
+     * Turns push off on this phone: tells the nexus to stop pushing here
+     * (`push/unsubscribe`; [done] with whether it did) and unregisters from
+     * the distributor.
+     */
+    fun disable(context: Context, done: (Boolean) -> Unit = {}) {
+        val app = context.shed
+        unregister(context)
+        val session = app.session.value ?: return done(false)
+        app.scope.launch {
+            val ok = runCatching { session.http.post("/push/unsubscribe", Empty.serializer()) }
+                .onFailure { Log.w(TAG, "unsubscribe failed: ${it.message}") }
+                .isSuccess
+            changed.value++
+            done(ok)
+        }
     }
 
     /** The distributor gave an endpoint: hands it to the nexus. */
@@ -129,6 +140,7 @@ object Push {
                     PushSubscribe.serializer(),
                     Empty.serializer(),
                 )
+                changed.value++
             }.onFailure { Log.w(TAG, "subscribe failed: ${it.message}") }
         }
     }
@@ -154,7 +166,7 @@ object Push {
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val text = listOf(payload.body, payload.workspaceName).filter { it.isNotBlank() }.joinToString(" · ")
+        val text = listOfNotNull(payload.body, payload.workspaceName).filter { it.isNotBlank() }.joinToString(" · ")
         val notification = NotificationCompat.Builder(context, channelId(payload.kind))
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(payload.title)

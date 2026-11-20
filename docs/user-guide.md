@@ -1143,8 +1143,8 @@ Settings.
   its benches (in their colours), how many AI tabs work or wait for you, and
   your usage limits. Closed benches can be loaded from there.
 - **A bench**: its tabs in order, with tags; **New Tab** opens a terminal,
-  project, AI or remote tab in a folder you pick; a long press renames or
-  closes a tab (closing asks first).
+  project, AI or remote tab in a folder you pick (its full path shown, **..**
+  going up); a long press renames or closes a tab (closing asks first).
 - **AI tabs** work as on the computer: the conversation with its steps
   (tap one for the command, the change and what came back), permission cards
   (**Allow**, **Allow for This Session**, **Deny**), Claude's questions, and the
@@ -1156,17 +1156,21 @@ Settings.
   phone; scrolling up fetches earlier lines. Type in the field (Enter sends) and
   use the key bar for Esc, Tab, Ctrl, Alt and the arrows. For a full-screen
   program (vim, htop), **Take the size** makes the program draw for the phone
-  while you look; leaving gives the size back.
+  while you look; leaving gives the size back. When the program asks for the
+  mouse (htop, vim with `mouse=a`), a tap clicks there and dragging up or down
+  turns the wheel.
 - **Logbook**, **project files** (tree, Quick Open, search, a file viewer with
   colours) and **Git** (stage, unstage or discard by hunk, commit, history,
   branches, fetch, pull, push).
 - **Devices**: everything signed in or paired, revoking (with a code), and
   **Approve a Workspace…** with the code it showed (see
-  [Linking a workspace](#linking-a-workspace)).
+  [Linking a workspace](#linking-a-workspace)); **Reject…** on a waiting
+  request you did not make.
 - **Notifications** come through UnifiedPush (the ntfy app, with your own ntfy
   server), never through Google: Claude waiting for you, a turn done, a long
   command finished, a workspace gone offline, each on or off. Tapping one opens
-  its tab.
+  its tab. Settings shows whether the nexus pushes to this phone; turning
+  notifications off tells it to stop.
 
 Private tabs show as private: what is in them never leaves the computer. A
 workspace that allows viewing only shows everything and offers no changes.

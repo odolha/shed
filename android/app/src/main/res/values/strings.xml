@@ -238,6 +238,7 @@
     <string name="ai_picture_failed">That picture could not be read.</string>
     <string name="ai_default_model">Default model</string>
     <string name="ai_effort">%1$s effort</string>
+    <string name="ai_effort_default">Default effort</string>
     <plurals name="ai_prompts">
         <item quantity="one">%1$d prompt</item>
         <item quantity="other">%1$d prompts</item>
@@ -286,6 +287,9 @@
     <string name="pair_code">Pairing code</string>
     <string name="pair_name">Name</string>
     <string name="pair_reject">Reject</string>
+    <string name="pair_reject_ellipsis">Reject…</string>
+    <string name="pair_reject_title">Reject this workspace?</string>
+    <string name="pair_reject_text">%1$s will not be paired. It can ask again with “shed nexus join”.</string>
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
@@ -295,6 +299,8 @@
     <string name="push_enable">Push notifications</string>
     <string name="push_no_distributor">Notifications come through UnifiedPush, without Google. Install a distributor such as ntfy (from F-Droid), point it at your push server, then come back here.</string>
     <string name="push_off_at_nexus">Push is off on this nexus ([push] enabled = false in its nexus.toml).</string>
+    <string name="push_not_subscribed">The nexus no longer pushes to this phone (its push service dropped the subscription). Turn notifications on again.</string>
+    <string name="push_unsubscribe_failed">This phone stopped listening, but the nexus could not be told; it may keep sending until it notices.</string>
     <string name="channel_ai_waiting">Claude waits for an answer</string>
     <string name="channel_ai_done">Claude finished a turn</string>
     <string name="channel_command_done">A long command finished</string>
