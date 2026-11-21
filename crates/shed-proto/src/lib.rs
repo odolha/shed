@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 45;
+pub const PROTOCOL_VERSION: u32 = 46;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -167,6 +167,11 @@ pub enum ClientMsg {
     /// what came after it leave the conversation (the old session is kept),
     /// and with `files` the files Claude changed since are put back.
     AiRevert { tab: TabId, entry: u32, files: bool },
+    /// Deletes a Claude Code session of an AI tab's folder, and the sessions
+    /// going on from it: their files move to Shed's trash. Refused while
+    /// another AI tab shows one of them; the tab asking, showing one, goes
+    /// to a new session. Answered with `Done` or `Error`.
+    AiDeleteSession { tab: TabId, session: String },
 }
 
 /// A picture sent with a prompt.

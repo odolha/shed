@@ -18,7 +18,7 @@ pub fn install(cx: &mut App) {
 }
 
 fn build(
-    _level: PromptLevel,
+    level: PromptLevel,
     message: &str,
     detail: Option<&str>,
     actions: &[PromptButton],
@@ -31,6 +31,7 @@ fn build(
         message: message.to_string(),
         detail: detail.map(str::to_string),
         actions: actions.iter().map(|a| a.label().to_string()).collect(),
+        critical: level == PromptLevel::Critical,
         focus: cx.focus_handle(),
         ui,
     });
@@ -41,6 +42,8 @@ struct ShedPrompt {
     message: String,
     detail: Option<String>,
     actions: Vec<String>,
+    /// What cannot easily be undone: bigger, and Enter cancels.
+    critical: bool,
     focus: FocusHandle,
     ui: UiColors,
 }
@@ -55,10 +58,11 @@ impl Focusable for ShedPrompt {
 
 impl ShedPrompt {
     fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        // The last button is the safe one: Cancel.
+        let cancel = self.actions.len().saturating_sub(1);
         match event.keystroke.key.as_str() {
-            "enter" => cx.emit(PromptResponse(0)),
-            // The last button is the safe one: Cancel.
-            "escape" => cx.emit(PromptResponse(self.actions.len().saturating_sub(1))),
+            "enter" => cx.emit(PromptResponse(if self.critical { cancel } else { 0 })),
+            "escape" => cx.emit(PromptResponse(cancel)),
             _ => return,
         }
         cx.stop_propagation();
@@ -69,6 +73,8 @@ impl Render for ShedPrompt {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ui = &self.ui;
         let danger = ui.danger;
+        let last = self.actions.len().saturating_sub(1);
+        let critical = self.critical;
         let buttons = self.actions.iter().enumerate().map(|(i, label)| {
             // ("Close Here" only lets go of a remote shell, which keeps running.)
             let destructive = ["Delete", "Close", "Remove", "End"].iter().any(|word| label.starts_with(word)) && label != "Close Here";
@@ -79,7 +85,8 @@ impl Render for ShedPrompt {
                 .py_1()
                 .rounded_md()
                 .border_1()
-                .border_color(hsla(ui.divider))
+                // (Critical: Enter takes Cancel, so it looks the default.)
+                .border_color(hsla(if critical && i == last { ui.text_dim } else { ui.divider }))
                 .text_color(hsla(color))
                 .cursor_pointer()
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
@@ -90,7 +97,7 @@ impl Render for ShedPrompt {
                 }))
         });
         let dialog = div()
-            .w(px(420.0))
+            .w(px(if self.critical { 500.0 } else { 420.0 }))
             .flex()
             .flex_col()
             .gap_2()
@@ -101,8 +108,9 @@ impl Render for ShedPrompt {
             .border_color(hsla(ui.divider))
             .text_color(hsla(ui.text))
             .text_size(px(14.0))
-            .child(div().text_size(px(15.0)).child(self.message.clone()))
-            .children(self.detail.clone().map(|d| div().text_size(px(13.0)).text_color(hsla(ui.text_dim)).child(d)))
+            .when(self.critical, |d| d.border_color(hsla(danger)))
+            .child(div().text_size(px(if self.critical { 17.0 } else { 15.0 })).when(self.critical, |d| d.text_color(hsla(danger))).child(self.message.clone()))
+            .children(self.detail.clone().map(|d| div().text_size(px(13.0)).text_color(hsla(if self.critical { ui.text } else { ui.text_dim })).child(d)))
             .child(div().mt_2().flex().justify_end().gap_2().children(buttons));
 
         div()

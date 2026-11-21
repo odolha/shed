@@ -310,6 +310,120 @@ fn rename_session_in(dir: &Path, id: &str, name: &str) -> std::io::Result<()> {
     file.write_all(format!("{}{record}\n", if ends_clean { "" } else { "\n" }).as_bytes())
 }
 
+/// The sessions that go on from `id`, as listed: continued or branched from
+/// it, and on from those. They read their beginning from its file.
+pub fn going_on_from(sessions: &[SessionInfo], id: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut stack = vec![id.to_string()];
+    while let Some(at) = stack.pop() {
+        for s in sessions.iter().filter(|s| s.parent.as_deref() == Some(at.as_str())) {
+            if s.id != id && !out.contains(&s.id) {
+                out.push(s.id.clone());
+                stack.push(s.id.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Whether `id` can be a session's id (Claude Code's are UUIDs): nothing
+/// that could name a file elsewhere.
+pub fn is_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// A session's files: `<id>.jsonl`, and its `<id>/` folder (its
+/// sub-agents and the like) when it has one.
+pub fn session_files(folder: &Path, id: &str) -> Vec<PathBuf> {
+    session_files_in(&sessions_dir(folder), id)
+}
+
+fn session_files_in(dir: &Path, id: &str) -> Vec<PathBuf> {
+    if !is_session_id(id) {
+        return Vec::new();
+    }
+    [dir.join(format!("{id}.jsonl")), dir.join(id)].into_iter().filter(|p| p.exists()).collect()
+}
+
+/// Moves sessions' files out of Claude Code's way, into a new folder of
+/// `trash` named `<unix seconds>-<first id>`, with a `restore.txt` saying
+/// how to put each back. The folder made.
+pub fn trash_sessions(folder: &Path, ids: &[String], trash: &Path) -> std::io::Result<PathBuf> {
+    trash_sessions_in(&sessions_dir(folder), ids, trash)
+}
+
+fn trash_sessions_in(dir: &Path, ids: &[String], trash: &Path) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    let first = ids.first().ok_or_else(|| Error::new(ErrorKind::InvalidInput, "no session"))?;
+    if let Some(bad) = ids.iter().find(|id| !is_session_id(id)) {
+        return Err(Error::new(ErrorKind::InvalidInput, format!("not a session id: {bad:?}")));
+    }
+    if !dir.join(format!("{first}.jsonl")).is_file() {
+        return Err(Error::new(ErrorKind::NotFound, "no such session"));
+    }
+    let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    std::fs::create_dir_all(trash)?;
+    let mut to = trash.join(format!("{now}-{first}"));
+    let mut n = 1;
+    while to.exists() {
+        n += 1;
+        to = trash.join(format!("{now}-{first}-{n}"));
+    }
+    std::fs::create_dir(&to)?;
+    let quote = |p: &Path| format!("'{}'", p.to_string_lossy().replace('\'', r"'\''"));
+    let mut restore = String::from(
+        "Claude Code sessions deleted in Shed. To restore them, move their files back\n\
+         where they were (with Claude Code not running in that folder):\n\n",
+    );
+    for id in ids {
+        for from in session_files_in(dir, id) {
+            let Some(name) = from.file_name() else { continue };
+            let kept = to.join(name);
+            move_path(&from, &kept)?;
+            restore.push_str(&format!("mv {} {}\n", quote(&kept), quote(&from)));
+        }
+    }
+    std::fs::write(to.join("restore.txt"), restore)?;
+    Ok(to)
+}
+
+/// Renames, or (onto another file system) copies, then deletes.
+fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
+        if from.is_dir() {
+            std::fs::create_dir_all(to)?;
+            for e in std::fs::read_dir(from)? {
+                let e = e?;
+                copy(&e.path(), &to.join(e.file_name()))?;
+            }
+            Ok(())
+        } else {
+            std::fs::copy(from, to).map(|_| ())
+        }
+    }
+    copy(from, to)?;
+    if from.is_dir() { std::fs::remove_dir_all(from) } else { std::fs::remove_file(from) }
+}
+
+/// Deletes what `trash_sessions` put in `trash` more than `max_age` ago (by
+/// the time its folder is named with); how many went.
+pub fn prune_trash(trash: &Path, max_age: std::time::Duration) -> usize {
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(max_age).and_then(|t| t.duration_since(UNIX_EPOCH).ok()) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(trash) else { return 0 };
+    let mut gone = 0;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(Ok(when)) = name.split('-').next().map(str::parse::<u64>) else { continue };
+        if when < cutoff.as_secs() && e.path().is_dir() && std::fs::remove_dir_all(e.path()).is_ok() {
+            gone += 1;
+        }
+    }
+    gone
+}
+
 /// A saved session as a conversation; its prompts' pictures are kept in
 /// `picture_dir`, to show them.
 pub fn load_session(folder: &Path, id: &str, picture_dir: Option<std::path::PathBuf>) -> Option<Transcript> {
@@ -453,6 +567,53 @@ mod tests {
         assert_eq!(order[0].1, 0);
         let a = order.iter().position(|(id, _)| id == "a").unwrap();
         assert!(order[a + 1].1 == 1 && order[a + 2].1 == 1, "{order:?}");
+    }
+
+    #[test]
+    fn a_deleted_session_goes_to_the_trash_with_those_going_on_from_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = &dir.path().join("sessions");
+        std::fs::create_dir_all(d).unwrap();
+        write_session(d, "a", "2026-11-13T08:00:00Z", &[("p1", None, Some("one")), ("r1", Some("p1"), None), ("p2", Some("r1"), Some("two")), ("r2", Some("p2"), None)]);
+        // Continued from a, and on from that; branched from a; unrelated.
+        write_session(d, "b", "2026-11-13T12:00:00Z", &[("p4", Some("r2"), Some("four")), ("r4", Some("p4"), None)]);
+        write_session(d, "bb", "2026-11-13T14:00:00Z", &[("p5", Some("r4"), Some("five")), ("r5", Some("p5"), None)]);
+        write_session(d, "c", "2026-11-13T10:00:00Z", &[("p1", None, Some("one")), ("r1", Some("p1"), None), ("q2", Some("r1"), Some("two, changed"))]);
+        write_session(d, "z", "2026-11-12T08:00:00Z", &[("x1", None, Some("else"))]);
+        std::fs::create_dir_all(d.join("a/subagents")).unwrap();
+        std::fs::write(d.join("a/subagents/agent-1.jsonl"), "{}\n").unwrap();
+        let found: Vec<_> = ["a", "b", "bb", "c", "z"].iter().filter_map(|id| read_info(&d.join(format!("{id}.jsonl")))).collect();
+        let listed = as_tree(link(found));
+        let mut later = going_on_from(&listed, "a");
+        later.sort();
+        assert_eq!(later, ["b", "bb", "c"]);
+        assert_eq!(going_on_from(&listed, "b"), ["bb"]);
+        assert!(going_on_from(&listed, "z").is_empty());
+        assert_eq!(session_files_in(d, "a"), [d.join("a.jsonl"), d.join("a")]);
+        assert!(session_files_in(d, "../a").is_empty(), "nothing outside the sessions folder");
+
+        let trash = dir.path().join("trash");
+        let ids: Vec<String> = ["b", "bb"].iter().map(|s| s.to_string()).collect();
+        let kept = trash_sessions_in(d, &ids, &trash).unwrap();
+        assert!(kept.starts_with(&trash) && kept.file_name().unwrap().to_string_lossy().ends_with("-b"), "{kept:?}");
+        assert!(kept.join("b.jsonl").is_file() && kept.join("bb.jsonl").is_file());
+        assert!(!d.join("b.jsonl").exists() && !d.join("bb.jsonl").exists());
+        let restore = std::fs::read_to_string(kept.join("restore.txt")).unwrap();
+        assert!(restore.contains(&format!("mv '{}' '{}'", kept.join("bb.jsonl").display(), d.join("bb.jsonl").display())), "{restore}");
+        // With its folder (sub-agents) too.
+        let kept = trash_sessions_in(d, &["a".to_string(), "c".to_string()], &trash).unwrap();
+        assert!(kept.join("a/subagents/agent-1.jsonl").is_file() && kept.join("c.jsonl").is_file());
+        assert!(!d.join("a").exists() && !d.join("a.jsonl").exists());
+        assert!(d.join("z.jsonl").is_file(), "the others stay");
+        assert!(trash_sessions_in(d, &["a".to_string()], &trash).is_err(), "gone already");
+        assert!(trash_sessions_in(d, &["../z".to_string()], &trash).is_err());
+
+        // Kept 30 days: an older one goes, the new ones stay.
+        std::fs::create_dir_all(trash.join("1000-old/x")).unwrap();
+        std::fs::write(trash.join("1000-old/x/y.jsonl"), "").unwrap();
+        assert_eq!(prune_trash(&trash, std::time::Duration::from_secs(30 * 24 * 3600)), 1);
+        assert!(!trash.join("1000-old").exists());
+        assert_eq!(std::fs::read_dir(&trash).unwrap().count(), 2);
     }
 
     fn fixture(name: &str) -> PathBuf {
