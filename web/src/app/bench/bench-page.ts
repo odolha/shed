@@ -148,6 +148,11 @@ import { BENCH_COLORS, BenchActions } from './bench-actions';
           <button class="menu-item" (click)="actions.renameTab(workspace(), ref(), mt)">
             <shed-icon name="pencil" />{{ 'tab.rename' | t }}
           </button>
+          @if (mt.kind.type === 'Remote') {
+            <button class="menu-item" (click)="actions.reconnect(workspace(), mt)">
+              <shed-icon name="refresh" />{{ 'tab.reconnect' | t }}
+            </button>
+          }
           <button class="menu-item" (click)="actions.setPrivate(workspace(), ref(), mt, !mt.private)">
             <shed-icon name="private" />{{ (mt.private ? 'tab.unprivate' : 'tab.private') | t }}
           </button>

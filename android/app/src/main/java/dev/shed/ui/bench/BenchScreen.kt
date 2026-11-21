@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
@@ -77,6 +78,7 @@ import dev.shed.api.RenameTab
 import dev.shed.api.Reply
 import dev.shed.api.SetBenchColor
 import dev.shed.api.Tab
+import dev.shed.api.TabKind
 import dev.shed.api.TabOnly
 import dev.shed.ui.LocalSession
 import dev.shed.ui.Routes
@@ -380,6 +382,12 @@ fun TabList(
                 }
                 DropdownMenu(expanded = menuFor == tab.id, onDismissRequest = { menuFor = null }) {
                     MenuItem(Icons.Default.Edit, stringResource(R.string.tab_rename)) { menuFor = null; renaming = tab }
+                    if (tab.kind is TabKind.Remote) {
+                        MenuItem(Icons.Default.Refresh, stringResource(R.string.tab_reconnect)) {
+                            menuFor = null
+                            runner.run { session.socket.call(ws, Call.ReconnectRemote(TabOnly(tab.id))) }
+                        }
+                    }
                     MenuItem(Icons.Default.Close, stringResource(R.string.tab_close), shed.danger) { menuFor = null; closing = tab }
                 }
             }

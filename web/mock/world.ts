@@ -569,6 +569,12 @@ async function dispatch(call: Call): Promise<Reply> {
       bench.activeTab = tab.id;
       return DONE;
     }
+    case 'ReconnectRemote': {
+      const { tab } = runningTab(call.content.tab);
+      if (tab.kind.type !== 'Remote') throw new Fail('invalid', 'not a remote tab');
+      for (const p of tab.panes ?? []) shells.get(p.id)?.print(`Reconnecting to ${tab.kind.content.host}…`, { fg: '8' });
+      return DONE;
+    }
 
     // ---- terminals
     case 'Split': {

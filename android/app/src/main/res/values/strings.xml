@@ -115,6 +115,7 @@
     <string name="tab_remote_host">Server (ssh host)</string>
     <string name="tab_pick_folder">Where it works</string>
     <string name="tab_rename">Rename Tab…</string>
+    <string name="tab_reconnect">Reconnect</string>
     <string name="tab_close">Close Tab…</string>
     <string name="tab_close_title">Close “%1$s”?</string>
     <string name="tab_close_text">What runs in it on the workspace stops.</string>

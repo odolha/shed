@@ -189,6 +189,12 @@ export class BenchActions {
     );
   }
 
+  /** A remote tab drops its connection and joins its shell again. */
+  async reconnect(ws: string, tab: Tab): Promise<void> {
+    const r = await this.notices.run(this.store.request(ws, { type: 'ReconnectRemote', content: { tab: tab.id } }));
+    if (r) this.notices.info(t('tab.reconnected'));
+  }
+
   async closeTab(ws: string, tab: Tab): Promise<boolean> {
     const ok = await this.dialogs.confirm({
       title: t('tab.close.title', { name: tab.title }),

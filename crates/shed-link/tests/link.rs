@@ -40,6 +40,9 @@ async fn a_workspace_through_its_link() {
     assert_eq!(b.name, "work");
     assert!(b.color.starts_with('#') && b.color.len() == 7);
     let pane = bench_tab(&state, &tab).unwrap().panes[0].id.clone();
+    // Only a remote tab reconnects.
+    let reconnect = nexus.call(Call::ReconnectRemote(TabOnly { tab: tab.clone() })).await.unwrap_err();
+    assert_eq!(reconnect.code, ErrorCode::Invalid);
 
     // Its screen, as text, and typing into it.
     let screen = nexus.subscribe(Topic::Screen(ScreenTopic { pane: pane.clone() })).await;
@@ -199,6 +202,8 @@ async fn a_view_only_workspace_shows_but_does_not_change() {
     assert_eq!(hello.policy, Policy::View);
     let refused = nexus.call(Call::NewBench(NewBench { name: None, cwd: None })).await.unwrap_err();
     assert_eq!(refused.code, ErrorCode::Forbidden);
+    let reconnect = nexus.call(Call::ReconnectRemote(TabOnly { tab: shed_model::TabId::new().to_string() })).await.unwrap_err();
+    assert_eq!(reconnect.code, ErrorCode::Forbidden);
     assert!(matches!(nexus.call(Call::Previews).await.unwrap(), Reply::Previews(_)));
     // Nor does it show the machine's folders (that is for making tabs).
     let browse = nexus.call(Call::BrowseFolders(Browse { path: env.home.display().to_string() })).await.unwrap_err();

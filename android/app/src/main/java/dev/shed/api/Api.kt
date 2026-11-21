@@ -1612,6 +1612,12 @@ sealed class Call {
 	@Serializable
 	@SerialName("FocusTab")
 	data class FocusTab(val content: TabOnly): Call()
+	/// Makes a remote tab drop its connection and join its shell again at
+	/// once (the shell on the server keeps running); one whose connecting
+	/// was stopped (Ctrl+C) starts it again. → `Done`
+	@Serializable
+	@SerialName("ReconnectRemote")
+	data class ReconnectRemote(val content: TabOnly): Call()
 	/// → `Pane`
 	@Serializable
 	@SerialName("Split")

@@ -758,6 +758,9 @@ impl App {
             TabKind::Ai(_) => items.extend(crate::ai::menu_items()),
             TabKind::Project(_) => items.extend(crate::project::menu_items()),
             TabKind::Terminal | TabKind::Remote(_) => {
+                if matches!(tab.kind, TabKind::Remote(_)) {
+                    items.push((Item::new("Reconnect").hint("join the shell again now"), |app, tab| app.send(ClientMsg::ReconnectRemote { tab })));
+                }
                 items.push((Item::new("Split Right").hint("C-b %"), |app, _| app.split(SplitDir::Right)));
                 items.push((Item::new("Split Down").hint("C-b \""), |app, _| app.split(SplitDir::Down)));
                 items.push((Item::new("Close Pane…").hint("C-b x"), |app, _| app.close_pane()));

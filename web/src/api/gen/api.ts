@@ -1298,6 +1298,12 @@ export type Call =
 	| { type: "SetDivider", content: SetDivider }
 	/** Makes it the bench's active tab (the GUI follows). */
 	| { type: "FocusTab", content: TabOnly }
+	/**
+	 * Makes a remote tab drop its connection and join its shell again at
+	 * once (the shell on the server keeps running); one whose connecting
+	 * was stopped (Ctrl+C) starts it again. → `Done`
+	 */
+	| { type: "ReconnectRemote", content: TabOnly }
 	/** → `Pane` */
 	| { type: "Split", content: SplitPane }
 	| { type: "ClosePane", content: PaneOnly }

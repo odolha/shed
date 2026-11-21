@@ -398,6 +398,8 @@
   "tab.private": "Make Private",
   "tab.unprivate": "Make Not Private",
   "tab.privateBody": "A private tab: what is in it stays on its workspace.",
+  "tab.reconnect": "Reconnect",
+  "tab.reconnected": "Reconnecting: the shell on the server stays as it is.",
   "tab.close": "Close Tab…",
   "tab.close.title": "Close {name}?",
   "tab.close.body": "What runs in it stops.",

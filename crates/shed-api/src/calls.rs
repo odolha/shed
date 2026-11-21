@@ -52,6 +52,10 @@ pub enum Call {
     SetDivider(SetDivider),
     /// Makes it the bench's active tab (the GUI follows).
     FocusTab(TabOnly),
+    /// Makes a remote tab drop its connection and join its shell again at
+    /// once (the shell on the server keeps running); one whose connecting
+    /// was stopped (Ctrl+C) starts it again. → `Done`
+    ReconnectRemote(TabOnly),
 
     // ---- terminals
     /// → `Pane`

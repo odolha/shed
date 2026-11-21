@@ -287,6 +287,13 @@ pub(crate) async fn call(ctx: Arc<Ctx>, call: Call) -> Result<Reply, ApiError> {
             running_tab(&tree, tab)?;
             ctx.quiet(ClientMsg::FocusTab { tab })
         }
+        Call::ReconnectRemote(a) => {
+            let tab = tab_id(&a.tab)?;
+            if running_tab(&tree, tab)?.remote_info().is_none() {
+                return Err(invalid("not a remote tab"));
+            }
+            ctx.quiet(ClientMsg::ReconnectRemote { tab })
+        }
 
         // ---- terminals
         Call::Split(a) => {

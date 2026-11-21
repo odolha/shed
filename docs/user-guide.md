@@ -625,6 +625,7 @@ needed. The server's keeper holds the shell; the tab shows it over ssh. So:
   HOST…"), for when the tab looks stuck. The shell on the server is the same, with
   everything in it. Other remote tabs to that server share the connection, so they
   join again too. After Ctrl+C stopped the joining, Reconnect starts it again.
+  The web app, the Android app and `shed tui` (`C-b m`) offer it too.
 - **A server restart** stops the shell, but its keeper saved it: the next time the
   tab connects, a new shell starts in the same folder, under the old scrollback.
 - **Closing the tab** asks: **Close Here** (the default) only lets go of the shell,
@@ -993,7 +994,7 @@ sends Ctrl+B itself. `Ctrl+B ?` lists all keys.
 | `C-b ,` / `C-b $` | Rename the tab / the bench |
 | `C-b <` / `C-b >` | Move the tab left / right (to another bench: `C-b m`) |
 | `C-b &` | Close the tab (asks; a remote tab can be let go or ended) |
-| `C-b m` | Everything for this tab and its bench, as a menu |
+| `C-b m` | Everything for this tab and its bench, as a menu (a remote tab's: **Reconnect** too) |
 | `C-b %` / `C-b "` | Split right / down |
 | `C-b` arrows, `C-b o` | Focus the pane that way / the next pane |
 | `C-b x` | Close the pane (asks) |
@@ -1153,7 +1154,7 @@ What the web app shows:
   project, AI or remote tab (choosing a folder on the workspace: its full
   path shows, `..` goes up, and a path can be typed, `~/…` too); a tab's
   menu (right-click, or the arrow after the tabs) renames it, makes it private
-  or closes it, after asking. The bench's name opens its menu: rename, badge,
+  or closes it, after asking; a remote tab's also has **Reconnect**. The bench's name opens its menu: rename, badge,
   colour, Run Startup, Run Teardown, the logbook, Close Bench…. A link to a tab
   (`…/w/<workspace>/b/<bench>/t/<tab>`) opens that tab.
 - **AI tabs**, as in Shed: the conversation with its steps (click one for its
@@ -1228,7 +1229,8 @@ Settings.
   your usage limits. Closed benches can be loaded from there.
 - **A bench**: its tabs in order, with tags; **New Tab** opens a terminal,
   project, AI or remote tab in a folder you pick (its full path shown, **..**
-  going up); a long press renames or closes a tab (closing asks first).
+  going up); a long press renames or closes a tab (closing asks first), or
+  reconnects a remote tab.
 - **AI tabs** work as on the computer: the conversation with its steps
   (tap one for the command, the change and what came back), permission cards
   (**Allow**, **Allow for This Session**, **Deny**), Claude's questions, and the

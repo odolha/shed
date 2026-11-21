@@ -207,4 +207,10 @@ class JsonTest {
         val call = Call.AiUpload(dev.shed.api.AiUpload("t", "notes.txt", "aGk="))
         same("""{"type":"AiUpload","content":{"tab":"t","name":"notes.txt","data":"aGk="}}""", ShedJson.encodeToString(Call.serializer(), call))
     }
+
+    @Test
+    fun reconnectCall() {
+        val call = Call.ReconnectRemote(dev.shed.api.TabOnly("t"))
+        same("""{"type":"ReconnectRemote","content":{"tab":"t"}}""", ShedJson.encodeToString(Call.serializer(), call))
+    }
 }

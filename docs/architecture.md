@@ -296,7 +296,8 @@ pane's foreground job when it is `shed remote connect` (the job leads its proces
 group); the loop, which polls ssh with `try_wait` rather than blocking, stops ssh
 (SIGTERM, then kill), puts the terminal settings back, closes the master and joins
 at once. When the pane's shell is at a prompt instead (Ctrl+C stopped the loop),
-the keeper types the tab's connect command again. Closing the
+the keeper types the tab's connect command again. Connectors call
+`Call::ReconnectRemote`, which the link passes on for a running remote tab. Closing the
 bench or the tab (`CloseTab`) locally sends no Ctrl+C to a remote pane (it would
 reach the server's program): the hangup ends ssh and the shell stays.
 `EndRemoteTab` first writes a close request (an OSC 7777 sequence) into the pane,
