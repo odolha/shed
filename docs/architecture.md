@@ -518,9 +518,9 @@ keeping the view where it was. Rows and entries map through `row` / `entry_at`;
 search, the prompt list and block jumps `reveal` an entry before scrolling to it.
 Drafts are `AiTab.drafts`, saved with the bench. A window changes an AI tab's
 settings and kept state one thing at a time (`AiChange`: settings, unsent text,
-a draft added or removed, a change viewed, explanations), so two clients
-changing different things at once do not undo each other; a draft is removed
-only if it is still what the client saw. Each draft
+a draft added, changed or removed, a change viewed, explanations), so two clients
+changing different things at once do not undo each other; a draft is changed or
+removed only if it is still what the client saw. Each draft
 names its session (`Draft.session`): Claude Code's session id, or a draft
 session's key (`draft-…`, `AiTab.draft_session` while one is shown, opened with
 `AiOpenSession` like a session). When Claude Code reports a session id the tab

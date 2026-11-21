@@ -800,6 +800,11 @@ impl Keeper {
                 };
                 ai.drafts.push(shed_model::Draft { session, text });
             }
+            AiChange::EditDraft { index, session, old, text } => {
+                if let Some(d) = ai.drafts.get_mut(index as usize).filter(|d| d.session == session && d.text == old) {
+                    d.text = text;
+                }
+            }
             AiChange::RemoveDraft { index, session, text } => {
                 let i = index as usize;
                 if ai.drafts.get(i).is_some_and(|d| d.session == session && d.text == text) {

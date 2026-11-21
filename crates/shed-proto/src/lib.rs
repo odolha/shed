@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 47;
+pub const PROTOCOL_VERSION: u32 = 48;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -214,6 +214,9 @@ pub enum AiChange {
     Viewed { key: String, hash: String, viewed: bool },
     /// Keeps explanations of changes: key, hash of what was explained, text.
     Explained(Vec<(String, String, String)>),
+    /// Changes the text of the draft at `index` if it still has this session
+    /// and text (`old`).
+    EditDraft { index: u32, session: String, old: String, text: String },
 }
 
 /// A picture sent with a prompt.

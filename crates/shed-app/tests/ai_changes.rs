@@ -69,7 +69,11 @@ fn changes_from_two_clients_do_not_undo_each_other() {
     a.msg(ClientMsg::AiChange { tab, change: AiChange::Viewed { key: "k".into(), hash: "h".into(), viewed: true } });
     let t = tree_until(&mut a, "viewed", |t| ai(t, tab).is_some_and(|a| a.viewed.len() == 1));
     assert_eq!(ai(&t, tab).unwrap().drafts.len(), 1);
-    a.msg(ClientMsg::AiChange { tab, change: AiChange::RemoveDraft { index: 0, session: key, text: "later".into() } });
+    // A draft changes in place only if it is still what the client saw.
+    a.msg(ClientMsg::AiChange { tab, change: AiChange::EditDraft { index: 0, session: key.clone(), old: "other".into(), text: "lost".into() } });
+    a.msg(ClientMsg::AiChange { tab, change: AiChange::EditDraft { index: 0, session: key.clone(), old: "later".into(), text: "later, changed".into() } });
+    tree_until(&mut a, "draft changed", |t| ai(t, tab).is_some_and(|a| a.drafts.len() == 1 && a.drafts[0].text == "later, changed"));
+    a.msg(ClientMsg::AiChange { tab, change: AiChange::RemoveDraft { index: 0, session: key, text: "later, changed".into() } });
     a.msg(ClientMsg::AiChange { tab, change: AiChange::Explained(vec![("k".into(), "h".into(), "why".into())]) });
     let t = tree_until(&mut a, "explained", |t| ai(t, tab).is_some_and(|a| a.explained.len() == 1));
     assert!(ai(&t, tab).unwrap().drafts.is_empty());
