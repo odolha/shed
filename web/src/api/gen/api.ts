@@ -43,6 +43,12 @@ export interface AiCommand {
 	hint?: string;
 }
 
+export interface AiDeleteSession {
+	tab: string;
+	/** A Claude Code session id (not a draft session's key). */
+	session: string;
+}
+
 export interface AiDraft {
 	session: string;
 	text: string;
@@ -1320,6 +1326,13 @@ export type Call =
 	/** Shows and continues a session; `None`: a new one. → `Done` */
 	| { type: "AiOpenSession", content: AiOpenSession }
 	| { type: "AiRenameSession", content: AiRenameSession }
+	/**
+	 * Deletes a Claude Code session and the sessions going on from it
+	 * (their files go to Shed's trash, kept 30 days). Refused while another
+	 * AI tab shows one of them; the tab, showing one, goes to a new
+	 * session. → `Done`
+	 */
+	| { type: "AiDeleteSession", content: AiDeleteSession }
 	/** Sends a prompt (queued if a turn is under way). → `Done` */
 	| { type: "AiSend", content: AiSend }
 	| { type: "AiStop", content: TabOnly }

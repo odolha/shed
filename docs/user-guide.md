@@ -1028,7 +1028,7 @@ path in the message (under "Attached files:"), for Claude to read.
 | --- | --- |
 | `Alt+Enter` | A new line in the prompt |
 | `PgUp` / `PgDn` | Scroll the conversation |
-| `Alt+S` / `Alt+N` | The sessions (Enter opens, → shows a conversation's files, `r` renames, `n` new) / a new session |
+| `Alt+S` / `Alt+N` | The sessions (Enter opens, → shows a conversation's files, `r` renames, `D` deletes after asking, `n` new) / a new session |
 | `Alt+M` / `Alt+O` / `Alt+E` | Model / mode (Full Auto asks first) / effort |
 | `Alt+D` / `Alt+P` | Keep the prompt as a draft / the drafts (send, put back in the prompt, delete) |
 | `Alt+I` / `Alt+X` | Attach a file, folder or picture by its path / remove what is attached |
@@ -1169,7 +1169,9 @@ What the web app shows:
   (**Edit**, **Send Now**, **Remove**); **Draft** keeps it for later; **Stop**
   interrupts. Below the prompt: the model, its effort, the mode (**Full Auto…**
   asks first), and the follow and browser switches. The clock button lists the
-  sessions (draft sessions first; double-click to rename); **Review** shows
+  sessions (draft sessions first; double-click to rename; right-click for
+  **Delete Session…**, which asks first and moves its files to Shed's trash,
+  as in the window); **Review** shows
   what Claude changed, with **Viewed** and **Explain**.
 - **Terminals** show the text of the screen, re-flowed to the width of the
   browser, so a shell's output reads well on a phone; full-screen programs
@@ -1233,7 +1235,8 @@ Settings.
   what it will tell Claude). While Claude works, messages queue. Drafts,
   sessions, the model, effort and mode (**Full
   Auto…** asks first), and **Review** with Viewed and **Explain** are there too.
-  A long press on one of your messages offers Edit, Send Again and Revert….
+  A long press on one of your messages offers Edit, Send Again and Revert…; on
+  a session in the sessions list, Rename… and Delete Session… (asks first).
 - **Terminals** show the active pane's screen, its lines re-wrapped to the
   phone; scrolling up fetches earlier lines. Type in the field (Enter sends) and
   use the key bar for Esc, Tab, Ctrl, Alt and the arrows. For a full-screen

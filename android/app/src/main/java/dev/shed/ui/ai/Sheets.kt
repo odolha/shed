@@ -17,7 +17,9 @@ import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -37,6 +39,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.shed.R
+import dev.shed.api.AiDeleteSession
 import dev.shed.api.AiDraft
 import dev.shed.api.AiOpenSession
 import dev.shed.api.AiRemoveDraft
@@ -51,7 +54,9 @@ import dev.shed.ui.common.ConfirmDialog
 import dev.shed.ui.common.HSpace
 import dev.shed.ui.common.Loading
 import dev.shed.ui.common.TextDialog
+import dev.shed.ui.bench.MenuItem
 import dev.shed.ui.common.ago
+import dev.shed.ui.common.clock
 import dev.shed.ui.common.rememberRunner
 import dev.shed.ui.theme.LocalShed
 
@@ -72,6 +77,9 @@ fun SessionsSheet(
     val context = LocalContext.current
     val runner = rememberRunner()
     var renaming by remember { mutableStateOf<AiSession?>(null) }
+    // A long press: a session's menu, and one to delete after asking.
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    var deleting by remember { mutableStateOf<AiSession?>(null) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Text(stringResource(R.string.ai_sessions), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp))
         if (canChange) {
@@ -99,7 +107,7 @@ fun SessionsSheet(
                                     onDismiss()
                                     if (canChange) runner.run { session.socket.call(ws, Call.AiOpenSession(AiOpenSession(tab, s.id))) }
                                 },
-                                onLongClick = { if (canChange && s.draft != true) renaming = s },
+                                onLongClick = { if (canChange && s.draft != true) menuFor = s.id },
                             )
                             .padding(start = (16 + depth * 16).dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -122,10 +130,32 @@ fun SessionsSheet(
                             }
                             Text(parts.joinToString(" · "), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
                         }
+                        DropdownMenu(expanded = menuFor == s.id, onDismissRequest = { menuFor = null }) {
+                            MenuItem(Icons.Default.Edit, stringResource(R.string.ai_rename_session_ellipsis)) { menuFor = null; renaming = s }
+                            MenuItem(Icons.Default.Delete, stringResource(R.string.ai_delete_session), color = shed.danger) { menuFor = null; deleting = s }
+                        }
                     }
                 }
             }
         }
+    }
+    deleting?.let { s ->
+        val later = laterSessions(sessions.orEmpty(), s.id).size
+        val prompts = pluralStringResource(R.plurals.ai_prompts, s.prompts.toInt(), s.prompts.toInt())
+        val laterText = if (later > 0) pluralStringResource(R.plurals.ai_delete_session_later, later, later) else ""
+        val modified = s.modified.toLong()
+        ConfirmDialog(
+            title = stringResource(R.string.ai_delete_session_title),
+            text = stringResource(R.string.ai_delete_session_body, s.title, "${clock(modified)} (${ago(context, modified)})", prompts, laterText),
+            confirm = stringResource(R.string.ai_delete_session_confirm),
+            onConfirm = {
+                runner.run {
+                    session.socket.call(ws, Call.AiDeleteSession(AiDeleteSession(tab, s.id)))
+                    vm.loadSessions()
+                }
+            },
+            onDismiss = { deleting = null },
+        )
     }
     renaming?.let { s ->
         TextDialog(
@@ -142,6 +172,22 @@ fun SessionsSheet(
             onDismiss = { renaming = null },
         )
     }
+}
+
+/** The sessions going on from `id` (continued or branched from it, and on from those). */
+fun laterSessions(all: List<AiSession>, id: String): List<AiSession> {
+    val out = mutableListOf<AiSession>()
+    val stack = ArrayDeque(listOf(id))
+    while (stack.isNotEmpty()) {
+        val at = stack.removeLast()
+        for (s in all) {
+            if (s.parent == at && s.id != id && s !in out) {
+                out += s
+                stack += s.id
+            }
+        }
+    }
+    return out
 }
 
 /** The drafts of the session shown: send, edit (back into the prompt), delete. */

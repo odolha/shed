@@ -122,6 +122,16 @@ pub(super) async fn call(ctx: &Ctx, tree: &Shed, call: Call) -> Result<Reply, Ap
                 .map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { not_found("no such session") } else { keeper::failed(e.to_string()) })?;
             Ok(Reply::Done)
         }
+        Call::AiDeleteSession(a) => {
+            let (tab, _) = ai_tab(tree, &a.tab)?;
+            if private_sessions(ctx, tree).await.contains(&a.session) {
+                return Err(super::forbidden_private());
+            }
+            if shed_model::AiTab::is_draft_key(&a.session) || !shed_ai::sessions::is_session_id(&a.session) {
+                return Err(invalid("only a Claude Code session can be deleted"));
+            }
+            ctx.answered(ClientMsg::AiDeleteSession { tab, session: a.session }).await
+        }
         Call::AiSend(a) => {
             let (tab, _) = ai_tab(tree, &a.tab)?;
             let images = images(a.pictures)?;

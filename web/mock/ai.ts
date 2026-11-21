@@ -504,6 +504,32 @@ export class AiRuntime {
         s.title = call.content.name.trim() || 'Untitled session';
         return { type: 'Done' };
       }
+      case 'AiDeleteSession': {
+        const s = this.sessions.find((x) => x.id === call.content.session && !x.draft);
+        if (!s) throw new Fail('notFound', `no session ${call.content.session}`);
+        const gone = new Set([s.id]);
+        for (let more = true; more; ) {
+          more = false;
+          for (const x of this.sessions) {
+            if (x.parent && gone.has(x.parent) && !gone.has(x.id)) {
+              gone.add(x.id);
+              more = true;
+            }
+          }
+        }
+        if (this.ai.session && gone.has(this.ai.session)) {
+          if (this.turn) this.interrupt();
+          this.ai.session = null;
+          this.entries = [];
+          this.status = { ...this.status, session: null, state: 'idle', since: null };
+          this.emitFrom(0);
+        }
+        this.ai.drafts = (this.ai.drafts ?? []).filter((d) => !gone.has(d.session));
+        for (let i = this.sessions.length - 1; i >= 0; i--) if (gone.has(this.sessions[i]!.id)) this.sessions.splice(i, 1);
+        for (const id of gone) this.stored.delete(id);
+        this.changed();
+        return { type: 'Done' };
+      }
       case 'AiSend': {
         const text = call.content.text;
         if (!text.trim() && !(call.content.pictures ?? []).length) throw new Fail('invalid', 'nothing to send');

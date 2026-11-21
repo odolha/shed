@@ -190,6 +190,11 @@
     <string name="ai_sessions">Sessions</string>
     <string name="ai_new_session">New Session</string>
     <string name="ai_rename_session">Rename Session</string>
+    <string name="ai_rename_session_ellipsis">Rename…</string>
+    <string name="ai_delete_session">Delete Session…</string>
+    <string name="ai_delete_session_title">Delete this Claude Code session?</string>
+    <string name="ai_delete_session_body">“%1$s”\n%2$s · %3$s%4$s.\n\nClaude Code\'s files for it move to Shed\'s trash (~/.local/state/shed/ai-trash), kept 30 days, then deleted.</string>
+    <string name="ai_delete_session_confirm">Delete Session</string>
     <string name="ai_review">Review</string>
     <string name="ai_drafts">Drafts</string>
     <string name="ai_drafts_n">Drafts (%1$d)</string>
@@ -255,6 +260,10 @@
     <string name="ai_default_model">Default model</string>
     <string name="ai_effort">%1$s effort</string>
     <string name="ai_effort_default">Default effort</string>
+    <plurals name="ai_delete_session_later">
+        <item quantity="one">, and %1$d later session that continues it</item>
+        <item quantity="other">, and %1$d later sessions that continue it</item>
+    </plurals>
     <plurals name="ai_prompts">
         <item quantity="one">%1$d prompt</item>
         <item quantity="other">%1$d prompts</item>

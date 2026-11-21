@@ -727,6 +727,7 @@ async function dispatch(call: Call): Promise<Reply> {
     // ---- AI tabs
     case 'AiPicture':
     case 'AiRenameSession':
+    case 'AiDeleteSession':
     case 'AiOpenSession':
     case 'AiSend':
     case 'AiStop':

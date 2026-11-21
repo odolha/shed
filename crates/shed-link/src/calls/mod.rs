@@ -335,6 +335,7 @@ pub(crate) async fn call(ctx: Arc<Ctx>, call: Call) -> Result<Reply, ApiError> {
         Call::AiSessions(_)
         | Call::AiOpenSession(_)
         | Call::AiRenameSession(_)
+        | Call::AiDeleteSession(_)
         | Call::AiSend(_)
         | Call::AiStop(_)
         | Call::AiAnswer(_)

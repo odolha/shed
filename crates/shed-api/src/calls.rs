@@ -82,6 +82,11 @@ pub enum Call {
     /// Shows and continues a session; `None`: a new one. → `Done`
     AiOpenSession(AiOpenSession),
     AiRenameSession(AiRenameSession),
+    /// Deletes a Claude Code session and the sessions going on from it
+    /// (their files go to Shed's trash, kept 30 days). Refused while another
+    /// AI tab shows one of them; the tab, showing one, goes to a new
+    /// session. → `Done`
+    AiDeleteSession(AiDeleteSession),
     /// Sends a prompt (queued if a turn is under way). → `Done`
     AiSend(AiSend),
     AiStop(TabOnly),
@@ -582,6 +587,15 @@ pub struct AiRenameSession {
     pub tab: String,
     pub session: String,
     pub name: String,
+}
+
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiDeleteSession {
+    pub tab: String,
+    /// A Claude Code session id (not a draft session's key).
+    pub session: String,
 }
 
 #[typeshare]

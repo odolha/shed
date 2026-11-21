@@ -425,6 +425,21 @@ fn tokens(n: u64) -> String {
     if n >= 1000 { format!("{}k", n / 1000) } else { n.to_string() }
 }
 
+/// What deleting a session asks: what it is, what goes with it, and where.
+pub fn delete_text(s: &SessionInfo, prompts: usize, later: usize) -> String {
+    let more = match later {
+        0 => String::new(),
+        1 => ", and 1 later session that continues it".into(),
+        n => format!(", and {n} later sessions that continue it"),
+    };
+    format!(
+        "Delete this Claude Code session?\n\n“{}”\n{} ago · {prompts} prompt{}{more}.\n\nClaude Code's files for it move to Shed's trash (~/.local/state/shed/ai-trash), kept 30 days, then deleted.",
+        s.title,
+        ago(s.modified),
+        if prompts == 1 { "" } else { "s" },
+    )
+}
+
 /// How long ago, short: 5m, 3h, 2d.
 pub fn ago(secs: u64) -> String {
     shed_logbook::age(now().saturating_sub(secs) as i64 * 1000)
@@ -981,6 +996,30 @@ impl App {
 
     // ── Sessions ────────────────────────────────────────────────────────
 
+    /// Deletes a session and those going on from it (the keeper moves their
+    /// files to Shed's trash, or says why not); the list again once its file is gone.
+    pub(crate) fn ai_delete_session(&mut self, tab: TabId, session: String) {
+        let Some(ai) = self.ai_tab(tab) else { return };
+        self.send(ClientMsg::AiDeleteSession { tab, session: session.clone() });
+        let folder = ai.folder.clone();
+        self.spawn(move || {
+            let file = shed_ai::sessions::sessions_dir(&folder).join(format!("{session}.jsonl"));
+            for _ in 0..50 {
+                if !file.exists() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            let list = shed_ai::list_sessions(&folder);
+            move |app: &mut App| {
+                if let Some(AiView { panel: Panel::Sessions(s), .. }) = app.ais.get_mut(&tab) {
+                    s.list = list;
+                    s.loaded = true;
+                }
+            }
+        });
+    }
+
     pub(crate) fn ai_sessions(&mut self, tab: TabId) {
         let Some(ai) = self.ai_tab(tab) else { return };
         let Some(view) = self.ais.get_mut(&tab) else { return };
@@ -1048,6 +1087,17 @@ impl App {
                 *panel = Panel::Conversation;
                 self.send(ClientMsg::AiOpenSession { tab, session: Some(session) });
             }
+            // A conversation's row: all of it (its first file, and those going on from it).
+            KeyCode::Char('D') | KeyCode::Delete => {
+                let (id, shown, prompts) = match row {
+                    Some(SessionRow::Conversation { tip, root, .. }) => (root, tip.clone(), tip.whole.max(tip.prompts)),
+                    Some(SessionRow::Part(p)) => (p.id.clone(), p.clone(), p.prompts),
+                    _ => return,
+                };
+                let later = shed_ai::going_on_from(&s.list, &id).len();
+                let text = delete_text(&shown, prompts, later);
+                self.confirm("Delete Session", text, "Delete Session", true, move |app| app.ai_delete_session(tab, id));
+            }
             KeyCode::Char('r') => {
                 let id = match row {
                     Some(SessionRow::Conversation { tip, .. }) => tip,
@@ -1077,7 +1127,7 @@ impl App {
         let Some(AiView { panel: Panel::Sessions(s), .. }) = self.ais.get_mut(&tab) else { return };
         let head = Line::from(vec![
             Span::styled(" Sessions ", c.chip(c.accent)),
-            Span::styled("  Enter open · n new · → its parts · r rename · / filter · Esc back", c.dim()),
+            Span::styled("  Enter open · n new · → its parts · r rename · D delete · / filter · Esc back", c.dim()),
         ]);
         f.render_widget(Paragraph::new(head), Rect { height: 1, ..area });
         let filter_style = if s.filtering { c.accent() } else { c.dim() };
@@ -1201,6 +1251,17 @@ mod tests {
 
     fn text(lines: &[Line]) -> String {
         lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn deleting_a_session_says_what_goes_and_where() {
+        let s = SessionInfo { id: "a".into(), title: "Plan the shelves".into(), modified: now(), ..Default::default() };
+        let text = delete_text(&s, 3, 2);
+        assert!(text.starts_with("Delete this Claude Code session?"), "{text}");
+        assert!(text.contains("“Plan the shelves”") && text.contains("3 prompts, and 2 later sessions that continue it."), "{text}");
+        assert!(text.contains("Shed's trash (~/.local/state/shed/ai-trash), kept 30 days"), "{text}");
+        assert!(!delete_text(&s, 1, 0).contains("later"));
+        assert!(delete_text(&s, 1, 1).contains("1 prompt, and 1 later session that continues it."));
     }
 
     #[test]

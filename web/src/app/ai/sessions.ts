@@ -8,8 +8,34 @@ import { Dialogs } from '../../ui/dialog';
 import { Icon } from '../../ui/icon';
 import { ContextMenuTrigger, Menu } from '../../ui/menu';
 import { Notices } from '../../ui/notices';
-import { AgoPipe } from '../../ui/time';
+import { AgoPipe, ago, clock } from '../../ui/time';
 import { Tooltip } from '../../ui/tooltip';
+
+/** The sessions going on from `id` (continued or branched from it, and on from those). */
+export function laterSessions(all: readonly AiSession[], id: string): AiSession[] {
+  const out: AiSession[] = [];
+  const stack = [id];
+  while (stack.length) {
+    const at = stack.pop()!;
+    for (const s of all) {
+      if (s.parent === at && s.id !== id && !out.includes(s)) {
+        out.push(s);
+        stack.push(s.id);
+      }
+    }
+  }
+  return out;
+}
+
+/** What the confirmation says about a session to delete. */
+export function deleteBody(s: AiSession, later: number): string {
+  return t('ai.sessions.deleteBody', {
+    title: s.title || t('ai.sessions.untitled'),
+    date: `${clock(s.modified)} (${ago(s.modified)})`,
+    prompts: t('ai.sessions.prompts', { n: s.prompts }),
+    later: later ? t('ai.sessions.deleteLater', { n: later }) : '',
+  });
+}
 
 /** The folder's Claude Code sessions, newest first, draft sessions on top. */
 @Component({
@@ -83,6 +109,9 @@ import { Tooltip } from '../../ui/tooltip';
       @if (menuFor; as s) {
         <button class="menu-item" (click)="open(s.id)"><shed-icon name="go" />{{ 'ai.sessions.show' | t }}</button>
         <button class="menu-item" (click)="rename(s)"><shed-icon name="pencil" />{{ 'common.rename' | t }}</button>
+        @if (!s.draft) {
+          <button class="menu-item danger" (click)="remove(s)"><shed-icon name="trash" />{{ 'ai.sessions.delete' | t }}</button>
+        }
       }
     </shed-menu>
   `,
@@ -189,6 +218,24 @@ export class AiSessionsPanel {
       this.store.request(this.workspace(), { type: 'AiOpenSession', content: { tab: this.tab(), session } }),
     );
     if (r !== undefined) this.opened.emit();
+  }
+
+  /** Deletes a session and those going on from it, after asking: their files go to Shed's trash. */
+  protected async remove(s: AiSession): Promise<void> {
+    if (!this.canChange() || s.draft) return;
+    const later = laterSessions(this.sessions(), s.id).length;
+    const ok = await this.dialogs.confirm({
+      title: t('ai.sessions.deleteTitle'),
+      body: deleteBody(s, later),
+      ok: t('ai.sessions.deleteOk'),
+      danger: true,
+    });
+    if (!ok) return;
+    const r = await this.notices.run(
+      this.store.request(this.workspace(), { type: 'AiDeleteSession', content: { tab: this.tab(), session: s.id } }),
+    );
+    if (r !== undefined) this.notices.info(t('ai.sessions.deleted'));
+    void this.load(this.workspace(), this.tab());
   }
 
   protected async rename(s: AiSession): Promise<void> {

@@ -579,7 +579,9 @@ drafts of those sessions leave the tab, and `trash_sessions` moves their
 `restore.txt` (`mv` lines back); the keeper's hourly upkeep deletes those
 older than 30 days (`prune_trash`, by the time in the name). The window asks
 first (a `Critical` prompt: Enter cancels) and refuses at once what it can see
-is open elsewhere.
+is open elsewhere. Connectors call `Call::AiDeleteSession`; the link refuses
+draft sessions, odd ids and private tabs' sessions, and passes the rest on,
+waiting for the keeper's `Done` or `Error`.
 `shed-ai` has
 no UI and no processes; its tests replay recorded streams
 (`crates/shed-ai/tests/streams/`) and read saved sessions

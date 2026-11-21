@@ -76,6 +76,13 @@ data class AiCommand (
 )
 
 @Serializable
+data class AiDeleteSession (
+	val tab: String,
+	/// A Claude Code session id (not a draft session's key).
+	val session: String
+)
+
+@Serializable
 data class AiDraft (
 	val session: String,
 	val text: String
@@ -1655,6 +1662,13 @@ sealed class Call {
 	@Serializable
 	@SerialName("AiRenameSession")
 	data class AiRenameSession(val content: dev.shed.api.AiRenameSession): Call()
+	/// Deletes a Claude Code session and the sessions going on from it
+	/// (their files go to Shed's trash, kept 30 days). Refused while another
+	/// AI tab shows one of them; the tab, showing one, goes to a new
+	/// session. → `Done`
+	@Serializable
+	@SerialName("AiDeleteSession")
+	data class AiDeleteSession(val content: dev.shed.api.AiDeleteSession): Call()
 	/// Sends a prompt (queued if a turn is under way). → `Done`
 	@Serializable
 	@SerialName("AiSend")
