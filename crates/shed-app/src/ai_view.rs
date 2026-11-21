@@ -144,6 +144,17 @@ struct Completion {
     selected: usize,
 }
 
+/// A draft open in the prompt field to be changed.
+struct DraftEdit {
+    /// Where it is in the tab's drafts, its session and its text as it was
+    /// (to find it again if the list changed meanwhile).
+    index: usize,
+    session: String,
+    text: String,
+    /// What was in the prompt before: it comes back when the edit ends.
+    before: String,
+}
+
 pub struct AiView {
     pub bench: BenchId,
     pub tab: TabId,
@@ -214,6 +225,9 @@ pub struct AiView {
     /// An earlier prompt being edited in the prompt field: sending goes
     /// back to it.
     editing: Option<usize>,
+    /// A draft being changed in the prompt field: Save Draft puts it back
+    /// changed, Cancel leaves it as it was.
+    editing_draft: Option<DraftEdit>,
     /// The working dots' step.
     spin: usize,
     /// Answers being chosen to Claude's questions, by request.
@@ -443,6 +457,7 @@ impl AiView {
             dragged: false,
             copied: None,
             editing: None,
+            editing_draft: None,
             spin: 0,
             asks: HashMap::new(),
             unsent_save: None,
@@ -939,7 +954,18 @@ impl AiView {
         }
         // Sent from going back through earlier prompts: what was being
         // written before comes back into the prompt.
-        let unsent = self.unsent.take().unwrap_or_default();
+        let mut unsent = self.unsent.take().unwrap_or_default();
+        // A draft being edited goes as it is now, and leaves the drafts.
+        if let Some(edit) = self.editing_draft.take() {
+            let was = |d: &shed_model::Draft| d.session == edit.session && d.text == edit.text;
+            let at = if self.ai.drafts.get(edit.index).is_some_and(was) { Some(edit.index) } else { self.ai.drafts.iter().position(was) };
+            if let Some(i) = at {
+                self.change_drafts(|d| {
+                    d.remove(i);
+                });
+            }
+            unsent = edit.before;
+        }
         self.history = None;
         // Files go as their paths, for Claude to read.
         let files = std::mem::take(&mut self.files);
@@ -986,6 +1012,9 @@ impl AiView {
     /// Keeps what is in the prompt as a draft, to send some other time:
     /// attached files and pictures go with it as paths.
     fn save_draft(&mut self, cx: &mut Context<Self>) {
+        if self.editing_draft.is_some() {
+            return self.finish_draft_edit(true, cx);
+        }
         let mut text = self.prompt.read(cx).buffer.text().trim_end().to_string();
         let dir = shed_model::paths::state_dir().join("ai-pictures");
         let mut files: Vec<String> = self.images.iter().filter_map(|i| shed_ai::keep_picture_in(&dir, &i.media_type, &i.data)).collect();
@@ -1029,6 +1058,9 @@ impl AiView {
         self.change_drafts(|d| {
             d.remove(n);
         });
+        if let Some(e) = self.editing_draft.as_mut().filter(|e| e.index > n) {
+            e.index -= 1;
+        }
         // Busy, the keeper queues it.
         let idle = self.status.state == AiState::Idle;
         self.conn.send_msg(ClientMsg::AiSend { tab: self.tab, text, images: Vec::new() });
@@ -1038,20 +1070,81 @@ impl AiView {
         cx.notify();
     }
 
-    /// Puts a draft back in the prompt to change it (after what is there).
+    /// Opens a draft in the prompt to change it: what was being written is
+    /// set aside until the edit ends. The draft stays in the list meanwhile;
+    /// a draft already open is put back with its changes first.
     fn edit_draft(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = self.ai.drafts.get(n).map(|d| d.text.clone()) else { return };
-        self.change_drafts(|d| {
-            d.remove(n);
-        });
+        let Some(draft) = self.ai.drafts.get(n).cloned() else { return };
+        if self.editing_draft.as_ref().is_some_and(|d| d.index == n) {
+            return;
+        }
+        let before = match self.editing_draft.is_some() {
+            true => {
+                let before = self.editing_draft.as_ref().map(|d| d.before.clone()).unwrap_or_default();
+                self.finish_draft_edit(true, cx);
+                before
+            }
+            false => {
+                self.cancel_edit(cx);
+                self.prompt.read(cx).buffer.text()
+            }
+        };
+        // Saving the one open before may have moved this one.
+        let index = if self.ai.drafts.get(n) == Some(&draft) {
+            n
+        } else {
+            match self.ai.drafts.iter().position(|d| *d == draft) {
+                Some(i) => i,
+                None => return,
+            }
+        };
+        self.editing_draft = Some(DraftEdit { index, session: draft.session.clone(), text: draft.text.clone(), before });
+        self.history = None;
         self.prompt.update(cx, |p, cx| {
-            let had = p.buffer.text();
             p.buffer.select_all();
-            p.buffer.insert(&if had.trim().is_empty() { text } else { format!("{}\n\n{text}", had.trim_end()) });
+            p.buffer.insert(&draft.text);
             cx.notify();
         });
         let focus = self.prompt.read(cx).focus_handle().clone();
         window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// Ends the draft edit: `save` puts the prompt's text (and anything
+    /// attached) into the draft, in its place; otherwise the draft stays as
+    /// it was. Either way, what was being written before comes back.
+    fn finish_draft_edit(&mut self, save: bool, cx: &mut Context<Self>) {
+        let Some(edit) = self.editing_draft.take() else { return };
+        if save {
+            let mut text = self.prompt.read(cx).buffer.text().trim_end().to_string();
+            let dir = shed_model::paths::state_dir().join("ai-pictures");
+            let mut files: Vec<String> = self.images.iter().filter_map(|i| shed_ai::keep_picture_in(&dir, &i.media_type, &i.data)).collect();
+            files.extend(self.files.iter().map(|f| f.display().to_string()));
+            if !files.is_empty() {
+                let list: Vec<String> = files.iter().map(|f| format!("- {f}")).collect();
+                text = format!("{}{}Attached files:\n{}", text, if text.is_empty() { "" } else { "\n\n" }, list.join("\n"));
+            }
+            self.images.clear();
+            self.previews.clear();
+            self.files.clear();
+            let was = |d: &shed_model::Draft| d.session == edit.session && d.text == edit.text;
+            let at = if self.ai.drafts.get(edit.index).is_some_and(was) { Some(edit.index) } else { self.ai.drafts.iter().position(was) };
+            if text.trim().is_empty() {
+                // Emptied: nothing to keep (the draft stays as it was).
+            } else if let Some(i) = at {
+                self.change_drafts(|d| d[i].text = text);
+            } else {
+                // Gone meanwhile (sent or deleted elsewhere): kept as a new one.
+                let session = edit.session.clone();
+                self.change_drafts(|d| d.push(shed_model::Draft { session, text }));
+            }
+        }
+        let before = edit.before;
+        self.prompt.update(cx, |p, cx| {
+            p.buffer.select_all();
+            p.buffer.insert(&before);
+            cx.notify();
+        });
         cx.notify();
     }
 
@@ -1064,9 +1157,16 @@ impl AiView {
                 this.update(cx, |this, cx| {
                     // Still there, where it was (another window may have changed the list).
                     if this.ai.drafts.get(n) == Some(&draft) {
+                        if this.editing_draft.as_ref().is_some_and(|e| e.index == n) {
+                            this.finish_draft_edit(false, cx);
+                        }
                         this.change_drafts(|d| {
                             d.remove(n);
                         });
+                        // A draft open for editing after this one moved up.
+                        if let Some(e) = this.editing_draft.as_mut().filter(|e| e.index > n) {
+                            e.index -= 1;
+                        }
                     }
                     cx.notify();
                 })
@@ -1156,6 +1256,7 @@ impl AiView {
             // Enter breaks the line; Ctrl+Enter (Cmd+Enter) sends.
             "enter" if sec => self.send(cx),
             "escape" if self.editing.is_some() => self.cancel_edit(cx),
+            "escape" if self.editing_draft.is_some() => self.finish_draft_edit(false, cx),
             "escape" if self.status.state != AiState::Idle => self.stop(),
             "f" if sec => self.open_find(window, cx),
             // Ctrl+Shift+R: the review of what changed.
@@ -1762,6 +1863,7 @@ impl AiView {
     fn edit_prompt(&mut self, entry: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Entry::User { text, .. }) = self.entries.get(entry) else { return };
         let text = text.clone();
+        self.finish_draft_edit(true, cx);
         self.editing = Some(entry);
         self.prompt.update(cx, |p, cx| {
             p.buffer.select_all();
@@ -3399,10 +3501,10 @@ impl AiView {
                     .text_color(hsla(ui.text))
                     .cursor_pointer()
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
-                    .tooltip(menu::tooltip("Keep the message as a draft, to send later (Ctrl+S)"))
+                    .tooltip(menu::tooltip(if self.editing_draft.is_some() { "Keep the changes to the draft (Ctrl+S)" } else { "Keep the message as a draft, to send later (Ctrl+S)" }))
                     .on_click(cx.listener(|this, _, _, cx| this.save_draft(cx)))
-                    .child(svg().path(icon("pencil")).size(px(13.0)).text_color(hsla(ui.text_dim)))
-                    .child("Draft"),
+                    .child(svg().path(icon(if self.editing_draft.is_some() { "check" } else { "pencil" })).size(px(13.0)).text_color(hsla(ui.text_dim)))
+                    .child(if self.editing_draft.is_some() { "Save Draft" } else { "Draft" }),
             )
             .child(
                 div()
@@ -3527,7 +3629,9 @@ impl AiView {
         if self.drafts_open && self.ai.shown_drafts().next().is_some() {
             any = true;
             out = out.child(div().text_color(hsla(ui.text_dim)).child("This session's drafts: sent only when you choose, in any order"));
+            let open = self.editing_draft.as_ref().map(|d| d.index);
             for (n, text) in self.ai.shown_drafts().map(|(n, d)| (n, &d.text)) {
+                let editing = open == Some(n);
                 let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
                 let more = text.lines().count().saturating_sub(1);
                 let action = |id: (&'static str, usize), label: &'static str, color: Rgb| {
@@ -3556,9 +3660,12 @@ impl AiView {
                         .child(svg().path(icon("pencil")).size(px(12.0)).flex_none().text_color(hsla(ui.text_dim)))
                         .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(first))
                         .when(more > 0, |d| d.child(div().flex_none().text_color(hsla(ui.text_dim)).child(format!("+{more} lines"))))
-                        .child(action(("draft-send", n), "Send", ui.ink(accent)).on_click(cx.listener(move |this, _, _, cx| this.send_draft(n, cx))))
-                        .child(action(("draft-edit", n), "Edit", ui.text).on_click(cx.listener(move |this, _, window, cx| this.edit_draft(n, window, cx))))
-                        .child(action(("draft-delete", n), "Delete…", ui.danger).on_click(cx.listener(move |this, _, window, cx| this.delete_draft(n, window, cx)))),
+                        .when(editing, |d| d.border_color(hsla(accent)).child(div().flex_none().text_color(hsla(ui.ink(accent))).child("editing in the prompt")))
+                        .when(!editing, |d| {
+                            d.child(action(("draft-send", n), "Send", ui.ink(accent)).on_click(cx.listener(move |this, _, _, cx| this.send_draft(n, cx))))
+                                .child(action(("draft-edit", n), "Edit", ui.text).on_click(cx.listener(move |this, _, window, cx| this.edit_draft(n, window, cx))))
+                                .child(action(("draft-delete", n), "Delete…", ui.danger).on_click(cx.listener(move |this, _, window, cx| this.delete_draft(n, window, cx))))
+                        }),
                 );
             }
         }
@@ -3645,6 +3752,34 @@ impl AiView {
                     .child(svg().path(icon("pencil")).size(px(12.0)).text_color(hsla(ui.ink(accent))))
                     .child(div().flex_1().child("Editing an earlier message: sending goes back to it (later messages go, files Claude changed since are put back). Esc cancels."))
                     .child(div().id("cancel-edit").cursor_pointer().text_color(hsla(ui.ink(accent))).child("Cancel").on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx)))),
+            );
+        }
+        if self.editing_draft.is_some() {
+            any = true;
+            let button = |id: &'static str, glyph: &'static str, label: &'static str, color: Rgb| {
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(hsla(color))
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .child(svg().path(icon(glyph)).size(px(12.0)).text_color(hsla(color)))
+                    .child(label)
+            };
+            out = out.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_color(hsla(ui.text_dim))
+                    .child(svg().path(icon("pencil")).size(px(12.0)).text_color(hsla(ui.ink(accent))))
+                    .child(div().flex_1().child("Editing a draft: Save Draft keeps the change, Cancel (Esc) leaves it as it was, Send sends it."))
+                    .child(button("save-draft-edit", "check", "Save Draft", ui.ink(accent)).on_click(cx.listener(|this, _, _, cx| this.finish_draft_edit(true, cx))))
+                    .child(button("cancel-draft-edit", "close", "Cancel", ui.text).on_click(cx.listener(|this, _, _, cx| this.finish_draft_edit(false, cx)))),
             );
         }
         if let Some((editor, at, _)) = &self.find {
@@ -4265,6 +4400,60 @@ mod tests {
     #[test]
     fn token_counts_are_short() {
         assert_eq!((tokens(84_312), tokens(200_000), tokens(1_000_000), tokens(1_500_000)), ("84k".into(), "200k".into(), "1M".into(), "1.5M".into()));
+    }
+
+    /// Editing drafts: a draft opens in the prompt without leaving the list,
+    /// Save Draft changes it in place, Cancel leaves it, and opening a second
+    /// draft puts the first back rather than joining them.
+    #[gpui::test]
+    fn drafts_are_edited_in_place(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let ai = shed_model::AiTab {
+                session: Some("s".into()),
+                drafts: vec![shed_model::Draft { session: "s".into(), text: "first".into() }, shed_model::Draft { session: "s".into(), text: "second".into() }],
+                ..Default::default()
+            };
+            AiView::new(BenchId::new(), TabId::new(), ai, Rgb::hex(0xFF8A57), crate::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default(), cx)
+        });
+        let prompt = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext| view.update(cx, |v, cx| v.prompt.read(cx).buffer.text());
+        let set = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext, text: &str| {
+            view.update(cx, |v, cx| {
+                v.prompt.update(cx, |p, cx| {
+                    p.buffer.select_all();
+                    p.buffer.insert(text);
+                    cx.notify();
+                })
+            })
+        };
+        let drafts = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext| view.update(cx, |v, _| v.ai.drafts.iter().map(|d| d.text.clone()).collect::<Vec<_>>());
+
+        set(&view, cx, "half written");
+        view.update_in(cx, |v, window, cx| v.edit_draft(0, window, cx));
+        assert_eq!(prompt(&view, cx), "first");
+        assert_eq!(drafts(&view, cx), ["first", "second"], "the draft stays in the list while edited");
+        set(&view, cx, "first, changed");
+        // Opening the second puts the first back, changed, not joined.
+        view.update_in(cx, |v, window, cx| v.edit_draft(1, window, cx));
+        assert_eq!(prompt(&view, cx), "second");
+        assert_eq!(drafts(&view, cx), ["first, changed", "second"]);
+        set(&view, cx, "second, changed");
+        view.update(cx, |v, cx| v.finish_draft_edit(false, cx));
+        assert_eq!(drafts(&view, cx), ["first, changed", "second"], "cancel leaves it as it was");
+        assert_eq!(prompt(&view, cx), "half written", "what was being written comes back");
+        view.update_in(cx, |v, window, cx| v.edit_draft(1, window, cx));
+        set(&view, cx, "second, changed");
+        view.update(cx, |v, cx| v.save_draft(cx));
+        assert_eq!(drafts(&view, cx), ["first, changed", "second, changed"]);
+        assert_eq!(prompt(&view, cx), "half written");
+        // Sending a draft being edited sends it and takes it out of the list.
+        view.update_in(cx, |v, window, cx| v.edit_draft(0, window, cx));
+        view.update(cx, |v, cx| v.send(cx));
+        assert_eq!(drafts(&view, cx), ["second, changed"]);
+        assert_eq!(prompt(&view, cx), "half written");
     }
 
     /// Frame time with a long real conversation (measurement, not a check):

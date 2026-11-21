@@ -384,7 +384,10 @@ terminal of the bench.
   and is there when the tab opens again. **Draft** (or Ctrl+S) keeps the message for
   later instead, with its files and pictures. Drafts belong to their session:
   **Drafts (N)** opens this session's, and each has **Send** (queued if Claude
-  is busy), **Edit** (back into the prompt) and **Delete…**; in the sessions
+  is busy), **Edit** and **Delete…**. **Edit** opens the draft in the prompt
+  (what you were writing is set aside) and marks it in the list: **Save Draft**
+  (the ✓, or Ctrl+S) keeps the change in place, **Cancel** (or Esc) leaves it as
+  it was, **Send** sends it; opening another draft puts the first back. In the sessions
   list, a session with drafts says how many. A draft kept in a new session, before
   anything is sent, makes it a **draft session**: listed first with the sessions
   (a pencil, titled by its first line, "Draft · N messages kept"), to come back
