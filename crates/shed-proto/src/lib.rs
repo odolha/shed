@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 49;
+pub const PROTOCOL_VERSION: u32 = 50;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -194,6 +194,10 @@ pub enum ClientMsg {
     /// another AI tab shows one of them; the tab asking, showing one, goes
     /// to a new session. Answered with `Done` or `Error`.
     AiDeleteSession { tab: TabId, session: String },
+    /// Makes a remote tab drop its connection and join its shell again at
+    /// once (the shell on the server keeps running); one whose connecting
+    /// was stopped starts it again.
+    ReconnectRemote { tab: TabId },
 }
 
 /// One change to an AI tab's settings or kept state.

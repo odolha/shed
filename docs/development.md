@@ -209,7 +209,8 @@ it) and `SHED_REMOTE_SHEDD` chooses the binary to copy.
 `crates/shed-keeper/tests/attach.rs` drives `shedd attach` against an in-process keeper
 (two attaches sharing a shell, `shedd list`). `crates/shed-app/tests/remote_tabs.rs`
 runs whole remote tabs through a stand-in ssh script whose "server" is a folder
-with its own home and Shed folders (it needs `target/debug/shedd`, which
+with its own home and Shed folders, which logs each ssh command line (to see
+Reconnect join again) and fails `-O`/`-G` as ssh does with no shared connection (it needs `target/debug/shedd`, which
 `cargo test --workspace` builds; skipped otherwise).
 
 ## The nexus

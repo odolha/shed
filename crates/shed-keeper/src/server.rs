@@ -757,6 +757,7 @@ impl Keeper {
                 }
             }
             ClientMsg::NewRemoteTab { bench, host, join } => self.new_remote_tab(client, bench, host, join),
+            ClientMsg::ReconnectRemote { tab } => self.reconnect_remote(tab),
             ClientMsg::NewCommandTab { bench, cwd, command } => {
                 let mut st = self.lock();
                 let Some(b) = st.tree.bench(bench) else { return };
@@ -2297,8 +2298,6 @@ impl Keeper {
         }
     }
 
-    /// A remote tab: a pane running `shed remote connect HOST ID`, again
-    /// each time the bench loads, which joins the shell the server keeps.
     /// Every tab at the usual size: running ones now, closed benches' in
     /// their files.
     fn reset_zoom(&self, client: ClientId) {
@@ -2328,6 +2327,8 @@ impl Keeper {
         self.save_soon.notify_one();
     }
 
+    /// A remote tab: a pane running `shed remote connect HOST ID`, again
+    /// each time the bench loads, which joins the shell the server keeps.
     fn new_remote_tab(self: &Arc<Self>, client: ClientId, bench: BenchId, host: String, join: Option<String>) {
         let host = host.trim().to_string();
         let mut st = self.lock();
@@ -2372,6 +2373,39 @@ impl Keeper {
                 self.save_soon.notify_one();
             }
             Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
+        }
+    }
+
+    /// Makes a remote tab connect again: its `shed remote connect` is told
+    /// (SIGUSR1) to drop the connection and join at once; one stopped with
+    /// Ctrl+C, its shell at a prompt, is typed again.
+    fn reconnect_remote(&self, tab: TabId) {
+        use nix::sys::signal::{Signal, kill};
+        let mut st = self.lock();
+        let Some(t) = st.tree.tab(tab).filter(|t| t.remote_info().is_some()) else { return };
+        let panes: Vec<(PaneId, Option<String>)> =
+            t.panes.iter().map(|p| (p.id, p.setup.startup.first().filter(|c| c.contains(" remote connect ")).cloned())).collect();
+        for (pane, command) in panes {
+            let Some(rt) = st.panes.get_mut(&pane) else { continue };
+            let Some(shell) = rt.pid else { continue };
+            match pty::foreground_pgrp(rt.master.get_ref()) {
+                // The job in front: `shed remote connect` leads its group.
+                Some(job) if job.as_raw() as u32 != shell => {
+                    let argv = procinfo::cmdline(job.as_raw() as u32).unwrap_or_default();
+                    if argv.get(1..3).is_some_and(|a| a == ["remote", "connect"]) {
+                        info!(?pane, "reconnecting a remote tab");
+                        let _ = kill(job, Signal::SIGUSR1);
+                    }
+                }
+                _ => {
+                    let Some(command) = command.filter(|_| rt.running.is_none()) else { continue };
+                    info!(?pane, "starting a remote tab's connection again");
+                    // Whatever is typed at the prompt goes first.
+                    let _ = rt.input.send(b"\x05\x15".to_vec());
+                    rt.after_prompt.push_back((command, true));
+                    self.send_after_prompt(&mut st, pane);
+                }
+            }
         }
     }
 

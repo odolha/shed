@@ -589,6 +589,9 @@ impl Pegboard {
         let e = entry.clone();
         let go = if entry.status == Status::Closed { "Open at This Tab" } else { "Go to Tab" };
         let mut entries = vec![menu_item(go, move |this, _, cx| this.open(&e, Some(tab_id), cx)).icon("go")];
+        if tab.remote_info().is_some() && entry.status != Status::Closed {
+            entries.push(menu_item("Reconnect", move |this, _, cx| this.send(ClientMsg::ReconnectRemote { tab: tab_id }, cx)).icon("refresh"));
+        }
         let bench = entry.bench.id;
         let title = tab.display_title();
         entries.push(menu_item("Rename…", move |this, window, cx| this.start_edit(Edit::TabName(tab_id), title.clone(), window, cx)).icon("pencil"));

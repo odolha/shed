@@ -678,6 +678,9 @@ impl BenchWindow {
                 .collect()
             }));
         }
+        if tab.remote_info().is_some() {
+            entries.push(item("Reconnect", move |this, _, cx| this.send(ClientMsg::ReconnectRemote { tab: tab_id }, cx)).icon("refresh"));
+        }
         match tab.project_info() {
             _ if tab.ai_info().is_some() => {}
             Some(project) => {

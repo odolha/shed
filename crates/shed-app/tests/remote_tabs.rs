@@ -1,7 +1,8 @@
 //! Remote tabs shared between PCs, against a stand-in for ssh that runs the
 //! "server" locally (its own home and Shed folders): a second tab joins the
 //! shell the first one opened, closing one tab keeps the shell, ending it
-//! ends it everywhere, and its commands are kept on the server only.
+//! ends it everywhere, its commands are kept on the server only, and
+//! Reconnect joins it again keeping its state.
 
 mod common;
 
@@ -72,13 +73,19 @@ impl Server {
     }
 }
 
+/// The stand-in ssh: it writes each command line to `ssh.log` beside it, and
+/// has no shared connections (`-O`, `-G` fail as with none).
 fn fake_ssh(dir: &Path, server: &Path) -> PathBuf {
     let script = dir.join("fakessh");
     let r = server.display();
+    let log = dir.join("ssh.log");
+    let log = log.display();
     std::fs::write(
         &script,
         format!(
             "#!/bin/sh\n\
+             echo \"$*\" >> {log}\n\
+             case \" $* \" in *\" -O \"*|*\" -G \"*) exit 255;; esac\n\
              while [ $# -gt 0 ]; do case \"$1\" in -o) shift 2;; -*) shift;; *) break;; esac; done\n\
              shift\n\
              while [ $# -gt 0 ]; do case \"$1\" in -o) shift 2;; -*) shift;; *) break;; esac; done\n\
@@ -146,6 +153,21 @@ fn two_tabs_share_a_remote_shell() {
     server.shells_until("let go of the second tab", |s| s == [(id.clone(), 1)]);
     c.input(first, "echo still-$((4*4))\r");
     c.output_until(first, "still-16");
+
+    // Reconnect drops the connection and joins again at once; the shell on
+    // the server kept what it had.
+    c.input(first, "kept=v$((3*3)); echo set-$kept\r");
+    c.output_until(first, "set-v9");
+    let log = dir.path().join("ssh.log");
+    let attaches = || std::fs::read_to_string(&log).unwrap().lines().filter(|l| l.contains(&format!("attach {id}"))).count();
+    let before = attaches();
+    c.msg(ClientMsg::ReconnectRemote { tab: first_tab });
+    c.output_until(first, "Reconnecting to srv");
+    c.output_until(first, "\x1bc");
+    assert_eq!(attaches(), before + 1, "joined again");
+    c.input(first, "echo got-$kept\r");
+    c.output_until(first, "got-v9");
+    server.shells_until("showed the first tab again", |s| s == [(id.clone(), 1)]);
 
     // Its commands are in the server's logbook, not this one.
     let local = shed_logbook::Logbook::open_readonly(&env.logbook).ok();
