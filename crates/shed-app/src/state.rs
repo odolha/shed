@@ -154,6 +154,10 @@ impl AppState {
             Frame::Keeper(KeeperMsg::Error(e)) => {
                 error!("keeper: {e}");
                 self.notice = Some(e.clone());
+                // A session being deleted in an AI tab: shown there.
+                for view in self.ai_views.values() {
+                    view.update(cx, |v, cx| v.keeper_error(&e, cx));
+                }
                 cx.notify();
                 if e.starts_with("protocol mismatch") {
                     eprintln!("shed: {e}. Run `shed stop` to restart the keeper.");

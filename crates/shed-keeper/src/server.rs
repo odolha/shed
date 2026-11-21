@@ -800,6 +800,7 @@ impl Keeper {
             ClientMsg::AiEdit { tab, entry, text, images } => self.ai_edit(client, tab, entry as usize, text, images),
             ClientMsg::AiRevert { tab, entry, files } => self.ai_revert(client, tab, entry as usize, files),
             ClientMsg::AiChange { tab, change } => self.ai_change(tab, change),
+            ClientMsg::AiDeleteSession { tab, session } => self.ai_delete_session(client, tab, session),
             ClientMsg::AiAnswerQuestions { tab, request, answers } => self.ai_answer_questions(tab, request, answers),
             ClientMsg::ResetZoom => self.reset_zoom(client),
             ClientMsg::SetTabDivider { tab, divider } => self.edit_tab(tab, |t| t.divider = divider),

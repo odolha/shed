@@ -47,6 +47,8 @@ enum Cmd {
 const PICTURES_KEPT: std::time::Duration = std::time::Duration::from_secs(60 * 24 * 3600);
 /// Files uploaded for AI prompts are deleted after this long unused.
 const UPLOADS_KEPT: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+/// Deleted Claude Code sessions are kept this long in `ai-trash`, to restore by hand.
+const TRASH_KEPT: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -117,6 +119,13 @@ fn main() -> anyhow::Result<()> {
                     && gone > 0
                 {
                     info!(gone, "old uploaded AI files deleted");
+                }
+                // Claude Code sessions deleted in AI tabs, 30 days on.
+                let trash = paths::state_dir().join("ai-trash");
+                if let Ok(gone) = tokio::task::spawn_blocking(move || shed_ai::prune_trash(&trash, TRASH_KEPT)).await
+                    && gone > 0
+                {
+                    info!(gone, "deleted AI sessions emptied from the trash");
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }

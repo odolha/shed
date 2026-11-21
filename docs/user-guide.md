@@ -381,7 +381,15 @@ terminal of the bench.
   Claude Code's own title back. The name is Claude Code's too (its `/rename`):
   it shows in `claude --resume`. Type to filter. Click one to show it and carry on with it; **New
   Session** starts afresh. Right-click a session to continue it in a terminal
-  (`claude --resume`), in Claude Code's own interface. The quick commands that the
+  (`claude --resume`), in Claude Code's own interface. **Delete Session…** (in red,
+  in the same menu) gets rid of a session you do not want: it asks first, saying
+  its title, date and prompts, and the later sessions that continue it, which go
+  with it (on a conversation's row, that is the whole conversation). Claude
+  Code's files for it move to Shed's trash, `~/.local/state/shed/ai-trash`,
+  kept 30 days (each with a `restore.txt` saying how to move them back), then
+  deleted; its drafts go too. A session open in another AI tab cannot be
+  deleted until it is closed there; the tab you delete it from goes to a new
+  session. The quick commands that the
   `> request` prompt makes are not saved as sessions, so they do not crowd the list.
 - **The prompt** grows with what you type. Enter breaks the line; **Ctrl+Enter**
   (Cmd+Enter) or the send button sends. While Claude works, sending queues the
@@ -1409,6 +1417,7 @@ change in Shed are in `~/.config/shed/shell-aliases.sh`.
 | The logbook (SQLite), per-tab shell history, the keeper's log | `~/.local/state/shed/` |
 | Pictures from AI prompts and screenshots Claude read (60 days unseen); the last usage limits | `~/.local/state/shed/ai-pictures/`, `ai-limits.json` |
 | Claude Code's own sessions (Claude Code keeps them; AI tabs read them) | `~/.claude/projects/` |
+| Claude Code sessions deleted in AI tabs (30 days, each with a `restore.txt`) | `~/.local/state/shed/ai-trash/` |
 | Unsaved edits of open files, kept aside until saved | `~/.local/state/shed/recovery/` |
 | Browser extension and its native host | `~/.local/share/shed/browser-extension/`, `browser-host/` |
 | Launchers and icons for Shed and each bench (Linux) | `~/.local/share/applications/`, `~/.local/share/icons/` |

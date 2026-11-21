@@ -99,6 +99,16 @@ impl Render for EntryView {
     }
 }
 
+/// A session to delete, from its row: the session (with those going on
+/// from it), and what the row shows of it.
+#[derive(Clone)]
+struct ToDelete {
+    id: String,
+    title: String,
+    modified: u64,
+    prompts: usize,
+}
+
 #[path = "ai_review.rs"]
 mod review;
 
@@ -181,6 +191,11 @@ pub struct AiView {
     /// A session being renamed: its id, and the field with its name.
     renaming: Option<(String, Entity<LineEditor>, Subscription)>,
     sessions_task: Option<Task<()>>,
+    /// A session being deleted (the keeper moves its files to the trash):
+    /// its id, and the task watching for its file to go.
+    deleting: Option<(String, Task<()>)>,
+    /// Why deleting a session did not work, above the sessions list.
+    delete_problem: Option<String>,
     filter: Entity<LineEditor>,
     sessions_scroll: UniformListScrollHandle,
     /// The conversation's and the sessions' scrollbars.
@@ -430,6 +445,8 @@ impl AiView {
             sessions_task: None,
             filter,
             sessions_scroll: UniformListScrollHandle::new(),
+            deleting: None,
+            delete_problem: None,
             conversation_bar: Default::default(),
             sessions_bar: Default::default(),
             completion: None,
@@ -1514,14 +1531,93 @@ impl AiView {
         cx.notify();
     }
 
-    fn session_menu(&self, id: String) -> Vec<MenuEntry<Self>> {
+    /// A session row's menu: `id` the session it opens, `delete` what
+    /// Delete Session takes (a conversation's row: its first file, so all of it).
+    fn session_menu(&self, id: String, delete: ToDelete) -> Vec<MenuEntry<Self>> {
         let (a, b, c) = (id.clone(), id.clone(), id.clone());
         vec![
             menu::item("Open", move |this: &mut Self, _, _| this.open_session(Some(a.clone()))).icon("go"),
             menu::item("Rename…", move |this: &mut Self, window, cx| this.start_rename(c.clone(), window, cx)).icon("pencil"),
             menu::item("Continue in a Terminal", move |this: &mut Self, _, _| this.continue_in_terminal(&b)).icon("terminal"),
             menu::item("Copy Session ID", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(id.clone()))),
+            MenuEntry::Separator,
+            menu::danger("Delete Session…", move |this: &mut Self, window, cx| this.delete_session(delete.clone(), window, cx)).icon("trash"),
         ]
+    }
+
+    /// Deletes a Claude Code session and the sessions going on from it,
+    /// after asking: the keeper moves their files to Shed's trash.
+    fn delete_session(&mut self, target: ToDelete, window: &mut Window, cx: &mut Context<Self>) {
+        let later = shed_ai::going_on_from(&self.sessions, &target.id);
+        let mut ids = later.clone();
+        ids.push(target.id.clone());
+        // Shown in another tab: its Claude Code may be writing to it.
+        let dir = shed_ai::sessions::sessions_dir(&self.ai.folder);
+        let elsewhere = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()).is_some_and(|state| {
+            state.read(cx).tree.benches.iter().flat_map(|b| &b.tabs).filter(|t| t.id != self.tab).filter_map(|t| t.ai_info()).any(|a| {
+                a.session.as_ref().is_some_and(|s| ids.contains(s)) && shed_ai::sessions::sessions_dir(&a.folder) == dir
+            })
+        });
+        if elsewhere {
+            let detail = "It is open in another AI tab. Close it there first (or open another session there), then delete it here.";
+            let answer = window.prompt(gpui::PromptLevel::Info, "This session is open in another tab", Some(detail), &["OK"], cx);
+            cx.spawn(async move |_, _| {
+                let _ = answer.await;
+            })
+            .detach();
+            return;
+        }
+        let prompts = format!("{} prompt{}", target.prompts, if target.prompts == 1 { "" } else { "s" });
+        let more = match later.len() {
+            0 => String::new(),
+            1 => ", and 1 later session that continues it".to_string(),
+            n => format!(", and {n} later sessions that continue it"),
+        };
+        let trash = shed_save::home_relative(&shed_model::paths::state_dir().join("ai-trash"));
+        let detail = format!(
+            "“{}”\n{} ({}) · {prompts}{more}.\n\nClaude Code's files for it move to Shed's trash ({trash}), kept 30 days, then deleted.",
+            target.title,
+            local_time(target.modified),
+            ago(target.modified),
+        );
+        let answer = window.prompt(gpui::PromptLevel::Critical, "Delete this Claude Code session?", Some(&detail), &["Delete Session", "Cancel"], cx);
+        cx.spawn(async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                this.delete_problem = None;
+                this.conn.send_msg(ClientMsg::AiDeleteSession { tab: this.tab, session: target.id.clone() });
+                // The list again once its file is gone (or after a while).
+                let file = dir.join(format!("{}.jsonl", target.id));
+                let watch = cx.spawn(async move |this, cx| {
+                    for _ in 0..50 {
+                        cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
+                        if !file.exists() {
+                            break;
+                        }
+                    }
+                    this.update(cx, |this, cx| {
+                        this.deleting = None;
+                        this.load_sessions(cx);
+                    })
+                    .ok();
+                });
+                this.deleting = Some((target.id.clone(), watch));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// An error from the keeper: shown, when it can be about a session being deleted.
+    pub fn keeper_error(&mut self, error: &str, cx: &mut Context<Self>) {
+        if self.deleting.take().is_some() {
+            self.delete_problem = Some(error.to_string());
+            self.load_sessions(cx);
+            cx.notify();
+        }
     }
 
     fn entry_menu(&self, i: usize) -> Vec<MenuEntry<Self>> {
@@ -2999,6 +3095,17 @@ impl AiView {
                 };
                 let id = s.id.clone();
                 let menu_id = s.id.clone();
+                let prompts = if matches!(row, SessionRow::Conversation { .. }) { s.whole.max(s.prompts) } else { s.prompts };
+                // A conversation's row deletes all of it: its first file, and those going on from it.
+                let delete = ToDelete {
+                    id: match row {
+                        SessionRow::Conversation { root, .. } => root.clone(),
+                        _ => s.id.clone(),
+                    },
+                    title: s.title.clone(),
+                    modified: s.modified,
+                    prompts,
+                };
                 let mut meta = vec![ago(s.modified)];
                 match row {
                     SessionRow::Part(p) if p.parent.is_some() => meta.insert(0, if p.branched { format!("↳ branched after #{}", p.from) } else { "↳ continued".to_string() }),
@@ -3008,7 +3115,6 @@ impl AiView {
                 if let Some(b) = &s.branch {
                     meta.push(b.clone());
                 }
-                let prompts = if matches!(row, SessionRow::Conversation { .. }) { s.whole.max(s.prompts) } else { s.prompts };
                 meta.push(format!("{prompts} prompt{}", if prompts == 1 { "" } else { "s" }));
                 if let Some((_, parts, _)) = &toggle {
                     meta.push(format!("{parts} parts"));
@@ -3041,7 +3147,7 @@ impl AiView {
                             }
                         }))
                         .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                            let entries = this.session_menu(menu_id.clone());
+                            let entries = this.session_menu(menu_id.clone(), delete.clone());
                             this.open_menu(e.position, entries, cx);
                         }))
                         .child(
@@ -4002,6 +4108,31 @@ impl Render for AiView {
                     )
                     .child(switch)
                     .child(div().text_size(px(12.0 * self.z())).child(self.filter.clone()))
+                    // Deleting a session did not work: why, until clicked away.
+                    .when_some(self.delete_problem.clone(), |d, problem| {
+                        d.child(
+                            div()
+                                .id("delete-problem")
+                                .flex()
+                                .items_start()
+                                .gap_1()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(hsla(ui.danger))
+                                .text_size(px(12.0 * self.z()))
+                                .text_color(hsla(ui.danger))
+                                .cursor_pointer()
+                                .tooltip(menu::tooltip("Dismiss"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.delete_problem = None;
+                                    cx.notify();
+                                }))
+                                .child(svg().path(icon("alert")).size(px(12.0)).flex_none().mt_0p5().text_color(hsla(ui.danger)))
+                                .child(div().flex_1().min_w_0().child(problem)),
+                        )
+                    })
                     .child(sessions),
             )
             .child(

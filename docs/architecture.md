@@ -569,11 +569,23 @@ filtered by words). `load_session` reads a session with the files it goes on fro
 first, each up to where it does, a message id once; `PromptMark.session` keeps
 which file the message before a prompt came from, and editing that prompt
 resumes that file.
+Deleting a session (`AiDeleteSession`) is the keeper's, so it can refuse
+safely: it lists the folder's sessions off the lock and takes the session with
+those going on from it (`going_on_from`: they read their beginning from its
+file); if another AI tab shows one of them it answers `Error`; if the asking
+tab does, that tab goes to a new session (its Claude Code stopped) first. The
+drafts of those sessions leave the tab, and `trash_sessions` moves their
+`<id>.jsonl` and `<id>/` to `state_dir/ai-trash/<unix seconds>-<id>/` with a
+`restore.txt` (`mv` lines back); the keeper's hourly upkeep deletes those
+older than 30 days (`prune_trash`, by the time in the name). The window asks
+first (a `Critical` prompt: Enter cancels) and refuses at once what it can see
+is open elsewhere.
 `shed-ai` has
 no UI and no processes; its tests replay recorded streams
 (`crates/shed-ai/tests/streams/`) and read saved sessions
 (`tests/sessions/`), and `crates/shed-app/tests/ai_tabs.rs` (and `ai_agents.rs`,
-`ai_questions.rs`) run the keeper against a stand-in `claude` (`SHED_CLAUDE`).
+`ai_questions.rs`, `ai_delete.rs`) run the keeper against a stand-in `claude`
+(`SHED_CLAUDE`; `ai_delete.rs` points `CLAUDE_CONFIG_DIR` at a temporary folder).
 
 `ai_view.rs` draws the conversation with GPUI's `list` (variable-height rows,
 only those in view, following the end as it grows), a light Markdown renderer,

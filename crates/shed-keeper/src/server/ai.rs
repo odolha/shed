@@ -749,6 +749,82 @@ impl Keeper {
         });
     }
 
+    /// Deletes a session of the tab's folder and those going on from it
+    /// (they read their beginning from its file): their files move to the
+    /// trash (`ai-trash`, pruned after a while), their drafts go. Refused
+    /// while another AI tab shows one of them; this tab, showing one, goes
+    /// to a new session first, its Claude Code stopped.
+    pub(super) fn ai_delete_session(self: &Arc<Self>, client: ClientId, tab: TabId, session: String) {
+        let ai = {
+            let st = self.lock();
+            match ai_tab(&st, tab) {
+                Some(ai) if shed_ai::sessions::is_session_id(&session) && !AiTab::is_draft_key(&session) => ai,
+                Some(_) => return st.send(client, KeeperMsg::Error(format!("not a Claude Code session: {session:?}"))),
+                None => return st.send(client, KeeperMsg::Error("no such AI tab".into())),
+            }
+        };
+        let keeper = self.clone();
+        let trash = self.cfg.state_dir.join("ai-trash");
+        tokio::spawn(async move {
+            let (folder, first) = (ai.folder.clone(), session.clone());
+            let ids = tokio::task::spawn_blocking(move || {
+                if !shed_ai::sessions::sessions_dir(&folder).join(format!("{first}.jsonl")).is_file() {
+                    return None;
+                }
+                let mut ids = vec![first.clone()];
+                ids.extend(shed_ai::going_on_from(&shed_ai::list_sessions(&folder), &first));
+                Some(ids)
+            })
+            .await
+            .ok()
+            .flatten();
+            let Some(ids) = ids else {
+                return keeper.lock().send(client, KeeperMsg::Error(format!("no session {session:?} in {}", ai.folder.display())));
+            };
+            let dir = shed_ai::sessions::sessions_dir(&ai.folder);
+            let shown_here = {
+                let mut st = keeper.lock();
+                let shows = |a: &AiTab| a.session.as_ref().is_some_and(|s| ids.contains(s)) && shed_ai::sessions::sessions_dir(&a.folder) == dir;
+                let elsewhere = st.tree.benches.iter().flat_map(|b| &b.tabs).filter(|t| t.id != tab).filter_map(|t| t.ai_info()).any(shows);
+                if elsewhere {
+                    return st.send(client, KeeperMsg::Error("That session is open in another tab; close it there first.".into()));
+                }
+                let Some(TabKind::Ai(here)) = st.tree.tab_mut(tab).map(|t| &mut t.kind) else {
+                    return st.send(client, KeeperMsg::Error("no such AI tab".into()));
+                };
+                let shown = shows(here);
+                // Their drafts have nothing to go with any more.
+                here.drafts.retain(|d| !ids.contains(&d.session));
+                if !shown {
+                    st.broadcast_tree();
+                }
+                shown
+            };
+            if shown_here {
+                keeper.ai_open_session(tab, None);
+                // Its Claude Code, stopped, writes no more to the files.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            keeper.save_soon.notify_one();
+            let (folder, gone) = (ai.folder.clone(), ids.clone());
+            let moved = tokio::task::spawn_blocking(move || shed_ai::trash_sessions(&folder, &gone, &trash)).await;
+            let st = keeper.lock();
+            match moved {
+                Ok(Ok(to)) => {
+                    info!(?tab, session, more = ids.len() - 1, to = %to.display(), "Claude Code session moved to the trash");
+                    let more = match ids.len() - 1 {
+                        0 => String::new(),
+                        1 => " and 1 later session".into(),
+                        n => format!(" and {n} later sessions"),
+                    };
+                    st.send(client, KeeperMsg::Done(format!("deleted the session{more}")));
+                }
+                Ok(Err(e)) => st.send(client, KeeperMsg::Error(format!("cannot delete the session: {e}"))),
+                Err(e) => st.send(client, KeeperMsg::Error(format!("cannot delete the session: {e}"))),
+            }
+        });
+    }
+
     pub(super) fn ai_settings(&self, tab: TabId, new: AiTab) {
         self.ai_edit_tab(tab, |ai| {
             ai.add_dirs = new.add_dirs;
