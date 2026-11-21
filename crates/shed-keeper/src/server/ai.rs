@@ -31,12 +31,21 @@ const INIT_REQUEST: &str = "shed-init";
 const VIEWED_KEPT: usize = 2000;
 const EXPLAINED_KEPT: usize = 500;
 
+/// A number no process of any tab had before.
+fn next_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A conversation's process and what it said.
 pub(super) struct AiRt {
     pub transcript: Transcript,
     /// Lines to Claude Code's stdin, while it runs.
     input: Option<mpsc::UnboundedSender<String>>,
-    /// Which process events belong to; older ones are ignored.
+    /// Which process events belong to; older ones are ignored. Numbered
+    /// across the keeper (`next_generation`), not per tab: a tab's runtime is
+    /// made anew when it opens another session, and a process stopped then
+    /// must not pass for the new one.
     generation: u64,
     commands: Vec<shed_ai::Command>,
     models: Vec<shed_ai::Model>,
@@ -107,7 +116,7 @@ impl AiRt {
     fn stop(&mut self) {
         self._kill = None;
         self.input = None;
-        self.generation += 1;
+        self.generation = next_generation();
         self.pending.clear();
         self.transcript.stopped();
     }
@@ -523,7 +532,7 @@ impl Keeper {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let (kill_tx, kill_rx) = oneshot::channel::<()>();
         let rt = st.ai.get_mut(&tab).unwrap();
-        rt.generation += 1;
+        rt.generation = next_generation();
         let generation = rt.generation;
         rt.input = Some(tx);
         rt._kill = Some(kill_tx);
