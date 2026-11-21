@@ -256,7 +256,26 @@ that keeper's program (`/proc/PID/exe attach ID`).
 
 Exit codes tell the loop what happened: 0, the shell ended (or was ended); 2,
 this end let go; 3, the shell was lost with its keeper (a reboot), so the loop
-joins again, and the server's keeper brings the saved bench back. Closing the
+joins again, and the server's keeper brings the saved bench back.
+
+ssh runs with `ServerAliveInterval=5`, `ServerAliveCountMax=3` and
+`ConnectTimeout=10`, so a dead connection ends within about 15 s. The attach is a
+client of the shared connection (the `ControlMaster`), which may itself be the dead
+part: each join learns that master's pid (`ssh -O check`, opening one with `ssh
+HOST true` when there is none), and after any other end (or Reconnect) closes it
+(`ssh -O exit`, else SIGTERM to that pid) before joining again, so the next join
+opens a fresh connection. Only that master is closed, not a newer one another tab
+opened meanwhile, so tabs to one server cannot keep closing each other's. Steps
+that type nothing (`-O`) are killed after 3 s; a master that does not answer has
+its socket (the path from `ssh -G`) removed. A join ending badly within 10 s
+counts as failed: the loop waits 3 s, 6 s, … up to 30 s before the next.
+
+**Reconnect** (`ClientMsg::ReconnectRemote`): the keeper sends SIGUSR1 to the
+pane's foreground job when it is `shed remote connect` (the job leads its process
+group); the loop, which polls ssh with `try_wait` rather than blocking, stops ssh
+(SIGTERM, then kill), puts the terminal settings back, closes the master and joins
+at once. When the pane's shell is at a prompt instead (Ctrl+C stopped the loop),
+the keeper types the tab's connect command again. Closing the
 bench or the tab (`CloseTab`) locally sends no Ctrl+C to a remote pane (it would
 reach the server's program): the hangup ends ssh and the shell stays.
 `EndRemoteTab` first writes a close request (an OSC 7777 sequence) into the pane,

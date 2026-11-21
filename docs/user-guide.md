@@ -608,8 +608,15 @@ needed. The server's keeper holds the shell; the tab shows it over ssh. So:
 
 - **Closing or hiding the bench** keeps the shell and whatever runs in it. Opening
   the bench joins it again.
-- **A dropped connection** (network, sleep) is joined again after a few seconds,
-  until the shell ends or you press Ctrl+C.
+- **A dropped connection** (network, sleep) is noticed within about 15 seconds;
+  the tab says "Connection to HOST lost; joining again…" and joins at once. When
+  joining fails it says why and tries again after 3 s, then 6 s, up to every 30 s,
+  until it works or you press Ctrl+C.
+- **Reconnect**, in a remote tab's menu (on the tab bar, or its card on the
+  pegboard), drops the connection and joins again right away ("Reconnecting to
+  HOST…"), for when the tab looks stuck. The shell on the server is the same, with
+  everything in it. Other remote tabs to that server share the connection, so they
+  join again too. After Ctrl+C stopped the joining, Reconnect starts it again.
 - **A server restart** stops the shell, but its keeper saved it: the next time the
   tab connects, a new shell starts in the same folder, under the old scrollback.
 - **Closing the tab** asks: **Close Here** (the default) only lets go of the shell,
