@@ -129,7 +129,8 @@ The mock (`web/mock/`, plain Node with `ws`) implements the HTTP routes of
 `shed-api/src/http.rs` and the `/api` socket with a made-up workspace: a fake
 shell per terminal pane, a scripted AI conversation with a tool call, a
 permission request and questions, a project with files, search and Git. Its
-switches (`MOCK_FRESH`, `MOCK_VIEW`, `MOCK_LATENCY`, `MOCK_NO_REVIEW`) are in
+switches (`MOCK_FRESH`, `MOCK_VIEW`, `MOCK_LATENCY`, `MOCK_NO_REVIEW`,
+`MOCK_NTFY_TOPIC`) and its `notify` command are in
 `web/README.md`. Like the screenshots, it uses `you`, `devbox` and other
 made-up names only.
 
@@ -239,8 +240,9 @@ level. Deleting the data folder starts over.
 
 `crates/shed-nexus/tests/` run a nexus in process on a real socket, with a
 temporary data folder: the account (setup, sign-in, lockout, cookies and CSRF),
-pairing, and relaying, where a fake link and connectors speak over
-`tokio-tungstenite`. TOTP codes come from the account's secret; each time step
+pairing, relaying, where a fake link and connectors speak over
+`tokio-tungstenite`, and notifications (`notify.rs`, `ntfy_env.rs`), where a
+fake push service and ntfy on loopback count what reaches them. TOTP codes come from the account's secret; each time step
 is taken once, so a test that needs more than three codes waits for the next
 step. Recovery codes stand in where a test only needs to sign in.
 

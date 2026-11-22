@@ -75,15 +75,21 @@ slow_per_minute = 6
 pair_per_minute = 5
 
 [push]
-# Web Push to browsers and UnifiedPush (ntfy) to phones.
+# Notifications when no Shed app is in view (while one is, the apps get them
+# live and nothing is pushed): Web Push to browsers, and to phones a ntfy
+# topic (ntfy_url) or, without one, UnifiedPush. Off: nothing is pushed.
 enabled = true
+# A ntfy topic for phones, on a ntfy you run (example; see
+# docs/nexus-deploy.md §7). SHED_NEXUS_NTFY_URL wins over it; the publishing
+# token: SHED_NEXUS_NTFY_TOKEN in /etc/shed-nexus.env, never here. Carries the
+# kinds any phone wants. Leave out for UnifiedPush to phones instead.
+# ntfy_url = "https://ntfy.example.com/alerts-shed"
+# Seconds a workspace stays offline before that is notified.
+offline_after_secs = 120
 # Who push services can contact: mailto: or https:. Default: the public URL.
 # subject = "mailto:admin@example.com"
 # Accept http: push endpoints (a ntfy on a private network only).
 allow_http_endpoints = false
 # Accept push endpoints on private, loopback or link-local addresses (a ntfy
-# on a private network). Off: public addresses only.
+# on a private network, for UnifiedPush). Off: public addresses only.
 allow_private_endpoints = false
-# Your own ntfy, to publish to with an account (no anonymous publishing to up*
-# topics). The token: SHED_NEXUS_NTFY_TOKEN in /etc/shed-nexus.env, never here.
-# ntfy_host = "ntfy.example.com"

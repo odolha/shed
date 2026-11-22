@@ -289,7 +289,7 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
       throw new Fail('unsupported', 'the mock has no workspaces to pair');
 
     case 'GET /push':
-      return { vapidKey, prefs: { kinds: pushPrefs.get(session!.device) ?? ['aiWaiting', 'aiDone'] }, subscribed: pushSubs.has(session!.device) };
+      return { vapidKey, prefs: { kinds: pushPrefs.get(session!.device) ?? ['aiWaiting', 'aiDone'] }, subscribed: pushSubs.has(session!.device), ntfyTopic: env.ntfyTopic };
     case 'POST /push/subscribe': {
       const b = await body<PushSubscribe>(req);
       if (!b.endpoint || !b.p256dh || !b.auth) throw new Fail('invalid', 'endpoint, p256dh and auth are needed');

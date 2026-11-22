@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use shed_api::ApiError;
-use shed_api::wire::{ClientHello, Ended, LinkHello, LinkWelcome, Notification, Unsubscribe, WorkspaceInfo};
+use shed_api::wire::{ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationFrame, Unsubscribe, WorkspaceInfo};
 
 pub type Raw = Box<RawValue>;
 
@@ -23,6 +23,7 @@ pub enum RawClientFrame {
     Request(RawRequest),
     Subscribe(RawSubscribe),
     Unsubscribe(Unsubscribe),
+    Visible(bool),
 }
 
 /// `ServerFrame`.
@@ -36,6 +37,7 @@ pub enum RawServerFrame {
     Workspaces(Vec<WorkspaceInfo>),
     State(RawStateFrame),
     Goodbye(ApiError),
+    Notification(NotificationFrame),
 }
 
 /// `LinkFrame`.
@@ -146,6 +148,7 @@ impl RawClientFrame {
             "Request" => Self::Request(content(env.content)?),
             "Subscribe" => Self::Subscribe(content(env.content)?),
             "Unsubscribe" => Self::Unsubscribe(content(env.content)?),
+            "Visible" => Self::Visible(content(env.content)?),
             other => return unknown(other),
         })
     }
@@ -162,6 +165,7 @@ impl RawServerFrame {
             "Workspaces" => Self::Workspaces(content(env.content)?),
             "State" => Self::State(content(env.content)?),
             "Goodbye" => Self::Goodbye(content(env.content)?),
+            "Notification" => Self::Notification(content(env.content)?),
             other => return unknown(other),
         })
     }
@@ -254,6 +258,7 @@ mod tests {
             ClientFrame::Request(Request { id: 5, workspace: "w".into(), call: Call::CloseBench(BenchOnly { bench: "b".into() }) }),
             ClientFrame::Subscribe(Subscribe { id: 9, workspace: "w".into(), topic: Topic::Screen(ScreenTopic { pane: "p".into() }) }),
             ClientFrame::Unsubscribe(Unsubscribe { id: 9 }),
+            ClientFrame::Visible(true),
         ];
         for frame in &clients {
             same(frame, |t| RawClientFrame::parse(t).map(|f| serde_json::to_string(&f).unwrap()));
@@ -274,6 +279,16 @@ mod tests {
             ServerFrame::Workspaces(vec![info()]),
             ServerFrame::State(StateFrame { workspace: "w".into(), state: state() }),
             ServerFrame::Goodbye(ApiError::new(ErrorCode::Unauthorized, "revoked")),
+            ServerFrame::Notification(NotificationFrame {
+                workspace: "w".into(),
+                notification: Notification {
+                    kind: NotificationKind::AiDone,
+                    title: "Claude is done".into(),
+                    body: "api · claude".into(),
+                    bench: Some("b".into()),
+                    tab: Some("t".into()),
+                },
+            }),
         ];
         for frame in &servers {
             same(frame, |t| RawServerFrame::parse(t).map(|f| f.to_text()));

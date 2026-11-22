@@ -153,6 +153,8 @@ pub struct WorkspaceRow {
 #[derive(Clone, Debug)]
 pub struct Subscription {
     pub device: String,
+    /// The device's kind: a browser, or a phone (UnifiedPush).
+    pub kind: DeviceKind,
     pub endpoint: String,
     pub p256dh: String,
     pub auth: String,
@@ -600,7 +602,7 @@ impl Store {
     pub fn subscriptions(&self, kind: NotificationKind) -> anyhow::Result<Vec<Subscription>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT p.device, p.endpoint, p.p256dh, p.auth, p.kinds FROM push p JOIN devices d ON d.id = p.device
+            "SELECT p.device, p.endpoint, p.p256dh, p.auth, p.kinds, d.kind FROM push p JOIN devices d ON d.id = p.device
              WHERE d.revoked = 0 AND p.endpoint IS NOT NULL",
         )?;
         let rows = stmt
@@ -611,10 +613,23 @@ impl Store {
                     p256dh: r.get(2)?,
                     auth: r.get(3)?,
                     kinds: kinds_from(&r.get::<_, String>(4)?),
+                    kind: kind_from(&r.get::<_, String>(5)?),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows.into_iter().filter(|s| s.kinds.contains(&kind)).collect())
+    }
+
+    /// Whether some phone wants `kind`, for a ntfy topic all phones share:
+    /// any signed-in phone that wants it (one that never chose wants all),
+    /// or every kind when no phone is signed in.
+    pub fn phones_want(&self, kind: NotificationKind) -> anyhow::Result<bool> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT p.kinds FROM devices d LEFT JOIN push p ON p.device = d.id WHERE d.revoked = 0 AND d.kind = 'phone'",
+        )?;
+        let phones = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(phones.is_empty() || phones.iter().any(|k| k.as_deref().map(kinds_from).unwrap_or_else(all_kinds).contains(&kind)))
     }
 
     // --------------------------------------------------------------- audit
@@ -796,5 +811,28 @@ mod tests {
         store.set_push_kinds(&phone, &[NotificationKind::AiWaiting]).unwrap();
         assert!(store.subscriptions(NotificationKind::AiDone).unwrap().is_empty());
         assert_eq!(store.subscriptions(NotificationKind::AiWaiting).unwrap().len(), 1);
+        assert_eq!(store.subscriptions(NotificationKind::AiWaiting).unwrap()[0].kind, DeviceKind::Phone);
+    }
+
+    #[test]
+    fn a_shared_topic_carries_what_any_phone_wants() {
+        let store = Store::in_memory().unwrap();
+        // No phone: everything.
+        assert!(store.phones_want(NotificationKind::AiDone).unwrap());
+        let browser = store.add_device(DeviceKind::Browser, "B", None, "", None, 1).unwrap();
+        store.set_push_kinds(&browser, &[]).unwrap();
+        assert!(store.phones_want(NotificationKind::AiDone).unwrap());
+        // A phone that never chose wants everything.
+        let a = store.add_device(DeviceKind::Phone, "A", Some("a"), "", None, 1).unwrap();
+        assert!(store.phones_want(NotificationKind::CommandDone).unwrap());
+        store.set_push_kinds(&a, &[NotificationKind::AiWaiting]).unwrap();
+        assert!(!store.phones_want(NotificationKind::CommandDone).unwrap());
+        assert!(store.phones_want(NotificationKind::AiWaiting).unwrap());
+        // Another phone's choices count too; a revoked one's do not.
+        let b = store.add_device(DeviceKind::Phone, "B", Some("b"), "", None, 1).unwrap();
+        store.set_push_kinds(&b, &[NotificationKind::CommandDone]).unwrap();
+        assert!(store.phones_want(NotificationKind::CommandDone).unwrap());
+        store.revoke_device(&b).unwrap();
+        assert!(!store.phones_want(NotificationKind::CommandDone).unwrap());
     }
 }

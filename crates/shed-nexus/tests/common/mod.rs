@@ -280,3 +280,4 @@ pub async fn connector(nexus: &Nexus, token: &str) -> (Socket, Welcome) {
         other => panic!("no welcome: {other:?}"),
     }
 }
+

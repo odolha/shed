@@ -1,8 +1,10 @@
-//! Push notifications: Web Push (RFC 8030), its payload encrypted for the
-//! receiving device (RFC 8291, `aes128gcm`) and signed with the nexus's VAPID
-//! key (RFC 8292). Browsers subscribe through their push service; the Android
-//! app through a UnifiedPush distributor such as ntfy, which takes the same
-//! requests. The push service sees only ciphertext.
+//! Notifications, and pushing them: live to the apps while one is in view
+//! (`notify`), else pushed. Web Push (RFC 8030), its payload encrypted for
+//! the receiving device (RFC 8291, `aes128gcm`) and signed with the nexus's
+//! VAPID key (RFC 8292). Browsers subscribe through their push service; the
+//! Android app through a UnifiedPush distributor such as ntfy, which takes
+//! the same requests (unless the nexus has a ntfy topic for phones, see
+//! `ntfy`). The push service sees only ciphertext.
 //!
 //! The VAPID key is made on first start and kept in `vapid.key` in the data
 //! folder (0600).
@@ -21,8 +23,8 @@ use std::time::Duration;
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use shed_api::http::{PushPayload as Payload, PushSubscribe};
-use shed_api::wire::{Notification, NotificationKind};
+use shed_api::http::{DeviceKind, PushPayload as Payload, PushSubscribe};
+use shed_api::wire::{Notification, NotificationFrame, NotificationKind};
 use web_push_native::jwt_simple::algorithms::{ECDSAP256PublicKeyLike, ES256KeyPair};
 use web_push_native::p256::PublicKey;
 use web_push_native::{Auth, WebPushBuilder};
@@ -37,9 +39,6 @@ pub struct Push {
     allow_http: bool,
     allow_private: bool,
     client: reqwest::Client,
-    /// Push servers the nexus publishes to with an account: host, and the
-    /// `auth` parameter (base64url of `Bearer <token>`) added to their URLs.
-    logins: Vec<(String, String)>,
 }
 
 /// Whether `ip` is on the public internet: not loopback, private (RFC 1918,
@@ -157,23 +156,7 @@ impl Push {
             builder = builder.dns_resolver(PublicOnly);
         }
         let client = builder.build()?;
-        Ok(Push { key, public, subject, allow_http, allow_private, client, logins: Vec::new() })
-    }
-
-    /// Publishes to these push servers (host, token) with their accounts.
-    pub fn with_logins(mut self, logins: Vec<(String, String)>) -> Push {
-        self.logins = logins.into_iter().map(|(host, token)| (host, URL_SAFE_NO_PAD.encode(format!("Bearer {token}")))).collect();
-        self
-    }
-
-    /// The endpoint to send to: with the account's `auth` parameter when the
-    /// nexus has one for its host (to that host only).
-    fn endpoint_for(&self, endpoint: &str) -> String {
-        let host = host_port(endpoint).map(|(h, _)| h.to_ascii_lowercase());
-        match self.logins.iter().find(|(h, _)| Some(h) == host.as_ref()) {
-            Some((_, auth)) => format!("{endpoint}{}auth={auth}", if endpoint.contains('?') { '&' } else { '?' }),
-            None => endpoint.to_string(),
-        }
+        Ok(Push { key, public, subject, allow_http, allow_private, client })
     }
 
     pub fn public_key(&self) -> &str {
@@ -221,7 +204,7 @@ impl Push {
         urgent: bool,
     ) -> anyhow::Result<axum::http::Request<Vec<u8>>> {
         let (public, auth) = keys(sub).map_err(|e| anyhow::anyhow!(e))?;
-        let endpoint = self.endpoint_for(&sub.endpoint).parse().context("push endpoint")?;
+        let endpoint = sub.endpoint.parse().context("push endpoint")?;
         let mut request = WebPushBuilder::new(endpoint, public, auth)
             .with_valid_duration(Duration::from_secs(12 * 3600))
             .with_vapid(&self.key, &self.subject)
@@ -279,13 +262,34 @@ fn keys(sub: &PushSubscribe) -> Result<(PublicKey, Auth), &'static str> {
     Ok((public, Auth::clone_from_slice(&auth)))
 }
 
-/// Pushes `notification` from `workspace` to every device that wants its
-/// kind, in the background.
+/// Tells the user about `notification` from `workspace`: live to the
+/// connectors while one is in view (nothing pushed then); otherwise, in the
+/// background, to the ntfy topic (if there is one and a phone wants the
+/// kind) and by Web Push to every subscription that wants it: browsers, and
+/// phones too when there is no topic (they read the topic instead).
 pub fn notify(app: &Arc<App>, workspace: &str, notification: Notification) {
-    let Some(_) = &app.push else { return };
+    let notification = Notification {
+        title: clip(&notification.title, TITLE_MAX),
+        body: clip(&notification.body, BODY_MAX),
+        ..notification
+    };
+    if app.hub.notify_live(NotificationFrame { workspace: workspace.to_string(), notification: notification.clone() }) {
+        return;
+    }
+    if app.push.is_none() && app.ntfy.is_none() {
+        return;
+    }
     let app = app.clone();
     let workspace = workspace.to_string();
     tokio::spawn(async move {
+        let name = app.store.device(&workspace).ok().flatten().map(|d| d.name).unwrap_or_default();
+        if let Some(ntfy) = &app.ntfy {
+            match app.store.phones_want(notification.kind) {
+                Ok(true) => ntfy.send(&crate::ntfy::message(&workspace, &name, &notification)).await,
+                Ok(false) => {}
+                Err(e) => tracing::warn!("ntfy: {e:#}"),
+            }
+        }
         let Some(push) = &app.push else { return };
         let subs = match app.store.subscriptions(notification.kind) {
             Ok(subs) => subs,
@@ -294,14 +298,15 @@ pub fn notify(app: &Arc<App>, workspace: &str, notification: Notification) {
                 return;
             }
         };
+        let phones_by_ntfy = app.ntfy.is_some();
+        let subs: Vec<_> = subs.into_iter().filter(|s| !(phones_by_ntfy && s.kind == DeviceKind::Phone)).collect();
         if subs.is_empty() {
             return;
         }
-        let name = app.store.device(&workspace).ok().flatten().map(|d| d.name).unwrap_or_default();
         let payload = Payload {
             kind: notification.kind,
-            title: clip(&notification.title, TITLE_MAX),
-            body: clip(&notification.body, BODY_MAX),
+            title: notification.title,
+            body: notification.body,
             workspace,
             workspace_name: name,
             bench: notification.bench,
@@ -385,28 +390,6 @@ mod tests {
         }
         assert_eq!(host_port("https://[::1]:8443/x"), Some(("::1".into(), 8443)));
         assert_eq!(host_port("http://ntfy.lan/x"), Some(("ntfy.lan".into(), 80)));
-    }
-
-    #[test]
-    fn the_account_goes_to_its_host_only() {
-        crate::install_crypto();
-        let push = Push::with_key(ES256KeyPair::generate(), "mailto:admin@example.com".into(), false, false)
-            .unwrap()
-            .with_logins(vec![("ntfy.example.com".into(), "tk_secret".into())]);
-        let auth = URL_SAFE_NO_PAD.encode("Bearer tk_secret");
-        assert_eq!(push.endpoint_for("https://ntfy.example.com/upAbC123?up=1"), format!("https://ntfy.example.com/upAbC123?up=1&auth={auth}"));
-        assert_eq!(push.endpoint_for("https://NTFY.example.com/upX"), format!("https://NTFY.example.com/upX?auth={auth}"));
-        assert_eq!(push.endpoint_for("https://push.example.org/send/abc"), "https://push.example.org/send/abc");
-        assert_eq!(push.endpoint_for("https://ntfy.example.com.evil.org/upX"), "https://ntfy.example.com.evil.org/upX");
-        // The request carries it, with the VAPID signature in its header as before.
-        let sub = PushSubscribe {
-            endpoint: "https://ntfy.example.com/upAbC123?up=1".into(),
-            p256dh: URL_SAFE_NO_PAD.encode(SecretKey::random(&mut web_push_native::p256::elliptic_curve::rand_core::OsRng).public_key().to_encoded_point(false).as_bytes()),
-            auth: URL_SAFE_NO_PAD.encode([7u8; 16]),
-        };
-        let request = push.request(&sub, b"hi", false).unwrap();
-        assert!(request.uri().to_string().ends_with(&format!("auth={auth}")), "{}", request.uri());
-        assert!(request.headers()["Authorization"].to_str().unwrap().starts_with("vapid"));
     }
 
     #[tokio::test]

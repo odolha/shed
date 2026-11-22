@@ -1339,8 +1339,11 @@ enum class NotificationKind(val string: String) {
 }
 
 /// Something that happened in a workspace that the user may want to hear
-/// about away from it. The nexus pushes it to the devices that want its kind,
-/// as a `http::PushPayload` (this, with the workspace's id and name added).
+/// about. While a connector is in view the nexus sends it live to the
+/// connectors (`ServerFrame::Notification`); otherwise it pushes it: to a
+/// ntfy topic if it has one (`PushInfo::ntfy_topic`), and as Web Push, a
+/// `http::PushPayload` (this, with the workspace's id and name added), to
+/// the browsers (and, without a topic, the phones) that want its kind.
 @Serializable
 data class Notification (
 	val kind: NotificationKind,
@@ -1351,6 +1354,13 @@ data class Notification (
 	/// Where it happened, to open it from the notification.
 	val bench: String? = null,
 	val tab: String? = null
+)
+
+@Serializable
+data class NotificationFrame (
+	/// The workspace's id (`WorkspaceInfo::id`).
+	val workspace: String,
+	val notification: Notification
 )
 
 @Serializable
@@ -1472,7 +1482,11 @@ data class PushInfo (
 	/// This device has a subscription (`push/subscribe`), so pushes reach
 	/// it. False once it unsubscribed, or after the push service said the
 	/// subscription is gone.
-	val subscribed: Boolean? = null
+	val subscribed: Boolean? = null,
+	/// The ntfy topic the nexus publishes to when no app is in view
+	/// (`https://ntfy.example.com/alerts-shed`), if it has one: phones
+	/// subscribe to it in the ntfy app, and get no UnifiedPush then.
+	val ntfyTopic: String? = null
 )
 
 /// What a push carries, once decrypted: a workspace's `Notification` with
@@ -2268,6 +2282,14 @@ sealed class ClientFrame {
 	@Serializable
 	@SerialName("Unsubscribe")
 	data class Unsubscribe(val content: dev.shed.api.Unsubscribe): ClientFrame()
+	/// Whether the connector is in view (a browser tab shown and focused,
+	/// the Android app in the foreground). Sent after `Hello` and on every
+	/// change; a connection that never sends it counts as not in view. While
+	/// any connector is in view, notifications come to all of them live
+	/// (`ServerFrame::Notification`) and nothing is pushed.
+	@Serializable
+	@SerialName("Visible")
+	data class Visible(val content: Boolean): ClientFrame()
 }
 
 /// From a workspace's link to the nexus.
@@ -2291,7 +2313,7 @@ sealed class LinkFrame {
 	@Serializable
 	@SerialName("Ended")
 	data class Ended(val content: dev.shed.api.Ended): LinkFrame()
-	/// Something worth a push notification.
+	/// Something worth a notification.
 	@Serializable
 	@SerialName("Notify")
 	data class Notify(val content: Notification): LinkFrame()
@@ -2366,6 +2388,11 @@ sealed class ServerFrame {
 	@Serializable
 	@SerialName("Goodbye")
 	data class Goodbye(val content: ApiError): ServerFrame()
+	/// A notification, live: sent to every connector while one is in view
+	/// (`ClientFrame::Visible`), instead of a push. The app shows it itself.
+	@Serializable
+	@SerialName("Notification")
+	data class Notification(val content: NotificationFrame): ServerFrame()
 }
 
 const val MAX_UPLOAD: UInt = 16777216u

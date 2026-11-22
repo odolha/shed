@@ -6,10 +6,16 @@
 //   MOCK_VIEW=1          devbox allows viewing only
 //   MOCK_LATENCY=300     delay every answer by this many ms
 //   MOCK_NO_REVIEW=1     AI review answers `unsupported`
+//   MOCK_NTFY_TOPIC=url  the nexus has this ntfy topic for phones (PushInfo)
+//
+// Notifications follow the nexus's rule: when an AI tab starts waiting or
+// finishes a turn, a connection in view (`Visible`) gets it live; with none
+// in view, the mock only logs what it would push. Type `notify` on its
+// standard input to send a test notification.
 
 import { createServer } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { ClientFrame, ServerFrame } from '../src/api/gen/api.ts';
+import type { ClientFrame, Notification, ServerFrame } from '../src/api/gen/api.ts';
 import { handleHttp, sessionOf, setOnSessionEnd, setupCode } from './http.ts';
 import { API_VERSION, Fail, env } from './util.ts';
 import { handleCall, setHooks, states, subscribeTopic, topicKey, workspaces } from './world.ts';
@@ -18,6 +24,8 @@ interface Conn {
   ws: WebSocket;
   token: string;
   hello: boolean;
+  /** In view, as it last said. */
+  visible: boolean;
   subs: Map<number, { key: string; stop: () => void }>;
 }
 
@@ -31,10 +39,39 @@ function broadcast(frame: ServerFrame): void {
   for (const c of conns) if (c.hello) send(c, frame);
 }
 
+/** Live to every connection while one is in view; else what would be pushed. */
+function notify(workspace: string, notification: Notification): void {
+  if ([...conns].some((c) => c.hello && c.visible)) {
+    broadcast({ type: 'Notification', content: { workspace, notification } });
+    console.log(`notify (live): ${notification.title}`);
+  } else {
+    console.log(`notify (no app in view, would push): ${notification.title}`);
+  }
+}
+
+/** Each AI tab's activity, to tell when one starts waiting or finishes. */
+const activity = new Map<string, string>();
+
+function notifyChanges(workspace: string): void {
+  for (const bench of states[workspace]?.benches ?? []) {
+    for (const tab of bench.tabs) {
+      if (tab.kind.type !== 'Ai') continue;
+      const now = tab.kind.content.activity;
+      const before = activity.get(tab.id);
+      activity.set(tab.id, now);
+      if (before === undefined || tab.private) continue;
+      const at = (kind: Notification['kind'], title: string): Notification => ({ kind, title, body: `${bench.name} · ${tab.title}`, bench: bench.id, tab: tab.id });
+      if (now === 'waiting' && before !== 'waiting') notify(workspace, at('aiWaiting', 'Claude waits for an answer'));
+      else if (now === 'idle' && before === 'working') notify(workspace, at('aiDone', 'Claude is done'));
+    }
+  }
+}
+
 setHooks({
   stateChanged(workspace) {
     const state = states[workspace];
     if (state) broadcast({ type: 'State', content: { workspace, state } });
+    notifyChanges(workspace);
   },
   workspacesChanged() {
     broadcast({ type: 'Workspaces', content: workspaces });
@@ -117,6 +154,9 @@ function onFrame(c: Conn, frame: ClientFrame): void {
       c.subs.get(frame.content.id)?.stop();
       c.subs.delete(frame.content.id);
       break;
+    case 'Visible':
+      c.visible = frame.content;
+      break;
   }
 }
 
@@ -144,7 +184,7 @@ server.on('upgrade', (req, socket, head) => {
       ws.close(1008, 'not signed in');
       return;
     }
-    const c: Conn = { ws, token: session.token, hello: false, subs: new Map() };
+    const c: Conn = { ws, token: session.token, hello: false, visible: false, subs: new Map() };
     conns.add(c);
     ws.on('message', (data, binary) => {
       if (binary) return;
@@ -163,6 +203,19 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
+// `notify` on standard input: a test notification from the first AI tab.
+process.stdin.on('data', (data) => {
+  if (data.toString().trim() !== 'notify') return;
+  for (const [workspace, state] of Object.entries(states)) {
+    for (const bench of state.benches) {
+      const tab = bench.tabs.find((t) => t.kind.type === 'Ai' && !t.private);
+      if (!tab) continue;
+      notify(workspace, { kind: 'aiWaiting', title: 'Claude waits for an answer', body: `${bench.name} · ${tab.title}`, bench: bench.id, tab: tab.id });
+      return;
+    }
+  }
+});
+
 server.listen(env.port, '127.0.0.1', () => {
   const lines = [
     '',
@@ -179,6 +232,7 @@ server.listen(env.port, '127.0.0.1', () => {
     '',
     `  Workspaces: devbox (online${env.viewOnly ? ', view only' : ''}), laptop (offline).`,
     '  In a terminal tab, `help` lists the pretend commands; in the AI tab, a prompt with "ask" gets questions.',
+    '  Type `notify` here for a test notification.',
     '',
   );
   console.log(lines.join('\n'));

@@ -33,6 +33,12 @@ pub enum ClientFrame {
     Request(Request),
     Subscribe(Subscribe),
     Unsubscribe(Unsubscribe),
+    /// Whether the connector is in view (a browser tab shown and focused,
+    /// the Android app in the foreground). Sent after `Hello` and on every
+    /// change; a connection that never sends it counts as not in view. While
+    /// any connector is in view, notifications come to all of them live
+    /// (`ServerFrame::Notification`) and nothing is pushed.
+    Visible(bool),
 }
 
 #[typeshare]
@@ -97,6 +103,18 @@ pub enum ServerFrame {
     /// The connection is being closed: signed out, revoked, or the API
     /// version is not accepted. Not to be retried as is.
     Goodbye(ApiError),
+    /// A notification, live: sent to every connector while one is in view
+    /// (`ClientFrame::Visible`), instead of a push. The app shows it itself.
+    Notification(NotificationFrame),
+}
+
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationFrame {
+    /// The workspace's id (`WorkspaceInfo::id`).
+    pub workspace: String,
+    pub notification: Notification,
 }
 
 #[typeshare]
@@ -205,7 +223,7 @@ pub enum LinkFrame {
     Response(Response),
     Event(EventFrame),
     Ended(Ended),
-    /// Something worth a push notification.
+    /// Something worth a notification.
     Notify(Notification),
 }
 
@@ -244,8 +262,11 @@ pub struct LinkWelcome {
 }
 
 /// Something that happened in a workspace that the user may want to hear
-/// about away from it. The nexus pushes it to the devices that want its kind,
-/// as a `http::PushPayload` (this, with the workspace's id and name added).
+/// about. While a connector is in view the nexus sends it live to the
+/// connectors (`ServerFrame::Notification`); otherwise it pushes it: to a
+/// ntfy topic if it has one (`PushInfo::ntfy_topic`), and as Web Push, a
+/// `http::PushPayload` (this, with the workspace's id and name added), to
+/// the browsers (and, without a topic, the phones) that want its kind.
 #[typeshare]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

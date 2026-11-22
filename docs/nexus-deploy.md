@@ -2,7 +2,7 @@
 
 How to run `shed-nexus` on a server of your own: as its own user, under
 systemd with its sandboxing, behind nginx with a Let's Encrypt certificate, and
-optionally with a ntfy server for push to Android. [How Shed works](architecture.md#the-nexus)
+optionally with a ntfy server for notifications on the phone. [How Shed works](architecture.md#the-nexus)
 describes what the nexus does.
 
 Everything below uses placeholders: `nexus.example.com` for the nexus,
@@ -79,7 +79,8 @@ Limits worth knowing (all in the sample):
 - `max_connections` and `header_timeout_secs`: connections at once, and how
   long a client may take to send a request's headers.
 - Push endpoints must be on public addresses (`[push] allow_private_endpoints`
-  for a ntfy on your network).
+  for a ntfy on your network); `[push] ntfy_url` is a ntfy topic for phones
+  ([7](#7-notifications-on-the-phone-with-ntfy-optional)).
 
 Optional filters:
 
@@ -190,12 +191,15 @@ Devices to cut it off at once; `shed nexus leave` unlinks it from its side. The
 [user guide](user-guide.md#linking-a-workspace) has the rest (view-only
 workspaces, private tabs).
 
-## 7. Push to Android with ntfy (optional)
+## 7. Notifications on the phone with ntfy (optional)
 
-Browsers get Web Push through their vendor's push service, with nothing to
-set up here. The Android app uses UnifiedPush, through a distributor app on the
-phone; ntfy is one, and you can host its server too. The nexus sends the same
-encrypted Web Push requests either way, so ntfy only ever sees ciphertext.
+While a Shed app is open and in view (the web app's page, or the Android app
+in the foreground), notifications come to the apps directly and nothing is
+pushed. When none is, browsers get Web Push through their vendor's push
+service, with nothing to set up here, and phones get a message on a **ntfy
+topic** you run, read by the ntfy app (the same way other projects' alerts
+can come, one topic each: `alerts-shed`, `alerts-<project>`). Tapping one opens
+its tab in Shed's app (`shed://w/…/b/…/t/…`).
 
 Install the ntfy server (see ntfy's documentation for its package repository),
 then in `/etc/ntfy/server.yml`:
@@ -204,25 +208,40 @@ then in `/etc/ntfy/server.yml`:
 base-url: "https://ntfy.example.com"
 listen-http: "127.0.0.1:2586"
 behind-proxy: true
+cache-file: "/var/cache/ntfy/cache.db"
+cache-duration: "24h"
 auth-file: "/var/lib/ntfy/user.db"
 auth-default-access: "deny-all"
 ```
 
-Give the nexus an account to publish to UnifiedPush topics (one user per
-publisher, write-only, an access token), and the phone one to read them;
-nobody else can write (`deny-all`):
+Put it behind nginx like the nexus (its own `server_name ntfy.example.com`,
+`proxy_pass http://127.0.0.1:2586`, the WebSocket headers on `location /`,
+`proxy_buffering off`, `proxy_read_timeout 3m`) and run certbot for it.
+
+Accounts: one publisher per project, write-only on its topic, with an access
+token; the phone reads (all `alerts-*` topics, or just `alerts-shed`); nobody
+else can do either (`deny-all`):
 
 ```sh
 sudo ntfy user add shed-bot                     # its password is not used: the nexus uses a token
-sudo ntfy access shed-bot 'up*' write-only
+sudo ntfy access shed-bot 'alerts-shed' write-only
 sudo ntfy token add shed-bot                    # prints tk_…
 sudo ntfy user add phone                        # (if not there yet) the phone signs in with it
-sudo ntfy access phone 'up*' read-only
+sudo ntfy access phone 'alerts-*' read-only     # or 'alerts-shed'
 sudo systemctl enable --now ntfy
 ```
 
-The token goes in the service's env file, readable by root only (systemd reads
-it for the nexus), never in `nexus.toml` or git:
+The topic goes in `nexus.toml`:
+
+```toml
+[push]
+ntfy_url = "https://ntfy.example.com/alerts-shed"
+```
+
+and the token in the service's env file, readable by root only (systemd reads
+it for the nexus), never in `nexus.toml` or git. `SHED_NEXUS_NTFY_URL` there
+wins over `ntfy_url` (`http://127.0.0.1:2586/alerts-shed` works too, with ntfy
+on the same machine):
 
 ```sh
 sudo install -m 600 /dev/null /etc/shed-nexus.env
@@ -230,29 +249,41 @@ echo 'SHED_NEXUS_NTFY_TOKEN=tk_…' | sudo tee -a /etc/shed-nexus.env >/dev/null
 sudo systemctl restart shed-nexus
 ```
 
-and the host in `nexus.toml` (or `SHED_NEXUS_NTFY_HOST` in the same env file,
-which wins):
+The nexus POSTs each notification to the topic with `Authorization: Bearer`
+and the token: the text in the body (workspace, bench and tab), `Title`,
+`Priority` (4 when Claude waits for an answer or a workspace went offline, 3
+otherwise), `Tags`, and `Click` with the tab's link. Failures are logged
+(`ntfy: http 403`). The topic is shared by every phone, so it carries the kinds
+any signed-in phone has on in Shed's settings (all, before a phone chooses).
+The message text is not encrypted, which is why the topic belongs on a ntfy
+you run, closed to others. Try it:
 
-```toml
-[push]
-ntfy_host = "ntfy.example.com"
+```sh
+curl -H "Authorization: Bearer tk_…" -H "Title: test" -H "Priority: 4" -d hello https://ntfy.example.com/alerts-shed
 ```
 
-Web Push signs each request in its `Authorization` header, so the nexus sends
-the token as ntfy's `auth` URL parameter, to that host only. Without a token,
-a ntfy of your own would have to let anyone publish to `up*` topics (`ntfy
-access everyone 'up*' write-only`, UnifiedPush's usual set-up: safe enough, as
-the topics' names are long and random and only the phone can decrypt what is
-sent, but not needed when you run both). The log says when `ntfy_host` is set
-without a token.
+On the phone, install the ntfy app, set its default server to
+`https://ntfy.example.com`, sign in as `phone` (Settings → Users) and
+subscribe to `alerts-shed`. Shed's app says the same in its Settings →
+Notifications, with the topic to copy; with a topic it does not register for
+UnifiedPush.
 
-Put it behind nginx like the nexus (its own `server_name ntfy.example.com`,
-`proxy_pass http://127.0.0.1:2586`, the WebSocket headers on `location /`,
-`proxy_read_timeout 1h`) and run certbot for it. On the phone, install the ntfy
-app, set its default server to `https://ntfy.example.com` and sign in as
-`phone`; Shed's app then registers through it and hands its endpoint to the
-nexus. A ntfy on a private network needs `allow_private_endpoints = true` in
-the nexus's `[push]` (and `allow_http_endpoints = true` without TLS).
+**Without a topic: UnifiedPush.** Leave `ntfy_url` out (with a ntfy you do not
+run, say) and Shed's app registers through the ntfy app as its UnifiedPush
+distributor instead, handing its endpoint to the nexus, which sends it the same
+encrypted Web Push requests as browsers get (ntfy sees only ciphertext). The
+nexus publishes to those `up…` topics without an account, so that ntfy must let
+anyone publish to them, UnifiedPush's usual set-up (safe enough: the topics'
+names are long and random and only the phone can decrypt what is sent):
+
+```sh
+sudo ntfy access everyone 'up*' write-only
+sudo ntfy access phone 'up*' read-only
+```
+
+A ntfy on a private network needs `allow_private_endpoints = true` in the
+nexus's `[push]` (and `allow_http_endpoints = true` without TLS) for
+UnifiedPush endpoints; the topic in `ntfy_url` may be anywhere.
 
 ## 8. A server workspace (optional)
 

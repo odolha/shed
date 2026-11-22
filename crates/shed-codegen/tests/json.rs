@@ -331,6 +331,20 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("ServerFrame", to_json(&ServerFrame::Ended(Ended { sub: 1, error: None }))),
         ("ServerFrame", to_json(&ServerFrame::Goodbye(ApiError::new(ErrorCode::Unauthorized, "")))),
         (
+            "ServerFrame",
+            to_json(&ServerFrame::Notification(NotificationFrame {
+                workspace: "w1".into(),
+                notification: Notification {
+                    kind: NotificationKind::AiWaiting,
+                    title: "Claude waits for an answer".into(),
+                    body: "api · claude".into(),
+                    bench: Some("b1".into()),
+                    tab: None,
+                },
+            })),
+        ),
+        ("ClientFrame", to_json(&ClientFrame::Visible(true))),
+        (
             "ClientFrame",
             to_json(&ClientFrame::Hello(ClientHello { api: 1, client: "web 0.1.0".into() })),
         ),
@@ -500,6 +514,7 @@ fn json_shapes() {
         json!({"type": "Commit", "content": "abc"})
     );
     assert_eq!(to_json(&Reply::Previews(vec![])), json!({"type": "Previews", "content": []}));
+    assert_eq!(to_json(&ClientFrame::Visible(false)), json!({"type": "Visible", "content": false}));
     // A struct as content, with camelCase fields.
     assert_eq!(
         to_json(&TabKind::Remote(RemoteTab { host: "h".into(), id: "r".into() })),

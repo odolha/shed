@@ -1,14 +1,15 @@
 //! The nexus (`shed-nexus`): a server that links Shed workspaces to the web
 //! and Android apps. It keeps the account and the paired devices, remembers
 //! each workspace's last state, relays requests and subscriptions between
-//! connectors (`/api`) and workspaces' links (`/link`), sends push
-//! notifications and serves the web app. See `docs/architecture.md` ("The
+//! connectors (`/api`) and workspaces' links (`/link`), sends notifications
+//! (live to apps in view, else pushed) and serves the web app. See `docs/architecture.md` ("The
 //! nexus") and `docs/nexus-plan.md`.
 
 pub mod auth;
 pub mod config;
 pub mod geo;
 mod http;
+pub mod ntfy;
 mod pair;
 pub mod push;
 pub mod raw;
@@ -37,6 +38,8 @@ pub struct App {
     guard: auth::Guard,
     filter: geo::Filter,
     push: Option<push::Push>,
+    /// The ntfy topic phones read, if any.
+    ntfy: Option<ntfy::Ntfy>,
     setup: Mutex<Setup>,
     origins: Vec<String>,
     /// Proxies whose `X-Forwarded-For` is believed.
@@ -243,10 +246,16 @@ pub async fn start(config: Config) -> anyhow::Result<Server> {
             config.push_subject(),
             config.push.allow_http_endpoints,
             config.push.allow_private_endpoints,
-        )?
-        .with_logins(config.ntfy_login().into_iter().collect()))
+        )?)
     } else {
         None
+    };
+    let ntfy = match config.ntfy()? {
+        Some(topic) if config.push.enabled => {
+            tracing::info!("notifications for phones go to the ntfy topic {}", topic.url);
+            Some(ntfy::Ntfy::new(topic)?)
+        }
+        _ => None,
     };
     let filter = geo::Filter::new(&config)?;
 
@@ -282,6 +291,7 @@ pub async fn start(config: Config) -> anyhow::Result<Server> {
         argon: Arc::new(tokio::sync::Semaphore::new(ARGON_AT_ONCE)),
         filter,
         push,
+        ntfy,
         hub,
         store,
         setup: Mutex::new(setup),

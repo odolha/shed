@@ -1075,8 +1075,11 @@ export type NotificationKind =
 
 /**
  * Something that happened in a workspace that the user may want to hear
- * about away from it. The nexus pushes it to the devices that want its kind,
- * as a `http::PushPayload` (this, with the workspace's id and name added).
+ * about. While a connector is in view the nexus sends it live to the
+ * connectors (`ServerFrame::Notification`); otherwise it pushes it: to a
+ * ntfy topic if it has one (`PushInfo::ntfy_topic`), and as Web Push, a
+ * `http::PushPayload` (this, with the workspace's id and name added), to
+ * the browsers (and, without a topic, the phones) that want its kind.
  */
 export interface Notification {
 	kind: NotificationKind;
@@ -1087,6 +1090,12 @@ export interface Notification {
 	/** Where it happened, to open it from the notification. */
 	bench?: string | null;
 	tab?: string | null;
+}
+
+export interface NotificationFrame {
+	/** The workspace's id (`WorkspaceInfo::id`). */
+	workspace: string;
+	notification: Notification;
 }
 
 export interface OptionalFolder {
@@ -1200,6 +1209,12 @@ export interface PushInfo {
 	 * subscription is gone.
 	 */
 	subscribed?: boolean;
+	/**
+	 * The ntfy topic the nexus publishes to when no app is in view
+	 * (`https://ntfy.example.com/alerts-shed`), if it has one: phones
+	 * subscribe to it in the ntfy app, and get no UnifiedPush then.
+	 */
+	ntfyTopic?: string | null;
 }
 
 /**
@@ -1779,7 +1794,15 @@ export type ClientFrame =
 	| { type: "Hello", content: ClientHello }
 	| { type: "Request", content: Request }
 	| { type: "Subscribe", content: Subscribe }
-	| { type: "Unsubscribe", content: Unsubscribe };
+	| { type: "Unsubscribe", content: Unsubscribe }
+	/**
+	 * Whether the connector is in view (a browser tab shown and focused,
+	 * the Android app in the foreground). Sent after `Hello` and on every
+	 * change; a connection that never sends it counts as not in view. While
+	 * any connector is in view, notifications come to all of them live
+	 * (`ServerFrame::Notification`) and nothing is pushed.
+	 */
+	| { type: "Visible", content: boolean };
 
 /** From a workspace's link to the nexus. */
 export type LinkFrame =
@@ -1793,7 +1816,7 @@ export type LinkFrame =
 	| { type: "Response", content: Response }
 	| { type: "Event", content: EventFrame }
 	| { type: "Ended", content: Ended }
-	/** Something worth a push notification. */
+	/** Something worth a notification. */
 	| { type: "Notify", content: Notification };
 
 /** From the nexus to a link. Ids are the nexus's own. */
@@ -1831,6 +1854,11 @@ export type ServerFrame =
 	 * The connection is being closed: signed out, revoked, or the API
 	 * version is not accepted. Not to be retried as is.
 	 */
-	| { type: "Goodbye", content: ApiError };
+	| { type: "Goodbye", content: ApiError }
+	/**
+	 * A notification, live: sent to every connector while one is in view
+	 * (`ClientFrame::Visible`), instead of a push. The app shows it itself.
+	 */
+	| { type: "Notification", content: NotificationFrame };
 
 export const MAX_UPLOAD: number = 16777216;

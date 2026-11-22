@@ -31,7 +31,10 @@
 //! `GET /api/v1/session`.
 //!
 //! Pushes (Web Push to a browser, UnifiedPush to the Android app) carry a
-//! `PushPayload` as JSON, encrypted for the device.
+//! `PushPayload` as JSON, encrypted for the device. With a ntfy topic
+//! (`PushInfo::ntfy_topic`), phones get plain ntfy messages on it instead of
+//! UnifiedPush. Nothing is pushed while a connector is in view: it gets the
+//! notification live (`wire::ServerFrame::Notification`).
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -291,6 +294,11 @@ pub struct PushInfo {
     /// subscription is gone.
     #[serde(default)]
     pub subscribed: bool,
+    /// The ntfy topic the nexus publishes to when no app is in view
+    /// (`https://ntfy.example.com/alerts-shed`), if it has one: phones
+    /// subscribe to it in the ntfy app, and get no UnifiedPush then.
+    #[serde(default)]
+    pub ntfy_topic: Option<String>,
 }
 
 /// What a push carries, once decrypted: a workspace's `Notification` with

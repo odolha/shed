@@ -31,6 +31,12 @@ from its row. Its switches:
 | `MOCK_VIEW=1` | `devbox` allows viewing only |
 | `MOCK_LATENCY=300` | every answer comes that many ms late |
 | `MOCK_NO_REVIEW=1` | the AI review answers `unsupported` |
+| `MOCK_NTFY_TOPIC=https://ntfy.example.com/alerts-shed` | the nexus has a ntfy topic for phones (`PushInfo.ntfyTopic`) |
+
+Notifications follow the nexus's rule: an AI tab that starts waiting or
+finishes a turn is sent live (a toast) while the page is in view; otherwise the
+mock logs what it would push. Typing `notify` in the mock's terminal sends a
+test one.
 
 To use a real nexus instead, point `proxy.conf.json` at it (HTTPS: `"secure": true`).
 

@@ -630,6 +630,7 @@ async fn push_info(State(app): State<Arc<App>>, caller: Caller) -> Answer<PushIn
         vapid_key: app.push.as_ref().map(|p| p.public_key().to_string()),
         prefs: PushPrefs { kinds: app.store.push_kinds(&caller.device)? },
         subscribed: app.store.subscribed(&caller.device)?,
+        ntfy_topic: app.ntfy.as_ref().map(|n| n.url().to_string()),
     }))
 }
 

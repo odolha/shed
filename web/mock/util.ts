@@ -42,6 +42,8 @@ export const env = {
   viewOnly: process.env['MOCK_VIEW'] === '1',
   latency: Number(process.env['MOCK_LATENCY'] ?? 0),
   noReview: process.env['MOCK_NO_REVIEW'] === '1',
+  /** A ntfy topic the nexus would publish to (shown in the Android app's settings). */
+  ntfyTopic: process.env['MOCK_NTFY_TOPIC'] || null,
 };
 
 export const HOME = '/home/you';

@@ -48,7 +48,7 @@ flowchart LR
     link2 -- "WSS" --> nexus
     browser -- "HTTPS + WSS" --> nexus
     phone -- "WSS" --> nexus
-    nexus -- "push" --> ntfy -- "UnifiedPush" --> phone
+    nexus -- "push (ntfy topic)" --> ntfy -- "ntfy app" --> phone
 ```
 
 - **Workspace**: one keeper (`shedd`) on a machine, with its benches, and
@@ -262,14 +262,22 @@ and themes, multiple users, Claude in Chrome (shown, not controlled).
 
 ### Notifications
 
-- **Android**: UnifiedPush, self-hosted. You run ntfy (the server is
-  configurable) and install the ntfy app as the phone's distributor. Shed's app
-  registers and hands its endpoint to the nexus. Payloads are encrypted for
-  the app (RFC 8291), so the ntfy server cannot read them.
-- **Browser**: Web Push from the service worker (VAPID keys made by the nexus
-  on first start). Payloads are encrypted for the browser too.
+- **Live first**: each app says whether it is in view (`Visible`). While one
+  is, notifications come to the apps over their WebSocket and they show them
+  themselves (a toast in the web app, a banner in the Android app); nothing is
+  pushed.
+- **Android**, when no app is in view: a plain ntfy topic on a ntfy you run
+  (`[push] ntfy_url`, like other projects' alerts: `alerts-shed`), which the
+  phone reads in the ntfy app; tapping one opens the tab
+  (`shed://w/…/b/…/t/…`). Without a topic, UnifiedPush: Shed's app registers
+  through the ntfy app as distributor, and payloads are encrypted for the app
+  (RFC 8291), so the ntfy server cannot read them.
+- **Browser**, when no app is in view: Web Push from the service worker (VAPID
+  keys made by the nexus on first start). Payloads are encrypted for the
+  browser too.
 - **Events**: AI waiting for an answer, an AI turn done, a long command
-  finished, a workspace gone offline. Per device, each can be on or off.
+  finished, a workspace gone offline. Per device, each can be on or off (the
+  shared ntfy topic carries what any phone wants).
 
 ### The web app (`web/`)
 

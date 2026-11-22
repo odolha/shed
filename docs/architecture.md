@@ -789,7 +789,8 @@ apart from Shed's two processes: an axum server with a SQLite database
 (`nexus.db`, WAL, in its data folder), configured by `nexus.toml`. Workspaces'
 links dial out to it; the web and Android apps (connectors) speak only to it. It
 keeps the account, the paired devices and each workspace's last state, relays
-between connectors and links, and sends push notifications. The API's types are
+between connectors and links, and sends notifications (live to the apps in
+view, else pushed). The API's types are
 in `shed-api`; the nexus reads only their envelope.
 
 ```mermaid
@@ -799,7 +800,8 @@ flowchart LR
     link["shed link (a workspace)"] -- "WSS /link: LinkFrame ⇄ NexusFrame" --> hub
     http --> db[("nexus.db")]
     hub -- "last states" --> db
-    hub -- "Notify" --> push["Web Push"] --> service["push service / ntfy"]
+    hub -- "Notify, an app in view" --> web
+    hub -- "Notify, none in view" --> push["Web Push / ntfy topic"] --> service["push service / ntfy"]
 ```
 
 - **The account** is one user: an argon2 password hash, a TOTP secret and ten
@@ -871,33 +873,48 @@ seconds), so an offline workspace still shows as it was. `Welcome` carries the
 workspaces and their last states; `Workspaces` goes out when one comes, goes or
 is renamed.
 
-**Push.** A link's `Notify` (at most 30 a minute per workspace, title and body
-cut short), and a workspace offline for two minutes, become
-Web Push messages to every device whose subscription wants that kind. The
-payload (`shed_api::http::PushPayload`: kind, title, body, workspace and its
-name, bench, tab, so a click opens `/w/{workspace}/b/{bench}/t/{tab}`) is
-encrypted for the device (RFC 8291, `aes128gcm`) and signed with the nexus's
-VAPID key (RFC 8292), made on first start (`vapid.key`, 0600). Browsers'
-push services and UnifiedPush distributors (ntfy) take the same requests, so
-one path covers both. Subscriptions a push service no longer knows (404, 410)
-are dropped, and a device can drop its own (`push/unsubscribe`, keeping its
-choice of kinds; `PushInfo::subscribed` says whether it has one). Endpoints
-must be on public addresses (not loopback, private,
-link-local, shared or reserved, IPv4 within IPv6 included): checked on
-subscribing, and again as the push client connects, by a resolver that keeps
-only public addresses (so a name that later resolves inside does not lead
-there); `allow_private_endpoints` lifts this for a ntfy on one's network.
-A ntfy of one's own can require an account: `push.ntfy_host` (or
-`SHED_NEXUS_NTFY_HOST`) with the token in `SHED_NEXUS_NTFY_TOKEN`, sent to
-that host only as the URL's `auth` parameter (base64url of `Bearer <token>`,
-which ntfy reads), since Web Push's own `Authorization` header carries the
-VAPID signature.
+**Notifications.** A link's `Notify` (at most 30 a minute per workspace,
+title and body cut short), and a workspace offline for two minutes
+(`push.offline_after_secs`), go live when an app is in view, and are pushed
+only when none is. Each `/api` connection says whether it is in view with
+`ClientFrame::Visible` (the web app: the page shown and focused; the Android
+app: in the foreground), not in view until it says so. While any one is, the
+notification goes to every connector as `ServerFrame::Notification` (workspace
+and notification), the apps show it themselves, and nothing is pushed: you are
+looking at Shed already.
+
+With none in view it is pushed. **Phones**: with a ntfy topic
+(`push.ntfy_url`, or `SHED_NEXUS_NTFY_URL`, which wins; the token from
+`SHED_NEXUS_NTFY_TOKEN` as `Authorization: Bearer`) a plain POST to it
+(`ntfy.rs`): the text as the body (the workspace's name, the bench and tab),
+`Title`, `Priority` (4 for Claude waiting and a workspace offline, 3 for the
+rest), `Tags`, and `Click: shed://w/{workspace}/b/{bench}/t/{tab}` as far as
+known, which the Android app opens. The topic is shared, so it carries the
+kinds any signed-in phone wants (every kind with no phone); `PushInfo::ntfy_topic`
+tells the apps its URL (never the token). Without a topic, phones get Web Push
+through UnifiedPush, as below. **Browsers** (and phones without a topic) get Web
+Push messages, to every subscription that wants that kind. The payload
+(`shed_api::http::PushPayload`: kind, title, body, workspace and its name,
+bench, tab, so a click opens `/w/{workspace}/b/{bench}/t/{tab}`) is encrypted
+for the device (RFC 8291, `aes128gcm`) and signed with the nexus's VAPID key
+(RFC 8292), made on first start (`vapid.key`, 0600). Browsers' push services
+and UnifiedPush distributors (ntfy) take the same requests, so one path covers
+both. Subscriptions a push service no longer knows (404, 410) are dropped, and
+a device can drop its own (`push/unsubscribe`, keeping its choice of kinds;
+`PushInfo::subscribed` says whether it has one). Endpoints must be on public
+addresses (not loopback, private, link-local, shared or reserved, IPv4 within
+IPv6 included): checked on subscribing, and again as the push client connects,
+by a resolver that keeps only public addresses (so a name that later resolves
+inside does not lead there); `allow_private_endpoints` lifts this for a ntfy on
+one's network. The ntfy topic is the admin's own setting, so it may be on this
+host or the private network. `push.enabled = false` stops all pushing; apps in
+view still get notifications live.
 
 The modules: `config.rs` (`nexus.toml`), `store.rs` (the database and its
 numbered migrations), `auth.rs` (tokens, passwords, TOTP, recovery codes,
 lockouts), `http.rs` (routes, errors as `ApiError` with a matching status, who
 is calling, headers, the web app's files with `index.html` for any other path),
-`pair.rs`, `relay.rs`, `raw.rs`, `push.rs`, `geo.rs`. Deploying it is
+`pair.rs`, `relay.rs`, `raw.rs`, `push.rs`, `ntfy.rs`, `geo.rs`. Deploying it is
 described in [Deploying a nexus](nexus-deploy.md).
 
 ## The link

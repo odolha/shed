@@ -93,11 +93,15 @@ pub struct LoginConfig {
     pub pair_per_minute: u32,
 }
 
-/// Push notifications (Web Push; UnifiedPush endpoints such as ntfy speak it
-/// too).
+/// Notifications when no app is in view: Web Push to browsers, and to
+/// phones either a ntfy topic (`ntfy_url`) or UnifiedPush (Web Push through
+/// a distributor such as ntfy). While an app is in view, notifications go to
+/// the apps live instead, whatever these say.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PushConfig {
+    /// Off: nothing is pushed (neither Web Push nor ntfy); apps in view
+    /// still get notifications live.
     pub enabled: bool,
     /// Who push services can contact about this nexus: `mailto:…` or an
     /// `https:` URL. Default: the public URL.
@@ -109,14 +113,17 @@ pub struct PushConfig {
     /// ntfy on a private network). Off: only public addresses, checked when
     /// subscribing and again when sending.
     pub allow_private_endpoints: bool,
-    /// Your own ntfy's host name (`ntfy.example.com`), for the nexus to
-    /// publish there with an account rather than anonymously. The env var
-    /// `SHED_NEXUS_NTFY_HOST` wins over it; the account's access token
-    /// comes only from `SHED_NEXUS_NTFY_TOKEN` (kept in the service's env
-    /// file, not here). The token goes to that host only, as ntfy's `auth`
-    /// URL parameter (Web Push uses the `Authorization` header for its own
-    /// signature).
-    pub ntfy_host: Option<String>,
+    /// A ntfy topic to publish to when no app is in view
+    /// (`https://ntfy.example.com/alerts-shed`): phones subscribe to it in
+    /// the ntfy app, and get no UnifiedPush then. The env var
+    /// `SHED_NEXUS_NTFY_URL` wins over it; the publishing account's access
+    /// token comes only from `SHED_NEXUS_NTFY_TOKEN` (kept in the service's
+    /// env file, not here), sent as `Authorization: Bearer`. Which kinds go
+    /// there: those any signed-in phone wants (all, with no phone).
+    pub ntfy_url: Option<String>,
+    /// How long a workspace must stay offline before that is notified, in
+    /// seconds.
+    pub offline_after_secs: u64,
 }
 
 impl Default for Config {
@@ -151,7 +158,14 @@ impl Default for LoginConfig {
 
 impl Default for PushConfig {
     fn default() -> Self {
-        PushConfig { enabled: true, subject: None, allow_http_endpoints: false, allow_private_endpoints: false, ntfy_host: None }
+        PushConfig {
+            enabled: true,
+            subject: None,
+            allow_http_endpoints: false,
+            allow_private_endpoints: false,
+            ntfy_url: None,
+            offline_after_secs: 120,
+        }
     }
 }
 
@@ -195,10 +209,8 @@ impl Config {
         {
             anyhow::bail!("push.subject must be a mailto: or https: URL");
         }
-        if let Some(host) = &self.push.ntfy_host
-            && (host.trim().is_empty() || host.contains(['/', ':', '@']))
-        {
-            anyhow::bail!("push.ntfy_host must be a host name, like ntfy.example.com");
+        if let Some(url) = &self.push.ntfy_url {
+            check_ntfy_url(url).context("push.ntfy_url")?;
         }
         if self.session_days == 0 {
             anyhow::bail!("session_days must be at least 1");
@@ -244,19 +256,24 @@ impl Config {
         Vec::new()
     }
 
-    /// The ntfy to publish to with an account, and its token: the host from
-    /// `SHED_NEXUS_NTFY_HOST` or `push.ntfy_host`, the token from
-    /// `SHED_NEXUS_NTFY_TOKEN`. `None` without both (said in the log).
-    pub fn ntfy_login(&self) -> Option<(String, String)> {
-        let env = |k: &str| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-        let host = env("SHED_NEXUS_NTFY_HOST").or_else(|| self.push.ntfy_host.clone())?;
-        match env("SHED_NEXUS_NTFY_TOKEN") {
-            Some(token) => Some((host.trim().to_ascii_lowercase(), token)),
-            None => {
-                tracing::warn!(host = %host, "ntfy host set without SHED_NEXUS_NTFY_TOKEN: pushes there go without an account (fine only if it lets anyone publish to up* topics)");
-                None
-            }
+    /// The ntfy topic to publish to, and the token to publish with: the URL
+    /// from `SHED_NEXUS_NTFY_URL` or `push.ntfy_url`, the token from
+    /// `SHED_NEXUS_NTFY_TOKEN`.
+    pub fn ntfy(&self) -> anyhow::Result<Option<NtfyTopic>> {
+        self.ntfy_with(|k| std::env::var(k).ok())
+    }
+
+    /// `ntfy`, with the environment from `env`.
+    pub fn ntfy_with(&self, env: impl Fn(&str) -> Option<String>) -> anyhow::Result<Option<NtfyTopic>> {
+        let env = |k: &str| env(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let Some(url) = env("SHED_NEXUS_NTFY_URL").or_else(|| self.push.ntfy_url.clone()) else { return Ok(None) };
+        let url = url.trim().to_string();
+        check_ntfy_url(&url).context("the ntfy topic (SHED_NEXUS_NTFY_URL or push.ntfy_url)")?;
+        let token = env("SHED_NEXUS_NTFY_TOKEN");
+        if token.is_none() {
+            tracing::warn!(url = %url, "ntfy topic without SHED_NEXUS_NTFY_TOKEN (fine only if the topic allows anonymous publishing)");
         }
+        Ok(Some(NtfyTopic { url, token }))
     }
 
     /// Who push services can contact.
@@ -266,6 +283,30 @@ impl Config {
             None => self.public_base().to_string(),
         }
     }
+}
+
+/// A ntfy topic and the token to publish to it with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NtfyTopic {
+    /// `https://ntfy.example.com/alerts-shed`.
+    pub url: String,
+    pub token: Option<String>,
+}
+
+/// A topic's URL: `http(s)://host[:port]/topic`, no user or password in it
+/// (the token goes in a header, and the URL is shown to signed-in apps).
+fn check_ntfy_url(url: &str) -> anyhow::Result<()> {
+    let uri: axum::http::Uri = url.parse().map_err(|_| anyhow::anyhow!("{url:?} is not a URL"))?;
+    if !matches!(uri.scheme_str(), Some("https" | "http")) || uri.host().is_none() {
+        anyhow::bail!("{url:?} must be an https:// (or http://) URL");
+    }
+    if uri.authority().is_some_and(|a| a.as_str().contains('@')) {
+        anyhow::bail!("{url:?}: no user or password in the URL (the token comes from SHED_NEXUS_NTFY_TOKEN)");
+    }
+    if uri.path().trim_matches('/').is_empty() {
+        anyhow::bail!("{url:?} must name a topic, like https://ntfy.example.com/alerts-shed");
+    }
+    Ok(())
 }
 
 /// A range (`10.0.0.0/8`), or one address (`10.0.0.5`).
@@ -336,6 +377,37 @@ mod tests {
         assert_eq!(listed.proxies().len(), 2);
         let bad: Config = toml::from_str("trusted_proxies = [\"nope\"]").unwrap();
         assert!(bad.check().is_err());
+    }
+
+    #[test]
+    fn the_ntfy_topic_comes_from_the_env_first() {
+        let config: Config = toml::from_str("[push]\nntfy_url = \"https://ntfy.example.com/alerts-shed\"").unwrap();
+        config.check().unwrap();
+        let none = |_: &str| None;
+        assert_eq!(
+            config.ntfy_with(none).unwrap(),
+            Some(NtfyTopic { url: "https://ntfy.example.com/alerts-shed".into(), token: None })
+        );
+        let env = |k: &str| match k {
+            "SHED_NEXUS_NTFY_URL" => Some("https://ntfy.other.org/alerts-x ".into()),
+            "SHED_NEXUS_NTFY_TOKEN" => Some("tk_secret".into()),
+            _ => None,
+        };
+        assert_eq!(
+            config.ntfy_with(env).unwrap(),
+            Some(NtfyTopic { url: "https://ntfy.other.org/alerts-x".into(), token: Some("tk_secret".into()) })
+        );
+        // A token alone is no topic; an empty variable does not count.
+        let token_only = |k: &str| (k == "SHED_NEXUS_NTFY_TOKEN").then(|| "tk".to_string());
+        assert_eq!(Config::default().ntfy_with(token_only).unwrap(), None);
+        let empty = |k: &str| (k == "SHED_NEXUS_NTFY_URL").then(String::new);
+        assert_eq!(config.ntfy_with(empty).unwrap().unwrap().url, "https://ntfy.example.com/alerts-shed");
+        let bad = |k: &str| (k == "SHED_NEXUS_NTFY_URL").then(|| "https://me:pw@ntfy.example.com/x".to_string());
+        assert!(config.ntfy_with(bad).is_err());
+        for url in ["ntfy.example.com/x", "https://ntfy.example.com/", "ftp://ntfy.example.com/x"] {
+            let config: Config = toml::from_str(&format!("[push]\nntfy_url = \"{url}\"")).unwrap();
+            assert!(config.check().is_err(), "{url}");
+        }
     }
 
     #[test]

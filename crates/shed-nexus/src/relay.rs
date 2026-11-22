@@ -30,7 +30,8 @@ use axum::response::{IntoResponse, Response};
 use serde_json::value::RawValue;
 use shed_api::http::DeviceKind;
 use shed_api::wire::{
-    ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationKind, Policy, Unsubscribe, WorkspaceInfo,
+    ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationFrame, NotificationKind, Policy, Unsubscribe,
+    WorkspaceInfo,
 };
 use shed_api::{API_VERSION, ApiError, ErrorCode, MIN_API_VERSION};
 use tokio::sync::{Notify, mpsc};
@@ -51,11 +52,9 @@ const HELLO_WAIT: Duration = Duration::from_secs(10);
 /// `IDLE` is taken for dead.
 const PING: Duration = Duration::from_secs(30);
 const IDLE: Duration = Duration::from_secs(90);
-/// Notifications a workspace may push: this many a minute, this many at once.
+/// Notifications a workspace may send: this many a minute, this many at once.
 const NOTIFY_PER_MINUTE: u32 = 30;
 const NOTIFY_BURST: u32 = 10;
-/// A workspace must stay offline this long before the push says so.
-const OFFLINE_PUSH_AFTER: Duration = Duration::from_secs(120);
 
 // --------------------------------------------------------------- the hub
 
@@ -101,6 +100,8 @@ struct Pending {
 struct Connector {
     device: String,
     out: Outbox,
+    /// In view, as it last said (`Visible`).
+    visible: bool,
     /// Its subscription id → (workspace, nexus id).
     subs: HashMap<u32, (String, u32)>,
 }
@@ -209,7 +210,7 @@ impl Hub {
         !inner.links.contains_key(workspace) && inner.left.get(workspace) == Some(&conn)
     }
 
-    /// Handles a frame from a link; a notification to push comes back.
+    /// Handles a frame from a link; a notification to send comes back.
     fn link_frame(&self, workspace: &str, conn: u64, frame: RawLinkFrame) -> Option<Notification> {
         let mut inner = self.lock();
         let inner = &mut *inner;
@@ -254,7 +255,7 @@ impl Hub {
         let mut inner = self.lock();
         inner.next_conn += 1;
         let conn = inner.next_conn;
-        inner.connectors.insert(conn, Connector { device: out.device.clone(), out, subs: HashMap::new() });
+        inner.connectors.insert(conn, Connector { device: out.device.clone(), out, visible: false, subs: HashMap::new() });
         conn
     }
 
@@ -323,7 +324,27 @@ impl Hub {
         }
     }
 
+    fn set_visible(&self, conn: u64, visible: bool) {
+        if let Some(connector) = self.lock().connectors.get_mut(&conn) {
+            connector.visible = visible;
+        }
+    }
+
     // ---- everyone
+
+    /// Sends a notification live to every connector, if one is in view;
+    /// false (nothing sent) when none is.
+    pub fn notify_live(&self, frame: NotificationFrame) -> bool {
+        let inner = self.lock();
+        if !inner.connectors.values().any(|c| c.visible) {
+            return false;
+        }
+        let text = Utf8Bytes::from(RawServerFrame::Notification(frame).to_text());
+        for connector in inner.connectors.values() {
+            connector.out.send(text.clone());
+        }
+        true
+    }
 
     /// Sends a frame to every connector.
     fn broadcast(&self, frame: RawServerFrame) {
@@ -677,18 +698,15 @@ async fn run_link(app: Arc<App>, mut socket: WebSocket, device: DeviceRow) {
         let _ = app.store.touch_device(&workspace, &device.address, device.country.as_deref(), now());
         flush_states(&app);
         announce(&app);
-        offline_push(&app, workspace, device.name, conn);
+        offline_notify(&app, workspace, device.name, conn);
     }
 }
 
-/// Pushes "went offline" if the workspace has not come back after a while.
-fn offline_push(app: &Arc<App>, workspace: String, name: String, conn: u64) {
-    if app.push.is_none() {
-        return;
-    }
+/// Notifies "went offline" if the workspace has not come back after a while.
+fn offline_notify(app: &Arc<App>, workspace: String, name: String, conn: u64) {
     let app = app.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(OFFLINE_PUSH_AFTER).await;
+        tokio::time::sleep(Duration::from_secs(app.config.push.offline_after_secs)).await;
         if app.hub.still_gone(&workspace, conn) && app.store.device_valid(&workspace, now()).unwrap_or(false) {
             let notification = Notification {
                 kind: NotificationKind::WorkspaceOffline,
@@ -773,5 +791,6 @@ fn connector_frame(app: &App, conn: u64, frame: RawClientFrame) {
             }
         }
         RawClientFrame::Unsubscribe(Unsubscribe { id }) => app.hub.unsubscribe(conn, id),
+        RawClientFrame::Visible(visible) => app.hub.set_visible(conn, visible),
     }
 }
