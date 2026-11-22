@@ -84,8 +84,6 @@ allow_http_endpoints = false
 # Accept push endpoints on private, loopback or link-local addresses (a ntfy
 # on a private network). Off: public addresses only.
 allow_private_endpoints = false
-# An account to publish with at your own ntfy (so it needs no anonymous
-# publishing to up* topics); the token goes to that host only.
-# [[push.logins]]
-# host = "ntfy.example.com"
-# token_file = "/etc/shed-nexus/ntfy-token"
+# Your own ntfy, to publish to with an account (no anonymous publishing to up*
+# topics). The token: SHED_NEXUS_NTFY_TOKEN in /etc/shed-nexus.env, never here.
+# ntfy_host = "ntfy.example.com"

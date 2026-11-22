@@ -109,24 +109,14 @@ pub struct PushConfig {
     /// ntfy on a private network). Off: only public addresses, checked when
     /// subscribing and again when sending.
     pub allow_private_endpoints: bool,
-    /// Accounts the nexus publishes with, by the push server's host: for a
-    /// ntfy of your own that lets no one publish without one. The token goes
-    /// to that host only, in the URL's `auth` parameter (Web Push uses the
-    /// `Authorization` header for its own signature).
-    pub logins: Vec<PushLogin>,
-}
-
-/// An account at a push server (a ntfy access token, `tk_…`).
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PushLogin {
-    /// The push server's host name, as in its endpoints: `ntfy.example.com`.
-    pub host: String,
-    /// The token itself, or (better, kept out of this file) a file holding it.
-    #[serde(default)]
-    pub token: Option<String>,
-    #[serde(default)]
-    pub token_file: Option<PathBuf>,
+    /// Your own ntfy's host name (`ntfy.example.com`), for the nexus to
+    /// publish there with an account rather than anonymously. The env var
+    /// `SHED_NEXUS_NTFY_HOST` wins over it; the account's access token
+    /// comes only from `SHED_NEXUS_NTFY_TOKEN` (kept in the service's env
+    /// file, not here). The token goes to that host only, as ntfy's `auth`
+    /// URL parameter (Web Push uses the `Authorization` header for its own
+    /// signature).
+    pub ntfy_host: Option<String>,
 }
 
 impl Default for Config {
@@ -161,7 +151,7 @@ impl Default for LoginConfig {
 
 impl Default for PushConfig {
     fn default() -> Self {
-        PushConfig { enabled: true, subject: None, allow_http_endpoints: false, allow_private_endpoints: false, logins: Vec::new() }
+        PushConfig { enabled: true, subject: None, allow_http_endpoints: false, allow_private_endpoints: false, ntfy_host: None }
     }
 }
 
@@ -205,13 +195,10 @@ impl Config {
         {
             anyhow::bail!("push.subject must be a mailto: or https: URL");
         }
-        for login in &self.push.logins {
-            if login.host.trim().is_empty() || login.host.contains(['/', ':', '@']) {
-                anyhow::bail!("push.logins: host must be a host name, like ntfy.example.com");
-            }
-            if login.token.is_some() == login.token_file.is_some() {
-                anyhow::bail!("push.logins for {}: give either token or token_file", login.host);
-            }
+        if let Some(host) = &self.push.ntfy_host
+            && (host.trim().is_empty() || host.contains(['/', ':', '@']))
+        {
+            anyhow::bail!("push.ntfy_host must be a host name, like ntfy.example.com");
         }
         if self.session_days == 0 {
             anyhow::bail!("session_days must be at least 1");
@@ -257,23 +244,19 @@ impl Config {
         Vec::new()
     }
 
-    /// The push servers' hosts and the tokens to publish with (files read).
-    pub fn push_logins(&self) -> anyhow::Result<Vec<(String, String)>> {
-        self.push
-            .logins
-            .iter()
-            .map(|l| {
-                let token = match (&l.token, &l.token_file) {
-                    (Some(t), _) => t.trim().to_string(),
-                    (None, Some(f)) => std::fs::read_to_string(f).with_context(|| format!("push.logins: reading {}", f.display()))?.trim().to_string(),
-                    (None, None) => String::new(),
-                };
-                if token.is_empty() {
-                    anyhow::bail!("push.logins for {}: the token is empty", l.host);
-                }
-                Ok((l.host.trim().to_ascii_lowercase(), token))
-            })
-            .collect()
+    /// The ntfy to publish to with an account, and its token: the host from
+    /// `SHED_NEXUS_NTFY_HOST` or `push.ntfy_host`, the token from
+    /// `SHED_NEXUS_NTFY_TOKEN`. `None` without both (said in the log).
+    pub fn ntfy_login(&self) -> Option<(String, String)> {
+        let env = |k: &str| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let host = env("SHED_NEXUS_NTFY_HOST").or_else(|| self.push.ntfy_host.clone())?;
+        match env("SHED_NEXUS_NTFY_TOKEN") {
+            Some(token) => Some((host.trim().to_ascii_lowercase(), token)),
+            None => {
+                tracing::warn!(host = %host, "ntfy host set without SHED_NEXUS_NTFY_TOKEN: pushes there go without an account (fine only if it lets anyone publish to up* topics)");
+                None
+            }
+        }
     }
 
     /// Who push services can contact.

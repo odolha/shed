@@ -244,7 +244,7 @@ pub async fn start(config: Config) -> anyhow::Result<Server> {
             config.push.allow_http_endpoints,
             config.push.allow_private_endpoints,
         )?
-        .with_logins(config.push_logins()?))
+        .with_logins(config.ntfy_login().into_iter().collect()))
     } else {
         None
     };

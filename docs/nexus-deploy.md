@@ -208,38 +208,43 @@ auth-file: "/var/lib/ntfy/user.db"
 auth-default-access: "deny-all"
 ```
 
-Give the nexus an account to publish to UnifiedPush topics, and the phone one
-to read them; nobody else can write (`deny-all`):
+Give the nexus an account to publish to UnifiedPush topics (one user per
+publisher, write-only, an access token), and the phone one to read them;
+nobody else can write (`deny-all`):
 
 ```sh
-sudo ntfy user add shed-nexus                   # its password is not used: the nexus uses a token
-sudo ntfy access shed-nexus 'up*' write-only
-sudo ntfy token add shed-nexus                  # prints tk_…
+sudo ntfy user add shed-bot                     # its password is not used: the nexus uses a token
+sudo ntfy access shed-bot 'up*' write-only
+sudo ntfy token add shed-bot                    # prints tk_…
 sudo ntfy user add phone                        # (if not there yet) the phone signs in with it
 sudo ntfy access phone 'up*' read-only
 sudo systemctl enable --now ntfy
 ```
 
-Keep the token in a file only the nexus's user reads, and name it in
-`nexus.toml`:
+The token goes in the service's env file, readable by root only (systemd reads
+it for the nexus), never in `nexus.toml` or git:
 
 ```sh
-echo 'tk_…' | sudo tee /etc/shed-nexus/ntfy-token >/dev/null
-sudo chown shed-nexus: /etc/shed-nexus/ntfy-token && sudo chmod 600 /etc/shed-nexus/ntfy-token
+sudo install -m 600 /dev/null /etc/shed-nexus.env
+echo 'SHED_NEXUS_NTFY_TOKEN=tk_…' | sudo tee -a /etc/shed-nexus.env >/dev/null
+sudo systemctl restart shed-nexus
 ```
 
+and the host in `nexus.toml` (or `SHED_NEXUS_NTFY_HOST` in the same env file,
+which wins):
+
 ```toml
-[[push.logins]]
-host = "ntfy.example.com"
-token_file = "/etc/shed-nexus/ntfy-token"
+[push]
+ntfy_host = "ntfy.example.com"
 ```
 
 Web Push signs each request in its `Authorization` header, so the nexus sends
-the token as ntfy's `auth` URL parameter, to that host only. (Without
-`push.logins`, a ntfy of your own would have to let anyone publish to `up*`
-topics, `ntfy access everyone 'up*' write-only`: UnifiedPush's usual set-up,
-safe enough since the topics' names are long and random and only the phone can
-decrypt what is sent, but not needed when you run both.)
+the token as ntfy's `auth` URL parameter, to that host only. Without a token,
+a ntfy of your own would have to let anyone publish to `up*` topics (`ntfy
+access everyone 'up*' write-only`, UnifiedPush's usual set-up: safe enough, as
+the topics' names are long and random and only the phone can decrypt what is
+sent, but not needed when you run both). The log says when `ntfy_host` is set
+without a token.
 
 Put it behind nginx like the nexus (its own `server_name ntfy.example.com`,
 `proxy_pass http://127.0.0.1:2586`, the WebSocket headers on `location /`,

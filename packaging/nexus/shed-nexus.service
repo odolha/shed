@@ -5,6 +5,7 @@
 #   sudo install -m 0755 shed-nexus /usr/local/bin/
 #   sudo install -d -m 0755 /etc/shed-nexus
 #   sudo install -m 0644 nexus.toml /etc/shed-nexus/
+#   sudo install -m 0600 /dev/null /etc/shed-nexus.env   # secrets, if any (ntfy token)
 #   sudo install -m 0644 shed-nexus.service /etc/systemd/system/
 #   sudo systemctl enable --now shed-nexus
 #   sudo cat /var/lib/shed-nexus/setup-link.txt   # the setup link, until the account exists
@@ -20,6 +21,8 @@ User=shed-nexus
 Group=shed-nexus
 ExecStart=/usr/local/bin/shed-nexus --config /etc/shed-nexus/nexus.toml
 Environment=SHED_LOG=info
+# Secrets (SHED_NEXUS_NTFY_TOKEN), root-only (0600); optional.
+EnvironmentFile=-/etc/shed-nexus.env
 Restart=on-failure
 RestartSec=5
 # Stopping writes the workspaces' last states first.
