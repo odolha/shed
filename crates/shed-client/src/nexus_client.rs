@@ -86,20 +86,20 @@ pub fn configured_ca_file() -> Option<std::path::PathBuf> {
 }
 
 /// The largest message read: as the nexus relays.
-const MAX_MESSAGE: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_MESSAGE: usize = 32 * 1024 * 1024;
 /// Tunnel data goes in pieces of at most this size.
 const CHUNK: usize = 256 * 1024;
 /// How long connecting, the nexus's welcome and the tunnel may take.
 const WAIT: Duration = Duration::from_secs(15);
 /// A ping this often keeps proxies from closing a quiet connection.
-const PING_EVERY: Duration = Duration::from_secs(30);
+pub(crate) const PING_EVERY: Duration = Duration::from_secs(30);
 /// The tunnel's id (one tunnel per connection).
 const TUNNEL: u32 = 1;
 
-type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+pub(crate) type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Connects to the nexus's `/api` as this desktop and waits for its welcome.
-async fn open_api(url: &str, token: &str, ca_file: Option<&Path>) -> anyhow::Result<(Socket, shed_api::wire::Welcome)> {
+pub(crate) async fn open_api(url: &str, token: &str, ca_file: Option<&Path>) -> anyhow::Result<(Socket, shed_api::wire::Welcome)> {
     let ws_url = nexus_tls::api_ws_url(url)?;
     let tls = nexus_tls::client_config(ca_file)?;
     let mut request = ws_url.as_str().into_client_request().context("the nexus's address")?;
@@ -150,7 +150,7 @@ async fn next_server_frame(ws: &mut Socket) -> anyhow::Result<ServerFrame> {
     }
 }
 
-fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+pub(crate) fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread().enable_all().build().context("starting a runtime")
 }
 

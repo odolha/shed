@@ -31,6 +31,7 @@ shed-git.workspace = true
 shed-review.workspace = true
 shed-client.workspace = true
 shed-link.workspace = true
+shed-api.workspace = true
 serde_json.workspace = true
 base64.workspace = true
 # Must match the version gpui-ce uses, for window icons.

@@ -20,6 +20,7 @@ use gpui::{AppContext, AsyncApp, Context, Entity, FocusHandle, TitlebarOptions, 
 use shed_model::config::{Config, FileWatch};
 use shed_desktop::{BenchIdentity, Desktop};
 use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed, Tab, TabId};
+use shed_client::nexus_api::RemoteWorkspace;
 use shed_proto::{BenchRef, ClientKind, ClientMsg, Frame, KeeperMsg, ShowTarget};
 use tracing::{error, warn};
 
@@ -119,6 +120,9 @@ pub struct AppState {
     shown_before: HashMap<Workspace, Vec<BenchId>>,
     /// Shed is closing.
     quitting: bool,
+    /// Another workspace's calls and topics through the nexus (its files,
+    /// Git, logbook, AI sessions), while it is shown.
+    remote_api: Option<RemoteWorkspace>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -171,6 +175,7 @@ impl AppState {
             local_benches: 0,
             shown_before: HashMap::new(),
             quitting: false,
+            remote_api: None,
         }
     }
 
@@ -178,6 +183,12 @@ impl AppState {
     /// read from this machine's disk does not belong to it.
     pub fn is_remote(&self) -> bool {
         self.workspace.is_remote()
+    }
+
+    /// The shown workspace's calls through the nexus, when it is another
+    /// workspace: what views read in place of this machine's disk.
+    pub fn remote(&self) -> Option<RemoteWorkspace> {
+        self.remote_api.clone()
     }
 
     /// Reads frames from the keeper until it goes away.
@@ -299,13 +310,15 @@ impl AppState {
                 .spawn(async move {
                     let remote = shed_client::keeper_conn::connect_remote(&sign_in.url, &sign_in.token, &id, ClientKind::Window)?;
                     let standby = if need_standby { Some(shed_client::keeper_conn::connect(ClientKind::Window, true)?) } else { None };
-                    anyhow::Ok((remote, standby))
+                    // Its files, Git and the like come as calls (connecting when first needed).
+                    let api = shed_client::nexus_api::NexusApi::new(&sign_in, shed_client::nexus_client::configured_ca_file()).workspace(&id);
+                    anyhow::Ok((remote, standby, api))
                 })
                 .await;
             this.update(cx, |state, cx| {
                 state.switching = None;
                 match connected {
-                    Ok((remote, standby)) => state.connected_to(target, remote, standby, cx),
+                    Ok((remote, standby, api)) => state.connected_to(target, remote, standby, Some(api), cx),
                     Err(e) => {
                         state.notice = Some(format!("Cannot show {name}: {e:#}"));
                         cx.notify();
@@ -319,8 +332,9 @@ impl AppState {
 
     /// Connected to another workspace (and, coming from this PC, to its
     /// keeper as the standby): shows it.
-    fn connected_to(&mut self, target: Workspace, remote: Connection, standby: Option<Connection>, cx: &mut Context<Self>) {
+    fn connected_to(&mut self, target: Workspace, remote: Connection, standby: Option<Connection>, api: Option<RemoteWorkspace>, cx: &mut Context<Self>) {
         self.leave_workspace(cx);
+        self.remote_api = api;
         if let Some((standby, rx)) = standby {
             let generation = self.next_generation();
             standby.send_msg(ClientMsg::Status);
@@ -396,6 +410,7 @@ impl AppState {
         self.identities.clear();
         self.pending_reveal = None;
         self.tree = Shed::default();
+        self.remote_api = None;
         cx.set_global(PegboardData(Default::default()));
         if cx.has_global::<AiLimits>() {
             cx.remove_global::<AiLimits>();
@@ -1493,7 +1508,7 @@ mod tests {
         let mut remote = Fake::new();
         let mut standby = Fake::new();
         let target = Workspace::Remote { id: "w2".into(), name: "tower".into() };
-        state.update(cx, |s, cx| s.connected_to(target.clone(), remote.connection(), Some(standby.connection()), cx));
+        state.update(cx, |s, cx| s.connected_to(target.clone(), remote.connection(), Some(standby.connection()), None, cx));
         cx.run_until_parked();
         state.read_with(cx, |s, _| {
             assert!(s.is_remote() && s.tree.benches.is_empty() && !s.has_window(here_id));

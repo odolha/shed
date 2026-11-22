@@ -138,6 +138,8 @@ fn status(repo: &Repo, scope: &GitScope) -> Result<api::GitStatus, ApiError> {
             })
             .collect(),
         outgoing: outgoing.iter().map(commit).collect(),
+        root: Some(repo.root.to_string_lossy().into_owned()),
+        head: Some(s.branch.oid.clone()).filter(|o| !o.is_empty() && o != "(initial)"),
     })
 }
 

@@ -1090,7 +1090,12 @@ data class GitStatus (
 	val operation: String? = null,
 	val files: List<GitFile>,
 	/// Commits not pushed yet.
-	val outgoing: List<Commit>? = null
+	val outgoing: List<Commit>? = null,
+	/// The repository's folder, absolute (on the workspace): files' paths
+	/// are relative to it. Missing from older workspaces.
+	val root: String? = null,
+	/// The commit checked out (its hash, shortened), if any.
+	val head: String? = null
 )
 
 @Serializable

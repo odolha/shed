@@ -891,6 +891,13 @@ export interface GitStatus {
 	files: GitFile[];
 	/** Commits not pushed yet. */
 	outgoing?: Commit[];
+	/**
+	 * The repository's folder, absolute (on the workspace): files' paths
+	 * are relative to it. Missing from older workspaces.
+	 */
+	root?: string | null;
+	/** The commit checked out (its hash, shortened), if any. */
+	head?: string | null;
 }
 
 export type InputItem =

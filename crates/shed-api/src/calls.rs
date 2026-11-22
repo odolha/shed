@@ -946,6 +946,13 @@ pub struct GitStatus {
     /// Commits not pushed yet.
     #[serde(default)]
     pub outgoing: Vec<Commit>,
+    /// The repository's folder, absolute (on the workspace): files' paths
+    /// are relative to it. Missing from older workspaces.
+    #[serde(default)]
+    pub root: Option<String>,
+    /// The commit checked out (its hash, shortened), if any.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 #[typeshare]

@@ -39,6 +39,8 @@ mod project_view;
 #[cfg(feature = "gui")]
 mod prompt;
 #[cfg(feature = "gui")]
+mod workspace_api;
+#[cfg(feature = "gui")]
 mod scrollbar;
 #[cfg(all(feature = "gui", target_os = "linux"))]
 mod selection;

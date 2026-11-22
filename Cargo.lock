@@ -7555,6 +7555,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shed-ai",
+ "shed-api",
  "shed-client",
  "shed-desktop",
  "shed-emu",
