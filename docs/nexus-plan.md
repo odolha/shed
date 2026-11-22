@@ -206,7 +206,8 @@ hardened instead:
   machine). Waiting requests are capped per address, the oldest making way.
 - **Devices** are listed with last seen time and address and can be revoked.
   Revoking closes their connections at once. Changing the password ends every
-  session and device token but the current one.
+  session and device token (browsers, phones and desktops) but the current
+  one; paired workspaces keep theirs.
 - **Asking for TOTP again** for pairing, revoking, and account changes; wrong
   codes there are counted per device, apart from sign-ins.
 - **Rate limiting and lockout** on sign-in, per address (IPv4, or IPv6 /64),

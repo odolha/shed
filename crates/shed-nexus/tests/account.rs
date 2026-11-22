@@ -133,14 +133,20 @@ async fn cookie_sessions_need_the_csrf_token_for_changes() {
     nexus.post_err("/api/v1/devices/rename", &rename, &wrong, StatusCode::FORBIDDEN).await;
     let _: serde_json::Value = nexus.post("/api/v1/devices/rename", &rename, &account.browser).await;
 
-    // A new password ends the other sessions but this one.
+    // A new password ends the other sessions but this one: phones and
+    // desktops too, while paired workspaces stay.
     let phone = Auth::Bearer(phone_token(&nexus, &mut account).await);
+    let desktop = Auth::Bearer(desktop_token(&nexus, &mut account).await);
+    let (workspace, _) = pair(&nexus, &mut account, "box").await;
     let change = ChangePassword { old: PASSWORD.into(), new: "another long password".into(), totp: "000000".into() };
     nexus.post_err("/api/v1/password", &change, &account.browser, StatusCode::FORBIDDEN).await;
     let change = ChangePassword { totp: account.auth.code().await, ..change };
     let _: serde_json::Value = nexus.post("/api/v1/password", &change, &account.browser).await;
     assert_eq!(nexus.get_raw("/api/v1/devices", &phone).await.status(), StatusCode::UNAUTHORIZED);
-    let _: Vec<Device> = nexus.get("/api/v1/devices", &account.browser).await;
+    assert_eq!(nexus.get_raw("/api/v1/devices", &desktop).await.status(), StatusCode::UNAUTHORIZED);
+    let devices: Vec<Device> = nexus.get("/api/v1/devices", &account.browser).await;
+    assert!(devices.iter().any(|d| d.id == workspace), "the workspace stays paired");
+    assert_eq!(devices.len(), 2);
 
     // Signing out ends the session.
     let answer = nexus.post_raw("/api/v1/logout", &serde_json::json!({}), &account.browser).await;

@@ -351,12 +351,13 @@ impl Store {
         Ok(changed == 1)
     }
 
-    /// Revokes every browser and phone but `keep`; returns their ids.
+    /// Revokes every browser, phone and desktop but `keep` (the devices a
+    /// person signed in on, not paired workspaces); returns their ids.
     pub fn revoke_people_devices_but(&self, keep: &str) -> anyhow::Result<Vec<String>> {
         let ids: Vec<String> = {
             let conn = self.lock();
             let mut stmt = conn.prepare(
-                "SELECT id FROM devices WHERE revoked = 0 AND kind IN ('browser', 'phone') AND id != ?1",
+                "SELECT id FROM devices WHERE revoked = 0 AND kind IN ('browser', 'phone', 'desktop') AND id != ?1",
             )?;
             stmt.query_map(params![keep], |r| r.get(0))?.collect::<Result<_, _>>()?
         };
