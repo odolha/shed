@@ -37,6 +37,9 @@ pub struct Push {
     allow_http: bool,
     allow_private: bool,
     client: reqwest::Client,
+    /// Push servers the nexus publishes to with an account: host, and the
+    /// `auth` parameter (base64url of `Bearer <token>`) added to their URLs.
+    logins: Vec<(String, String)>,
 }
 
 /// Whether `ip` is on the public internet: not loopback, private (RFC 1918,
@@ -154,7 +157,23 @@ impl Push {
             builder = builder.dns_resolver(PublicOnly);
         }
         let client = builder.build()?;
-        Ok(Push { key, public, subject, allow_http, allow_private, client })
+        Ok(Push { key, public, subject, allow_http, allow_private, client, logins: Vec::new() })
+    }
+
+    /// Publishes to these push servers (host, token) with their accounts.
+    pub fn with_logins(mut self, logins: Vec<(String, String)>) -> Push {
+        self.logins = logins.into_iter().map(|(host, token)| (host, URL_SAFE_NO_PAD.encode(format!("Bearer {token}")))).collect();
+        self
+    }
+
+    /// The endpoint to send to: with the account's `auth` parameter when the
+    /// nexus has one for its host (to that host only).
+    fn endpoint_for(&self, endpoint: &str) -> String {
+        let host = host_port(endpoint).map(|(h, _)| h.to_ascii_lowercase());
+        match self.logins.iter().find(|(h, _)| Some(h) == host.as_ref()) {
+            Some((_, auth)) => format!("{endpoint}{}auth={auth}", if endpoint.contains('?') { '&' } else { '?' }),
+            None => endpoint.to_string(),
+        }
     }
 
     pub fn public_key(&self) -> &str {
@@ -202,7 +221,7 @@ impl Push {
         urgent: bool,
     ) -> anyhow::Result<axum::http::Request<Vec<u8>>> {
         let (public, auth) = keys(sub).map_err(|e| anyhow::anyhow!(e))?;
-        let endpoint = sub.endpoint.parse().context("push endpoint")?;
+        let endpoint = self.endpoint_for(&sub.endpoint).parse().context("push endpoint")?;
         let mut request = WebPushBuilder::new(endpoint, public, auth)
             .with_valid_duration(Duration::from_secs(12 * 3600))
             .with_vapid(&self.key, &self.subject)
@@ -366,6 +385,28 @@ mod tests {
         }
         assert_eq!(host_port("https://[::1]:8443/x"), Some(("::1".into(), 8443)));
         assert_eq!(host_port("http://ntfy.lan/x"), Some(("ntfy.lan".into(), 80)));
+    }
+
+    #[test]
+    fn the_account_goes_to_its_host_only() {
+        crate::install_crypto();
+        let push = Push::with_key(ES256KeyPair::generate(), "mailto:admin@example.com".into(), false, false)
+            .unwrap()
+            .with_logins(vec![("ntfy.example.com".into(), "tk_secret".into())]);
+        let auth = URL_SAFE_NO_PAD.encode("Bearer tk_secret");
+        assert_eq!(push.endpoint_for("https://ntfy.example.com/upAbC123?up=1"), format!("https://ntfy.example.com/upAbC123?up=1&auth={auth}"));
+        assert_eq!(push.endpoint_for("https://NTFY.example.com/upX"), format!("https://NTFY.example.com/upX?auth={auth}"));
+        assert_eq!(push.endpoint_for("https://push.example.org/send/abc"), "https://push.example.org/send/abc");
+        assert_eq!(push.endpoint_for("https://ntfy.example.com.evil.org/upX"), "https://ntfy.example.com.evil.org/upX");
+        // The request carries it, with the VAPID signature in its header as before.
+        let sub = PushSubscribe {
+            endpoint: "https://ntfy.example.com/upAbC123?up=1".into(),
+            p256dh: URL_SAFE_NO_PAD.encode(SecretKey::random(&mut web_push_native::p256::elliptic_curve::rand_core::OsRng).public_key().to_encoded_point(false).as_bytes()),
+            auth: URL_SAFE_NO_PAD.encode([7u8; 16]),
+        };
+        let request = push.request(&sub, b"hi", false).unwrap();
+        assert!(request.uri().to_string().ends_with(&format!("auth={auth}")), "{}", request.uri());
+        assert!(request.headers()["Authorization"].to_str().unwrap().starts_with("vapid"));
     }
 
     #[tokio::test]

@@ -109,6 +109,24 @@ pub struct PushConfig {
     /// ntfy on a private network). Off: only public addresses, checked when
     /// subscribing and again when sending.
     pub allow_private_endpoints: bool,
+    /// Accounts the nexus publishes with, by the push server's host: for a
+    /// ntfy of your own that lets no one publish without one. The token goes
+    /// to that host only, in the URL's `auth` parameter (Web Push uses the
+    /// `Authorization` header for its own signature).
+    pub logins: Vec<PushLogin>,
+}
+
+/// An account at a push server (a ntfy access token, `tk_…`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PushLogin {
+    /// The push server's host name, as in its endpoints: `ntfy.example.com`.
+    pub host: String,
+    /// The token itself, or (better, kept out of this file) a file holding it.
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub token_file: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -143,7 +161,7 @@ impl Default for LoginConfig {
 
 impl Default for PushConfig {
     fn default() -> Self {
-        PushConfig { enabled: true, subject: None, allow_http_endpoints: false, allow_private_endpoints: false }
+        PushConfig { enabled: true, subject: None, allow_http_endpoints: false, allow_private_endpoints: false, logins: Vec::new() }
     }
 }
 
@@ -187,6 +205,14 @@ impl Config {
         {
             anyhow::bail!("push.subject must be a mailto: or https: URL");
         }
+        for login in &self.push.logins {
+            if login.host.trim().is_empty() || login.host.contains(['/', ':', '@']) {
+                anyhow::bail!("push.logins: host must be a host name, like ntfy.example.com");
+            }
+            if login.token.is_some() == login.token_file.is_some() {
+                anyhow::bail!("push.logins for {}: give either token or token_file", login.host);
+            }
+        }
         if self.session_days == 0 {
             anyhow::bail!("session_days must be at least 1");
         }
@@ -229,6 +255,25 @@ impl Config {
             return ["127.0.0.0/8", "::1/128"].iter().filter_map(|n| n.parse().ok()).collect();
         }
         Vec::new()
+    }
+
+    /// The push servers' hosts and the tokens to publish with (files read).
+    pub fn push_logins(&self) -> anyhow::Result<Vec<(String, String)>> {
+        self.push
+            .logins
+            .iter()
+            .map(|l| {
+                let token = match (&l.token, &l.token_file) {
+                    (Some(t), _) => t.trim().to_string(),
+                    (None, Some(f)) => std::fs::read_to_string(f).with_context(|| format!("push.logins: reading {}", f.display()))?.trim().to_string(),
+                    (None, None) => String::new(),
+                };
+                if token.is_empty() {
+                    anyhow::bail!("push.logins for {}: the token is empty", l.host);
+                }
+                Ok((l.host.trim().to_ascii_lowercase(), token))
+            })
+            .collect()
     }
 
     /// Who push services can contact.

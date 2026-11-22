@@ -887,6 +887,10 @@ link-local, shared or reserved, IPv4 within IPv6 included): checked on
 subscribing, and again as the push client connects, by a resolver that keeps
 only public addresses (so a name that later resolves inside does not lead
 there); `allow_private_endpoints` lifts this for a ntfy on one's network.
+A push server of one's own can require an account: `push.logins` gives a
+host and a token (a ntfy access token), sent to that host only as the URL's
+`auth` parameter (base64url of `Bearer <token>`, which ntfy reads), since
+Web Push's own `Authorization` header carries the VAPID signature.
 
 The modules: `config.rs` (`nexus.toml`), `store.rs` (the database and its
 numbered migrations), `auth.rs` (tokens, passwords, TOTP, recovery codes,

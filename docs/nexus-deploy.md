@@ -208,16 +208,38 @@ auth-file: "/var/lib/ntfy/user.db"
 auth-default-access: "deny-all"
 ```
 
-Let anyone publish to UnifiedPush topics (their names are long and random; the
-nexus publishes without an account), and give the phone an account to read
-them:
+Give the nexus an account to publish to UnifiedPush topics, and the phone one
+to read them; nobody else can write (`deny-all`):
 
 ```sh
-sudo ntfy access everyone 'up*' write-only
-sudo ntfy user add phone
+sudo ntfy user add shed-nexus                   # its password is not used: the nexus uses a token
+sudo ntfy access shed-nexus 'up*' write-only
+sudo ntfy token add shed-nexus                  # prints tk_…
+sudo ntfy user add phone                        # (if not there yet) the phone signs in with it
 sudo ntfy access phone 'up*' read-only
 sudo systemctl enable --now ntfy
 ```
+
+Keep the token in a file only the nexus's user reads, and name it in
+`nexus.toml`:
+
+```sh
+echo 'tk_…' | sudo tee /etc/shed-nexus/ntfy-token >/dev/null
+sudo chown shed-nexus: /etc/shed-nexus/ntfy-token && sudo chmod 600 /etc/shed-nexus/ntfy-token
+```
+
+```toml
+[[push.logins]]
+host = "ntfy.example.com"
+token_file = "/etc/shed-nexus/ntfy-token"
+```
+
+Web Push signs each request in its `Authorization` header, so the nexus sends
+the token as ntfy's `auth` URL parameter, to that host only. (Without
+`push.logins`, a ntfy of your own would have to let anyone publish to `up*`
+topics, `ntfy access everyone 'up*' write-only`: UnifiedPush's usual set-up,
+safe enough since the topics' names are long and random and only the phone can
+decrypt what is sent, but not needed when you run both.)
 
 Put it behind nginx like the nexus (its own `server_name ntfy.example.com`,
 `proxy_pass http://127.0.0.1:2586`, the WebSocket headers on `location /`,
