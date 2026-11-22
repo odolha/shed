@@ -10,6 +10,7 @@
 #   tools/e2e.sh              # E2E_DIR=/tmp/shed-e2e, port 7871, release build
 #   E2E_PROFILE=debug tools/e2e.sh
 #   E2E_KEEP=1 tools/e2e.sh   # leave the folder (logs, shots) for a look
+#   E2E_TARGET=/some/dir tools/e2e.sh   # cargo target dir (default target/e2e)
 #
 # Needs: cargo, Node 22.22+/24.15+ (for the web app and the driver), git,
 # python3 (the stand-in claude), Chrome or Chromium ($CHROME to choose).
@@ -20,6 +21,8 @@ repo=$PWD
 E2E_DIR=${E2E_DIR:-/tmp/shed-e2e}
 E2E_PORT=${E2E_PORT:-7871}
 E2E_PROFILE=${E2E_PROFILE:-release}
+# A target dir of its own: target/release may be a Shed someone runs.
+E2E_TARGET=${E2E_TARGET:-$repo/target/e2e}
 case "$E2E_DIR" in /tmp/*) ;; *) echo "E2E_DIR must be under /tmp (it is wiped)" >&2; exit 2 ;; esac
 
 log() { printf '[e2e] %s\n' "$*"; }
@@ -30,8 +33,8 @@ node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.ex
 # ---- build
 if [[ "$E2E_PROFILE" == release ]]; then flag=--release; else flag=; fi
 log "building shed, shedd and shed-nexus ($E2E_PROFILE)"
-cargo build -q $flag -p shed-app -p shed-keeper -p shed-nexus
-bin=$repo/target/$E2E_PROFILE
+CARGO_TARGET_DIR=$E2E_TARGET cargo build -q $flag -p shed-app -p shed-keeper -p shed-nexus
+bin=$E2E_TARGET/$E2E_PROFILE
 if [[ "${E2E_WEB_BUILD:-1}" == 1 || ! -f web/dist/shed-web/index.html ]]; then
   log "building the web app"
   (cd web && { [[ -d node_modules ]] || npm ci --no-audit --no-fund; } && npm run -s build >/dev/null)

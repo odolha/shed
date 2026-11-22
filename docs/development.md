@@ -272,7 +272,9 @@ link against a fake nexus on a real socket (`tests/common/mod.rs`), and
 
 `tools/e2e.sh` runs the whole way with real processes, apart from your own
 Shed: it builds `shed`, `shedd` and `shed-nexus` (release; `E2E_PROFILE=debug`
-for a debug build) and the web app (`E2E_WEB_BUILD=0` keeps the one built),
+for a debug build) into a target dir of its own, `target/e2e` (`E2E_TARGET`),
+so it never replaces the `target/release` binaries a running Shed may use,
+and the web app (`E2E_WEB_BUILD=0` keeps the one built),
 makes a world in `/tmp/shed-e2e` (`E2E_DIR`; a home with a neutral prompt, a
 Git project with a change, a stand-in `claude` playing a recorded turn, a
 keeper that stays without windows), starts a nexus on `127.0.0.1:7871`
