@@ -26,6 +26,7 @@ use shed_proto::{AiChange, AiImage, ClientMsg};
 use crate::ai_text::{self, Copy, Kind, Piece, Point, Selection};
 use crate::assets::icon;
 use shed_client::keeper_conn::KeeperConn;
+use shed_client::nexus_api::RemoteWorkspace;
 use crate::line_editor::{EditorEvent, LineEditor};
 use crate::menu::{self, Menu, MenuEntry, MenuHost};
 use crate::settings::Settings;
@@ -111,6 +112,8 @@ struct ToDelete {
 
 #[path = "ai_review.rs"]
 mod review;
+#[path = "ai_remote.rs"]
+mod remote;
 
 /// After a model's name, Claude Code's choice of its 1M-token context.
 const LARGE_CONTEXT: &str = "[1m]";
@@ -196,9 +199,16 @@ pub struct AiView {
     deleting: Option<(String, Task<()>)>,
     /// Why deleting a session did not work, above the sessions list.
     delete_problem: Option<String>,
-    /// Another workspace's tab: its sessions and changes are on that
-    /// computer, not readable here (yet).
-    remote: bool,
+    /// Another workspace's tab: its sessions, review and pictures are on
+    /// that computer, asked for through the nexus.
+    remote: Option<RemoteWorkspace>,
+    /// Pictures of the conversation fetched from another workspace, by
+    /// their path there (`None` while coming, or when not there).
+    remote_pictures: HashMap<String, Option<Arc<gpui::Image>>>,
+    /// Files and pictures on their way to another workspace, to attach.
+    uploading: usize,
+    /// Why attaching did not work, above the prompt.
+    attach_problem: Option<String>,
     filter: Entity<LineEditor>,
     sessions_scroll: UniformListScrollHandle,
     /// The conversation's and the sessions' scrollbars.
@@ -450,7 +460,10 @@ impl AiView {
             sessions_scroll: UniformListScrollHandle::new(),
             deleting: None,
             delete_problem: None,
-            remote: false,
+            remote: None,
+            remote_pictures: HashMap::new(),
+            uploading: 0,
+            attach_problem: None,
             conversation_bar: Default::default(),
             sessions_bar: Default::default(),
             completion: None,
@@ -934,18 +947,19 @@ impl AiView {
         }));
     }
 
-    /// Marks the tab as another workspace's: no sessions list or review
-    /// from this PC's files.
-    pub fn set_remote(&mut self, cx: &mut Context<Self>) {
-        self.remote = true;
+    /// Marks the tab as another workspace's: its sessions list, review and
+    /// pictures come from there, never from this PC's files.
+    pub fn set_remote(&mut self, workspace: RemoteWorkspace, cx: &mut Context<Self>) {
+        self.remote = Some(workspace);
         self.sessions_task = None;
         self.sessions = Arc::new(Vec::new());
+        self.load_sessions(cx);
         cx.notify();
     }
 
     fn load_sessions(&mut self, cx: &mut Context<Self>) {
-        if self.remote {
-            return;
+        if let Some(workspace) = self.remote.clone() {
+            return self.load_remote_sessions(workspace, cx);
         }
         let folder = self.ai.folder.clone();
         self.sessions_task = Some(cx.spawn(async move |this, cx| {
@@ -985,6 +999,12 @@ impl AiView {
         }
         let mut text = self.prompt.read(cx).buffer.text().trim_end().to_string();
         if text.trim().is_empty() && self.images.is_empty() && self.files.is_empty() {
+            return;
+        }
+        // Files still on their way to another workspace go with it once there.
+        if self.uploading > 0 {
+            self.attach_problem = Some("Wait for the files to reach the workspace, then send.".into());
+            cx.notify();
             return;
         }
         if self.editing.is_some() && self.status.state != AiState::Idle {
@@ -1074,6 +1094,10 @@ impl AiView {
     fn save_draft(&mut self, cx: &mut Context<Self>) {
         if self.editing_draft.is_some() {
             return self.finish_draft_edit(true, cx);
+        }
+        // Another workspace's drafts name its own files: pictures go there first.
+        if self.pictures_to_upload(cx) {
+            return;
         }
         let mut text = self.prompt.read(cx).buffer.text().trim_end().to_string();
         let dir = shed_model::paths::state_dir().join("ai-pictures");
@@ -1172,6 +1196,9 @@ impl AiView {
     /// attached) into the draft, in its place; otherwise the draft stays as
     /// it was. Either way, what was being written before comes back.
     fn finish_draft_edit(&mut self, save: bool, cx: &mut Context<Self>) {
+        if save && self.editing_draft.is_some() && self.pictures_to_upload(cx) {
+            return;
+        }
         let Some(edit) = self.editing_draft.take() else { return };
         if save {
             let mut text = self.prompt.read(cx).buffer.text().trim_end().to_string();
@@ -1404,6 +1431,7 @@ impl AiView {
     /// Files and folders to go with the prompt (dropped, pasted, picked):
     /// pictures as pictures, the rest as their paths for Claude to read.
     fn attach_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        self.attach_problem = None;
         for path in paths {
             let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
             let media_type = match ext.as_deref() {
@@ -1416,6 +1444,8 @@ impl AiView {
             let small = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= 10 * 1024 * 1024);
             match media_type.filter(|_| small).and_then(|t| Some((t, std::fs::read(path).ok()?))) {
                 Some((media_type, data)) => self.add_picture(AiImage { media_type: media_type.into(), data }),
+                // Another workspace reads its own disk: the file goes there.
+                None if self.remote.is_some() => self.upload_file(path.clone(), cx),
                 None => {
                     if !self.files.contains(path) {
                         self.files.push(path.clone());
@@ -1435,8 +1465,14 @@ impl AiView {
     /// What goes with the prompt: thumbnails of the pictures and the names of
     /// the files (the path in a tooltip), each with a × to leave it out.
     fn render_attachments(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let note = match (self.uploading, &self.attach_problem) {
+            (0, None) => None,
+            (n, None) => Some((format!("Sending {n} file{} to the workspace…", if n == 1 { "" } else { "s" }), ui.text_dim)),
+            (_, Some(problem)) => Some((problem.clone(), ui.danger)),
+        };
         if self.images.is_empty() && self.files.is_empty() {
-            return None;
+            let (text, color) = note?;
+            return Some(div().mx_3().mt_2().text_size(px(12.0 * self.z())).text_color(hsla(color)).child(text).into_any_element());
         }
         let z = self.z();
         let remove = |id: SharedString| {
@@ -1508,6 +1544,9 @@ impl AiView {
                     }))),
             );
         }
+        if let Some((text, color)) = note {
+            row = row.child(div().text_size(px(12.0 * z)).text_color(hsla(color)).child(text));
+        }
         Some(row.into_any_element())
     }
 
@@ -1534,10 +1573,14 @@ impl AiView {
         let sub = cx.subscribe(&editor, |this, _, e: &EditorEvent, cx| {
             let Some((id, _, _)) = this.renaming.take() else { return };
             if let EditorEvent::Submit(name) = e {
-                if let Err(e) = shed_ai::rename_session(&this.ai.folder, &id, name) {
-                    tracing::warn!("cannot rename the session: {e}");
+                if let Some(workspace) = this.remote.clone() {
+                    this.rename_remote_session(workspace, id, name.clone(), cx);
+                } else {
+                    if let Err(e) = shed_ai::rename_session(&this.ai.folder, &id, name) {
+                        tracing::warn!("cannot rename the session: {e}");
+                    }
+                    this.load_sessions(cx);
                 }
-                this.load_sessions(cx);
             }
             cx.notify();
         });
@@ -1567,11 +1610,14 @@ impl AiView {
         let later = shed_ai::going_on_from(&self.sessions, &target.id);
         let mut ids = later.clone();
         ids.push(target.id.clone());
-        // Shown in another tab: its Claude Code may be writing to it.
-        let dir = shed_ai::sessions::sessions_dir(&self.ai.folder);
+        // Shown in another tab: its Claude Code may be writing to it. (Another
+        // workspace's session folders are its own: tabs there are compared by folder.)
+        let remote = self.remote.is_some();
+        let dir = if remote { PathBuf::new() } else { shed_ai::sessions::sessions_dir(&self.ai.folder) };
+        let folder = self.ai.folder.clone();
         let elsewhere = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()).is_some_and(|state| {
             state.read(cx).tree.benches.iter().flat_map(|b| &b.tabs).filter(|t| t.id != self.tab).filter_map(|t| t.ai_info()).any(|a| {
-                a.session.as_ref().is_some_and(|s| ids.contains(s)) && shed_ai::sessions::sessions_dir(&a.folder) == dir
+                a.session.as_ref().is_some_and(|s| ids.contains(s)) && if remote { a.folder == folder } else { shed_ai::sessions::sessions_dir(&a.folder) == dir }
             })
         });
         if elsewhere {
@@ -1589,7 +1635,7 @@ impl AiView {
             1 => ", and 1 later session that continues it".to_string(),
             n => format!(", and {n} later sessions that continue it"),
         };
-        let trash = shed_save::home_relative(&shed_model::paths::state_dir().join("ai-trash"));
+        let trash = if self.remote.is_some() { "on that workspace".to_string() } else { shed_save::home_relative(&shed_model::paths::state_dir().join("ai-trash")) };
         let detail = format!(
             "“{}”\n{} ({}) · {prompts}{more}.\n\nClaude Code's files for it move to Shed's trash ({trash}), kept 30 days, then deleted.",
             target.title,
@@ -1603,6 +1649,9 @@ impl AiView {
             }
             this.update(cx, |this, cx| {
                 this.delete_problem = None;
+                if let Some(workspace) = this.remote.clone() {
+                    return this.delete_remote_session(workspace, target.id.clone(), cx);
+                }
                 this.conn.send_msg(ClientMsg::AiDeleteSession { tab: this.tab, session: target.id.clone() });
                 // The list again once its file is gone (or after a while).
                 let file = dir.join(format!("{}.jsonl", target.id));
@@ -2721,7 +2770,7 @@ impl AiView {
                         self.sel_text(i, 0, &parsed, Vec::new(), cx)
                     })
                     // The pictures sent with it, small; a click opens one whole.
-                    .when(!pictures.is_empty(), |d| d.child(thumbnails(i, &pictures, 72.0, &ui, self.z())))
+                    .when(!pictures.is_empty(), |d| d.child(thumbnails(i, &pictures, self.remote_shown(&pictures, cx).as_deref(), 72.0, &ui, self.z())))
                     .when(pictures.is_empty() && images > 0, |d| d.child(div().mt_1().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{images} picture(s) attached"))))
                     .when(lines.len() > FOLD_LINES, |d| {
                         let label = if open { "Show less".to_string() } else { format!("Show all {} lines", lines.len()) };
@@ -2855,7 +2904,8 @@ impl AiView {
                 );
                 // A screenshot it read, to see without opening it.
                 if !t.pictures.is_empty() {
-                    el = el.child(div().pl(px(20.0)).child(thumbnails(i, &t.pictures, 120.0, &ui, self.z())));
+                    let fetched = self.remote_shown(&t.pictures, cx);
+                    el = el.child(div().pl(px(20.0)).child(thumbnails(i, &t.pictures, fetched.as_deref(), 120.0, &ui, self.z())));
                 }
                 if open && agent && let Some(run) = t.run.as_deref() {
                     el = el.child(self.render_agent(i, &t, run, &ui, &mono, cx));
@@ -4008,14 +4058,6 @@ impl Render for AiView {
                 .flex_col()
                 .child(uniform_list("ai-prompts", shown, cx.processor(|this, range, _, cx| this.render_prompt_rows(range, cx))).track_scroll(&self.prompts_scroll).flex_1().min_h_0())
                 .child(crate::scrollbar::vertical(crate::scrollbar::Source::uniform(&self.prompts_scroll), &self.prompts_bar, &ui, false).absolute().top_0().right_0().bottom_0())
-        } else if self.remote {
-            div()
-                .flex_1()
-                .min_h_0()
-                .p_3()
-                .text_size(px(12.0 * self.z()))
-                .text_color(hsla(ui.text_dim))
-                .child(crate::state::NOT_YET_REMOTE_AI)
         } else {
             div()
                 .relative()
@@ -4461,8 +4503,33 @@ fn secs_since(start: u64) -> String {
 
 /// Pictures kept as files, small (`height` at zoom 1); a click opens one
 /// whole, and one gone since says so.
-fn thumbnails(entry: usize, pictures: &[String], height: f32, ui: &UiColors, z: f32) -> gpui::Div {
+/// Pictures, small; a click opens one whole. `fetched`: another
+/// workspace's, as fetched from there (in order; `None` while coming).
+fn thumbnails(entry: usize, pictures: &[String], fetched: Option<&[Option<Arc<gpui::Image>>]>, height: f32, ui: &UiColors, z: f32) -> gpui::Div {
     let dim = ui.text_dim;
+    if let Some(fetched) = fetched {
+        return div().mt_2().flex().flex_wrap().gap_2().children(fetched.iter().enumerate().map(|(n, image)| {
+            let inner = match image {
+                Some(image) => gpui::img(image.clone()).h(px(height * z)).max_w(px(height * 2.5 * z)).rounded_sm().into_any_element(),
+                None => div().px_2().py_1().text_size(px(11.0 * z)).text_color(hsla(dim)).child("picture…").into_any_element(),
+            };
+            let image = image.clone();
+            div()
+                .id(SharedString::from(format!("picture-{entry}-{n}")))
+                .flex_none()
+                .rounded_md()
+                .border_1()
+                .border_color(hsla(ui.divider))
+                .p_0p5()
+                .when_some(image, |d, image| {
+                    d.cursor_pointer()
+                        .tooltip(menu::tooltip("Open the picture"))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, _, cx| remote::open_picture(&image, cx))
+                })
+                .child(inner)
+        }));
+    }
     div().mt_2().flex().flex_wrap().gap_2().children(pictures.iter().enumerate().map(|(n, path)| {
         let url = format!("file://{path}");
         div()

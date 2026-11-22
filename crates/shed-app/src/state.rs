@@ -42,10 +42,6 @@ const FRAME_BUDGET: Duration = Duration::from_millis(8);
 /// view, filled by a replay from the keeper, when they are shown again.
 const KEPT_TABS: usize = 3;
 
-/// What views show in place of what is read from this machine's disk, for
-/// another workspace.
-pub const NOT_YET_REMOTE_AI: &str = "Not yet for remote workspaces: Claude Code's sessions are on that computer.";
-
 /// A keeper connection and the frames from it.
 type Connection = (KeeperConn, async_channel::Receiver<Frame>);
 
@@ -694,11 +690,11 @@ impl AppState {
                     v.set_ai(ai, cx);
                 }),
                 None if open.contains(&bench) => {
-                    let (conn, settings, remote) = (self.conn.clone(), self.settings.clone(), self.is_remote());
+                    let (conn, settings, remote) = (self.conn.clone(), self.settings.clone(), self.remote());
                     let view = cx.new(|cx| {
                         let mut v = AiView::new(bench, tab, ai, accent, conn, settings, cx);
-                        if remote {
-                            v.set_remote(cx);
+                        if let Some(workspace) = remote {
+                            v.set_remote(workspace, cx);
                         }
                         v.projects = projects;
                         v.set_zoom(zoom, cx);

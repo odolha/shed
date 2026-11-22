@@ -21,6 +21,7 @@ use crate::menu;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
 pub(super) use shed_review::Scope;
+use shed_api::calls::{self as api, Call, Reply};
 use shed_review::{Change, Found, Layer, MOST};
 
 /// A change's two pictures, ready to draw.
@@ -29,7 +30,7 @@ type Pictures = (Option<crate::picture::Picture>, Option<crate::picture::Picture
 pub(super) struct Review {
     pub scope: Scope,
     /// What reading the repositories found (`shed_review::read`).
-    found: Found,
+    pub(super) found: Found,
     /// Each change's pictures, as `found` has them, ready to draw.
     pictures: Vec<Option<Pictures>>,
     selected: Option<usize>,
@@ -49,7 +50,14 @@ pub(super) struct Review {
     message: Entity<LineEditor>,
     _message_sub: gpui::Subscription,
     pub focus: gpui::FocusHandle,
+    /// Another workspace's review: its Viewed marks and explanations, kept
+    /// there (`None`: this PC's, read here).
+    pub(super) marks: Option<super::remote::Marks>,
 }
+
+/// What the review says in place of the Git actions another workspace's
+/// review does not have.
+const REMOTE_ACTIONS: &str = "Another workspace: stage, commit or undo in its project tab (Changes) or a terminal there.";
 
 impl AiView {
     /// Opens the review (or reads it again, in another scope).
@@ -80,10 +88,12 @@ impl AiView {
                 message,
                 _message_sub: sub,
                 focus: cx.focus_handle(),
+                marks: None,
             });
         }
         if let Some(r) = &mut self.review {
-            r.scope = scope;
+            // Another workspace reviews the whole session only.
+            r.scope = if self.remote.is_some() { Scope::Session } else { scope };
             let focus = r.focus.clone();
             window.focus(&focus, cx);
         }
@@ -103,13 +113,8 @@ impl AiView {
     }
 
     fn reload_review(&mut self, cx: &mut Context<Self>) {
-        if self.remote {
-            if let Some(r) = &mut self.review {
-                r.error = Some(crate::state::NOT_YET_REMOTE_AI.into());
-                r.loading = None;
-            }
-            cx.notify();
-            return;
+        if let Some(workspace) = self.remote.clone() {
+            return self.reload_remote_review(workspace, cx);
         }
         let Some(review) = &self.review else { return };
         let since = self.review_since(review.scope);
@@ -145,6 +150,59 @@ impl AiView {
         cx.notify();
     }
 
+    /// Reads another workspace's review there (the whole session's).
+    fn reload_remote_review(&mut self, workspace: shed_client::nexus_api::RemoteWorkspace, cx: &mut Context<Self>) {
+        if self.review.is_none() {
+            return;
+        }
+        let answer = workspace.call(Call::AiReview(api::TabOnly { tab: crate::workspace_api::tab(self.tab) }));
+        let task = cx.spawn(async move |this, cx| {
+            let answer = answer.await;
+            let read = cx
+                .background_spawn(async move {
+                    match answer {
+                        Ok(Reply::Review(review)) => {
+                            let (found, marks) = super::remote::found_of(review);
+                            let pictures: Vec<Option<Pictures>> =
+                                found.changes.iter().map(|c| c.pictures.clone().map(|(old, new)| (old.map(Into::into), new.map(Into::into)))).collect();
+                            Ok((found, pictures, marks))
+                        }
+                        Ok(other) => Err(shed_client::nexus_api::unexpected(&other)),
+                        Err(e) => Err(e),
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(r) = &mut this.review {
+                    r.loading = None;
+                    match read {
+                        Ok((found, pictures, marks)) => {
+                            let keep = r.selected.and_then(|i| r.found.changes.get(i)).map(|c| (c.repo, c.layer.clone(), c.path.clone()));
+                            r.found = found;
+                            r.pictures = pictures;
+                            r.marks = Some(marks);
+                            r.selected = keep
+                                .and_then(|(repo, layer, path)| r.found.changes.iter().position(|c| c.repo == repo && c.layer == layer && c.path == path))
+                                .or((!r.found.changes.is_empty()).then_some(0));
+                        }
+                        Err(e) => r.error = Some(format!("Cannot read the changes: {}", crate::workspace_api::says(&e))),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+        if let Some(r) = &mut self.review {
+            r.loading = Some(task);
+        }
+        cx.notify();
+    }
+
+    /// A change's place in the review, by reference.
+    fn change_index(&self, c: &Change) -> Option<usize> {
+        self.review.as_ref()?.found.changes.iter().position(|x| std::ptr::eq(x, c))
+    }
+
     /// Runs a Git command for the review away from the UI, then reads again.
     fn review_op(&mut self, label: &str, repo: Repo, op: impl FnOnce(&Repo) -> shed_git::Result<String> + Send + 'static, cx: &mut Context<Self>) {
         let Some(r) = &mut self.review else { return };
@@ -168,11 +226,18 @@ impl AiView {
     }
 
     fn is_viewed(&self, c: &Change) -> bool {
-        self.review.as_ref().is_some_and(|r| r.found.is_viewed(c, &self.ai.viewed))
+        let Some(r) = &self.review else { return false };
+        match &r.marks {
+            Some(marks) => self.change_index(c).is_some_and(|i| marks.viewed.get(i).copied().unwrap_or(false)),
+            None => r.found.is_viewed(c, &self.ai.viewed),
+        }
     }
 
     /// Marks a change viewed (as it is now), or not; kept with the tab.
-    fn toggle_viewed(&mut self, i: usize, cx: &mut Context<Self>) {
+    pub(super) fn toggle_viewed(&mut self, i: usize, cx: &mut Context<Self>) {
+        if let Some(workspace) = self.remote.clone() {
+            return self.toggle_remote_viewed(workspace, i, cx);
+        }
         let Some(r) = &self.review else { return };
         let Some(c) = r.found.changes.get(i) else { return };
         let key = r.found.key(c);
@@ -182,6 +247,29 @@ impl AiView {
         // The keeper keeps the marks (and lets old ones go); this copy shows
         // the change until the tree comes back with it.
         self.conn.send_msg(shed_proto::ClientMsg::AiChange { tab: self.tab, change: shed_proto::AiChange::Viewed { key, hash, viewed: !viewed } });
+        cx.notify();
+    }
+
+    /// Marks another workspace's change viewed, or not: here at once, there
+    /// by a call (which marks it as it is there now).
+    fn toggle_remote_viewed(&mut self, workspace: shed_client::nexus_api::RemoteWorkspace, i: usize, cx: &mut Context<Self>) {
+        let Some(marks) = self.review.as_mut().and_then(|r| r.marks.as_mut()) else { return };
+        let (Some(key), Some(viewed)) = (marks.keys.get(i).cloned(), marks.viewed.get_mut(i)) else { return };
+        *viewed = !*viewed;
+        let call = Call::AiSetViewed(api::AiSetViewed { tab: crate::workspace_api::tab(self.tab), key, viewed: *viewed });
+        let answer = workspace.call(call);
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = answer.await {
+                this.update(cx, |this, cx| {
+                    if let Some(r) = &mut this.review {
+                        r.error = Some(format!("Cannot mark it: {}", crate::workspace_api::says(&e)));
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -240,7 +328,11 @@ impl AiView {
     /// The explanation kept for a change: its text, and whether it is of the
     /// change as it is now (else it was of an earlier version).
     fn explanation(&self, c: &Change) -> Option<(String, bool)> {
-        self.review.as_ref()?.found.explanation(c, &self.ai.explained)
+        let r = self.review.as_ref()?;
+        match &r.marks {
+            Some(marks) => marks.explanations.get(self.change_index(c)?)?.clone().map(|text| (text, true)),
+            None => r.found.explanation(c, &self.ai.explained),
+        }
     }
 
     /// Asks a copy of the session (not saved, read-only, the session itself
@@ -250,6 +342,9 @@ impl AiView {
         let Some(session) = self.ai.session.clone() else { return };
         if r.explain_task.is_some() || which.is_empty() {
             return;
+        }
+        if let Some(workspace) = self.remote.clone() {
+            return self.explain_remote(workspace, which, cx);
         }
         let request = r.found.explain_request(&which);
         let keys = request.keys();
@@ -287,6 +382,44 @@ impl AiView {
         cx.notify();
     }
 
+    /// Asks another workspace to explain these changes (it asks a copy of
+    /// the session there); the explanations show as they come back.
+    fn explain_remote(&mut self, workspace: shed_client::nexus_api::RemoteWorkspace, which: Vec<usize>, cx: &mut Context<Self>) {
+        let Some(r) = &self.review else { return };
+        let keys: Vec<String> = which.iter().filter_map(|&i| r.found.changes.get(i).map(|c| r.found.key(c))).collect();
+        let answer = workspace.call(Call::AiExplain(api::AiExplain { tab: crate::workspace_api::tab(self.tab), keys: keys.clone() }));
+        let task = cx.spawn(async move |this, cx| {
+            let answer = answer.await;
+            this.update(cx, |this, cx| {
+                if let Some(r) = &mut this.review {
+                    r.explain_task = None;
+                    r.explaining.clear();
+                    match answer {
+                        Ok(Reply::Explained(list)) => {
+                            for e in list {
+                                if let Some(marks) = &mut r.marks
+                                    && let Some(i) = marks.keys.iter().position(|k| *k == e.key)
+                                {
+                                    marks.explanations[i] = Some(e.text);
+                                }
+                            }
+                        }
+                        Ok(other) => r.error = Some(crate::workspace_api::says(&shed_client::nexus_api::unexpected(&other))),
+                        Err(e) => r.error = Some(format!("Could not explain: {}", crate::workspace_api::says(&e))),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+        if let Some(r) = &mut self.review {
+            r.explaining = keys;
+            r.explain_task = Some(task);
+            r.error = None;
+        }
+        cx.notify();
+    }
+
     /// Files by folder or flat, here and in project tabs' Changes (`[git] tree`).
     fn set_review_tree(&mut self, tree: bool, cx: &mut Context<Self>) {
         self.settings.config.git.tree = tree;
@@ -306,6 +439,7 @@ impl AiView {
         let Some(c) = r.found.changes.get(i) else { return Vec::new() };
         let repo = r.found.repos[c.repo].repo.clone();
         let rows = diff_layout(&c.hunks, r.side);
+        let remote = r.marks.is_some();
         let (red, green) = (Rgb::hex(0xE5534B), Rgb::hex(0x57AB5A));
         range
             .filter_map(|n| {
@@ -313,7 +447,7 @@ impl AiView {
                 let base = div().id(("review-drow", n)).h(px(DIFF_ROW * z)).w_full().flex().items_center().font_family(mono.clone()).text_size(px(12.0 * z)).text_color(hsla(ui.text));
                 // A hunk's own actions, as how far it went allows.
                 let actions = match row {
-                    DiffRow::Hunk(h) => {
+                    DiffRow::Hunk(h) if !remote => {
                         let patch = shed_git::hunk_patch(&c.path, &c.hunks[*h]);
                         let act = |id: &'static str, label: &'static str, color: Rgb| {
                             div()
@@ -427,17 +561,22 @@ impl AiView {
         let z = self.z();
         let mono = self.settings.font.family.clone();
         let viewed = r.found.changes.iter().filter(|c| self.is_viewed(c)).count();
+        let remote = self.remote.is_some();
         let scope_button = |id: &'static str, label: &'static str, scope: Scope| {
             let on = r.scope == scope;
+            // Another workspace's review is the whole session's.
+            let off = remote && scope == Scope::Turn;
             div()
                 .id(id)
+                .when(off, |d| d.tooltip(menu::tooltip("Not for another workspace: its review covers the whole session")))
                 .px_2()
                 .py_0p5()
                 .rounded_sm()
                 .cursor_pointer()
                 .when(on, |d| d.bg(hsla_alpha(accent, 0.22)).text_color(hsla(ui.text)))
-                .when(!on, |d| d.text_color(hsla(ui.text_dim)).hover(|s| s.bg(hsla(ui.tab_hover))))
-                .on_click(cx.listener(move |this, _, window, cx| this.open_review(scope, window, cx)))
+                .when(!on && !off, |d| d.text_color(hsla(ui.text_dim)).hover(|s| s.bg(hsla(ui.tab_hover))))
+                .when(off, |d| d.text_color(hsla_alpha(ui.text_dim, 0.5)))
+                .when(!off, |d| d.on_click(cx.listener(move |this, _, window, cx| this.open_review(scope, window, cx))))
                 .child(label)
         };
         let button = |id: SharedString, label: &'static str, color: Rgb| {
@@ -626,7 +765,8 @@ impl AiView {
                 let undoable = !commit.pushed && repo.commits[..ci].iter().all(|c| !c.pushed);
                 let hash = commit.hash.clone();
                 let mut actions = div().flex().flex_wrap().gap_1().px_2().pt_0p5();
-                if undoable {
+                if remote {
+                } else if undoable {
                     let (repo_c, h) = (repo.repo.clone(), hash.clone());
                     actions = actions.child(
                         button(format!("undo-{ri}-{ci}").into(), "Undo (back to staged)", amber)
@@ -691,8 +831,8 @@ impl AiView {
             Some((i, c)) => self.render_review_diff(i, c, ui, &mono, cx),
             None => div().flex_1().into_any_element(),
         };
-        let staged_any = r.found.changes.iter().any(|c| c.layer == Layer::Staged);
-        let unpushed: Vec<usize> = r.found.repos.iter().enumerate().filter(|(_, repo)| repo.commits.iter().any(|c| !c.pushed)).map(|(i, _)| i).collect();
+        let staged_any = !remote && r.found.changes.iter().any(|c| c.layer == Layer::Staged);
+        let unpushed: Vec<usize> = if remote { Vec::new() } else { r.found.repos.iter().enumerate().filter(|(_, repo)| repo.commits.iter().any(|c| !c.pushed)).map(|(i, _)| i).collect() };
         let footer = div()
             .flex()
             .flex_none()
@@ -703,6 +843,7 @@ impl AiView {
             .border_t_1()
             .border_color(hsla(ui.divider))
             .when_some(r.error.clone(), |d, e| d.child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.danger)).child(e)))
+            .when(remote && r.error.is_none(), |d| d.child(div().flex_1().min_w_0().truncate().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(REMOTE_ACTIONS)))
             .when(staged_any, |d| {
                 d.child(div().text_color(hsla(ui.text_dim)).child("New commit:"))
                     .child(div().w(px(320.0)).px_1().rounded_sm().border_1().border_color(hsla(ui.divider)).child(r.message.clone()))
@@ -768,6 +909,7 @@ impl AiView {
             Layer::Committed { pushed: true, .. } => ("pushed", ui.danger),
         };
         let path = c.path.clone();
+        let remote = r.marks.is_some();
         let mut bar = div()
             .flex()
             .flex_none()
@@ -782,6 +924,7 @@ impl AiView {
             .child(div().px_1().rounded_sm().bg(hsla_alpha(layer_color, 0.2)).text_size(px(11.0 * z)).text_color(hsla(ui.ink(layer_color))).child(layer_label))
             .child(div().flex_1());
         match &c.layer {
+            _ if remote => {}
             Layer::Unstaged { untracked } => {
                 let (p1, p2, repo1, repo2, untracked) = (path.clone(), path.clone(), repo.clone(), repo.clone(), *untracked);
                 bar = bar
@@ -816,7 +959,8 @@ impl AiView {
             );
         }
         // The file itself: open in its project tab, shown in its Files.
-        if full.is_file() {
+        // (Another workspace's file is not on this disk: shown unless deleted.)
+        if if remote { c.code != 'D' } else { full.is_file() } {
             bar = bar.child(
                 small(format!("edit-file-{i}").into(), "Go to File", self.accent)
                     .tooltip(crate::menu::tooltip("Open the file in its project tab, and show where it is in Files"))
