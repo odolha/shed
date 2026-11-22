@@ -44,7 +44,6 @@ const KEPT_TABS: usize = 3;
 
 /// What views show in place of what is read from this machine's disk, for
 /// another workspace.
-pub const NOT_YET_REMOTE_LOGBOOK: &str = "The command history is not yet searchable for remote workspaces.";
 pub const NOT_YET_REMOTE_AI: &str = "Not yet for remote workspaces: Claude Code's sessions are on that computer.";
 
 /// A keeper connection and the frames from it.

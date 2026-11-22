@@ -9,6 +9,9 @@ use gpui::{
 use shed_logbook::{Context as Here, Entry, Logbook, Scope, age};
 use shed_model::Rgb;
 
+use shed_api::calls::{self as api, Call, LogScope, Reply};
+use shed_client::nexus_api::RemoteWorkspace;
+
 use crate::theme::{UiColors, hsla, hsla_alpha};
 
 /// How many results are fetched, and how many rows are shown.
@@ -40,9 +43,9 @@ pub struct LogbookSearch {
     /// over ssh), and the fetch while it runs.
     server: Option<String>,
     fetching: Option<Task<()>>,
-    /// Why there is nothing to search here (another workspace's history,
-    /// not reachable yet).
-    unavailable: Option<String>,
+    /// Another workspace's history, searched there (`LogSearch`) rather
+    /// than in this PC's logbook.
+    workspace: Option<RemoteWorkspace>,
 }
 
 impl EventEmitter<SearchEvent> for LogbookSearch {}
@@ -55,7 +58,13 @@ impl Focusable for LogbookSearch {
 
 impl LogbookSearch {
     pub fn new(here: Here, path: PathBuf, ui: UiColors, accent: Rgb, mono: SharedString, cx: &mut Context<Self>) -> Self {
-        let mut this = Self {
+        let mut this = Self::unsearched(here, path, ui, accent, mono, cx);
+        this.refresh(cx);
+        this
+    }
+
+    fn unsearched(here: Here, path: PathBuf, ui: UiColors, accent: Rgb, mono: SharedString, cx: &mut Context<Self>) -> Self {
+        Self {
             focus: cx.focus_handle(),
             here,
             path,
@@ -71,21 +80,54 @@ impl LogbookSearch {
             pending: None,
             server: None,
             fetching: None,
-            unavailable: None,
-        };
+            workspace: None,
+        }
+    }
+
+    /// Searches another workspace's history, there, through the nexus
+    /// (this PC's logbook is not that workspace's).
+    pub fn workspace(here: Here, workspace: RemoteWorkspace, ui: UiColors, accent: Rgb, mono: SharedString, cx: &mut Context<Self>) -> Self {
+        let mut this = Self::unsearched(here, PathBuf::new(), ui, accent, mono, cx);
+        this.workspace = Some(workspace);
         this.refresh(cx);
         this
     }
 
-    /// Nothing to search, saying why: another workspace's history (this
-    /// PC's logbook is not that workspace's).
-    pub fn unavailable(note: String, ui: UiColors, accent: Rgb, mono: SharedString, cx: &mut Context<Self>) -> Self {
-        let here = Here { tab: shed_model::TabId::new(), bench: shed_model::BenchId::new() };
-        let mut this = Self::new(here, PathBuf::new(), ui, accent, mono, cx);
-        this.pending = None;
-        this.error = Some(note.clone());
-        this.unavailable = Some(note);
-        this
+    /// Searches another workspace's logbook with a call; a newer query
+    /// replaces an older one.
+    fn refresh_remote(&mut self, workspace: RemoteWorkspace, cx: &mut Context<Self>) {
+        let scope = match self.scope {
+            Scope::Local => LogScope::Tab,
+            Scope::Bench => LogScope::Bench,
+            Scope::Global => LogScope::All,
+        };
+        let call = Call::LogSearch(api::LogSearch { scope, tab: Some(self.here.tab.to_string()), query: self.query.clone(), limit: FETCH as u32 });
+        let answer = workspace.call(call);
+        self.pending = Some(cx.spawn(async move |this, cx| {
+            let answer = answer.await;
+            this.update(cx, |this, cx| {
+                // Tabs' titles, as this window knows the workspace's tree.
+                let titles: std::collections::HashMap<String, String> = cx
+                    .try_global::<crate::state::AppHandle>()
+                    .and_then(|h| h.0.upgrade())
+                    .map(|state| state.read(cx).tree.benches.iter().flat_map(|b| &b.tabs).map(|t| (t.id.to_string(), t.display_title())).collect())
+                    .unwrap_or_default();
+                match answer {
+                    Ok(Reply::Log(found)) => {
+                        this.results = found.into_iter().map(|e| entry_of(e, &titles)).collect();
+                        this.error = None;
+                    }
+                    Ok(other) => this.error = Some(crate::workspace_api::says(&shed_client::nexus_api::unexpected(&other))),
+                    Err(e) => {
+                        this.results.clear();
+                        this.error = Some(format!("Cannot search the history: {}", crate::workspace_api::says(&e)));
+                    }
+                }
+                this.selected = 0;
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// Searches the history on a remote tab's server: what ran in that
@@ -134,8 +176,8 @@ impl LogbookSearch {
 
     /// Runs the query off the UI thread; a newer query replaces an older one.
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.unavailable.is_some() {
-            return;
+        if let Some(workspace) = self.workspace.clone() {
+            return self.refresh_remote(workspace, cx);
         }
         let (path, scope, here, query) = (self.path.clone(), self.scope, self.here, self.query.clone());
         self.pending = Some(cx.spawn(async move |this, cx| {
@@ -315,5 +357,62 @@ impl Render for LogbookSearch {
             .child(header)
             .child(input)
             .child(list)
+    }
+}
+
+/// A command from another workspace's logbook, as this view shows one
+/// (`titles`: tabs' titles by id).
+fn entry_of(e: api::LogEntry, titles: &std::collections::HashMap<String, String>) -> Entry {
+    Entry {
+        id: 0,
+        tab_title: titles.get(&e.tab).cloned().unwrap_or_default(),
+        command: e.command,
+        cwd: e.cwd,
+        exit: e.exit,
+        started_ms: e.started as i64 * 1000,
+        duration_ms: Some((e.duration * 1000.0) as i64),
+        tab: e.tab,
+        bench: e.bench,
+        tags: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    #[gpui::test]
+    fn another_workspaces_history_is_searched_there(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let asked: Arc<Mutex<Vec<api::LogSearch>>> = Arc::default();
+        let seen = asked.clone();
+        let api = shed_client::nexus_api::NexusApi::fake(Arc::new(move |_, call| match call {
+            Call::LogSearch(s) => {
+                let command = format!("make {}", s.query);
+                seen.lock().unwrap().push(s);
+                Ok(Reply::Log(vec![api::LogEntry { command, cwd: "/srv/app".into(), exit: Some(1), started: 1_700_000_000, duration: 1.5, bench: "b".into(), tab: "t".into() }]))
+            }
+            _ => Err(shed_api::ApiError::new(shed_api::ErrorCode::Unsupported, "no")),
+        }));
+        let here = Here { tab: shed_model::TabId::new(), bench: shed_model::BenchId::new() };
+        let (view, cx) = cx.add_window_view(|_, cx| LogbookSearch::workspace(here, api.workspace("w1"), UiColors::default(), Rgb::hex(0xFF8A57), "mono".into(), cx));
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            assert_eq!(v.results.len(), 1);
+            assert_eq!((v.results[0].command.as_str(), v.results[0].exit, v.results[0].started_ms), ("make ", Some(1), 1_700_000_000_000));
+            v.query = "tag:prod deploy".into();
+            v.scope = Scope::Global;
+            v.refresh(cx);
+        });
+        cx.run_until_parked();
+        let asked = asked.lock().unwrap();
+        let last = asked.last().unwrap();
+        assert_eq!((last.scope, last.query.as_str(), last.tab.clone()), (LogScope::All, "tag:prod deploy", Some(here.tab.to_string())));
+        assert_eq!(view.read_with(cx, |v, _| v.results[0].command.clone()), "make tag:prod deploy");
     }
 }
