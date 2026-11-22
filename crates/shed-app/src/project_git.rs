@@ -536,7 +536,7 @@ impl ProjectView {
                     let Some(file) = this.open.get_mut(i) else { return };
                     if let Content::Diff(d) = &mut file.content {
                         let at = Path::new(&d.path).to_path_buf();
-                        d.hunks = remote::hunks_of(&diff.hunks);
+                        d.hunks = crate::workspace_api::hunks_of(&diff.hunks);
                         d.headers = diff.hunks.iter().map(|h| h.header.clone()).collect();
                         let picture = |p: &Option<api::Picture>| p.as_ref().and_then(|p| remote::picture_of(&at, p));
                         d.pictures = (diff.old_picture.is_some() || diff.new_picture.is_some()).then(|| (picture(&diff.old_picture), picture(&diff.new_picture)));

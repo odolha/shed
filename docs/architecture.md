@@ -1146,9 +1146,18 @@ opened from terminals or Claude's answers go to the bench's project tab
 holding them (by path, without this disk's links), else to a new project tab
 on the bench's folder or the file's.
 
-The logbook search says it is not available (`LogbookSearch::unavailable`),
-an AI view marked remote (`AiView::set_remote`) lists no sessions and does no
-review, the folder picker is refused (folders are typed), and no desktop
+The logbook search (`LogbookSearch::workspace`) is the `LogSearch` call. An
+AI view of another workspace (`AiView::set_remote`, `ai_remote.rs`) lists,
+renames and deletes sessions with `AiSessions` (draft rows left out: the tab
+has its drafts), `AiRenameSession` and `AiDeleteSession`; reads the
+conversation's pictures with `AiPicture`; uploads attached files (and a
+draft's pictures) with `AiUpload` as they are attached, putting the path
+there in the prompt; and reads the review with `AiReview` (the whole
+session; the turn's scope is greyed out), converted to the
+`shed_review::Found` the review draws, with that workspace's Viewed marks
+and explanations beside it (`Marks`; changed with `AiSetViewed`,
+`AiExplain`); the review's Git actions are hidden there. `pick_folder`
+opens `folder_browser.rs`, a small window over `Browse`. No desktop
 launchers or icons are written. Bench windows' titles end with the
 workspace's name and their app IDs include it; their places are not taken
 from, or sent to, that keeper (it keeps its own screens' places).

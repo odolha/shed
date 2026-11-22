@@ -49,33 +49,6 @@ pub fn sessions_of(list: Vec<api::AiSession>) -> Vec<shed_ai::SessionInfo> {
     list.into_iter().filter(|s| !s.draft).map(session_of).collect()
 }
 
-/// A hunk as the API gives it, as the diff views draw it (`@@ -a,b +c,d @@`).
-pub fn hunk_of(h: &api::Hunk) -> shed_git::Hunk {
-    let nums: Vec<usize> = h.header.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect();
-    let at = |i: usize| nums.get(i).copied().unwrap_or(0);
-    shed_git::Hunk {
-        old_start: at(0),
-        old_len: at(1),
-        new_start: at(2),
-        new_len: at(3),
-        lines: h
-            .lines
-            .iter()
-            .map(|l| shed_git::Line {
-                kind: match l.kind {
-                    api::DiffLineKind::Context => shed_git::LineKind::Context,
-                    api::DiffLineKind::Added => shed_git::LineKind::Added,
-                    api::DiffLineKind::Removed => shed_git::LineKind::Removed,
-                },
-                old: l.old.map(|n| n as usize),
-                new: l.new.map(|n| n as usize),
-                text: l.text.clone(),
-                no_newline: false,
-            })
-            .collect(),
-    }
-}
-
 fn picture_of(path: &Path, p: &api::Picture) -> Option<shed_project::picture::PictureData> {
     shed_project::picture::PictureData::from_bytes(path, decode(&p.data)?)
 }
@@ -107,7 +80,7 @@ pub fn found_of(review: api::Review) -> (Found, Marks) {
                 repo: ri,
                 layer,
                 code: if c.status == "?" { 'A' } else { c.status.chars().next().unwrap_or('M') },
-                hunks: c.diff.hunks.iter().map(hunk_of).collect(),
+                hunks: crate::workspace_api::hunks_of(&c.diff.hunks),
                 hash: String::new(),
                 pictures,
                 path: c.path,

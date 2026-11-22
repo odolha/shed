@@ -25,10 +25,11 @@ them). Still open:
   it, and a signed Android release (now: debug builds only; F-Droid later).
 - **Editing files from the apps** beyond writing a small text file whole,
   through `shed-text` as the editor does.
-- **Other workspaces in the desktop app: the rest.** Shed's window shows
-  another workspace through the nexus (terminals, AI conversations, benches);
-  still to come for it: project tabs (files, editor, search, Git), the logbook,
-  the AI sessions list and review, opening files and picking folders there.
+- **Other workspaces in the desktop app: the last gaps.** Shed's window
+  shows another workspace through the nexus, project tabs, the logbook and AI
+  sessions included; still to come for it, as API calls: merging, rebasing,
+  deleting branches, the stash and finishing a merge in the Git panel, the
+  three-way conflict view, the review's Git actions and its turn scope.
 - **Settings and themes from the apps**, **more than one user** on a nexus, and
   **Claude in Chrome** controlled from them (now: shown, not controlled).
 

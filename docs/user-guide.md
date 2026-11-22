@@ -1194,12 +1194,17 @@ three-way view of a conflict, merging, rebasing, deleting branches, the stash
 and finishing a merge from the panel (use a terminal tab there), the file
 manager, and what a private tab holds (the workspace keeps it to itself).
 
-Not yet for another workspace (they read this computer's disk; they come
-next): the command history (Ctrl+R) says it is not searchable yet; an AI
-tab's sessions list and Review say so (the conversation, prompt, permissions,
-drafts, queue and settings all work); picking folders (type them instead)
-and its benches' desktop launchers. Notifications from its AI tabs come here
-as usual.
+Ctrl+R searches that workspace's command history (by tab, bench or all,
+`tag:` included). Its AI tabs list, rename and delete its Claude Code
+sessions, show the conversation's pictures, and Review shows the whole
+session's changes with Viewed and Explain (the turn's alone, and the
+review's stage, commit and undo buttons, are not there for another
+workspace: do those in a project tab there). Files you attach to a prompt
+or a draft are sent to that workspace first (up to 16 MB each; not
+folders), and their path there is what Claude reads. New project and AI
+tabs choose a folder in a browser of that workspace's folders (Up, a path
+to type, Open This Folder). Its benches get no desktop launchers here.
+Notifications from its AI tabs come here as usual.
 
 ## Shed in a browser
 

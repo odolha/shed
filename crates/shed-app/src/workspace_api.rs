@@ -7,6 +7,7 @@ use std::path::Path;
 
 use base64::Engine;
 use shed_api::ApiError;
+use shed_api::calls as api;
 use shed_model::TabId;
 
 /// A tab's id as calls name it.
@@ -55,6 +56,53 @@ pub fn char_of_utf16(text: &str, unit: u32) -> usize {
 /// What went wrong with a call, for people.
 pub fn says(e: &ApiError) -> String {
     if e.message.is_empty() { format!("{:?}", e.code).to_lowercase() } else { e.message.clone() }
+}
+
+/// Hunks as the diff views draw them, from a workspace's (the header
+/// gives where each starts and how long it is).
+pub fn hunks_of(hunks: &[api::Hunk]) -> Vec<shed_git::Hunk> {
+    hunks
+        .iter()
+        .map(|h| {
+            let (old_start, old_len, new_start, new_len) = parse_header(&h.header).unwrap_or_default();
+            shed_git::Hunk {
+                old_start,
+                old_len,
+                new_start,
+                new_len,
+                lines: h
+                    .lines
+                    .iter()
+                    .map(|l| shed_git::Line {
+                        kind: match l.kind {
+                            api::DiffLineKind::Context => shed_git::LineKind::Context,
+                            api::DiffLineKind::Added => shed_git::LineKind::Added,
+                            api::DiffLineKind::Removed => shed_git::LineKind::Removed,
+                        },
+                        old: l.old.map(|n| n as usize),
+                        new: l.new.map(|n| n as usize),
+                        text: l.text.clone(),
+                        no_newline: false,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// `@@ -12,7 +12,9 @@` as (12, 7, 12, 9); a missing length is 1.
+pub fn parse_header(header: &str) -> Option<(usize, usize, usize, usize)> {
+    let mut parts = header.split_whitespace().skip(1);
+    let side = |s: &str, sign: char| -> Option<(usize, usize)> {
+        let s = s.strip_prefix(sign)?;
+        Some(match s.split_once(',') {
+            Some((a, b)) => (a.parse().ok()?, b.parse().ok()?),
+            None => (s.parse().ok()?, 1),
+        })
+    };
+    let (a, b) = side(parts.next()?, '-')?;
+    let (c, d) = side(parts.next()?, '+')?;
+    Some((a, b, c, d))
 }
 
 #[cfg(test)]
