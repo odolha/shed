@@ -349,7 +349,10 @@ impl Transcript {
                     run.output = n.output.clone();
                 }
                 let report = if agent && live { n.summary.clone() } else if agent { n.result.clone() } else { n.summary.clone() };
-                if !report.is_empty() {
+                // An agent that handed its report back as a message: the
+                // notification only points at it.
+                let pointer = is_report_pointer(&report);
+                if !report.is_empty() && (!pointer || run.report.is_empty()) {
                     run.report = agent_report(&report);
                 }
                 run.last = match run.state {
@@ -359,7 +362,7 @@ impl Transcript {
                     RunState::Running => run.last.clone(),
                 };
                 if agent {
-                    detail = run.report.clone();
+                    detail = if pointer { String::new() } else { run.report.clone() };
                 }
             }
             if agent && (live || text.is_empty()) {
@@ -396,28 +399,46 @@ impl Transcript {
         }
     }
 
-    /// A background agent's report, sent as a message.
-    fn peer(&mut self, text: &str) {
-        let (from, said) = peer_message(text);
-        self.woken = true;
-        let named = self.runs.get(&from).copied().and_then(|i| match self.entries.get_mut(i) {
+    /// Background agents' reports, sent as messages.
+    pub(super) fn peer(&mut self, text: &str) {
+        let mut found = crate::notes::peer_messages(text);
+        if found.is_empty() {
+            found.push(peer_message(text));
+        }
+        for (from, said) in found {
+            self.woken = true;
+            self.peer_said(&from, &said, None);
+        }
+    }
+
+    /// An agent's report (`from`: its id), as a note of its own, folded:
+    /// its first line, its whole below. Its agent's run (found by the id,
+    /// or `at`) keeps it as its report. Each report is noted once: a live
+    /// hand-back seen as the agent's last step, then as a message, is one.
+    pub(super) fn peer_said(&mut self, from: &str, said: &str, at: Option<usize>) {
+        if said.trim().is_empty() || !self.noted.insert(format!("report|{from}|{}", first_line(said, 200))) {
+            return;
+        }
+        let i = at.or_else(|| self.runs.get(from).copied());
+        let named = i.and_then(|i| match self.entries.get_mut(i) {
             Some(Entry::Tool(t)) => {
                 let name = agent_name(t);
                 if let Some(run) = t.run.as_mut() {
-                    run.report = said.clone();
+                    run.report = said.to_string();
                 }
                 Some((i, name))
             }
             _ => None,
         });
+        let title = crate::notes::plain_line(said, 100);
         let text = match &named {
             Some((i, name)) => {
                 self.touch_one(*i);
-                format!("Agent “{name}” reported back")
+                format!("Agent report from “{name}”: {title}")
             }
-            None => "A message from another Claude session".into(),
+            None => format!("Message from another Claude session: {title}"),
         };
-        self.note(NoteKind::Message, text, said, false);
+        self.note(NoteKind::Message, text, said.to_string(), false);
     }
 
     /// A saved session's attachment: a notification or a message that
@@ -549,6 +570,7 @@ impl Transcript {
         let Some(t) = self.tool_mut(top) else { return };
         let run = t.run.get_or_insert_with(|| Box::new(Run { started: at, ..Default::default() }));
         let mut called = Vec::new();
+        let mut handed = None;
         for b in &content {
             match (kind, s(b, "type")) {
                 ("assistant", "text") => {
@@ -565,6 +587,11 @@ impl Transcript {
                     }
                     let name = s(b, "name").to_string();
                     let input = b.get("input").cloned().unwrap_or(Value::Null);
+                    // Its report, handed back (the message itself comes to
+                    // Claude, not to this stream).
+                    if name == "SubagentHandback" {
+                        handed = Some(s(&input, "message").trim().to_string()).filter(|m| !m.is_empty());
+                    }
                     let (summary, detail, file, diff) = summarize(&name, &input, &cwd);
                     // A step is a glimpse: long inputs and changes are cut.
                     let detail = cut(detail, Run::MAX_STEP_RESULT);
@@ -588,6 +615,17 @@ impl Transcript {
             self.owners.insert(id, top);
         }
         self.touch_one(top);
+        if let Some(report) = handed {
+            let task = self.tool_mut(top).and_then(|t| t.run.as_ref()).map(|r| r.task.clone()).unwrap_or_default();
+            if self.reading_session.is_none() {
+                // Live: noted now (a saved session has the message itself).
+                self.peer_said(&task, &report, Some(top));
+            } else if let Some(run) = self.tool_mut(top).and_then(|t| t.run.as_mut())
+                && run.report.is_empty()
+            {
+                run.report = report;
+            }
+        }
     }
 
     /// The runs still going, ended: the process they ran in stopped.
@@ -685,6 +723,13 @@ fn run_state(status: &str) -> Option<RunState> {
 }
 
 /// A step of a sub-agent's run; the oldest go past `Run::MAX_STEPS`.
+/// What a notification says of an agent that handed its report back as a
+/// message (or has yet to): where the report is, not the report.
+fn is_report_pointer(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("This agent's report was delivered to you as a message") || t.starts_with("This agent has not reported yet")
+}
+
 fn push_step(run: &mut Run, step: Entry) {
     run.steps.push(step);
     if run.steps.len() > Run::MAX_STEPS {
@@ -849,7 +894,7 @@ mod tests {
             ("Command", "Compacted"),
             ("Command", "$ git status"),
             ("Task!", "Background command \"Serve\" was stopped after reaching its background time limit"),
-            ("Message", "A message from another Claude session"),
+            ("Message", "Message from another Claude session: All done."),
             ("Wakeup", "Woke up: check the build"),
             ("Task", "Background command \"Build\" completed (exit code 0)"),
         ]
@@ -859,6 +904,27 @@ mod tests {
         assert_eq!(shown, want);
         let Entry::Note(peer) = &t.entries[5] else { panic!() };
         assert_eq!(peer.detail, "All done.");
+    }
+
+    /// Live, a hand-back reaches the stream only as the agent's last step
+    /// (SubagentHandback): its report is noted then, and once, whatever
+    /// else brings it (a reminder after a tool's result, a peer message
+    /// without its meta flag).
+    #[test]
+    fn live_hand_backs_are_noted_once() {
+        let mut t = Transcript::new("/tmp");
+        t.clock = 100;
+        t.apply(&json!({"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "tA", "name": "Agent", "input": {"description": "Review", "prompt": "Look", "run_in_background": true}}]}}));
+        t.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "ag1", "tool_use_id": "tA", "description": "Review", "is_backgrounded": true, "task_type": "local_agent"}));
+        t.apply(&json!({"type": "assistant", "parent_tool_use_id": "tA", "message": {"id": "m2", "content": [{"type": "tool_use", "id": "tH", "name": "SubagentHandback", "input": {"message": "**All good.**\nNo issues."}}]}}));
+        t.apply(&json!({"type": "system", "subtype": "task_notification", "task_id": "ag1", "tool_use_id": "tA", "status": "completed", "summary": "This agent's report was delivered to you as a message from \"ag1\" (its SubagentHandback call)."}));
+        t.apply(&json!({"type": "user", "message": {"content": [{"type": "text", "text": "<system-reminder id=\"x\">\nAnother Claude session sent a message while you were working:\n<agent-message from=\"ag1\">\n[Subagent hand-back] … The report follows:\n  **All good.**\n  No issues.\n</agent-message>\n</system-reminder>"}]}}));
+        t.apply(&json!({"type": "user", "origin": {"kind": "peer", "from": "ag2"}, "message": {"content": "Another Claude session sent a message:\n<agent-message from=\"ag2\">\n  Other news.\n</agent-message>"}}));
+        let Entry::Tool(agent) = &t.entries[0] else { panic!("{:#?}", t.entries) };
+        assert_eq!(agent.run.as_ref().unwrap().report, "**All good.**\nNo issues.");
+        assert!(agent.run.as_ref().unwrap().steps.iter().any(|s| matches!(s, Entry::Tool(x) if x.summary == "Hand back the report: All good.")));
+        assert!(!t.entries.iter().any(|e| matches!(e, Entry::User { .. })), "{:#?}", t.entries);
+        assert_eq!(notes(&t), ["Agent report from “Review”: All good.", "Agent “Review” finished", "Message from another Claude session: Other news."]);
     }
 
     #[test]

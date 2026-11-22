@@ -653,6 +653,31 @@ mod tests {
         assert!(t.status.timers.is_empty());
     }
 
+    /// Agents that hand their reports back as messages (shapes from real
+    /// sessions, the words made up): one while Claude works, one while it is
+    /// idle. Each report is a folded note named after its agent, once; the
+    /// notifications that only point at it carry nothing more; nothing is
+    /// the user's but the prompt.
+    #[test]
+    fn hand_backs_are_reports_not_prompts() {
+        use crate::{Entry, NoteKind};
+        let t = load_from(&fixture("handback"), Path::new("/tmp/shed-handback"), "7e0c3b1a-5d2f-4c8e-9a61-2b4f8d0e1c55", None).unwrap();
+        let users = t.entries.iter().filter(|e| matches!(e, Entry::User { .. })).count();
+        assert_eq!(users, 1, "{:#?}", t.entries);
+        let notes: Vec<(NoteKind, &str, &str)> = t.entries.iter().filter_map(|e| if let Entry::Note(n) = e { Some((n.kind, n.text.as_str(), n.detail.as_str())) } else { None }).collect();
+        assert_eq!(
+            notes,
+            [
+                (NoteKind::Message, "Agent report from “Sort lists”: Both lists are sorted.", "Both lists are sorted.\n- `a.txt`: 3 lines\n- `b.txt`: 5 lines"),
+                (NoteKind::Task, "Agent \"Sort lists\" finished", ""),
+                (NoteKind::Message, "Agent report from “Count words”: Word count done", "## Word count done\n\nThe file has **42** words.\n\n```sh\nwc -w notes.txt\n```"),
+                (NoteKind::Task, "Agent \"Count words\" finished", ""),
+            ]
+        );
+        let reports: Vec<String> = t.entries.iter().filter_map(|e| if let Entry::Tool(x) = e { x.run.as_ref().map(|r| r.report.clone()) } else { None }).collect();
+        assert!(reports[0].starts_with("## Word count done") && reports[1].starts_with("Both lists"), "{reports:#?}");
+    }
+
     /// Recorded: a wake-up, a job, a watch and its events, as the session
     /// file keeps them; read back, nothing is left waiting.
     #[test]

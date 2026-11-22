@@ -75,6 +75,7 @@ pub fn summarize(name: &str, input: &Value, cwd: &str) -> (String, String, Optio
             let id = ["task_id", "bash_id", "shell_id"].iter().map(|k| s(k)).find(|x| !x.is_empty()).unwrap_or_default();
             (format!("Read the output of task {id}"), String::new(), None)
         }
+        "SubagentHandback" => (format!("Hand back the report: {}", crate::notes::plain_line(&s("message"), 80)), s("message"), None),
         "SendMessage" => (format!("Message to {}: {}", s("to"), first_line(&s("summary"))), s("message"), None),
         "ToolSearch" => (format!("Load tools: {}", s("query").trim_start_matches("select:").replace(',', ", ")), String::new(), None),
         "Skill" => (format!("Skill: {}", s("skill")), s("args"), None),

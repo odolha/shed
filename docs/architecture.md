@@ -482,6 +482,21 @@ them; the transcript updates the run they name and adds an `Entry::Note` (kind,
 line, folded detail) instead of a prompt. Live, notifications are `system`
 events, not messages.
 
+An agent's hand-back (its report, sent with its `SubagentHandback` tool) comes
+in several shapes: an `isMeta` message "Another Claude session sent a message:"
+with `<agent-message from="ID">` and a note for Claude after it; a
+`queued_command` attachment with `origin.kind: "peer"` when it came mid-turn
+(sent to the model as a `<system-reminder id=…>` beside a tool result); and in
+the stream only as the agent's last step, the `SubagentHandback` call. Any of
+them, wherever it is (a message of its own, a reminder before or after the
+user's words, a peer message without its meta flag), becomes one
+`NoteKind::Message` note ("Agent report from “name”: first line", the report
+folded below) and the agent's `Run::report`; the same report seen twice (live
+step, then the message) is noted once. The task notification that only points
+at the message ("This agent's report was delivered…") leaves the report as it
+is. The window pins running agents, and those ended in the last minute, above
+the prompt (`AiView::agents`, kept with the status).
+
 **Turns Claude starts.** While its process runs, Claude Code starts turns by
 itself: when a background task ends, a watch sees something, or a wake-up or job
 fires. Each begins with `system` `init` (and for a wake-up a

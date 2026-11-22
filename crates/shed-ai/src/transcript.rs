@@ -527,6 +527,11 @@ impl Transcript {
 
     fn user_message(&mut self, m: &Value) {
         let Some(msg) = m.get("message") else { return };
+        // A message from another session (an agent's report), whatever its
+        // flags say: never the user's words.
+        if m.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) == Some("peer") {
+            return self.peer(&message_text(msg.get("content")));
+        }
         // What a compaction left: the conversation so far, summed up.
         if m.get("isCompactSummary").and_then(Value::as_bool) == Some(true) {
             let summary = message_text(msg.get("content"));
@@ -589,6 +594,10 @@ impl Transcript {
         }
         for task in &read.tasks {
             self.task_note(task, false);
+        }
+        for (from, said) in &read.peers {
+            self.woken = true;
+            self.peer_said(from, said, None);
         }
         for (line, detail, error) in read.outputs {
             let detail = if detail == line { String::new() } else { detail };

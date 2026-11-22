@@ -36,6 +36,44 @@ use crate::theme::{UiColors, current_ui, hsla, hsla_alpha};
 const SESSIONS_WIDTH: f32 = 260.0;
 /// A user's message longer than this many lines shows folded.
 const FOLD_LINES: usize = 12;
+/// …or longer than this (long lines wrap to many): folded too.
+const FOLD_CHARS: usize = 1_500;
+/// Agents that ended stay in the strip above the prompt this long (seconds).
+const AGENT_KEPT: u64 = 60;
+/// An opened agent's prompt, as a step of its own, opened apart.
+const PROMPT_STEP: &str = "\u{0}prompt";
+
+/// A prompt shown folded: its first lines, and no more than `FOLD_CHARS`.
+fn folded_text(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= FOLD_LINES && text.len() <= FOLD_CHARS {
+        return None;
+    }
+    let mut shown = lines[..lines.len().min(FOLD_LINES)].join("\n");
+    if shown.len() > FOLD_CHARS {
+        shown.truncate(shown.floor_char_boundary(FOLD_CHARS));
+        shown.push('…');
+    }
+    Some(shown)
+}
+
+/// The same item of a conversation, after it changed: a tool by its id,
+/// a note by its line, others by kind.
+fn same_entry(a: &Entry, b: &Entry) -> bool {
+    match (a, b) {
+        (Entry::Tool(x), Entry::Tool(y)) => x.id == y.id,
+        (Entry::Note(x), Entry::Note(y)) => x.text == y.text,
+        _ => std::mem::discriminant(a) == std::mem::discriminant(b),
+    }
+}
+
+/// A sub-agent's tool and its run, if `e` is one.
+fn agent_run(e: &Entry) -> Option<(&shed_ai::Tool, &Run)> {
+    match e {
+        Entry::Tool(t) if matches!(t.name.as_str(), "Agent" | "Task") => t.run.as_deref().map(|r| (t, r)),
+        _ => None,
+    }
+}
 /// Lines of a tool's output shown when it is opened.
 const RESULT_LINES: usize = 40;
 
@@ -284,6 +322,8 @@ pub struct AiView {
     running: bool,
     /// When the latest of them started (its seconds are counted for a minute).
     newest_run: u64,
+    /// Sub-agents running or just ended, newest last: the strip above the prompt.
+    agents: Vec<usize>,
     _subs: Vec<Subscription>,
 }
 
@@ -506,6 +546,7 @@ impl AiView {
             open_steps: HashSet::new(),
             running: false,
             newest_run: 0,
+            agents: Vec::new(),
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -584,6 +625,9 @@ impl AiView {
     pub fn update(&mut self, from: usize, entries: Vec<Entry>, status: Status, cx: &mut Context<Self>) {
         let from = from.min(self.entries.len());
         let old_len = self.entries.len();
+        // What was opened stays open only where the same entry still is.
+        let old = &self.entries;
+        self.expanded.retain(|&e| e < from || old.get(e).zip(entries.get(e - from)).is_some_and(|(a, b)| same_entry(a, b)));
         self.entries.truncate(from);
         self.entries.extend(entries);
         self.parsed.retain(|i, _| *i < from);
@@ -641,6 +685,8 @@ impl AiView {
         });
         self.newest_run = running.clone().map(|r| r.started).max().unwrap_or(0);
         self.running = running.count() > 0;
+        let now = unix_now();
+        self.agents = self.entries.iter().enumerate().filter(|(_, e)| agent_run(e).is_some_and(|(_, r)| r.running() || r.ended + AGENT_KEPT > now)).map(|(i, _)| i).collect();
         self.tick(cx);
         cx.notify();
     }
@@ -913,6 +959,10 @@ impl AiView {
         let fresh = self.running && self.newest_run + 60 > now;
         if fresh || self.status.timers.iter().filter(counted).any(|t| t.at <= now + 60) {
             return Some(Duration::from_secs(1));
+        }
+        // An agent that ended leaves the strip after a minute.
+        if self.agents.iter().any(|&i| self.entries.get(i).and_then(agent_run).is_some_and(|(_, r)| !r.running() && r.ended + AGENT_KEPT > now)) {
+            return Some(Duration::from_secs(5));
         }
         // In minutes, the rest: runs going on for long (a server in the
         // background), timers further off. Nothing to count: no drawing.
@@ -2274,9 +2324,8 @@ impl AiView {
                 parsed
             }
             Some(Entry::User { text, .. }) => {
-                let lines: Vec<&str> = text.lines().collect();
-                let shown = if lines.len() > FOLD_LINES && !self.expanded.contains(&i) { lines[..FOLD_LINES].join("\n") } else { text.clone() };
-                Rc::new(Parsed::plain(shown))
+                let shown = if self.expanded.contains(&i) { None } else { folded_text(text) };
+                Rc::new(Parsed::plain(shown.unwrap_or_else(|| text.clone())))
             }
             Some(Entry::Thinking { text }) if self.expanded.contains(&i) => Rc::new(Parsed::plain(text.clone())),
             // An opened step: its input (the command) and what it returned,
@@ -2814,8 +2863,8 @@ impl AiView {
                     // The pictures sent with it, small; a click opens one whole.
                     .when(!pictures.is_empty(), |d| d.child(thumbnails(i, &pictures, self.remote_shown(&pictures, cx).as_deref(), 72.0, &ui, self.z())))
                     .when(pictures.is_empty() && images > 0, |d| d.child(div().mt_1().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{images} picture(s) attached"))))
-                    .when(lines.len() > FOLD_LINES, |d| {
-                        let label = if open { "Show less".to_string() } else { format!("Show all {} lines", lines.len()) };
+                    .when(folded_text(&text).is_some(), |d| {
+                        let label = if open { "Show less".to_string() } else if lines.len() > FOLD_LINES { format!("Show all {} lines", lines.len()) } else { "Show all".to_string() };
                         d.child(div().id(("fold", i)).mt_1().cursor_pointer().text_size(px(11.0 * self.z())).text_color(hsla(ui.ink(accent))).on_click(toggle).child(label))
                     })
                     .when(editing, |d| d.border_l_4()))
@@ -2889,7 +2938,14 @@ impl AiView {
                     None => self.status.timers.iter().find(|x| x.tool == t.id).map(|x| format!("fires {}", timer_when(x))),
                 };
                 let background = run.is_some_and(|r| r.background);
-                let mut el = div().id(("tool", i)).flex().flex_col().text_size(px(12.0 * self.z())).child(
+                // A sub-agent stands out: its own line in the accent colour.
+                let mut el = div()
+                    .id(("tool", i))
+                    .flex()
+                    .flex_col()
+                    .text_size(px(12.0 * self.z()))
+                    .when(agent, |d| d.pl_1p5().border_l_2().border_color(hsla_alpha(accent, 0.7)))
+                    .child(
                     div()
                         .id(("tool-head", i))
                         .group("tool-head")
@@ -2902,6 +2958,7 @@ impl AiView {
                         .on_click(toggle)
                         .child(div().flex_none().w(px(10.0)).text_color(hsla(ui.text_dim)).child(if open { "▾" } else { "▸" }))
                         .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(mark))
+                        .when(agent, |d| d.child(svg().path(icon("agent")).flex_none().size(px(13.0 * self.z())).text_color(hsla(ui.ink(accent)))))
                         .child(
                             div()
                                 .min_w_0()
@@ -2966,19 +3023,7 @@ impl AiView {
                         el = el.child(div().my_1().child(self.render_code(i, j, &parsed, &ui, &mono, cx)));
                     }
                     // Closing it from its end, without going back up to its line.
-                    el = el.child(
-                        div().flex().child(
-                            div()
-                                .id(("tool-collapse", i))
-                                .px_1p5()
-                                .rounded_sm()
-                                .cursor_pointer()
-                                .text_color(hsla(ui.text_dim))
-                                .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
-                                .on_click(cx.listener(move |this, _, _, cx| this.collapse(i, cx)))
-                                .child("▴ Collapse"),
-                        ),
-                    );
+                    el = el.child(div().flex().child(self.collapse_button(i, &ui, cx)));
                 }
                 el.into_any_element()
             }
@@ -3045,7 +3090,7 @@ impl AiView {
                     NoteKind::Wakeup => ("clock", ui.ink(accent)),
                     NoteKind::Command => ("terminal", ui.text_dim),
                     NoteKind::Compacted => ("history", ui.text_dim),
-                    NoteKind::Message => ("send", ui.text_dim),
+                    NoteKind::Message => ("agent", ui.ink(accent)),
                     NoteKind::Hook => ("settings", ui.text_dim),
                 };
                 let line = div()
@@ -3061,10 +3106,12 @@ impl AiView {
                     .child(svg().path(icon(glyph)).flex_none().size(px(12.0 * self.z())).text_color(hsla(color)))
                     .child(div().flex_1().min_w_0().truncate().child(n.text.clone()))
                     .children((n.at > 0).then(|| div().flex_none().text_size(px(11.0 * self.z())).text_color(hsla_alpha(ui.text_dim, 0.85)).child(local_time(n.at))));
-                let mut el = div().flex().flex_col().child(line);
+                let report = n.kind == NoteKind::Message;
+                let mut el = div().flex().flex_col().when(report, |d| d.pl_1p5().border_l_2().border_color(hsla_alpha(accent, 0.7))).child(line);
                 if open && foldable {
                     let parsed = self.entry_pieces(i);
                     el = el.child(div().pl(px(20.0)).my_1().text_size(px(12.5 * self.z())).child(self.render_pieces(i, &parsed, &ui, &mono, cx)));
+                    el = el.child(div().flex().pl(px(16.0)).text_size(px(12.0 * self.z())).child(self.collapse_button(i, &ui, cx)));
                 }
                 el.into_any_element()
             }
@@ -3091,8 +3138,37 @@ impl AiView {
         let accent = self.accent;
         let parsed = self.entry_pieces(i);
         let mut el = div().flex().flex_col();
+        // Its prompt, folded: often long, and not what one opens it for.
         if !t.detail.is_empty() {
-            el = el.child(div().my_1().child(self.render_code(i, 0, &parsed, ui, mono, cx)));
+            let key = (i, PROMPT_STEP.to_string());
+            let shown = self.open_steps.contains(&key);
+            let lines = t.detail.lines().count();
+            el = el.child(
+                div()
+                    .id(("agent-prompt", i))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(hsla(ui.text_dim))
+                    .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.open_steps.remove(&key) {
+                            this.open_steps.insert(key.clone());
+                        }
+                        if i >= this.first {
+                            let row = this.row(i);
+                            this.list.remeasure_items(row..row + 1);
+                        }
+                        cx.notify();
+                    }))
+                    .child(div().flex_none().w(px(10.0)).child(if shown { "▾" } else { "▸" }))
+                    .child(format!("Its prompt ({lines} line{})", if lines == 1 { "" } else { "s" })),
+            );
+            if shown {
+                el = el.child(div().my_1().child(self.render_code(i, 0, &parsed, ui, mono, cx)));
+            }
         }
         let what = [Some(run.agent.clone()).filter(|a| !a.is_empty()), (run.tokens > 0).then(|| format!("{} tokens", tokens(run.tokens)))].into_iter().flatten().collect::<Vec<_>>();
         if !what.is_empty() {
@@ -3167,19 +3243,79 @@ impl AiView {
             let report = self.render_range(i, &parsed, range, ui, mono, cx);
             el = el.child(div().mt_1().text_color(hsla(ui.text_dim)).child("Its report")).child(div().my_1().child(report));
         }
-        el.child(
-            div().flex().child(
+        el.child(div().flex().child(self.collapse_button(i, ui, cx)))
+    }
+
+    /// "▴ Collapse" at the end of an opened entry, to close it from there.
+    fn collapse_button(&self, i: usize, ui: &UiColors, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(("tool-collapse", i))
+            .px_1p5()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_color(hsla(ui.text_dim))
+            .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+            .on_click(cx.listener(move |this, _, _, cx| this.collapse(i, cx)))
+            .child("▴ Collapse")
+    }
+
+    /// Opens sub-agent `i` and brings it into view.
+    fn show_agent(&mut self, i: usize, cx: &mut Context<Self>) {
+        self.expanded.insert(i);
+        self.reveal(i);
+        let row = self.row(i);
+        self.list.remeasure_items(row..row + 1);
+        self.list.scroll_to(gpui::ListOffset { item_ix: row, offset_in_item: px(0.0) });
+        cx.notify();
+    }
+
+    /// The strip above the prompt: sub-agents running, and those that just
+    /// ended, each a line (what it is, how it does, its last step); a click
+    /// opens it in the conversation.
+    fn render_agents(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let now = unix_now();
+        let shown: Vec<(usize, &shed_ai::Tool, &Run)> =
+            self.agents.iter().filter_map(|&i| self.entries.get(i).and_then(agent_run).map(|(t, r)| (i, t, r))).filter(|(_, _, r)| r.running() || r.ended + AGENT_KEPT > now).collect();
+        if shown.is_empty() {
+            return None;
+        }
+        let accent = self.accent;
+        let z = self.z();
+        let mut out = div().flex().flex_col().gap_0p5();
+        for (i, t, run) in shown {
+            let (mark, color) = match run.state {
+                RunState::Running => (self.turning(), ui.ink(accent)),
+                RunState::Done => ("✓", ui.ink(accent)),
+                RunState::Failed => ("✗", ui.danger),
+                RunState::Stopped => ("■", ui.text_dim),
+            };
+            let name = t.summary.strip_prefix("Agent: ").unwrap_or(&t.summary).to_string();
+            let tools = (run.tools > 0).then(|| format!("{} tool call{}", run.tools, if run.tools == 1 { "" } else { "s" }));
+            let last = Some(run.last.clone()).filter(|l| run.running() && !l.is_empty() && l != "Starting");
+            out = out.child(
                 div()
-                    .id(("tool-collapse", i))
-                    .px_1p5()
-                    .rounded_sm()
+                    .id(("agent-chip", i))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(hsla_alpha(accent, if run.running() { 0.5 } else { 0.25 }))
                     .cursor_pointer()
-                    .text_color(hsla(ui.text_dim))
-                    .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.collapse(i, cx)))
-                    .child("▴ Collapse"),
-            ),
-        )
+                    .hover(|s| s.bg(hsla_alpha(accent, 0.1)))
+                    .tooltip(menu::tooltip("Show this agent in the conversation, opened: its prompt, steps and report"))
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_agent(i, cx)))
+                    .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(mark))
+                    .child(svg().path(icon("agent")).flex_none().size(px(12.0 * z)).text_color(hsla(ui.ink(accent))))
+                    .child(div().flex_none().max_w(relative(0.4)).truncate().text_color(hsla(ui.text)).child(name))
+                    .child(div().flex_none().text_color(hsla(if run.running() { ui.ink(accent) } else { ui.text_dim })).child(run_time(run)))
+                    .children(tools.map(|n| div().flex_none().text_color(hsla(ui.text_dim)).child(n)))
+                    .child(div().flex_1().min_w_0().truncate().font_family(self.settings.font.family.clone()).text_color(hsla(ui.text_dim)).children(last)),
+            );
+        }
+        Some(out)
     }
 
     fn render_sessions(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -3909,6 +4045,11 @@ impl AiView {
                     .child(div().flex_none().text_color(hsla(ui.ink(accent))).child(label))
                     .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(t.what.clone())),
             );
+        }
+        // Sub-agents at work (and just done), pinned where they are seen.
+        if let Some(agents) = self.render_agents(ui, cx) {
+            any = true;
+            out = out.child(agents);
         }
         // Waiting for Claude to be free (kept by the keeper, with the bench).
         let idle = self.status.state == AiState::Idle;
@@ -4878,6 +5019,15 @@ mod tests {
         assert!(view.update(cx, |v, _| v.running));
         let parsed = view.update(cx, |v, _| v.parsed.get(&agent).cloned()).unwrap();
         assert_eq!(parsed.groups.len(), 5);
+        // Running, it is pinned above the prompt; its line there opens it.
+        assert_eq!(view.update(cx, |v, _| v.agents.clone()), vec![agent]);
+        view.update(cx, |v, cx| {
+            v.expanded.remove(&agent);
+            v.show_agent(agent, cx);
+            assert!(v.expanded.contains(&agent));
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
         // Idle, a run going on for long (a server left in the background):
         // drawn again now and then, its mark still.
         let tick = view.update(cx, |v, _| {
@@ -4893,6 +5043,10 @@ mod tests {
             v.tick_every()
         });
         assert_eq!(tick, None);
+        // Another entry where an opened one was: not opened in its place.
+        let status = view.update(cx, |v, _| v.status.clone());
+        view.update(cx, |v, cx| v.update(agent, vec![Entry::Notice { text: "Stopped".into(), error: false }], status, cx));
+        assert!(!view.update(cx, |v, _| v.expanded.contains(&agent)));
     }
 
     #[gpui::test]

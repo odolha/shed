@@ -466,6 +466,19 @@ terminal of the bench.
   conversation says when one finishes ("Agent “Check every link…” finished",
   "Background command "Build the docs site" completed"). Sessions opened again
   show their agents' steps too (Claude Code keeps them beside the session).
+  Agents stand out with their own icon and a line in the tab's colour; opened,
+  their prompt stays folded (**Its prompt**) until clicked.
+- **Agents above the prompt**: while sub-agents run, each has a line just above
+  the prompt, whatever you scrolled to: what it is, how long it has run, how many
+  tool calls, and its latest step. An agent that ended stays there a minute,
+  marked done, failed or stopped. Click a line to open that agent in the
+  conversation. Nothing shows when no agent runs.
+- **Agent reports**: an agent that hands its report back as a message (rather
+  than as its result) gets a note of its own, folded: "Agent report from “Count
+  the guides' words”: Word count"; click it for the whole report, and **▴
+  Collapse** at its end closes it. The report is the agent's too ("Its report",
+  when opened). It never shows as your message. A long message of yours shows
+  its start, with **Show all** to open it.
 
   ![A sub-agent at work in the background, a finished command, and a wake-up waiting above the prompt](images/ai-agents.png)
 
@@ -1039,7 +1052,8 @@ calls`, `done in 40 s`); unfolded, it shows the kind of agent, its steps
 own notes (a background task finished, a wake-up, a command's output, a
 compaction) are lines of their own, their detail folded. Wake-ups, scheduled
 jobs and watches Claude set wait above the prompt, counting down (`⏰ Wakes up
-in 18 min`), and the tool that set one says when it fires. `Alt+I` attaches a
+in 18 min`), and the tool that set one says when it fires; so do running
+sub-agents (the latest four, and those ended in the last minute). `Alt+I` attaches a
 file or folder by its path: a picture goes as a picture, anything else as its
 path in the message (under "Attached files:"), for Claude to read.
 

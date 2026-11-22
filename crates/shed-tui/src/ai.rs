@@ -879,6 +879,28 @@ impl App {
             let room = w.saturating_sub(width(&label) + 6);
             extra.push(Line::from(vec![Span::styled(glyph, c.accent()), Span::styled(format!("{label} "), c.accent()), Span::raw(fit(&t.what.replace('\n', " "), room))]));
         }
+        // Sub-agents at work, and those ended in the last minute (the latest few).
+        let at = now();
+        let agents: Vec<(&shed_ai::Tool, &Run)> = view
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Tool(t) if matches!(t.name.as_str(), "Agent" | "Task") => t.run.as_deref().filter(|r| r.running() || r.ended + 60 > at).map(|r| (t, r)),
+                _ => None,
+            })
+            .collect();
+        for (t, run) in agents.iter().skip(agents.len().saturating_sub(4)) {
+            let name = t.summary.strip_prefix("Agent: ").unwrap_or(&t.summary);
+            let mark = match run.state {
+                RunState::Running => "◐ ",
+                RunState::Done => "✓ ",
+                RunState::Failed => "✗ ",
+                RunState::Stopped => "■ ",
+            };
+            let line = run_line(t, run);
+            let room = w.saturating_sub(width(&line) + 8);
+            extra.push(Line::from(vec![Span::styled(mark, c.accent()), Span::raw(fit(name, room)), Span::styled(format!(" · {line}"), c.dim())]));
+        }
         if !view.images.is_empty() || !view.files.is_empty() {
             let names: Vec<String> = view
                 .images
