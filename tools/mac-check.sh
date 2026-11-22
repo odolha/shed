@@ -29,4 +29,4 @@ exit 0
 SH
 chmod +x "$tools/cc" "$tools/ar"
 export CC_aarch64_apple_darwin=$tools/cc AR_aarch64_apple_darwin=$tools/ar
-exec cargo "${1:-clippy}" --target aarch64-apple-darwin --all-targets
+exec cargo "${1:-clippy}" --target aarch64-apple-darwin --workspace --all-targets

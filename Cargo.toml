@@ -1,6 +1,16 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# A plain `cargo build` (and `cargo build --release`) makes the desktop app and
+# its keeper; the nexus is built on its own (`-p shed-nexus`, `cargo install`):
+# its release build embeds the web app, which needs Node. `--workspace` takes
+# every crate (CI's clippy and tests do).
+default-members = [
+    "crates/shed-ai", "crates/shed-api", "crates/shed-app", "crates/shed-client", "crates/shed-codegen",
+    "crates/shed-desktop", "crates/shed-emu", "crates/shed-git", "crates/shed-keeper", "crates/shed-link",
+    "crates/shed-logbook", "crates/shed-model", "crates/shed-project", "crates/shed-proto", "crates/shed-review",
+    "crates/shed-save", "crates/shed-text", "crates/shed-tui",
+]
 
 [workspace.package]
 version = "0.1.0"

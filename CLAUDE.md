@@ -15,7 +15,7 @@ describes the product as users see it.
 
 ```sh
 cargo build                          # both binaries: target/debug/shed, target/debug/shedd
-cargo clippy --all-targets           # must stay clean (the libxkbcommon-x11 build warning is expected)
+cargo clippy --workspace --all-targets  # must stay clean (the libxkbcommon-x11 build warning is expected)
 cargo test --workspace               # all tests; the shed-app ones run real bash (and zsh if found)
 cargo test -p shed-app --test benches closed_benches   # one integration test, by name filter
 cargo test -p shed-save closed_benches_change_tab_by_tab

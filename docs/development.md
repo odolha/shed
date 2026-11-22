@@ -52,7 +52,7 @@ tests.) CI builds this variant too.
 
 ```sh
 cargo test --workspace
-cargo clippy --all-targets
+cargo clippy --workspace --all-targets
 ```
 
 - Unit tests sit with the code.
