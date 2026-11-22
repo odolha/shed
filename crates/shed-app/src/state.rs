@@ -10,8 +10,9 @@
 //! window process, so launching a bench here switches back.
 //!
 //! What windows read from this machine's disk (project tabs, the logbook,
-//! Claude Code's session files, desktop launchers) is not shown for another
-//! workspace: `is_remote` says so, and those views say it comes later.
+//! Claude Code's session files) is never taken for another workspace's:
+//! `is_remote` says which, and those views use that workspace's calls
+//! through the nexus. Its benches' launchers are named by it.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -116,6 +117,11 @@ pub struct AppState {
     /// Another workspace's calls and topics through the nexus (its files,
     /// Git, logbook, AI sessions), while it is shown.
     remote_api: Option<RemoteWorkspace>,
+    /// A bench to show once the workspace (by id) is entered
+    /// (`shed load --workspace`).
+    pending_load: Option<(String, String)>,
+    /// The workspace the panel's pins were last made to follow.
+    taskbar_for: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -169,6 +175,8 @@ impl AppState {
             shown_before: HashMap::new(),
             quitting: false,
             remote_api: None,
+            pending_load: None,
+            taskbar_for: None,
         }
     }
 
@@ -264,6 +272,7 @@ impl AppState {
                 self.show(bench, cx);
             }
             Frame::Keeper(KeeperMsg::ShowShed) => self.show_shed(cx),
+            Frame::Keeper(KeeperMsg::ShowInWorkspace { workspace, bench }) => self.show_in_workspace(workspace, bench, cx),
             _ => {}
         }
     }
@@ -432,12 +441,107 @@ impl AppState {
         for bench in self.shown_before.remove(&self.workspace).unwrap_or_default() {
             self.show(bench, cx);
         }
+        // A bench asked for in this workspace (its launcher): its keeper
+        // shows it, loading it if it is saved.
+        if let Workspace::Remote { id, .. } = &self.workspace
+            && let Some((_, bench)) = self.pending_load.take().filter(|(ws, _)| ws == id)
+        {
+            self.conn.send_msg(ClientMsg::Show(ShowTarget::Load { name: bench }));
+        }
+        self.follow_taskbar();
         // The Shed window's place is this PC's, kept by its keeper only.
         let place_conn = if self.is_remote() { KeeperConn::detached() } else { self.conn.clone() };
         if let Some(handle) = self.shed_window {
             handle.update(cx, |shed, _, _| shed.tracker().set_conn(place_conn)).ok();
         }
         cx.notify();
+    }
+
+    /// Shows another workspace's bench (`shed load --workspace`, its
+    /// launcher): `workspace` is its id or name at the nexus, `bench` a
+    /// name or launcher key there. Switches to it first if needed.
+    pub fn show_in_workspace(&mut self, workspace: String, bench: String, cx: &mut Context<Self>) {
+        if let Workspace::Remote { id, name } = &self.workspace
+            && names_workspace(&workspace, id, name)
+        {
+            self.conn.send_msg(ClientMsg::Show(ShowTarget::Load { name: bench }));
+            return;
+        }
+        let Some(sign_in) = shed_client::nexus_client::SignIn::load() else {
+            self.notice = Some(format!("Sign in to a nexus to show {workspace} (This PC ▾ → Sign In to Nexus…)."));
+            cx.notify();
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let listed = cx
+                .background_executor()
+                .spawn(async move {
+                    let ca = shed_client::nexus_client::configured_ca_file();
+                    shed_client::nexus_client::workspaces(&sign_in, ca.as_deref())
+                })
+                .await;
+            this.update(cx, |state, cx| match listed {
+                Ok(list) => match list.into_iter().find(|w| names_workspace(&workspace, &w.id, &w.name)) {
+                    Some(w) => {
+                        state.pending_load = Some((w.id.clone(), bench));
+                        state.switch_to(Workspace::Remote { id: w.id, name: w.name }, cx);
+                    }
+                    None => {
+                        state.notice = Some(format!("The nexus has no workspace {workspace}."));
+                        cx.notify();
+                    }
+                },
+                Err(e) => {
+                    state.notice = Some(format!("Cannot show {workspace}: {e:#}"));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// With `[desktop] taskbar_follows_workspace`, makes the panel's pinned
+    /// bench launchers the shown workspace's (in the background: it writes
+    /// the panel's settings and may ask the panel to reload).
+    fn follow_taskbar(&mut self) {
+        if cfg!(test) || !self.settings.config.desktop.taskbar_follows_workspace {
+            return;
+        }
+        let Some(panel) = shed_desktop::taskbar::Panel::detect() else { return };
+        let key = match &self.workspace {
+            Workspace::Local => shed_desktop::taskbar::LOCAL.to_string(),
+            Workspace::Remote { id, .. } => id.clone(),
+        };
+        if self.taskbar_for.as_ref() == Some(&key) {
+            return;
+        }
+        self.taskbar_for = Some(key.clone());
+        std::thread::spawn(move || {
+            // One switch at a time, in the order asked.
+            static SWITCHING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _one = SWITCHING.lock().unwrap_or_else(|e| e.into_inner());
+            let taskbar = shed_desktop::taskbar::Taskbar {
+                panel,
+                state_dir: shed_model::paths::state_dir(),
+                config_home: shed_model::paths::config_home(),
+                run: &shed_desktop::taskbar::System,
+            };
+            if let Err(e) = taskbar.switch(&key) {
+                warn!("cannot switch the {} panel's pinned benches: {e}", panel.name());
+            }
+        });
+    }
+
+    /// Turns `[desktop] taskbar_follows_workspace` on or off.
+    pub fn set_taskbar_follows(&mut self, on: bool, cx: &mut Context<Self>) {
+        if let Err(e) = Config::set_value(&Config::path(), Some("desktop"), "taskbar_follows_workspace", on.into()) {
+            self.notice = Some(format!("Cannot change the setting: {e}"));
+            cx.notify();
+            return;
+        }
+        let settings = Settings::load(&self.settings);
+        self.apply_settings(settings, cx);
     }
 
     /// Closes Shed: this PC's benches close and its keeper stops (another
@@ -465,11 +569,12 @@ impl AppState {
         }
     }
 
-    /// A bench window's app ID (the dock groups windows by it).
+    /// A bench window's app ID (the dock groups windows by it): its
+    /// launcher's, so a pinned launcher and its windows are one.
     fn app_id(&self, launcher: &str) -> String {
         match &self.workspace {
             Workspace::Local => shed_desktop::app_id(launcher),
-            Workspace::Remote { name, .. } => shed_desktop::app_id(&format!("{name}-{launcher}")),
+            Workspace::Remote { name, .. } => shed_desktop::remote_app_id(name, launcher),
         }
     }
 
@@ -486,8 +591,10 @@ impl AppState {
             }
             Frame::Keeper(KeeperMsg::Show { bench }) => self.show(bench, cx),
             Frame::Keeper(KeeperMsg::ShowShed) => self.show_shed(cx),
+            Frame::Keeper(KeeperMsg::ShowInWorkspace { workspace, bench }) => self.show_in_workspace(workspace, bench, cx),
             Frame::Keeper(KeeperMsg::Hide { bench }) => self.hide_bench(bench, cx),
             Frame::Keeper(KeeperMsg::Pegboard(info)) => {
+                self.prune_launchers(&info);
                 // A global, so only the pegboard redraws, not every window.
                 if cx.try_global::<PegboardData>().is_none_or(|d| d.0 != info) {
                     cx.set_global(PegboardData(info));
@@ -854,12 +961,14 @@ impl AppState {
     }
 
     /// Keeps every bench's desktop entry, icon and window app ID current.
+    /// Another workspace's benches get launchers named by it, which switch
+    /// Shed to it (`shed load --workspace`).
     fn sync_identities(&mut self, cx: &mut Context<Self>) {
-        // Launchers start this PC's benches: none for another workspace's.
-        if self.is_remote() {
-            return;
-        }
         let shed = std::env::current_exe().unwrap_or_else(|_| "shed".into());
+        let workspace = match &self.workspace {
+            Workspace::Local => None,
+            Workspace::Remote { id, name } => Some((id.clone(), name.clone())),
+        };
         let badges = self.settings.icon_badges;
         for bench in &self.tree.benches {
             let identity = Identity::of(bench, badges);
@@ -869,9 +978,9 @@ impl AppState {
             }
             // A rename rewrites the same entry; only a new launcher key moves it.
             if let Some(old) = previous.filter(|old| old.launcher != identity.launcher) {
-                self.desktop.remove(&old.launcher);
+                self.desktop.remove_app(&self.app_id(&old.launcher));
                 if let Some(handle) = self.windows.get(&bench.id) {
-                    let id = shed_desktop::app_id(&identity.launcher);
+                    let id = self.app_id(&identity.launcher);
                     handle.update(cx, |_, window, _| window.set_app_id(&id)).ok();
                 }
             }
@@ -888,6 +997,7 @@ impl AppState {
                 color: identity.color,
                 badge: identity.badge.as_deref(),
                 shed: &shed,
+                workspace: workspace.as_ref().map(|(id, name)| shed_desktop::WorkspaceRef { id, name }),
             });
             if let Err(e) = written {
                 warn!("cannot write the desktop entry for {}: {e}", identity.name);
@@ -895,8 +1005,28 @@ impl AppState {
             self.identities.insert(bench.id, identity);
         }
         // A bench that stops running is still saved, so its launcher stays;
-        // the keeper removes it when the bench is deleted.
+        // the keeper removes it when the bench is deleted (another
+        // workspace's: `prune_launchers`).
         self.identities.retain(|id, _| self.tree.bench(*id).is_some());
+    }
+
+    /// Another workspace's launchers of benches it no longer has (neither
+    /// running nor saved: deleted there) go, as the keeper removes this
+    /// PC's.
+    fn prune_launchers(&mut self, info: &shed_proto::PegboardInfo) {
+        let Workspace::Remote { name, .. } = &self.workspace else { return };
+        let keep: HashSet<String> = self
+            .tree
+            .benches
+            .iter()
+            .chain(info.stored.iter().map(|s| &s.bench))
+            .map(|b| shed_desktop::remote_app_id(name, &b.launcher))
+            .collect();
+        for id in self.desktop.remote_launchers(name) {
+            if !keep.contains(&id) {
+                self.desktop.remove_app(&id);
+            }
+        }
     }
 
     fn sync_window(&mut self, bench: BenchId, cx: &mut Context<Self>) {
@@ -929,8 +1059,14 @@ impl AppState {
         }
         cx.set_global(crate::prompt::CurrentUi(settings.ui.clone()));
         crate::theme::set_ui_scale(settings.font.size);
+        let follows = settings.config.desktop.taskbar_follows_workspace;
+        if follows != self.settings.config.desktop.taskbar_follows_workspace || !follows {
+            // Turned on: follow from here; off: next time it is on, again.
+            self.taskbar_for = None;
+        }
         self.settings = settings;
         self.sync_identities(cx);
+        self.follow_taskbar();
         for view in self.panes.values() {
             view.update(cx, |view, cx| view.apply(&self.settings, cx));
         }
@@ -1379,6 +1515,12 @@ pub fn pick_folder(cx: &mut gpui::App) -> impl std::future::Future<Output = Resu
     }
 }
 
+/// Whether `given` (`shed load --workspace`) names the workspace `id`
+/// called `name`: its id, its name in any case, or its name's slug.
+fn names_workspace(given: &str, id: &str, name: &str) -> bool {
+    given == id || name.eq_ignore_ascii_case(given) || shed_model::slug(name) == shed_model::slug(given)
+}
+
 pub fn window_title(bench: &str) -> String {
     format!("Shed — {bench}")
 }
@@ -1564,6 +1706,57 @@ mod tests {
         drop(remote);
         cx.run_until_parked();
         assert!(state.read_with(cx, |s, _| s.tree.bench(here_id).is_some()));
+    }
+
+    #[gpui::test]
+    fn another_workspaces_benches_get_launchers_of_their_own(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::prompt::CurrentUi(crate::theme::UiColors::default()));
+            crate::theme::set_ui_scale(1.0);
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let local = Fake::new();
+        let state = cx.new(|_| AppState::new(local.conn.clone(), Settings::default()));
+        cx.update(|cx| cx.set_global(AppHandle(state.downgrade())));
+        state.update(cx, |s, _| s.desktop = Desktop::new(dir.path().to_path_buf()));
+        let mut remote = Fake::new();
+        let mut standby = Fake::new();
+        let target = Workspace::Remote { id: "w2".into(), name: "Tower PC".into() };
+        state.update(cx, |s, cx| s.connected_to(target, remote.connection(), Some(standby.connection()), None, cx));
+        cx.run_until_parked();
+        let _ = remote.messages();
+
+        // A running bench's launcher, named by the workspace, opening it there.
+        let far = bench("far");
+        remote.keeper(KeeperMsg::TreeChanged(Shed { benches: vec![far.clone()], ..Default::default() }));
+        cx.run_until_parked();
+        let desktop = Desktop::new(dir.path().to_path_buf());
+        let entry = std::fs::read_to_string(desktop.entry_path_of("dev.shed.bench.tower-pc.far")).unwrap();
+        assert!(entry.contains(" load --workspace w2 far\n"), "{entry}");
+        assert!(entry.contains("StartupWMClass=dev.shed.bench.tower-pc.far\n"));
+        assert_eq!(state.read_with(cx, |s, _| s.app_id("far")), "dev.shed.bench.tower-pc.far", "windows group with their launcher");
+        assert!(!desktop.entry_path("far").exists(), "not one of this PC's");
+
+        // Deleted there (neither running nor saved): its launcher goes; a
+        // saved one's stays.
+        let shed = std::path::PathBuf::from("/usr/bin/shed");
+        for key in ["kept", "deleted"] {
+            let identity = BenchIdentity { launcher: key, name: key, color: BenchColor::Blue, badge: None, shed: &shed, workspace: Some(shed_desktop::WorkspaceRef { id: "w2", name: "Tower PC" }) };
+            desktop.install(&identity).unwrap();
+        }
+        let stored = vec![shed_proto::StoredBench { bench: bench("kept"), saved: String::new() }];
+        remote.keeper(KeeperMsg::Pegboard(shed_proto::PegboardInfo { stored, previews: Vec::new(), order: Vec::new() }));
+        cx.run_until_parked();
+        assert_eq!(desktop.remote_launchers("Tower PC"), ["dev.shed.bench.tower-pc.far", "dev.shed.bench.tower-pc.kept"]);
+
+        // Its launcher while it is shown: that keeper shows the bench (by
+        // name or key, loading it if saved), whichever way the request came.
+        standby.keeper(KeeperMsg::ShowInWorkspace { workspace: "tower-pc".into(), bench: "kept".into() });
+        cx.run_until_parked();
+        assert!(remote.messages().contains(&ClientMsg::Show(ShowTarget::Load { name: "kept".into() })));
+        state.update(cx, |s, cx| s.show_in_workspace("w2".into(), "far".into(), cx));
+        assert!(remote.messages().contains(&ClientMsg::Show(ShowTarget::Load { name: "far".into() })));
+        assert!(state.read_with(cx, |s, _| s.is_remote()), "still there");
     }
 
     #[gpui::test]

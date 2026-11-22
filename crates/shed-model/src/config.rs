@@ -47,6 +47,17 @@ pub struct Config {
     /// Android apps (`shed nexus join`).
     pub nexus: NexusConfig,
     pub keeper: KeeperSettings,
+    /// How Shed fits the desktop (Linux).
+    pub desktop: DesktopConfig,
+}
+
+/// How Shed fits the desktop's panel (Linux: Cinnamon and GNOME).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DesktopConfig {
+    /// Switching the workspace Shed shows switches which bench launchers
+    /// are pinned in the panel: each workspace keeps its own.
+    pub taskbar_follows_workspace: bool,
 }
 
 /// The keeper (`shedd`).

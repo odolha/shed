@@ -7,6 +7,8 @@ license.workspace = true
 [dependencies]
 shed-model.workspace = true
 resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

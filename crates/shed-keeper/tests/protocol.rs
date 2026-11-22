@@ -364,6 +364,14 @@ fn show_goes_to_the_window_process() {
         _ => None,
     });
     assert_eq!(again, shown);
+
+    // Another workspace's bench (its launcher): the window process switches.
+    cli.msg(ClientMsg::Show(shed_proto::ShowTarget::InWorkspace { workspace: "office".into(), bench: "api".into() }));
+    let asked = window.expect("show in workspace", |f| match f {
+        Frame::Keeper(KeeperMsg::ShowInWorkspace { workspace, bench }) => Some((workspace, bench)),
+        _ => None,
+    });
+    assert_eq!(asked, ("office".to_string(), "api".to_string()));
 }
 
 /// Status as a CLI client sees it.

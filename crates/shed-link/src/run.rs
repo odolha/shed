@@ -300,6 +300,7 @@ impl Link {
             KeeperMsg::Error(e) => debug!("keeper: {e}"),
             KeeperMsg::Welcome { .. }
             | KeeperMsg::Attached { .. }
+            | KeeperMsg::ShowInWorkspace { .. }
             | KeeperMsg::Show { .. }
             | KeeperMsg::PaneExited { .. }
             | KeeperMsg::Done(_)

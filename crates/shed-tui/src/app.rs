@@ -448,7 +448,7 @@ impl App {
                 }
             }
             KeeperMsg::AiLimits(limits) => self.limits = Some(limits),
-            KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Hide { .. } => {}
+            KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Hide { .. } | KeeperMsg::ShowInWorkspace { .. } => {}
         }
     }
 

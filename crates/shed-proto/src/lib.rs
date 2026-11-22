@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 51;
+pub const PROTOCOL_VERSION: u32 = 52;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -312,6 +312,10 @@ pub enum ShowTarget {
     /// A saved bench loaded with its startup run (and what ran in it
     /// started again).
     LoadAndStart { name: String },
+    /// Another workspace's bench (`shed load --workspace`, its launcher):
+    /// the window process switches to that workspace (its id or name) and
+    /// shows the bench there (by name or launcher key).
+    InWorkspace { workspace: String, bench: String },
 }
 
 /// Sent by the keeper to a client.
@@ -349,6 +353,9 @@ pub enum KeeperMsg {
     /// Entries of an AI tab's conversation changed in place, each alone (a
     /// sub-agent's progress while the conversation goes on): `(index, entry)`.
     AiEntries { tab: TabId, entries: Vec<(u32, shed_ai::Entry)>, status: shed_ai::Status },
+    /// To the window process: show another workspace's bench
+    /// (`ShowTarget::InWorkspace`).
+    ShowInWorkspace { workspace: String, bench: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

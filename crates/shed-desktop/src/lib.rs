@@ -8,7 +8,15 @@
 //!
 //! Everything is keyed by the bench's launcher key (see
 //! [`shed_model::Bench::launcher`]), not its name, so renaming a bench
-//! rewrites its entry in place and a pinned launcher keeps working.
+//! rewrites its entry in place and a pinned launcher keeps working. Another
+//! workspace's benches (shown through a nexus) get launchers of their own,
+//! `dev.shed.bench.<workspace>.<launcher>`, which switch Shed to that
+//! workspace (`shed load --workspace`).
+//!
+//! `taskbar` swaps the panel's pinned bench launchers as Shed switches
+//! workspace.
+
+pub mod taskbar;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -28,6 +36,20 @@ pub use shed_model::slug;
 /// The app ID (X11 `WM_CLASS`, Wayland `app_id`) of a bench's window.
 pub fn app_id(launcher: &str) -> String {
     format!("dev.shed.bench.{}", slug(launcher))
+}
+
+/// The app ID of another workspace's bench window: the workspace's slug
+/// first (a dot apart, which a bench of this PC's never has).
+pub fn remote_app_id(workspace: &str, launcher: &str) -> String {
+    format!("dev.shed.bench.{}.{}", slug(workspace), slug(launcher))
+}
+
+/// Another workspace, as its launchers name it.
+#[derive(Clone, Copy, Debug)]
+pub struct WorkspaceRef<'a> {
+    /// Its id at the nexus (what `shed load --workspace` is given).
+    pub id: &'a str,
+    pub name: &'a str,
 }
 
 fn hex(c: Rgb) -> String {
@@ -89,6 +111,18 @@ pub struct BenchIdentity<'a> {
     pub badge: Option<&'a str>,
     /// The `shed` binary the launcher runs.
     pub shed: &'a Path,
+    /// Another workspace's bench; `None` for this PC's.
+    pub workspace: Option<WorkspaceRef<'a>>,
+}
+
+impl BenchIdentity<'_> {
+    /// Its windows' app ID, which its launcher's files are named by.
+    pub fn app_id(&self) -> String {
+        match self.workspace {
+            None => app_id(self.launcher),
+            Some(w) => remote_app_id(w.name, self.launcher),
+        }
+    }
 }
 
 /// Where desktop entries and icons go: `~/.local/share` by default.
@@ -102,11 +136,20 @@ impl Desktop {
     }
 
     pub fn entry_path(&self, launcher: &str) -> PathBuf {
-        self.data_home.join("applications").join(format!("{}.desktop", app_id(launcher)))
+        self.entry_path_of(&app_id(launcher))
     }
 
     pub fn icon_path(&self, launcher: &str) -> PathBuf {
-        self.data_home.join("icons/hicolor/scalable/apps").join(format!("{}.svg", app_id(launcher)))
+        self.icon_path_of(&app_id(launcher))
+    }
+
+    /// A launcher's desktop entry, by its app ID.
+    pub fn entry_path_of(&self, app_id: &str) -> PathBuf {
+        self.data_home.join("applications").join(format!("{app_id}.desktop"))
+    }
+
+    pub fn icon_path_of(&self, app_id: &str) -> PathBuf {
+        self.data_home.join("icons/hicolor/scalable/apps").join(format!("{app_id}.svg"))
     }
 
     /// Writes the bench's icon and desktop entry. Files already up to date
@@ -116,27 +159,31 @@ impl Desktop {
         if !cfg!(target_os = "linux") {
             return Ok(());
         }
-        let icon = self.icon_path(bench.launcher);
+        let class = bench.app_id();
+        let icon = self.icon_path_of(&class);
         write_if_changed(&icon, &icon_svg(bench.color, bench.badge))?;
+        let (name, workspace) = match bench.workspace {
+            None => (bench.name.to_string(), String::new()),
+            Some(w) => (format!("{} · {}", bench.name, w.name), format!("--workspace {} ", desktop_quote(w.id))),
+        };
         let entry = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
              Name=Shed — {name}\n\
              Comment=Shed bench “{name}”\n\
-             Exec={exe} load {key}\n\
+             Exec={exe} load {workspace}{key}\n\
              Icon={icon}\n\
              StartupWMClass={class}\n\
              Terminal=false\n\
              Categories=System;TerminalEmulator;\n\
              NoDisplay=true\n",
-            name = bench.name,
+            name = desktop_value(&name),
             exe = desktop_quote(&bench.shed.to_string_lossy()),
             // By launcher key: it outlives renames, which the name does not.
             key = desktop_quote(bench.launcher),
             icon = icon.display(),
-            class = app_id(bench.launcher),
         );
-        write_if_changed(&self.entry_path(bench.launcher), &entry)
+        write_if_changed(&self.entry_path_of(&class), &entry)
     }
 
     /// Writes Shed's own launcher and icon, which the Shed window goes by,
@@ -172,9 +219,33 @@ impl Desktop {
 
     /// Removes a bench's desktop entry and icon.
     pub fn remove(&self, launcher: &str) {
-        let _ = std::fs::remove_file(self.entry_path(launcher));
-        let _ = std::fs::remove_file(self.icon_path(launcher));
+        self.remove_app(&app_id(launcher));
     }
+
+    /// Removes a launcher's desktop entry and icon, by its app ID.
+    pub fn remove_app(&self, app_id: &str) {
+        let _ = std::fs::remove_file(self.entry_path_of(app_id));
+        let _ = std::fs::remove_file(self.icon_path_of(app_id));
+    }
+
+    /// The app IDs of the launchers written here for another workspace's
+    /// benches (`remote_app_id`).
+    pub fn remote_launchers(&self, workspace: &str) -> Vec<String> {
+        let prefix = format!("dev.shed.bench.{}.", slug(workspace));
+        let Ok(entries) = std::fs::read_dir(self.data_home.join("applications")) else { return Vec::new() };
+        let mut ids: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| e.file_name().to_str()?.strip_suffix(".desktop").map(str::to_string))
+            .filter(|id| id.starts_with(&prefix))
+            .collect();
+        ids.sort();
+        ids
+    }
+}
+
+/// A desktop entry's string value: no line breaks.
+fn desktop_value(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
 /// Whether an installed package provides Shed's launcher, in the system
@@ -240,7 +311,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let desktop = Desktop::new(dir.path().to_path_buf());
         let shed = Path::new("/opt/shed bin/shed");
-        let bench = BenchIdentity { launcher: "web-site", name: "web site", color: BenchColor::Green, badge: None, shed };
+        let bench = BenchIdentity { launcher: "web-site", name: "web site", color: BenchColor::Green, badge: None, shed, workspace: None };
         desktop.install(&bench).unwrap();
         let entry = std::fs::read_to_string(desktop.entry_path("web-site")).unwrap();
         assert!(entry.contains("StartupWMClass=dev.shed.bench.web-site\n"));
@@ -255,5 +326,32 @@ mod tests {
 
         desktop.remove("web-site");
         assert!(!desktop.entry_path("web-site").exists());
+    }
+
+    #[test]
+    fn another_workspaces_launchers_go_by_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let desktop = Desktop::new(dir.path().to_path_buf());
+        let shed = Path::new("/usr/bin/shed");
+        let office = WorkspaceRef { id: "w-1f3a", name: "Office PC" };
+        let bench = BenchIdentity { launcher: "api", name: "api", color: BenchColor::Blue, badge: None, shed, workspace: Some(office) };
+        assert_eq!(bench.app_id(), "dev.shed.bench.office-pc.api");
+        desktop.install(&bench).unwrap();
+        // This PC's bench of the same key is another launcher.
+        desktop.install(&BenchIdentity { workspace: None, ..bench }).unwrap();
+        let entry = std::fs::read_to_string(desktop.entry_path_of("dev.shed.bench.office-pc.api")).unwrap();
+        assert!(entry.contains("Exec=/usr/bin/shed load --workspace w-1f3a api\n"), "{entry}");
+        assert!(entry.contains("StartupWMClass=dev.shed.bench.office-pc.api\n"));
+        assert!(entry.contains("Name=Shed — api · Office PC\n"));
+        assert!(desktop.icon_path_of("dev.shed.bench.office-pc.api").exists());
+        assert!(std::fs::read_to_string(desktop.entry_path("api")).unwrap().contains(" load api\n"));
+
+        // Listed by workspace (never this PC's), and removed one by one.
+        desktop.install(&BenchIdentity { launcher: "db", ..bench }).unwrap();
+        assert_eq!(desktop.remote_launchers("Office PC"), ["dev.shed.bench.office-pc.api", "dev.shed.bench.office-pc.db"]);
+        assert!(desktop.remote_launchers("office").is_empty());
+        desktop.remove_app("dev.shed.bench.office-pc.db");
+        assert_eq!(desktop.remote_launchers("Office PC"), ["dev.shed.bench.office-pc.api"]);
+        assert!(desktop.entry_path("api").exists());
     }
 }

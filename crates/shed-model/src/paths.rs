@@ -15,7 +15,12 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
 
 /// `~/.config/shed`
 pub fn config_dir() -> PathBuf {
-    xdg("XDG_CONFIG_HOME", ".config").join("shed")
+    config_home().join("shed")
+}
+
+/// `~/.config`: other programs' settings are under it too (Cinnamon's panel).
+pub fn config_home() -> PathBuf {
+    xdg("XDG_CONFIG_HOME", ".config")
 }
 
 /// `~/.local/share`: where desktop entries and icons go.

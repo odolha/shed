@@ -165,6 +165,10 @@ enum Command {
         /// Loading from its file: run its startup, and start again what ran.
         #[arg(long)]
         start: bool,
+        /// Another workspace's bench (its id or name at the nexus this
+        /// desktop is signed in to): Shed's window switches to it first.
+        #[arg(long, conflicts_with_all = ["quiet", "start"])]
+        workspace: Option<String>,
     },
     /// Hide a running bench: its window closes, its tools keep running.
     Hide { name: String },
@@ -399,6 +403,7 @@ fn main() -> anyhow::Result<()> {
             let cwd = cwd.map(std::path::absolute).transpose()?;
             run_app(ShowTarget::NewBench { name, cwd })
         }
+        Some(Command::Load { name, workspace: Some(workspace), .. }) => run_app(ShowTarget::InWorkspace { workspace, bench: name }),
         Some(Command::Load { name, quiet: true, .. }) => run_app(ShowTarget::LoadQuiet { name }),
         Some(Command::Load { name, start: true, .. }) => run_app(ShowTarget::LoadAndStart { name }),
         Some(Command::Load { name, .. }) => run_app(ShowTarget::Load { name }),

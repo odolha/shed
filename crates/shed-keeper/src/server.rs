@@ -1281,6 +1281,14 @@ impl Keeper {
     fn show(self: &Arc<Self>, client: ClientId, target: ShowTarget) {
         let mut st = self.lock();
         let benches = match target {
+            // Another workspace's: the window process switches to it.
+            ShowTarget::InWorkspace { workspace, bench } => {
+                match st.window_client(client) {
+                    Some(window) => st.send(window, KeeperMsg::ShowInWorkspace { workspace, bench }),
+                    None => st.send(client, KeeperMsg::Error("no window is open to show it in".into())),
+                }
+                return;
+            }
             ShowTarget::Bench(b) if st.tree.bench(b).is_some() => vec![b],
             ShowTarget::Bench(b) => {
                 st.send(client, KeeperMsg::Error(format!("no bench {b}")));

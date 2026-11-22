@@ -711,7 +711,8 @@ launcher.
 **Taskbar and dock.** Every bench writes a launcher for itself, so it shows as its
 own app with its own icon, a terminal window on a workbench in the bench's colour. Pin it to your dock:
 clicking it opens that bench (and Shed, if it is not running). Renaming the bench
-keeps the pin working.
+keeps the pin working. Another workspace's benches, shown in Shed's window,
+get launchers too (see [Other workspaces in this window](#other-workspaces-in-this-window)).
 
 ## Setup: startup, teardown and aliases
 
@@ -1210,7 +1211,35 @@ workspace: do those in a project tab there). Files you attach to a prompt
 or a draft are sent to that workspace first (up to 16 MB each; not
 folders), and their path there is what Claude reads. New project and AI
 tabs choose a folder in a browser of that workspace's folders (Up, a path
-to type, Open This Folder). Its benches get no desktop launchers here.
+to type, Open This Folder).
+
+**Its benches' launchers.** Each of its benches, once it has run while
+shown here, gets a launcher of its own on this PC, named after the bench
+and the workspace (`Shed — api · office`, app ID
+`dev.shed.bench.office.api`), and its windows go by the same ID, so a pinned
+launcher and its windows are one icon. Clicking it switches Shed's window to
+that workspace (starting Shed if needed) and opens the bench there, loading
+it if it is closed (`shed load --workspace office api`). A bench deleted on
+that workspace loses its launcher here the next time Shed shows it.
+
+**The taskbar follows the workspace** (optional, Cinnamon and GNOME). With
+**This PC ▾ → Taskbar Follows Workspace** (`[desktop]
+taskbar_follows_workspace = true`), switching workspace also switches which
+bench launchers are pinned in your panel: Shed remembers each workspace's
+pinned benches, takes the shown one's out and puts the other's in where they
+were. Only Shed's bench launchers (`dev.shed.bench.…`) are touched; your
+other pins, and Shed's own launcher, stay as they are. Pin or unpin benches
+as usual; what is pinned when you switch away is what that workspace gets
+back. On Cinnamon it changes the window list applet's pins (the grouped
+window list, or a fork of it) and asks Cinnamon to reload that applet, so the
+window list redraws for a moment on each switch; on GNOME it changes the
+dash's favourites. On other desktops the item is greyed out.
+Before changing anything the first time, Shed copies the panel's settings
+to `~/.local/state/shed/panel-backup/`. To put them back, turn the option
+off, then on Cinnamon copy `cinnamon/<applet>/<n>.json` from there to
+`~/.config/cinnamon/spices/<applet>/<n>.json` and restart Cinnamon (or log
+out and in); on GNOME run
+`gsettings set org.gnome.shell favorite-apps "$(cat ~/.local/state/shed/panel-backup/gnome-favorite-apps.txt)"`.
 Notifications from its AI tabs come here as usual. Links it shows (its
 benches' links, Ctrl+click in its terminals, links in Claude's answers) open
 here only if they are web pages (`http`, `https`); files and other kinds of
@@ -1389,6 +1418,7 @@ same keeper, so they show up there as benches of their own.
 | `shed` | Opens the Shed window (starting the keeper if needed) |
 | `shed new [--name N] [--cwd DIR]` | Makes a bench and opens it |
 | `shed load NAME [--start\|--quiet]` | Opens a bench: raises it, shows it, or loads it if closed (quietly, unless `--start` or `start_on_open`) |
+| `shed load --workspace WS NAME` | Opens another workspace's bench: Shed's window switches to WS (its name or id at the nexus) first; what that workspace's launchers run |
 | `shed hide NAME` | Hides a running bench: closes its window, keeps it running |
 | `shed list` | Lists benches: open, hidden and closed |
 | `shed save NAME [--as COPY]` | Saves a bench now; `--as` saves a copy, handy as a template |
@@ -1455,6 +1485,9 @@ integration = true             # load Shed's bash or zsh integration into its sh
 
 [macos]
 option_as_alt = false          # Option sends Alt to the shell instead of typing é, @, …
+
+[desktop]
+taskbar_follows_workspace = false  # Cinnamon, GNOME: each workspace keeps its own pinned benches
 
 [ai]                           # the "> request" prompt
 command = "claude -p --no-session-persistence"   # request on stdin, prints a command; "" turns it off

@@ -693,7 +693,29 @@ bench template: a terminal window on a workbench, rendered in the bench's colour
 with resvg) to
 `~/.local/share`, so docks show one icon per bench and a pinned one runs
 `shed load <key>`. Installed packages provide Shed's own entry and icons in the
-hicolor theme.
+hicolor theme. Another workspace's benches get entries of their own,
+`dev.shed.bench.<workspace slug>.<key>` (a dot apart, which this PC's keys
+never have), running `shed load --workspace <id> <key>`
+(`ShowTarget::InWorkspace`: the keeper hands it to the window process as
+`KeeperMsg::ShowInWorkspace`, which switches workspace if needed and asks
+that keeper to `Load` the bench); their windows' app IDs are the same, so
+pins group with windows. They are written by `AppState::sync_identities` as
+this PC's are, and removed when a `Pegboard` from that workspace has the
+bench neither running nor saved (`prune_launchers`).
+
+With `[desktop] taskbar_follows_workspace` (`shed_desktop::taskbar`), entering
+a workspace also swaps the panel's pinned bench launchers, on a thread of
+its own: Shed's state folder keeps `taskbar.json` (whose pins the panel has,
+and each workspace's pins per panel place with where they were) and, before
+the first change, a copy of the panel's settings in `panel-backup/`. Pins not
+starting with `dev.shed.bench.` are never moved. Cinnamon: every spices
+settings file with a `pinned-apps` list (the grouped window list and its
+forks) is rewritten, then `org.Cinnamon.ReloadXlet(uuid, "APPLET")` over
+D-Bus (`gdbus`), since the applet reads pins only as it loads (Cinnamon's
+`updateSetting` would change the value without the applet redrawing).
+GNOME: `gsettings` `org.gnome.shell favorite-apps`, which the shell follows
+live. The panel is found from `XDG_CURRENT_DESKTOP`; elsewhere nothing is
+changed.
 
 Each window's place (size and position while not maximized, and whether it is
 maximized or full screen) is sent to the keeper half a second after it stops
@@ -1194,9 +1216,9 @@ opens `folder_browser.rs`, a small window over `Browse`. What another
 workspace can make this desktop open (its benches' link chips, links in its
 terminals and in Claude's answers) opens only if it is an `http` or `https`
 address (`links::may_open`, `open_external`): never a file here or another
-scheme's handler; its pictures open from a temporary copy, SVGs not at all. No desktop
-launchers or icons are written. Bench windows' titles end with the
-workspace's name and their app IDs include it; their places are not taken
+scheme's handler; its pictures open from a temporary copy, SVGs not at all. Its benches'
+launchers are named by it (see "Windows and the desktop"). Bench windows'
+titles end with the workspace's name and their app IDs are their launchers'; their places are not taken
 from, or sent to, that keeper (it keeps its own screens' places).
 
 **The Android app** (`android/`, Kotlin and Jetpack Compose) is a connector:

@@ -203,6 +203,26 @@ impl ShedWindow {
             }
             None => entries.push(item("Sign In to Nexus…", |this: &mut Self, window, cx| this.open_sign_in(window, cx)).icon("globe")),
         }
+        // The panel's pinned bench launchers can switch with the workspace.
+        entries.push(MenuEntry::Separator);
+        let follows = state.settings.config.desktop.taskbar_follows_workspace;
+        match shed_desktop::taskbar::Panel::detect() {
+            Some(panel) => entries.push(
+                item("Taskbar Follows Workspace", move |this: &mut Self, _, cx| {
+                    this.state.update(cx, |state, cx| state.set_taskbar_follows(!follows, cx));
+                })
+                .icon(if follows { "check" } else { "pegboard" })
+                .tip(format!(
+                    "Switching workspace switches the bench launchers pinned in the {} panel: each workspace keeps its own pins. Other pins are left as they are.",
+                    panel.name()
+                )),
+            ),
+            None => entries.push(
+                menu::disabled("Taskbar Follows Workspace", "")
+                    .icon("pegboard")
+                    .tip("Only on Cinnamon and GNOME: other desktops' panels are not changed."),
+            ),
+        }
         entries
     }
 

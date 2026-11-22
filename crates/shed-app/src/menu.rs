@@ -15,13 +15,14 @@ pub type MenuEntries<V> = Rc<dyn Fn(&mut V, &mut Context<V>) -> Vec<MenuEntry<V>
 
 pub enum MenuEntry<V> {
     /// `dot`: a colour shown before the label (a tag's), in the icon's place.
-    Item { label: SharedString, icon: Option<&'static str>, danger: bool, action: MenuAction<V>, dot: Option<Rgb> },
+    /// `tip`: a tooltip on hover.
+    Item { label: SharedString, icon: Option<&'static str>, danger: bool, action: MenuAction<V>, dot: Option<Rgb>, tip: Option<SharedString> },
     /// Colours to pick from, as a grid of dots.
     Palette(Vec<Swatch<V>>),
     /// Opens another menu in its place.
     More { label: SharedString, icon: Option<&'static str>, entries: MenuEntries<V> },
     /// Shown dimmed, not to be chosen, with why beside it ("offline").
-    Disabled { label: SharedString, icon: Option<&'static str>, note: SharedString },
+    Disabled { label: SharedString, icon: Option<&'static str>, note: SharedString, tip: Option<SharedString> },
     Separator,
 }
 
@@ -46,6 +47,14 @@ impl<V> MenuEntry<V> {
         self
     }
 
+    /// A tooltip saying more, on hover.
+    pub fn tip(mut self, text: impl Into<SharedString>) -> Self {
+        if let MenuEntry::Item { tip, .. } | MenuEntry::Disabled { tip, .. } = &mut self {
+            *tip = Some(text.into());
+        }
+        self
+    }
+
     /// Shows a dot of this colour before the label.
     pub fn dot(mut self, color: Rgb) -> Self {
         if let MenuEntry::Item { dot, .. } = &mut self {
@@ -56,7 +65,7 @@ impl<V> MenuEntry<V> {
 }
 
 pub fn item<V>(label: impl Into<SharedString>, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> MenuEntry<V> {
-    MenuEntry::Item { label: label.into(), icon: None, danger: false, action: Rc::new(action), dot: None }
+    MenuEntry::Item { label: label.into(), icon: None, danger: false, action: Rc::new(action), dot: None, tip: None }
 }
 
 /// An item that opens another menu, made when it is chosen.
@@ -66,12 +75,12 @@ pub fn more<V>(label: impl Into<SharedString>, entries: impl Fn(&mut V, &mut Con
 
 /// An item that cannot be chosen now, dimmed, with why (`note`) beside it.
 pub fn disabled<V>(label: impl Into<SharedString>, note: impl Into<SharedString>) -> MenuEntry<V> {
-    MenuEntry::Disabled { label: label.into(), icon: None, note: note.into() }
+    MenuEntry::Disabled { label: label.into(), icon: None, note: note.into(), tip: None }
 }
 
 /// An item in red, for what stops or removes things.
 pub fn danger<V>(label: impl Into<SharedString>, action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static) -> MenuEntry<V> {
-    MenuEntry::Item { label: label.into(), icon: None, danger: true, action: Rc::new(action), dot: None }
+    MenuEntry::Item { label: label.into(), icon: None, danger: true, action: Rc::new(action), dot: None, tip: None }
 }
 
 /// A one-line tooltip: `.tooltip(tooltip("Close"))`.
@@ -307,7 +316,7 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
                     }))
                     .into_any_element()
             }
-            MenuEntry::Disabled { label, icon: glyph, note } => div()
+            MenuEntry::Disabled { label, icon: glyph, note, tip } => div()
                 .id(("menu-item", base + i))
                 .h(crate::theme::us(ROW))
                 .flex()
@@ -318,8 +327,9 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
                 .children(lead(glyph, ui.text_dim))
                 .child(div().flex_1().child(label.clone()))
                 .child(div().text_size(crate::theme::us(11.0)).child(note.clone()))
+                .when_some(tip.clone(), |d, t| d.tooltip(tooltip_text(t)))
                 .into_any_element(),
-            MenuEntry::Item { label, icon: glyph, danger, action, dot } => {
+            MenuEntry::Item { label, icon: glyph, danger, action, dot, tip } => {
                 let action = action.clone();
                 let color = if *danger { ui.danger } else { ui.text };
                 let lead = match dot {
@@ -331,6 +341,7 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
                     .children(lead)
                     .child(label.clone())
+                    .when_some(tip.clone(), |d, t| d.tooltip(tooltip_text(t)))
                     // Moving onto another item of the menu closes a submenu.
                     .when(top, |d| {
                         d.on_hover(cx.listener(|this: &mut V, hovered: &bool, _, cx| {
