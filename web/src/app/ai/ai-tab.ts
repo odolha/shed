@@ -203,6 +203,9 @@ const PAGE = 150;
                     @if (canChange()) {
                       <button class="btn ghost small" (click)="sendDraft(d.index, d.text)">{{ 'common.send' | t }}</button>
                       <button class="btn ghost small" (click)="editDraft(d.index, d.text)">{{ 'common.edit' | t }}</button>
+                      <button class="btn ghost small" (click)="mergeDraft(d.text)" [shedTip]="'ai.mergeDraft.tip' | t">
+                        <shed-icon name="plus" [size]="14" />{{ 'ai.mergeDraft' | t }}
+                      </button>
                       <button class="btn ghost small danger" (click)="deleteDraft(d.index, d.text)">{{ 'common.delete' | t }}</button>
                     }
                   </div>
@@ -816,6 +819,11 @@ export class AiTab {
     if (await this.call({ type: 'AiRemoveDraft', content: { tab: this.tabId(), index, text } })) {
       this.prompt()?.fill(text);
     }
+  }
+
+  /** Adds a draft's text at the end of the prompt; the draft stays. */
+  protected mergeDraft(text: string): void {
+    this.prompt()?.merge(text);
   }
 
   protected async deleteDraft(index: number, text: string): Promise<void> {

@@ -762,7 +762,7 @@ impl App {
         self.menu("Drafts", items, move |app, i| {
             let (index, d) = drafts[i].clone();
             let remove = AiChange::RemoveDraft { index: index as u32, session: d.session.clone(), text: d.text.clone() };
-            let items = vec![Item::new("Send Now"), Item::new("Put in the Prompt"), Item::new("Delete…").danger()];
+            let items = vec![Item::new("Send Now"), Item::new("Put in the Prompt"), Item::new("Merge into Prompt"), Item::new("Delete…").danger()];
             app.menu("Draft", items, move |app, i| match i {
                 0 => {
                     app.send(ClientMsg::AiSend { tab, text: d.text.clone(), images: Vec::new() });
@@ -773,6 +773,13 @@ impl App {
                         v.input.set(d.text.clone());
                     }
                     app.send(ClientMsg::AiChange { tab, change: remove });
+                }
+                // At the end of what is in the prompt; the draft stays.
+                2 => {
+                    if let Some(v) = app.ais.get_mut(&tab) {
+                        let merged = d.merged_into(&v.input.text);
+                        v.input.set(merged);
+                    }
                 }
                 _ => app.confirm("Delete Draft", "Delete this draft?", "Delete", true, move |app| app.send(ClientMsg::AiChange { tab, change: remove })),
             });

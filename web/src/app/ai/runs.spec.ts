@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import type { AiEntry, AiRun, AiTimer, AiTool } from '../../api/gen/api';
 import { AiEntryView, noteIcon } from './entries';
-import { isPicture } from './prompt';
+import { isPicture, mergedDraft } from './prompt';
 import { coarse, runLine, runningStarts, tickEvery, timerLabel, timerWhen, took, tokens, withAttachedFiles } from './runs';
 
 const NOW = 1_800_000_000;
@@ -130,5 +130,14 @@ describe('AiEntryView', () => {
     const el = render({ type: 'Tool', content: agent({ state: 'running', started: Math.floor(Date.now() / 1000) - 5, last: 'Read a.rs', tools: 2 }) });
     expect(el.textContent).toContain('Agent: Look around');
     expect(el.textContent).toContain('Read a.rs · 2 tool calls');
+  });
+});
+
+describe('mergedDraft', () => {
+  it('puts the draft at the end, after a blank line', () => {
+    expect(mergedDraft('', 'and the tests')).toBe('and the tests');
+    expect(mergedDraft('  \n', 'and the tests')).toBe('and the tests');
+    expect(mergedDraft('Fix the build', 'and the tests')).toBe('Fix the build\n\nand the tests');
+    expect(mergedDraft('Fix the build\n\n', 'and the tests')).toBe('Fix the build\n\nand the tests');
   });
 });

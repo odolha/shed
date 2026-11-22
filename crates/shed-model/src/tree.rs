@@ -352,6 +352,15 @@ pub struct Draft {
     pub text: String,
 }
 
+impl Draft {
+    /// The prompt with this draft merged into it: the draft's text at the
+    /// end, after a blank line (alone, in a prompt with nothing in it).
+    pub fn merged_into(&self, prompt: &str) -> String {
+        let prompt = prompt.trim_end();
+        if prompt.trim().is_empty() { self.text.clone() } else { format!("{prompt}\n\n{}", self.text) }
+    }
+}
+
 /// A draft session: drafts written in a new session before anything was
 /// sent, listed with the sessions.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -894,6 +903,15 @@ pub fn split_rect(area: Rect, dir: SplitDir, ratio: f32) -> (Rect, Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_draft_merges_at_the_end_after_a_blank_line() {
+        let draft = Draft { session: "s".into(), text: "and the tests".into() };
+        assert_eq!(draft.merged_into(""), "and the tests");
+        assert_eq!(draft.merged_into("  \n"), "and the tests");
+        assert_eq!(draft.merged_into("Fix the build"), "Fix the build\n\nand the tests");
+        assert_eq!(draft.merged_into("Fix the build\n\n"), "Fix the build\n\nand the tests");
+    }
 
     #[test]
     fn a_tab_dropped_on_another_joins_its_group() {

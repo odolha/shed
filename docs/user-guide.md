@@ -403,10 +403,14 @@ terminal of the bench.
   and is there when the tab opens again. **Draft** (or Ctrl+S) keeps the message for
   later instead, with its files and pictures. Drafts belong to their session:
   **Drafts (N)** opens this session's, and each has **Send** (queued if Claude
-  is busy), **Edit** and **Delete…**. **Edit** opens the draft in the prompt
+  is busy), **Edit**, **Merge into Prompt** and **Delete…**. **Edit** opens the draft in the prompt
   (what you were writing is set aside) and marks it in the list: **Save Draft**
   (the ✓, or Ctrl+S) keeps the change in place, **Cancel** (or Esc) leaves it as
-  it was, **Send** sends it; opening another draft puts the first back. In the sessions
+  it was, **Send** sends it; opening another draft puts the first back.
+  **Merge into Prompt** adds the draft's text at the end of what is in the
+  prompt, after a blank line, and leaves the draft in the list (delete it once
+  you are done with it); while you edit another draft, it goes into that one.
+  The web and Android apps and `shed tui` have it in their drafts too. In the sessions
   list, a session with drafts says how many. A draft kept in a new session, before
   anything is sent, makes it a **draft session**: listed first with the sessions
   (a pencil, titled by its first line, "Draft · N messages kept"), to come back
@@ -1042,7 +1046,7 @@ path in the message (under "Attached files:"), for Claude to read.
 | `PgUp` / `PgDn` | Scroll the conversation |
 | `Alt+S` / `Alt+N` | The sessions (Enter opens, → shows a conversation's files, `r` renames, `D` deletes after asking, `n` new) / a new session |
 | `Alt+M` / `Alt+O` / `Alt+E` | Model / mode (Full Auto asks first) / effort |
-| `Alt+D` / `Alt+P` | Keep the prompt as a draft / the drafts (send, put back in the prompt, delete) |
+| `Alt+D` / `Alt+P` | Keep the prompt as a draft / the drafts (send, put back in the prompt, merge into the prompt, delete) |
 | `Alt+I` / `Alt+X` | Attach a file, folder or picture by its path / remove what is attached |
 | `Alt+R` | Review the changes: by layer, each file's diff; `v` marks it viewed, `e` asks Claude to explain it (`E` all not yet explained), `t` this turn or the whole session |
 

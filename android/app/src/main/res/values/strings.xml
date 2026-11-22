@@ -227,6 +227,7 @@
     <string name="ai_skip">Skip</string>
     <string name="ai_your_message">Your message</string>
     <string name="ai_edit">Edit</string>
+    <string name="ai_merge_draft">Merge into Prompt</string>
     <string name="ai_send_again">Send Again</string>
     <string name="ai_revert">Revert…</string>
     <string name="ai_revert_title">Go back to before this message?</string>

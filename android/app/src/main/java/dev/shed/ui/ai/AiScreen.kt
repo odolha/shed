@@ -173,6 +173,8 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
     var menu by remember { mutableStateOf(false) }
     var showSessions by rememberSaveable { mutableStateOf(false) }
     var showDrafts by rememberSaveable { mutableStateOf(false) }
+    // A draft to add at the end of the prompt (Merge into Prompt), until the prompt takes it.
+    var mergeIn by remember { mutableStateOf<String?>(null) }
     var userAction by remember { mutableStateOf<UserAction?>(null) }
     var editing by remember { mutableStateOf<UserAction?>(null) }
     var reverting by remember { mutableStateOf<UserAction?>(null) }
@@ -245,7 +247,7 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
                 }
             }
             Timers(status, { now.longValue }) { timer = it }
-            if (canChange) Prompt(ws, tabId, ai, vm)
+            if (canChange) Prompt(ws, tabId, ai, vm, mergeIn) { mergeIn = null }
         }
     }
 
@@ -264,7 +266,7 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
     }
 
     if (showSessions) SessionsSheet(ws, tabId, vm, sessions, currentKey, canChange) { showSessions = false }
-    if (showDrafts) DraftsSheet(ws, tabId, ai, currentKey, canChange) { showDrafts = false }
+    if (showDrafts) DraftsSheet(ws, tabId, ai, currentKey, canChange, onMerge = { mergeIn = it }) { showDrafts = false }
     userAction?.let { action ->
         AlertDialog(
             onDismissRequest = { userAction = null },
@@ -472,7 +474,7 @@ private fun Timers(status: AiStatus?, now: () -> Long, onOpen: (AiTimer) -> Unit
 private data class PromptFile(val key: Long, val name: String, val path: String? = null)
 
 @Composable
-private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm) {
+private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm, mergeIn: String?, onMerged: () -> Unit) {
     val session = LocalSession.current
     val shed = LocalShed.current
     val context = LocalContext.current
@@ -555,6 +557,13 @@ private fun Prompt(ws: String, tabId: String, ai: AiTab, vm: AiVm) {
             text = unsent
             typed = false
         }
+    }
+    // A draft merged in goes at the end of what is written.
+    LaunchedEffect(mergeIn) {
+        val draft = mergeIn ?: return@LaunchedEffect
+        text = mergedDraft(text, draft)
+        typed = true
+        onMerged()
     }
     // What is written and not sent is kept with the tab.
     LaunchedEffect(text) {

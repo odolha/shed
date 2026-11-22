@@ -1232,6 +1232,22 @@ impl AiView {
         cx.notify();
     }
 
+    /// Adds a draft's text at the end of the prompt, after a blank line,
+    /// leaving the draft in the list (while another draft is being edited,
+    /// into that one). The cursor goes to the end, in the prompt.
+    fn merge_draft(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(draft) = self.ai.drafts.get(n).cloned() else { return };
+        self.prompt.update(cx, |p, cx| {
+            let merged = draft.merged_into(&p.buffer.text());
+            p.buffer.select_all();
+            p.buffer.insert(&merged);
+            cx.notify();
+        });
+        let focus = self.prompt.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
     fn delete_draft(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.ai.drafts.get(n).cloned() else { return };
         let first: String = draft.text.lines().next().unwrap_or("").chars().take(80).collect();
@@ -3818,6 +3834,23 @@ impl AiView {
                         .when(!editing, |d| {
                             d.child(action(("draft-send", n), "Send", ui.ink(accent)).on_click(cx.listener(move |this, _, _, cx| this.send_draft(n, cx))))
                                 .child(action(("draft-edit", n), "Edit", ui.text).on_click(cx.listener(move |this, _, window, cx| this.edit_draft(n, window, cx))))
+                                .child(
+                                    div()
+                                        .id(("draft-merge", n))
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .px_1()
+                                        .rounded_sm()
+                                        .cursor_pointer()
+                                        .text_color(hsla(ui.text))
+                                        .hover(|s| s.bg(hsla(ui.tab_hover)))
+                                        .child(svg().path(icon("plus")).size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)))
+                                        .child("Merge into Prompt")
+                                        .tooltip(menu::tooltip("Add the draft's text at the end of the prompt; the draft stays here"))
+                                        .on_click(cx.listener(move |this, _, window, cx| this.merge_draft(n, window, cx))),
+                                )
                                 .child(action(("draft-delete", n), "Delete…", ui.danger).on_click(cx.listener(move |this, _, window, cx| this.delete_draft(n, window, cx))))
                         }),
                 );
@@ -4658,6 +4691,46 @@ mod tests {
         view.update(cx, |v, cx| v.send(cx));
         assert_eq!(drafts(&view, cx), ["second, changed"]);
         assert_eq!(prompt(&view, cx), "half written");
+    }
+
+    /// Merge into Prompt: a draft's text goes at the end of the prompt after
+    /// a blank line and stays in the list; while another draft is edited,
+    /// it goes into that edit.
+    #[gpui::test]
+    fn drafts_merge_into_the_prompt(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let ai = shed_model::AiTab {
+                session: Some("s".into()),
+                drafts: vec![shed_model::Draft { session: "s".into(), text: "first".into() }, shed_model::Draft { session: "s".into(), text: "second\nline".into() }],
+                ..Default::default()
+            };
+            AiView::new(BenchId::new(), TabId::new(), ai, Rgb::hex(0xFF8A57), crate::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default(), cx)
+        });
+        let prompt = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext| view.update(cx, |v, cx| v.prompt.read(cx).buffer.text());
+        let cursor = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext| view.update(cx, |v, cx| v.prompt.read(cx).buffer.selection().range());
+        let drafts = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext| view.update(cx, |v, _| v.ai.drafts.iter().map(|d| d.text.clone()).collect::<Vec<_>>());
+
+        // Into an empty prompt: the draft alone.
+        view.update_in(cx, |v, window, cx| v.merge_draft(0, window, cx));
+        assert_eq!(prompt(&view, cx), "first");
+        // Then another, after a blank line, the cursor at the end.
+        view.update_in(cx, |v, window, cx| v.merge_draft(1, window, cx));
+        assert_eq!(prompt(&view, cx), "first\n\nsecond\nline");
+        let end = "first\n\nsecond\nline".chars().count();
+        assert_eq!(cursor(&view, cx), end..end);
+        assert_eq!(drafts(&view, cx), ["first", "second\nline"], "the drafts stay");
+        assert!(view.update_in(cx, |v, window, cx| v.prompt.read(cx).focus_handle().is_focused(window)), "the prompt has the keyboard");
+
+        // While editing the first draft, the second goes into that edit.
+        view.update_in(cx, |v, window, cx| v.edit_draft(0, window, cx));
+        view.update_in(cx, |v, window, cx| v.merge_draft(1, window, cx));
+        view.update(cx, |v, cx| v.save_draft(cx));
+        assert_eq!(drafts(&view, cx), ["first\n\nsecond\nline", "second\nline"]);
+        assert_eq!(prompt(&view, cx), "first\n\nsecond\nline", "what was being written comes back");
     }
 
     /// Frame time with a long real conversation (measurement, not a check):

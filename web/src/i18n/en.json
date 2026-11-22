@@ -463,6 +463,8 @@
   "ai.drafts": "Drafts ({n})",
   "ai.deleteDraft.title": "Delete this draft?",
   "ai.deleteDraft.ok": "Delete Draft",
+  "ai.mergeDraft": "Merge into Prompt",
+  "ai.mergeDraft.tip": "Add the draft's text at the end of the prompt; the draft stays here",
   "ai.waiting": "Waits for you",
   "ai.model": "Model",
   "ai.modelDefault": "Default model",

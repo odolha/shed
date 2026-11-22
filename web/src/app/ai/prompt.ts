@@ -38,6 +38,13 @@ interface AttachedFile {
 /** Pictures Claude reads as pictures; other files go as files. */
 const PICTURES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
+/** The prompt with a draft merged into it: the draft at the end, after a
+ * blank line (alone, in a prompt with nothing in it), as the desktop does. */
+export function mergedDraft(prompt: string, draft: string): string {
+  const kept = prompt.trimEnd();
+  return kept.trim() ? `${kept}\n\n${draft}` : draft;
+}
+
 export function isPicture(file: { type: string }): boolean {
   return PICTURES.has(file.type);
 }
@@ -391,6 +398,11 @@ export class AiPrompt implements OnDestroy {
       el.focus();
       el.setSelectionRange(el.value.length, el.value.length);
     });
+  }
+
+  /** Adds a draft's text at the end of the prompt, focused. */
+  merge(text: string): void {
+    this.fill(mergedDraft(this.text(), text));
   }
 
   focus(): void {

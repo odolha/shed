@@ -190,9 +190,16 @@ fun laterSessions(all: List<AiSession>, id: String): List<AiSession> {
     return out
 }
 
-/** The drafts of the session shown: send, edit (back into the prompt), delete. */
+/** The prompt with a draft merged into it: the draft at the end, after a
+ *  blank line (alone, in a prompt with nothing in it), as the desktop does. */
+fun mergedDraft(prompt: String, draft: String): String {
+    val kept = prompt.trimEnd()
+    return if (kept.isBlank()) draft else "$kept\n\n$draft"
+}
+
+/** The drafts of the session shown: send, edit (back into the prompt), merge into the prompt, delete. */
 @Composable
-fun DraftsSheet(ws: String, tab: String, ai: AiTab, current: String?, canChange: Boolean, onDismiss: () -> Unit) {
+fun DraftsSheet(ws: String, tab: String, ai: AiTab, current: String?, canChange: Boolean, onMerge: (String) -> Unit, onDismiss: () -> Unit) {
     val session = LocalSession.current
     val shed = LocalShed.current
     val runner = rememberRunner()
@@ -223,6 +230,11 @@ fun DraftsSheet(ws: String, tab: String, ai: AiTab, current: String?, canChange:
                                     session.socket.call(ws, Call.AiRemoveDraft(AiRemoveDraft(tab, index.toUInt(), draft.text)))
                                 }
                             }) { Icon(Icons.Default.Edit, null); HSpace(6); Text(stringResource(R.string.ai_edit)) }
+                            // At the end of what is in the prompt; the draft stays.
+                            TextButton(onClick = {
+                                onDismiss()
+                                onMerge(draft.text)
+                            }) { Icon(Icons.Default.Add, null); HSpace(6); Text(stringResource(R.string.ai_merge_draft)) }
                             TextButton(
                                 onClick = { deleting = index to draft },
                                 colors = ButtonDefaults.textButtonColors(contentColor = shed.danger),
