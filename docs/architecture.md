@@ -823,7 +823,12 @@ flowchart LR
   session (`shed_session` cookie: `HttpOnly`, `Secure` unless turned off,
   `SameSite=Strict`) and a CSRF token it sends in `X-Shed-Csrf` with every
   change (after a reload, `GET /api/v1/session` gives it again); a phone gets
-  a device token for `Authorization: Bearer`. Tokens are
+  a device token for `Authorization: Bearer`, and so does Shed's desktop
+  app, whose token ends `desktop_days` (30) after that sign-in
+  (`devices.expires`, `SignedIn::expires`; past it the token is refused,
+  connections close and the minute's cleanup revokes the device). Changing
+  the password revokes every browser, phone and desktop but the current
+  one. Tokens are
   256 random bits; the database keeps their SHA-256 only. The guard
   (`auth::Guard`) counts by address, an IPv4 address or an IPv6 /64. A sign-in
   or setup attempt counts as a failure from when it starts until it succeeds
@@ -1097,8 +1102,10 @@ another workspace's through a nexus (`AppState::workspace`, a `Workspace`:
 nexus as a connector of kind `desktop` (`shed nexus signin`, or the Shed
 window's switcher; `shed_link::pairing::sign_in`), apart from the workspace's
 pairing: the token is in `nexus-client.json` in Shed's data folder (0600,
-`shed_client::nexus_client::SignIn`), while `nexus.json` grants no connector
-access. Signing out (`shed_link::pairing::sign_out_from`) posts
+`shed_client::nexus_client::SignIn`, with when it ends), while `nexus.json`
+grants no connector access. Signing in again (`sign_in_and_keep`) renews it
+and revokes the sign-in before; the switcher says when one ends within a
+week, or has ended, and offers Sign In Again…. Signing out (`shed_link::pairing::sign_out_from`) posts
 `/api/v1/logout` with the token first (the nexus revokes the device and
 closes its connections), then deletes the file, which goes even when the
 nexus cannot be reached (then the user is told to revoke it in the web app). `nexus_client::workspaces` lists the nexus's workspaces (a short `/api`

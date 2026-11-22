@@ -80,6 +80,8 @@ const MIGRATIONS: &[&str] = &[
         detail TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX audit_at ON audit(at);",
+    // 2: device tokens that end (desktops', some time after signing in).
+    "ALTER TABLE devices ADD COLUMN expires INTEGER;",
 ];
 
 pub struct Store {
@@ -108,6 +110,8 @@ pub struct DeviceRow {
     pub address: String,
     pub country: Option<String>,
     pub revoked: bool,
+    /// When its token stops working (Unix seconds); `None`: until revoked.
+    pub expires: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -298,9 +302,16 @@ impl Store {
         Ok(id)
     }
 
-    /// The device a token belongs to, if it is not revoked.
-    pub fn device_by_token(&self, token_hash: &str) -> anyhow::Result<Option<DeviceRow>> {
-        self.device_where("token_hash = ?1 AND revoked = 0", token_hash)
+    /// The device a token belongs to, if it is not revoked and has not
+    /// expired by `now`.
+    pub fn device_by_token(&self, token_hash: &str, now: u64) -> anyhow::Result<Option<DeviceRow>> {
+        Ok(self.device_where("token_hash = ?1 AND revoked = 0", token_hash)?.filter(|d| d.expires.is_none_or(|e| e > now)))
+    }
+
+    /// Sets when a device's token stops working.
+    pub fn set_device_expires(&self, id: &str, expires: Option<u64>) -> anyhow::Result<()> {
+        self.lock().execute("UPDATE devices SET expires = ?2 WHERE id = ?1", params![id, expires.map(|e| e as i64)])?;
+        Ok(())
     }
 
     pub fn device(&self, id: &str) -> anyhow::Result<Option<DeviceRow>> {
@@ -316,7 +327,7 @@ impl Store {
     pub fn devices(&self, now: u64) -> anyhow::Result<Vec<DeviceRow>> {
         let conn = self.lock();
         let sql = format!(
-            "SELECT {DEVICE_COLUMNS} FROM devices d WHERE revoked = 0 AND (kind != 'browser'
+            "SELECT {DEVICE_COLUMNS} FROM devices d WHERE revoked = 0 AND (d.expires IS NULL OR d.expires > ?1) AND (kind != 'browser'
                OR EXISTS (SELECT 1 FROM sessions s WHERE s.device = d.id AND s.expires > ?1))
              ORDER BY created DESC"
         );
@@ -396,7 +407,7 @@ impl Store {
         Ok(self
             .lock()
             .query_row(
-                "SELECT 1 FROM devices d WHERE d.id = ?1 AND d.revoked = 0 AND (d.kind != 'browser'
+                "SELECT 1 FROM devices d WHERE d.id = ?1 AND d.revoked = 0 AND (d.expires IS NULL OR d.expires > ?2) AND (d.kind != 'browser'
                    OR EXISTS (SELECT 1 FROM sessions s WHERE s.device = d.id AND s.expires > ?2))",
                 params![id, now as i64],
                 |_| Ok(()),
@@ -666,7 +677,8 @@ impl Store {
     // ------------------------------------------------------------- cleanup
 
     /// Drops what has expired: sessions (and the browsers left without one),
-    /// pairing requests, and audit entries older than a year.
+    /// device tokens past their end, pairing requests, and audit entries
+    /// older than a year.
     pub fn cleanup(&self, now: u64) -> anyhow::Result<()> {
         let conn = self.lock();
         conn.execute("DELETE FROM sessions WHERE expires <= ?1", params![now as i64])?;
@@ -675,13 +687,17 @@ impl Store {
              AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.device = devices.id)",
             [],
         )?;
+        conn.execute(
+            "UPDATE devices SET revoked = 1, token_hash = NULL WHERE revoked = 0 AND expires IS NOT NULL AND expires <= ?1",
+            params![now as i64],
+        )?;
         conn.execute("DELETE FROM pairings WHERE expires <= ?1", params![now as i64])?;
         conn.execute("DELETE FROM audit WHERE at < ?1", params![now.saturating_sub(366 * 86400) as i64])?;
         Ok(())
     }
 }
 
-const DEVICE_COLUMNS: &str = "id, kind, name, created, seen, address, country, revoked";
+const DEVICE_COLUMNS: &str = "id, kind, name, created, seen, address, country, revoked, expires";
 
 fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceRow> {
     Ok(DeviceRow {
@@ -693,6 +709,7 @@ fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceRow> {
         address: r.get(5)?,
         country: r.get(6)?,
         revoked: r.get::<_, i64>(7)? != 0,
+        expires: r.get::<_, Option<i64>>(8)?.map(|e| e as u64),
     })
 }
 
@@ -771,9 +788,9 @@ mod tests {
     fn migrates_and_keeps_devices() {
         let store = Store::in_memory().unwrap();
         let id = store.add_device(DeviceKind::Phone, "Pixel", Some("h"), "1.2.3.4", None, 10).unwrap();
-        assert_eq!(store.device_by_token("h").unwrap().unwrap().id, id);
+        assert_eq!(store.device_by_token("h", 10).unwrap().unwrap().id, id);
         assert!(store.revoke_device(&id).unwrap());
-        assert!(store.device_by_token("h").unwrap().is_none());
+        assert!(store.device_by_token("h", 10).unwrap().is_none());
         assert!(!store.revoke_device(&id).unwrap());
     }
 
@@ -802,6 +819,21 @@ mod tests {
         assert!(!store.device_valid(&browser, 150).unwrap());
         store.cleanup(150).unwrap();
         assert!(store.device(&browser).unwrap().unwrap().revoked);
+    }
+
+    #[test]
+    fn a_desktops_token_ends() {
+        let store = Store::in_memory().unwrap();
+        let desktop = store.add_device(DeviceKind::Desktop, "Shed", Some("d"), "", None, 10).unwrap();
+        store.set_device_expires(&desktop, Some(100)).unwrap();
+        assert!(store.device_by_token("d", 99).unwrap().is_some());
+        assert!(store.device_valid(&desktop, 99).unwrap());
+        assert_eq!(store.devices(99).unwrap().len(), 1);
+        assert!(store.device_by_token("d", 100).unwrap().is_none());
+        assert!(!store.device_valid(&desktop, 100).unwrap());
+        assert!(store.devices(100).unwrap().is_empty());
+        store.cleanup(100).unwrap();
+        assert!(store.device(&desktop).unwrap().unwrap().revoked);
     }
 
     #[test]

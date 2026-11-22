@@ -336,7 +336,10 @@ the link connects to its keeper's socket, and binary WebSocket messages
 (`[u32 id][bytes]`) carry the data, the nexus swapping ids as for requests.
 Only desktops may open tunnels, only to workspaces whose `shed.toml` says
 `[nexus] desktop_clients = true` with full control (they see everything,
-private tabs too: they are the user's own signed-in computers). Terminals and
+private tabs too: they are the user's own signed-in computers). A desktop's
+sign-in ends after 30 days (`desktop_days`), renewed by signing in again,
+and its connection is never taken for that workspace's own window
+(`ClientKind::Remote`). Terminals and
 AI conversations work fully this way; what the window reads from the local
 disk (project tabs, the logbook, Claude Code's session files) comes next,
 through the API's calls. See [the architecture](architecture.md#other-workspaces-in-the-window).

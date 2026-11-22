@@ -236,7 +236,7 @@ impl FromRequestParts<Arc<App>> for Caller {
 pub fn authenticate(app: &App, headers: &HeaderMap, method: &Method) -> Result<Caller, Failure> {
     let unauthorized = || Failure::new(ErrorCode::Unauthorized, "not signed in");
     if let Some(token) = bearer(headers) {
-        let device = app.store.device_by_token(&auth::hash_token(token))?.ok_or_else(unauthorized)?;
+        let device = app.store.device_by_token(&auth::hash_token(token), now())?.ok_or_else(unauthorized)?;
         if !matches!(device.kind, DeviceKind::Phone | DeviceKind::Desktop) {
             return Err(unauthorized());
         }
@@ -369,7 +369,7 @@ fn sign_in(app: &App, client: &Client, username: &str, device: &DeviceHello) -> 
     let address = client.address();
     let country = client.country.as_deref();
     let mut body =
-        SignedIn { username: username.to_string(), device: String::new(), token: None, csrf: None, recovery_codes: vec![] };
+        SignedIn { username: username.to_string(), device: String::new(), token: None, csrf: None, recovery_codes: vec![], expires: None };
     match device.kind {
         DeviceKind::Browser => {
             body.device = app.store.add_device(DeviceKind::Browser, &name, None, &address, country, now())?;
@@ -384,6 +384,13 @@ fn sign_in(app: &App, client: &Client, username: &str, device: &DeviceHello) -> 
             let token = auth::random_token();
             let hash = auth::hash_token(&token);
             body.device = app.store.add_device(kind, &name, Some(&hash), &address, country, now())?;
+            // A desktop's token (it may open tunnels) ends some days after
+            // this sign-in; signing in again gives a new one.
+            if kind == DeviceKind::Desktop {
+                let expires = now() + app.config.desktop_days as u64 * 86400;
+                app.store.set_device_expires(&body.device, Some(expires))?;
+                body.expires = Some(expires as u32);
+            }
             body.token = Some(token);
             Ok(SignedInAnswer { body, cookie: None })
         }
@@ -520,7 +527,7 @@ async fn session(State(app): State<Arc<App>>, headers: HeaderMap, caller: Caller
         Some(token) if caller.session.is_some() => app.store.session(&auth::hash_token(token), now())?.map(|s| s.csrf),
         _ => None,
     };
-    Ok(Json(SignedIn { username: account.username, device: caller.device, token: None, csrf, recovery_codes: vec![] }))
+    Ok(Json(SignedIn { username: account.username, device: caller.device, token: None, csrf, recovery_codes: vec![], expires: None }))
 }
 
 async fn logout(State(app): State<Arc<App>>, client: Client, caller: Caller) -> Result<Response, Failure> {

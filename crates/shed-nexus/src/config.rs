@@ -25,6 +25,9 @@ pub struct Config {
     pub web_dir: Option<PathBuf>,
     /// How long a browser stays signed in.
     pub session_days: u32,
+    /// How long Shed's desktop app stays signed in after its last sign-in
+    /// (with a code from the authenticator); signing in again renews it.
+    pub desktop_days: u32,
     /// Take the client's address from `X-Forwarded-For` when the request
     /// comes from a trusted proxy: one in `trusted_proxies`, or loopback if
     /// that list is empty. Only behind a proxy you run.
@@ -135,6 +138,7 @@ impl Default for Config {
             data_dir: None,
             web_dir: None,
             session_days: 7,
+            desktop_days: 30,
             trusted_proxy: false,
             trusted_proxies: Vec::new(),
             secure_cookies: true,
@@ -215,6 +219,9 @@ impl Config {
         }
         if self.session_days == 0 {
             anyhow::bail!("session_days must be at least 1");
+        }
+        if self.desktop_days == 0 {
+            anyhow::bail!("desktop_days must be at least 1");
         }
         Ok(())
     }
@@ -346,6 +353,7 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.listen.port(), 7870);
         assert_eq!(config.session_days, 7);
+        assert_eq!(config.desktop_days, 30);
         assert!(config.secure_cookies);
         assert_eq!(config.origins(), vec!["http://127.0.0.1:7870".to_string()]);
     }

@@ -40,9 +40,29 @@ pub struct SignIn {
     pub device: String,
     /// Its device token (a bearer token).
     pub token: String,
+    /// When the nexus stops taking the token (Unix seconds), unless this
+    /// desktop signs in again before; `None` from a nexus that does not say.
+    #[serde(default)]
+    pub expires: Option<u64>,
 }
 
+/// Days before the end of a sign-in from which Shed says it ends soon.
+pub const ENDS_SOON_DAYS: u64 = 7;
+
 impl SignIn {
+    /// Whether the nexus no longer takes its token, by its end (`now`, Unix
+    /// seconds).
+    pub fn ended(&self, now: u64) -> bool {
+        self.expires.is_some_and(|e| e <= now)
+    }
+
+    /// Whole days left (rounded up) when it ends within `ENDS_SOON_DAYS`.
+    pub fn ends_soon(&self, now: u64) -> Option<u64> {
+        let left = self.expires?.checked_sub(now).filter(|l| *l > 0)?;
+        let days = left.div_ceil(86400);
+        (days <= ENDS_SOON_DAYS).then_some(days)
+    }
+
     pub fn load() -> Option<SignIn> {
         Self::load_from(&paths::nexus_client_path())
     }
@@ -113,7 +133,10 @@ pub(crate) async fn open_api(url: &str, token: &str, ca_file: Option<&Path>) -> 
     let (mut ws, _) = match tokio::time::timeout(WAIT, connecting).await {
         Err(_) => bail!("the nexus at {url} did not answer"),
         Ok(Err(tokio_tungstenite::tungstenite::Error::Http(r))) if matches!(r.status().as_u16(), 401 | 403) => {
-            bail!("the nexus no longer knows this desktop ({}): sign in again", r.status())
+            bail!(
+                "the nexus no longer accepts this desktop's sign-in ({}): it ends some days after signing in, or the device was revoked. Sign in again",
+                r.status()
+            )
         }
         Ok(Err(e)) => bail!("cannot reach the nexus at {url}: {e}"),
         Ok(Ok(c)) => c,
@@ -421,7 +444,7 @@ mod tests {
     fn the_sign_in_is_kept_privately() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("shed/nexus-client.json");
-        let s = SignIn { url: "https://n.example.com".into(), username: "me".into(), device: "d1".into(), token: "t0k".into() };
+        let s = SignIn { url: "https://n.example.com".into(), username: "me".into(), device: "d1".into(), token: "t0k".into(), expires: Some(1000) };
         s.save_to(&path).unwrap();
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(SignIn::load_from(&path), Some(s));

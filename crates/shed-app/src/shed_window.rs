@@ -188,6 +188,17 @@ impl ShedWindow {
         match sign_in {
             Some(s) => {
                 entries.push(menu::disabled(format!("Signed in as {}", s.username), short_url(&s.url)));
+                // A desktop's sign-in ends some days after it was made.
+                let now = shed_link::pairing::now();
+                let ends = if s.ended(now) {
+                    Some("Sign-in ended".to_string())
+                } else {
+                    s.ends_soon(now).map(|d| format!("Sign-in ends in {d} day{}", if d == 1 { "" } else { "s" }))
+                };
+                if let Some(ends) = ends {
+                    entries.push(menu::disabled(ends, "").icon("alert"));
+                    entries.push(item("Sign In Again…", |this: &mut Self, window, cx| this.open_sign_in(window, cx)).icon("globe"));
+                }
                 entries.push(item("Sign Out", |this: &mut Self, _, cx| this.sign_out(cx)).icon("power"));
             }
             None => entries.push(item("Sign In to Nexus…", |this: &mut Self, window, cx| this.open_sign_in(window, cx)).icon("globe")),

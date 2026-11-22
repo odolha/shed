@@ -748,7 +748,7 @@ pub async fn link(
 ) -> Result<Response, Failure> {
     let unauthorized = || Failure::new(ErrorCode::Unauthorized, "not a paired workspace");
     let token = bearer(&headers).ok_or_else(unauthorized)?;
-    let device = app.store.device_by_token(&auth::hash_token(token))?.ok_or_else(unauthorized)?;
+    let device = app.store.device_by_token(&auth::hash_token(token), now())?.ok_or_else(unauthorized)?;
     if device.kind != DeviceKind::Workspace {
         return Err(unauthorized());
     }

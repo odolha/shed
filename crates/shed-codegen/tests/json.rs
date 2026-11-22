@@ -490,6 +490,7 @@ fn samples() -> Vec<(&'static str, Value)> {
                 token: None,
                 csrf: Some("c".into()),
                 recovery_codes: vec!["r1".into()],
+                expires: None,
             }),
         ),
         (

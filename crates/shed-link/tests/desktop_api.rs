@@ -55,7 +55,7 @@ async fn the_desktop_reads_another_workspace_through_the_nexus() {
     let (workspace, token) = nexus::pair(&hub, &mut account, "desk").await;
     let _link = common::link(&env, hub.base.clone(), &token, Policy::Full);
     let desktop = nexus::desktop_token(&hub, &mut account).await;
-    let sign_in = SignIn { url: hub.base.clone(), username: "me".into(), device: String::new(), token: desktop };
+    let sign_in = SignIn { url: hub.base.clone(), username: "me".into(), device: String::new(), token: desktop, expires: None };
     let ws = NexusApi::new(&sign_in, None).workspace(&workspace);
 
     // A bench with a project tab and an AI tab on the repository.

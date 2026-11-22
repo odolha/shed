@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn a_nexus_that_cannot_be_reached_fails_calls_in_words() {
-        let sign_in = SignIn { url: "https://127.0.0.1:9".into(), username: "me".into(), device: "d".into(), token: "t".into() };
+        let sign_in = SignIn { url: "https://127.0.0.1:9".into(), username: "me".into(), device: "d".into(), token: "t".into(), expires: None };
         let w = NexusApi::new(&sign_in, None).workspace("w1");
         let e = w.call_blocking(Call::GitStatus(TabOnly { tab: "t".into() })).unwrap_err();
         assert_eq!(e.code, ErrorCode::Offline);

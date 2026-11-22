@@ -2189,7 +2189,10 @@ data class SignedIn (
 	val csrf: String? = null,
 	/// Single-use codes to sign in without the authenticator; only given at
 	/// setup and when new ones are made.
-	val recoveryCodes: List<String>? = null
+	val recoveryCodes: List<String>? = null,
+	/// For a desktop: when its token stops working (Unix seconds), unless
+	/// it signs in again before.
+	val expires: UInt? = null
 )
 
 @Serializable

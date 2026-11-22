@@ -294,6 +294,11 @@ impl AppState {
             cx.notify();
             return;
         };
+        if sign_in.ended(shed_link::pairing::now()) {
+            self.notice = Some("This desktop's sign-in to the nexus has ended: sign in again (This PC ▾ → Sign In Again…, or shed nexus signin).".into());
+            cx.notify();
+            return;
+        }
         self.switching = Some(name.clone());
         cx.notify();
         let need_standby = !self.is_remote();

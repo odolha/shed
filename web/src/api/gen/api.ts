@@ -1730,6 +1730,11 @@ export interface SignedIn {
 	 * setup and when new ones are made.
 	 */
 	recoveryCodes?: string[];
+	/**
+	 * For a desktop: when its token stops working (Unix seconds), unless
+	 * it signs in again before.
+	 */
+	expires?: number | null;
 }
 
 export type SplitDir =

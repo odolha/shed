@@ -154,7 +154,7 @@ async fn the_desktop_speaks_to_another_workspaces_keeper_through_the_nexus() {
     }
 
     // The workspace list, as the switcher reads it.
-    let sign_in = shed_client::nexus_client::SignIn { url: hub.base.clone(), username: "me".into(), device: String::new(), token: desktop.clone() };
+    let sign_in = shed_client::nexus_client::SignIn { url: hub.base.clone(), username: "me".into(), device: String::new(), token: desktop.clone(), expires: None };
     let listed = tokio::task::spawn_blocking(move || shed_client::nexus_client::workspaces(&sign_in, None)).await.unwrap().unwrap();
     assert_eq!(listed.iter().map(|w| (w.name.as_str(), w.online)).collect::<Vec<_>>(), [("desk", true)]);
 
@@ -305,4 +305,36 @@ fn toml_settings(text: &str) -> shed_model::config::NexusConfig {
     let path = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(path.path(), text).unwrap();
     shed_model::config::Config::load_from(path.path()).unwrap().nexus
+}
+
+/// A desktop's sign-in ends after some days; signing in again renews it,
+/// and the sign-in before is revoked rather than left behind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_in_again_renews_and_revokes_the_old_sign_in() {
+    let hub = nexus::start().await;
+    let mut account = nexus::set_up(&hub).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nexus-client.json");
+    let code = account.recovery.pop().unwrap();
+    let first = shed_link::pairing::sign_in_and_keep(&path, &hub.base, "me", nexus::PASSWORD, &code, None).await.unwrap();
+    let now = shed_link::pairing::now();
+    let expires = first.expires.expect("a desktop's sign-in ends");
+    assert!((now + 29 * 86400..=now + 31 * 86400).contains(&expires), "{expires} ({now})");
+    assert!(!first.ended(now) && first.ends_soon(now).is_none());
+    assert_eq!(first.ends_soon(expires - 3 * 86400 + 10), Some(3));
+    assert!(first.ended(expires));
+    assert_eq!(shed_client::nexus_client::SignIn::load_from(&path), Some(first.clone()));
+
+    let code = account.recovery.pop().unwrap();
+    let second = shed_link::pairing::sign_in_and_keep(&path, &hub.base, "me", nexus::PASSWORD, &code, None).await.unwrap();
+    assert_ne!(second.device, first.device);
+    assert_eq!(shed_client::nexus_client::SignIn::load_from(&path), Some(second.clone()));
+    let bearer = |token: &str| [("authorization", format!("Bearer {token}"))];
+    assert_eq!(nexus::connect(&hub.ws_url("/api"), &bearer(&first.token)).await.err(), Some(401), "the old one is revoked");
+    assert!(nexus::connect(&hub.ws_url("/api"), &bearer(&second.token)).await.is_ok());
+    // Phones' tokens do not end.
+    let phone = nexus::phone_token(&hub, &mut account).await;
+    let devices: Vec<shed_api::http::Device> = hub.get("/api/v1/devices", &account.browser).await;
+    assert_eq!(devices.iter().filter(|d| d.kind == shed_api::http::DeviceKind::Desktop).count(), 1);
+    let _ = phone;
 }

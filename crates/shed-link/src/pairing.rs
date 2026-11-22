@@ -54,7 +54,8 @@ impl Secret {
 
 pub use shed_client::link_status::LinkStatus;
 
-pub(crate) fn now() -> u64 {
+/// Unix seconds now.
+pub fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
@@ -180,7 +181,10 @@ pub fn status() -> anyhow::Result<()> {
         None => println!("paired: no"),
     }
     match SignIn::load() {
-        Some(s) => println!("this desktop: signed in to {} as {}", s.url, s.username),
+        Some(s) => {
+            let ends = ends_text(&s).map(|e| format!(". {e}")).unwrap_or_default();
+            println!("this desktop: signed in to {} as {}{ends}", s.url, s.username);
+        }
         None => println!("this desktop: not signed in (shed nexus signin)"),
     }
     match LinkStatus::read(&paths::link_status_path()) {
@@ -223,16 +227,40 @@ pub async fn sign_in(url: &str, username: &str, password: &str, totp: &str, ca_f
     let login = Login { username: username.trim().into(), password: password.into(), totp: totp.trim().into(), device };
     let signed: SignedIn = post(&client, &crate::tls::api_url(&url, "api/v1/login")?, &login).await?;
     let token = signed.token.context("the nexus gave no token (is it older than this Shed?)")?;
-    Ok(SignIn { url, username: signed.username, device: signed.device, token })
+    Ok(SignIn { url, username: signed.username, device: signed.device, token, expires: signed.expires.map(u64::from) })
 }
 
-/// `sign_in`, blocking, and kept (for the windows, on a thread of their own).
+/// Signs in and keeps the sign-in at `path`, in place of the one there:
+/// that one is revoked at its nexus (signing in again renews a sign-in
+/// without leaving the old device behind).
+pub async fn sign_in_and_keep(path: &Path, url: &str, username: &str, password: &str, totp: &str, ca_file: Option<&Path>) -> anyhow::Result<SignIn> {
+    let old = SignIn::load_from(path);
+    let signed = sign_in(url, username, password, totp, ca_file).await?;
+    signed.save_to(path).context("keeping the sign-in")?;
+    if let Some(old) = old.filter(|o| o.token != signed.token)
+        && let Err(e) = revoke(&old, ca_file).await
+    {
+        tracing::warn!("the sign-in before could not be revoked at {}: {e:#}", old.url);
+    }
+    Ok(signed)
+}
+
+/// `sign_in_and_keep` for this desktop, blocking (for the windows, on a
+/// thread of their own).
 pub fn sign_in_blocking(url: &str, username: &str, password: &str, totp: &str) -> anyhow::Result<SignIn> {
     let ca = shed_client::nexus_client::configured_ca_file();
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    let signed = rt.block_on(sign_in(url, username, password, totp, ca.as_deref()))?;
-    signed.save().context("keeping the sign-in")?;
-    Ok(signed)
+    rt.block_on(sign_in_and_keep(&paths::nexus_client_path(), url, username, password, totp, ca.as_deref()))
+}
+
+/// When a sign-in ends, for people.
+pub fn ends_text(sign_in: &SignIn) -> Option<String> {
+    let expires = sign_in.expires?;
+    if sign_in.ended(now()) {
+        return Some("It has ended: sign in again.".into());
+    }
+    let days = expires.saturating_sub(now()).div_ceil(86400);
+    Some(format!("It lasts {days} more day{}; signing in again renews it.", if days == 1 { "" } else { "s" }))
 }
 
 /// The nexus to sign in to when none is given: the one signed in to
@@ -287,14 +315,14 @@ pub fn signin(url: Option<String>) -> anyhow::Result<()> {
     let username = ask("User: ", false)?;
     let password = ask("Password: ", true)?;
     let totp = ask("Code from the authenticator (or a recovery code): ", false)?;
-    let ca = shed_client::nexus_client::configured_ca_file();
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    let signed = rt.block_on(sign_in(&url, &username, &password, &totp, ca.as_deref()))?;
-    signed.save().context("keeping the sign-in")?;
+    let signed = sign_in_blocking(&url, &username, &password, &totp)?;
     println!(
         "Signed in as {}. Shed's window lists the nexus's workspaces in its switcher (This PC ▾); a workspace shows there once its shed.toml says desktop_clients = true under [nexus].",
         signed.username
     );
+    if let Some(ends) = ends_text(&signed) {
+        println!("{ends}");
+    }
     Ok(())
 }
 

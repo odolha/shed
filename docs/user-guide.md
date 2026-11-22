@@ -1151,7 +1151,10 @@ itself, through the nexus.
    ```
 
    This desktop becomes a device of your account (**Shed desktop** in the apps'
-   Devices, where revoking it cuts it off). Its token is kept in
+   Devices, where revoking it cuts it off). Its sign-in lasts 30 days (the
+   nexus's `desktop_days`); the switcher says when it ends within a week and
+   offers **Sign In Again…**, which renews it, and `shed nexus status` shows
+   how long is left. Changing the account's password signs desktops out too. Its token is kept in
    `~/.local/share/shed/nexus-client.json`, readable only by you. Signing in is
    apart from linking this PC (`shed nexus join`), which never lets anyone
    show other workspaces. `shed nexus signout` (or **Sign Out** in the

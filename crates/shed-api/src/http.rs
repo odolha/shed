@@ -140,6 +140,10 @@ pub struct SignedIn {
     /// setup and when new ones are made.
     #[serde(default)]
     pub recovery_codes: Vec<String>,
+    /// For a desktop: when its token stops working (Unix seconds), unless
+    /// it signs in again before.
+    #[serde(default)]
+    pub expires: Option<u32>,
 }
 
 #[typeshare]
