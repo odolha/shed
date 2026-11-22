@@ -772,7 +772,17 @@ makes these again whenever the tree, the keeper's answer, the filter or the
 selection change, and only a bench that shows differently is drawn again; a
 change nothing shows draws no frame at all, and a hover draws one bench. Menus
 read the bench as it is when they open. The card previews are painted line by
-line rather than as an element per line. The vendored `gpui_ce_linux` fixes key releases lost on X11, and window placement
+line rather than as an element per line. Bench windows work the same way: a
+`BenchWindow` keeps what it draws of `AppState` (`Shown`: the colours, the
+errors, and its shown tab's layout and views), its tab bar is a view of its own
+(`TabBar`) holding what the bar shows (`BarModel`: each tab's title, icon and
+tags, the controls, the usage limits, the text field being edited), and both
+are made again at each change to `AppState` and drawn only when they differ. A
+change to one bench draws only that bench's window; a terminal's output, an AI
+tab's ticks or a project's redraws draw their own view, and the window's root
+(a few elements) above them, but not the tab bar. Views inside a bench window
+do not read `AppState` while drawing either (an AI tab follows its bench's
+project views for their file lists; the Setup panel keeps its bench). The vendored `gpui_ce_linux` fixes key releases lost on X11, and window placement
 there (see above); it also stops an idle window's frame timer, which upstream ran
 at the display's refresh rate for as long as the window was visible.
 The patches are described in `SHED_PATCHES.md` in their folders.

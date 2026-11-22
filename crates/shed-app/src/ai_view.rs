@@ -256,6 +256,10 @@ pub struct AiView {
     /// file Claude names by its name alone; and what was found so.
     project_files: Vec<(PathBuf, Arc<Vec<PathBuf>>)>,
     file_lookups: HashMap<PathBuf, Option<PathBuf>>,
+    /// The bench's project views those files are read from, followed (not
+    /// read while drawing, which would draw this view at each change there).
+    project_views: Vec<Entity<crate::project_view::ProjectView>>,
+    _project_subs: Vec<Subscription>,
     /// The link the mouse is over: entry, piece, its range.
     hover_link: Option<(usize, usize, Range<usize>)>,
     /// Whether paths Claude names are files, as found (for its links).
@@ -494,6 +498,8 @@ impl AiView {
             hover_link: None,
             project_files: Vec::new(),
             file_lookups: HashMap::new(),
+            project_views: Vec::new(),
+            _project_subs: Vec::new(),
             show_prompts: false,
             prompts_scroll: UniformListScrollHandle::new(),
             prompts_bar: Default::default(),
@@ -2020,12 +2026,32 @@ impl AiView {
 
     /// Takes the bench's projects' file lists as they are now; when one
     /// changed, Claude's answers are read for links again.
-    pub fn set_project_files(&mut self, files: Vec<(PathBuf, Arc<Vec<PathBuf>>)>) {
+    /// Whether the files changed.
+    pub fn set_project_files(&mut self, files: Vec<(PathBuf, Arc<Vec<PathBuf>>)>) -> bool {
         let same = files.len() == self.project_files.len() && files.iter().zip(&self.project_files).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1));
         if !same {
             self.project_files = files;
             self.file_lookups.clear();
             self.parsed.clear();
+        }
+        !same
+    }
+
+    /// The views of the bench's project tabs, whose file lists find the
+    /// files Claude names; followed as their lists change.
+    pub fn set_project_views(&mut self, views: Vec<Entity<crate::project_view::ProjectView>>, cx: &mut Context<Self>) {
+        if views == self.project_views {
+            return;
+        }
+        self._project_subs = views.iter().map(|v| cx.observe(v, |this, _, cx| this.read_project_files(cx))).collect();
+        self.project_views = views;
+        self.read_project_files(cx);
+    }
+
+    fn read_project_files(&mut self, cx: &mut Context<Self>) {
+        let files = self.project_views.iter().map(|v| v.read(cx).file_index()).collect();
+        if self.set_project_files(files) {
+            cx.notify();
         }
     }
 
@@ -4069,16 +4095,6 @@ impl MenuHost for AiView {
 impl Render for AiView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ui = current_ui(cx);
-        // The bench's projects' file lists, to find files Claude names.
-        if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
-            let state = state.read(cx);
-            let files: Vec<(PathBuf, Arc<Vec<PathBuf>>)> = state
-                .tree
-                .bench(self.bench)
-                .map(|b| b.tabs.iter().filter_map(|t| state.projects.get(&t.id)).map(|v| v.read(cx).file_index()).collect())
-                .unwrap_or_default();
-            self.set_project_files(files);
-        }
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
         let count = self.shown_sessions(cx).len();
         let sessions = if self.show_prompts {

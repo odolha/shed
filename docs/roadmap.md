@@ -65,9 +65,6 @@ them). Still open:
 
 - **A terminal grid drawn by Shed itself** rather than glyph by glyph through
   GPUI: steady output costs about four to five times kitty's CPU per frame.
-- **Bench windows drawn from what they show**, as the Shed window is: each
-  draws again at every change to the tree (a title a program animates in any
-  bench redraws every bench window).
 - **A `scrollback` setting** in `shed.toml` (the keeper keeps about 20 MB for a
   busy pane).
 - **Shells beyond bash and zsh** (fish) for history, aliases and prompt marks.

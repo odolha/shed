@@ -791,6 +791,8 @@ impl AppState {
             .collect();
         self.ai_views.retain(|id, _| all.iter().any(|w| w.1 == *id));
         for (bench, tab, ai, accent, projects, zoom) in all {
+            // The views of its bench's project tabs, for their file lists.
+            let views: Vec<Entity<ProjectView>> = self.tree.bench(bench).map(|b| b.tabs.iter().filter_map(|t| self.projects.get(&t.id).cloned()).collect()).unwrap_or_default();
             match self.ai_views.get(&tab) {
                 Some(view) => view.update(cx, |v, cx| {
                     (v.bench, v.accent) = (bench, accent);
@@ -800,6 +802,7 @@ impl AppState {
                         cx.notify();
                     }
                     v.set_ai(ai, cx);
+                    v.set_project_views(views, cx);
                 }),
                 None if open.contains(&bench) => {
                     let (conn, settings, remote) = (self.conn.clone(), self.settings.clone(), self.remote());
@@ -810,6 +813,7 @@ impl AppState {
                         }
                         v.projects = projects;
                         v.set_zoom(zoom, cx);
+                        v.set_project_views(views, cx);
                         v
                     });
                     self.ai_views.insert(tab, view);

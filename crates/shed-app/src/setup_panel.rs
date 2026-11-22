@@ -99,24 +99,57 @@ pub struct SetupPanel {
     new_alias_level: AliasLevel,
     /// Whether the shell's own aliases are listed too.
     show_shell: bool,
+    /// What the panel shows of `AppState` and the closed benches, as of
+    /// their last change: drawn from, so that changes elsewhere (a title in
+    /// another bench) draw nothing.
+    shown: Shown,
+}
+
+#[derive(Clone, PartialEq)]
+struct Shown {
+    /// The bench: running, from the tree, or closed, from Shed's copy of
+    /// its saved file (then `false`).
+    bench: Option<(Bench, bool)>,
+    /// Shed's own aliases, for every bench.
+    aliases: Aliases,
+    ui: UiColors,
+    mono: SharedString,
+}
+
+impl Shown {
+    fn of(bench: BenchId, state: &AppState, cx: &gpui::App) -> Self {
+        let running = state.tree.bench(bench).map(|b| (b.clone(), true));
+        let bench = running.or_else(|| {
+            let stored = cx.try_global::<PegboardData>()?;
+            stored.0.stored.iter().find(|s| s.bench.id == bench).map(|s| (s.bench.clone(), false))
+        });
+        Self { bench, aliases: state.tree.aliases.clone(), ui: state.settings.ui.clone(), mono: state.settings.font.family.clone().into() }
+    }
 }
 
 impl EventEmitter<PanelEvent> for SetupPanel {}
 
 impl SetupPanel {
     pub fn new(bench: BenchId, pinned: Option<TabId>, state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&state, |_, _, cx| cx.notify()).detach();
-        Self { bench, pinned, state, editing: None, new_alias_level: AliasLevel::Tab, show_shell: false }
+        cx.observe(&state, |this, _, cx| this.follow(cx)).detach();
+        cx.observe_global::<PegboardData>(|this, cx| this.follow(cx)).detach();
+        let shown = Shown::of(bench, state.read(cx), cx);
+        Self { bench, pinned, state, editing: None, new_alias_level: AliasLevel::Tab, show_shell: false, shown }
+    }
+
+    /// Takes what the panel shows after a change; it draws again only if that changed.
+    fn follow(&mut self, cx: &mut Context<Self>) {
+        let shown = Shown::of(self.bench, self.state.read(cx), cx);
+        if shown != self.shown {
+            self.shown = shown;
+            cx.notify();
+        }
     }
 
     /// The bench: running, from the tree, or closed, from Shed's copy of
     /// its saved file (then `false`).
-    fn bench(&self, cx: &Context<Self>) -> Option<(Bench, bool)> {
-        if let Some(b) = self.state.read(cx).tree.bench(self.bench) {
-            return Some((b.clone(), true));
-        }
-        let stored = cx.try_global::<PegboardData>()?;
-        stored.0.stored.iter().find(|s| s.bench.id == self.bench).map(|s| (s.bench.clone(), false))
+    fn bench(&self, _: &Context<Self>) -> Option<(Bench, bool)> {
+        self.shown.bench.clone()
     }
 
     fn tab(&self, cx: &Context<Self>) -> Option<Tab> {
@@ -158,7 +191,7 @@ impl SetupPanel {
         let tab = shown_tab(&bench, self.pinned)?;
         let at = |tab: Option<TabId>| AliasDest::Bench { bench: bench_ref(&bench, running), tab };
         Some(match level {
-            AliasLevel::Global => (AliasDest::Global, self.state.read(cx).tree.aliases.clone()),
+            AliasLevel::Global => (AliasDest::Global, self.shown.aliases.clone()),
             AliasLevel::Bench => (at(None), bench.aliases.clone()),
             AliasLevel::Tab => (at(Some(tab.id)), tab.aliases.clone()),
             AliasLevel::Shell => return None,
@@ -275,7 +308,7 @@ impl SetupPanel {
         div()
             .id(id)
             .text_size(crate::theme::us(12.0))
-            .text_color(hsla(self.state.read(cx).settings.ui.ink(accent)))
+            .text_color(hsla(self.shown.ui.ink(accent)))
             .cursor_pointer()
             .hover(|s| s.underline())
             .child(label.to_string())
@@ -307,8 +340,8 @@ impl SetupPanel {
         col.into_any_element()
     }
 
-    fn mono(&self, cx: &Context<Self>) -> SharedString {
-        self.state.read(cx).settings.font.family.clone().into()
+    fn mono(&self, _: &Context<Self>) -> SharedString {
+        self.shown.mono.clone()
     }
 
     fn render_pane(&self, index: usize, pane: &Pane, ui: &UiColors, accent: Rgb, cx: &mut Context<Self>) -> AnyElement {
@@ -451,7 +484,7 @@ impl SetupPanel {
         let Some((bench, _)) = self.bench(cx) else { return div().into_any_element() };
         let Some(tab) = shown_tab(&bench, self.pinned) else { return div().into_any_element() };
         let shell = tab.active().map(|p| p.shell_aliases.clone()).unwrap_or_default();
-        let rows = resolve_aliases(&shell, &self.state.read(cx).tree.aliases, &bench.aliases, &tab.aliases);
+        let rows = resolve_aliases(&shell, &self.shown.aliases, &bench.aliases, &tab.aliases);
         let mono = self.mono(cx);
 
         let shell_count = rows.iter().filter(|r| r.2 == AliasLevel::Shell).count();
@@ -553,7 +586,7 @@ impl SetupPanel {
 
 impl Render for SetupPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let ui = self.state.read(cx).settings.ui.clone();
+        let ui = self.shown.ui.clone();
         let accent = self.bench(cx).map(|(b, _)| b.color.accent()).unwrap_or(ui.accent);
         let title = self.tab(cx).map(|t| t.display_title()).unwrap_or_default();
         let panes: Vec<(usize, Pane)> = self.panes(cx).into_iter().enumerate().collect();

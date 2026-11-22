@@ -7,22 +7,26 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, MouseButton,
-    MouseDownEvent, MouseMoveEvent, Pixels, PromptLevel, SharedString, Subscription, Window, canvas,
+    MouseDownEvent, MouseMoveEvent, Pixels, PromptLevel, SharedString, Subscription, WeakEntity, Window, canvas,
     div, prelude::*, px, relative, svg,
 };
-use shed_model::{TabDivider, 
-    Bench, BenchColor, BenchId, Direction, PaneId, PaneNode, Rgb, SplitDir, Tab, TabId, Tag,
+use shed_ai::Limits;
+use shed_model::{
+    Bench, BenchColor, BenchId, Direction, PaneId, PaneNode, ProjectLink, Rgb, SplitDir, Tab, TabDivider, TabId, Tag,
     tag_color,
 };
 use shed_model::config::NewPaneDir;
 use shed_proto::{BenchRef, ClientMsg};
 
 use crate::actions::*;
+use crate::ai_view::{AiLimits, AiView};
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
 use crate::menu::{self, Menu, MenuEntry, MenuHost, danger, more};
+use crate::project_view::ProjectView;
 use crate::setup_panel::{PanelEvent, SetupPanel};
 use crate::state::{AppState, Focus};
+use crate::terminal_view::TerminalView;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 use crate::window_place::{PlaceTracker, Placed};
 
@@ -123,11 +127,11 @@ pub fn known_tags(cx: &gpui::App, state: &crate::state::AppState) -> Vec<(String
 /// `s`: the tabs (by their titles, tags and zoom, in their groups), the
 /// controls, and the widest control (the narrowest the controls can get).
 /// Text is not measured before it is laid out, so this goes by characters.
-fn bar_widths(bench: &Bench, s: f32, limits: bool, lifecycle: bool, setup: bool) -> (f32, f32, f32) {
+fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bool) -> (f32, f32, f32) {
     let ch = 7.4 * s;
-    let tab = |t: &Tab| {
-        let tags: f32 = t.all_tags().map(|g| g.label.chars().count() as f32 * 6.5 * s + 16.0 * s).sum();
-        24.0 * s + 22.0 * s + t.display_title().chars().count() as f32 * ch + tags + if t.zoom != 0.0 { 44.0 * s } else { 0.0 }
+    let tab = |t: &BarTab| {
+        let tags: f32 = t.tags.iter().map(|g| g.label.chars().count() as f32 * 6.5 * s + 16.0 * s).sum();
+        24.0 * s + 22.0 * s + t.title.chars().count() as f32 * ch + tags + if t.zoom != 0.0 { 44.0 * s } else { 0.0 }
     };
     let mut tabs = 8.0 * s + 34.0 * s;
     for (i, t) in bench.tabs.iter().enumerate() {
@@ -192,7 +196,15 @@ impl Render for DraggedTab {
 pub struct BenchWindow {
     bench: BenchId,
     state: Entity<AppState>,
-    ui: UiColors,
+    /// What the window shows of `AppState`, as of its last change: the
+    /// window draws from this, never from `AppState` (which changes with
+    /// every title a program sets, in any bench).
+    shown: Shown,
+    /// What the tab bar shows of `AppState` (`None` once the bench is gone).
+    bar_state: Option<BarState>,
+    bar: Entity<TabBar>,
+    /// How many times it was drawn (tests check what a change draws).
+    drawn: usize,
     /// What was last given keyboard focus, so focus follows the keeper's
     /// active pane without fighting the user's clicks.
     focused: Option<Focus>,
@@ -217,6 +229,58 @@ pub struct BenchWindow {
     _following: Subscription,
 }
 
+/// What a bench window draws of `AppState` outside its tab bar. Made again
+/// at every change to `AppState`, and drawn again only when it differs.
+#[derive(Clone, PartialEq)]
+struct Shown {
+    ui: UiColors,
+    /// The terminal background, which the window is cleared to.
+    background: Rgb,
+    /// What is wrong in `shed.toml`.
+    errors: Vec<String>,
+    /// The bench's colour and its shown tab (`None` once the bench is gone).
+    bench: Option<(Rgb, Content)>,
+}
+
+/// The shown tab's content: the views it holds, and how its panes are laid out.
+#[derive(Clone, PartialEq)]
+enum Content {
+    None,
+    Project(Option<Entity<ProjectView>>),
+    Ai(Option<Entity<AiView>>),
+    Panes(Panes),
+}
+
+/// A terminal tab: its layout, its active pane, and its panes' views.
+#[derive(Clone, PartialEq)]
+struct Panes {
+    tab: TabId,
+    layout: PaneNode,
+    active: PaneId,
+    views: Vec<(PaneId, Option<Entity<TerminalView>>)>,
+}
+
+impl Shown {
+    fn of(bench: BenchId, state: &AppState) -> Self {
+        let settings = &state.settings;
+        let bench = state.tree.bench(bench).map(|b| {
+            let content = match b.active_tab() {
+                Some(tab) if tab.project_info().is_some() => Content::Project(state.projects.get(&tab.id).cloned()),
+                Some(tab) if tab.ai_info().is_some() => Content::Ai(state.ai_views.get(&tab.id).cloned()),
+                Some(tab) => Content::Panes(Panes {
+                    tab: tab.id,
+                    layout: tab.layout.clone(),
+                    active: tab.active_pane,
+                    views: tab.panes.iter().map(|p| (p.id, state.panes.get(&p.id).cloned())).collect(),
+                }),
+                None => Content::None,
+            };
+            (b.color.accent(), content)
+        });
+        Self { ui: settings.ui.clone(), background: settings.palette.background, errors: settings.errors.clone(), bench }
+    }
+}
+
 enum RemoteShells {
     Looking(Vec<shed_client::remote::RemoteShell>),
     Found(Vec<shed_client::remote::RemoteShell>),
@@ -237,12 +301,44 @@ impl BenchWindow {
             this.update(cx, |this, cx| this.close_from_window(window, cx)).ok();
             false
         });
-        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        cx.observe(&state, |this, _, cx| this.follow_state(cx)).detach();
+        let me = cx.entity().downgrade();
+        let bar = cx.new(|_| TabBar { window: me, model: None, drawn: 0 });
+        // The usage limits' time left keeps up: the tab bar draws again
+        // each minute while it shows them.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(std::time::Duration::from_secs(60)).await;
+            let alive = this.update(cx, |this, cx| {
+                if this.bar_state.as_ref().is_some_and(|b| b.limits.is_some()) {
+                    this.bar.update(cx, |_, cx| cx.notify());
+                }
+            });
+            if alive.is_err() {
+                break;
+            }
+        })
+        .detach();
+        // SHED_PERF_FRAMES=<n>: redraw the tab bar n times a second, as
+        // hovering in it does, to measure what a frame of this window costs.
+        if let Some(fps) = std::env::var("SHED_PERF_FRAMES").ok().and_then(|v| v.parse::<u64>().ok()).filter(|n| *n > 0) {
+            let bar = bar.downgrade();
+            cx.spawn_in(window, async move |_, cx| loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(1000 / fps)).await;
+                if bar.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            })
+            .detach();
+        }
         let following = PlaceTracker::follow(window, cx);
-        Self {
+        let shown = Shown::of(bench, state.read(cx));
+        let mut this = Self {
             bench,
             state,
-            ui: UiColors::default(),
+            shown,
+            bar_state: None,
+            bar,
+            drawn: 0,
             focused: None,
             drop_hint: None,
             title: String::new(),
@@ -256,7 +352,49 @@ impl BenchWindow {
             remote_shells: HashMap::new(),
             remote_menu: None,
             _following: following,
+        };
+        this.follow_state(cx);
+        this
+    }
+
+    /// Takes what the window and its tab bar show from `AppState`, after a
+    /// change to it: each draws again only if what it shows changed.
+    fn follow_state(&mut self, cx: &mut Context<Self>) {
+        let limits = cx.try_global::<AiLimits>().map(|l| l.0);
+        let state = self.state.read(cx);
+        let shown = Shown::of(self.bench, state);
+        let bar = state.tree.bench(self.bench).map(|b| BarState::of(b, state, limits));
+        if shown != self.shown {
+            self.shown = shown;
+            cx.notify();
         }
+        if bar != self.bar_state {
+            self.bar_state = bar;
+            self.update_bar(cx);
+        }
+    }
+
+    /// Gives the tab bar what it shows now; it draws again if that changed.
+    fn update_bar(&mut self, cx: &mut Context<Self>) {
+        let model = self.bar_state.clone().map(|bench| BarModel {
+            bench,
+            editing: self.editing.as_ref().map(|(t, e, _)| (*t, e.clone())),
+            drop_hint: self.drop_hint,
+            setup_open: self.setup.is_some(),
+        });
+        self.bar.update(cx, |bar, cx| {
+            if bar.model != model {
+                bar.model = model;
+                cx.notify();
+            }
+        });
+    }
+
+    /// Draws the window again after a change to its own state (a text
+    /// field, the Setup panel, a menu), and the tab bar if it shows it.
+    fn redraw(&mut self, cx: &mut Context<Self>) {
+        self.update_bar(cx);
+        cx.notify();
     }
 
     fn toggle_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -273,7 +411,7 @@ impl BenchWindow {
         } else {
             self.refocus(window, cx);
         }
-        cx.notify();
+        self.redraw(cx);
     }
 
     /// Follows the tree: window title, and keyboard focus on the active pane.
@@ -291,15 +429,14 @@ impl BenchWindow {
             }
             self.focused = active_id;
         }
-        cx.notify();
     }
 
     /// Re-applies focus after an overlay (a text field, a menu) closes.
     fn refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.redraw(cx);
         let Some((focus, handle)) = self.state.read(cx).active_focus(self.bench, cx) else { return };
         window.focus(&handle, cx);
         self.focused = Some(focus);
-        cx.notify();
     }
 
     fn send(&self, msg: ClientMsg, cx: &Context<Self>) {
@@ -591,7 +728,7 @@ impl BenchWindow {
             this.refocus(window, cx);
         });
         self.editing = Some((target, editor, sub));
-        cx.notify();
+        self.redraw(cx);
     }
 
     fn submit_edit(&mut self, target: EditTarget, text: String, cx: &mut Context<Self>) {
@@ -883,15 +1020,127 @@ impl BenchWindow {
         entries
     }
 
+}
+
+/// A tab as the tab bar shows it.
+#[derive(Clone, PartialEq)]
+struct BarTab {
+    id: TabId,
+    title: String,
+    /// Its icon and the icon's colour (`tab_icon`).
+    icon: (&'static str, Rgb),
+    private: bool,
+    zoom: f32,
+    tags: Vec<Tag>,
+    divider: TabDivider,
+}
+
+/// What the tab bar shows of `AppState`: its bench's tabs and controls.
+#[derive(Clone, PartialEq)]
+struct BarState {
+    tabs: Vec<BarTab>,
+    active: TabId,
+    name: String,
+    badge: Option<String>,
+    accent: Rgb,
+    links: Vec<ProjectLink>,
+    closing: bool,
+    started: bool,
+    has_startup: bool,
+    has_teardown: bool,
+    /// The shown tab is a terminal tab (it has a Setup).
+    terminal: bool,
+    /// Claude's usage limits, on a bench with an AI tab, and the palette
+    /// their bars are coloured from.
+    limits: Option<(Limits, shed_emu::Palette)>,
+    ui: UiColors,
+    /// How large the bar is drawn (`[window] tab_bar_scale`).
+    scale: f32,
+    /// The terminal font's size, which a tab's zoom is relative to.
+    base: f32,
+}
+
+impl BarState {
+    fn of(bench: &Bench, state: &AppState, limits: Option<Limits>) -> Self {
+        let ui = state.settings.ui.clone();
+        let accent = bench.color.accent();
+        let panes = || bench.tabs.iter().flat_map(|t| &t.panes);
+        let tabs = bench
+            .tabs
+            .iter()
+            .map(|t| BarTab {
+                id: t.id,
+                title: t.display_title(),
+                icon: tab_icon(t, accent, &ui),
+                private: t.private,
+                zoom: t.zoom,
+                tags: t.all_tags().cloned().collect(),
+                divider: t.divider,
+            })
+            .collect();
+        let ai = bench.tabs.iter().any(|t| t.ai_info().is_some());
+        Self {
+            tabs,
+            active: bench.active_tab,
+            name: bench.name.clone(),
+            badge: bench.badge.clone(),
+            accent,
+            links: bench.links.clone(),
+            closing: bench.closing,
+            started: bench.started,
+            has_startup: panes().any(|p| !p.setup.startup.is_empty()),
+            has_teardown: panes().any(|p| !p.setup.teardown.is_empty()),
+            terminal: bench.active_tab().is_some_and(|t| t.project_info().is_none() && t.ai_info().is_none()),
+            limits: limits.filter(|_| ai).map(|l| (l, state.settings.palette.clone())),
+            scale: state.settings.config.window.tab_bar_scale.clamp(0.7, 2.0) * crate::theme::ui_scale(),
+            base: state.settings.font.size,
+            ui,
+        }
+    }
+}
+
+/// What the tab bar draws: its bench, and the window's own state that shows
+/// on it (a text field in it, where a dragged tab would go, the Setup panel).
+#[derive(Clone, PartialEq)]
+struct BarModel {
+    bench: BarState,
+    editing: Option<(EditTarget, Entity<LineEditor>)>,
+    drop_hint: Option<(TabId, bool)>,
+    setup_open: bool,
+}
+
+impl BarModel {
     fn editor_for(&self, target: EditTarget) -> Option<Entity<LineEditor>> {
-        self.editing.as_ref().filter(|(t, _, _)| *t == target).map(|(_, e, _)| e.clone())
+        self.editing.as_ref().filter(|(t, _)| *t == target).map(|(_, e)| e.clone())
+    }
+}
+
+/// A bench window's tab bar, in a view of its own: a terminal's output, an
+/// AI tab's ticks or a project's changes draw the window without building
+/// the bar again, and the bar draws again only when what it shows changed.
+/// Its listeners act on the `BenchWindow`.
+pub struct TabBar {
+    window: WeakEntity<BenchWindow>,
+    model: Option<BarModel>,
+    /// How many times it was drawn (tests check what a change draws).
+    drawn: usize,
+}
+
+impl TabBar {
+    /// A listener that runs on the window, as `cx.listener` would there.
+    fn on<E: ?Sized>(&self, f: impl Fn(&mut BenchWindow, &E, &mut Window, &mut Context<BenchWindow>) + 'static) -> impl Fn(&E, &mut Window, &mut App) + 'static {
+        let view = self.window.clone();
+        move |event, window, cx| {
+            view.update(cx, |this, cx| f(this, event, window, cx)).ok();
+        }
     }
 
-    fn render_tab_bar(&self, bench: &Bench, width: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
-        let s = self.bar_scale(cx);
-        let ui = &self.ui;
-        let accent = bench.color.accent();
-        let tab_count = bench.tabs.len();
+    fn render_bar(&self, m: &BarModel, width: Pixels, cx: &App) -> impl IntoElement + use<> {
+        let b = &m.bench;
+        let s = b.scale;
+        let ui = &b.ui;
+        let accent = b.accent;
+        let tab_count = b.tabs.len();
         let row = px(TAB_BAR_HEIGHT * s);
         // Tabs wrap onto more rows when they do not fit; the buttons stay on
         // the right of the first.
@@ -916,9 +1165,9 @@ impl BenchWindow {
                 .border_color(hsla_alpha(accent, 0.22))
         };
         let mut current = group();
-        let base = self.state.read(cx).settings.font.size;
+        let base = b.base;
 
-        for (i, tab) in bench.tabs.iter().enumerate() {
+        for (i, tab) in b.tabs.iter().enumerate() {
             if i > 0 && tab.divider != TabDivider::None {
                 tabs = tabs.child(std::mem::replace(&mut current, group()));
                 if tab.divider == TabDivider::Row {
@@ -926,10 +1175,10 @@ impl BenchWindow {
                     tabs = tabs.child(div().w_full().h(px(0.0)));
                 }
             }
-            let active = tab.id == bench.active_tab;
+            let active = tab.id == b.active;
             let tab_id = tab.id;
-            let title = tab.display_title();
-            let tint = tab.all_tags().find(|t| t.tint_tab).map(|t| t.color);
+            let title = tab.title.clone();
+            let tint = tab.tags.iter().find(|t| t.tint_tab).map(|t| t.color);
             let mut el = div()
                 .id(("tab", i))
                 .group("tab")
@@ -941,24 +1190,24 @@ impl BenchWindow {
                 .max_w(px(260.0 * s))
                 .rounded_md()
                 .cursor_pointer()
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                .on_click(self.on(move |this, event: &ClickEvent, window, cx| {
                     if event.click_count() >= 2 {
                         this.start_edit(EditTarget::TabName(tab_id), window, cx);
                     } else {
                         this.send(ClientMsg::FocusTab { tab: tab_id }, cx);
                     }
                 }))
-                .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, window, cx| {
+                .on_mouse_down(MouseButton::Middle, self.on(move |this, _: &MouseDownEvent, window, cx| {
                     this.close_tab(tab_id, window, cx);
                 }))
-                .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                .on_mouse_down(MouseButton::Right, self.on(move |this, e: &MouseDownEvent, _, cx| {
                     let entries = this.tab_menu(tab_id, cx);
                     this.open_menu(e.position, entries, cx);
                 }))
                 .on_drag(DraggedTab { tab: tab_id, title: title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
                 // Dropped on the left half it goes before this tab, on the
                 // right half after it: either way into this tab's group.
-                .on_drag_move::<DraggedTab>(cx.listener(move |this, e: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                .on_drag_move::<DraggedTab>(self.on(move |this, e: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
                     let over = e.bounds.contains(&e.event.position);
                     let hint = if over {
                         Some((tab_id, e.event.position.x > e.bounds.center().x))
@@ -969,19 +1218,19 @@ impl BenchWindow {
                     };
                     if this.drop_hint != hint {
                         this.drop_hint = hint;
-                        cx.notify();
+                        this.redraw(cx);
                     }
                 }))
-                .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
+                .on_drop(self.on(move |this, d: &DraggedTab, _, cx| {
                     let after = this.drop_hint.is_some_and(|(t, after)| t == tab_id && after);
                     this.drop_hint = None;
                     if d.tab != tab_id {
                         this.send(ClientMsg::MoveTabNextTo { tab: d.tab, to: tab_id, after }, cx);
                     }
-                    cx.notify();
+                    this.redraw(cx);
                 }));
             if cx.has_active_drag()
-                && let Some((t, after)) = self.drop_hint
+                && let Some((t, after)) = m.drop_hint
                 && t == tab_id
             {
                 el = if after { el.border_r_2() } else { el.border_l_2() }.border_color(hsla(accent));
@@ -997,12 +1246,12 @@ impl BenchWindow {
                 el = el.border_b_2().border_color(hsla(accent));
             }
             // One icon, as in Shed: what the tab is, or that it waits or works.
-            let (glyph, tint) = tab_icon(tab, accent, ui);
+            let (glyph, tint) = tab.icon;
             el = el.child(svg().path(icon(glyph)).size(px(14.0 * s)).flex_none().text_color(hsla(tint)));
             if tab.private {
                 el = el.child(svg().path(icon("private")).size(px(12.0 * s)).flex_none().text_color(hsla(ui.text_dim)));
             }
-            match self.editor_for(EditTarget::TabName(tab_id)) {
+            match m.editor_for(EditTarget::TabName(tab_id)) {
                 Some(editor) => el = el.child(editor),
                 None => el = el.child(div().truncate().child(title)),
             }
@@ -1021,13 +1270,13 @@ impl BenchWindow {
                         .hover(|st| st.bg(hsla_alpha(ui.text_dim, 0.3)))
                         .tooltip(menu::tooltip("Zoom: click for the usual size"))
                         .child(format!("{pct}%"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_click(self.on(move |this, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
                             this.send(ClientMsg::SetZoom { tab: tab_id, zoom: 0.0 }, cx);
                         })),
                 );
             }
-            for tag in tab.all_tags() {
+            for tag in &tab.tags {
                 el = el.child(
                     div()
                         .flex_none()
@@ -1035,11 +1284,11 @@ impl BenchWindow {
                         .rounded_sm()
                         .text_size(px(11.0 * s))
                         .bg(hsla_alpha(tag.color, 0.25))
-                        .text_color(hsla(self.ui.ink(tag.color)))
+                        .text_color(hsla(ui.ink(tag.color)))
                         .child(tag.label.clone()),
                 );
             }
-            if let Some(editor) = self.editor_for(EditTarget::AddTag(tab_id)) {
+            if let Some(editor) = m.editor_for(EditTarget::AddTag(tab_id)) {
                 el = el.child(editor);
             }
             current = current.child(el);
@@ -1057,13 +1306,13 @@ impl BenchWindow {
                 .cursor_pointer()
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
                 .tooltip(menu::tooltip("New tab (right-click for a project tab)"))
-                .on_click(cx.listener(|this, _, _, cx| this.new_tab(cx)))
-                .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                .on_click(self.on(|this, _: &ClickEvent, _, cx| this.new_tab(cx)))
+                .on_mouse_down(MouseButton::Right, self.on(|this, e: &MouseDownEvent, _, cx| {
                     let entries = vec![
                         item("New Terminal Tab", |this, _, cx| this.new_tab(cx)).icon("terminal"),
                         item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
-                        more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(cx)).icon("ai"),
-                        more("New Remote Tab", |this: &mut Self, cx| this.remote_host_menu(cx)).icon("server"),
+                        more("New AI Tab", |this: &mut BenchWindow, cx| this.ai_folder_menu(cx)).icon("ai"),
+                        more("New Remote Tab", |this: &mut BenchWindow, cx| this.remote_host_menu(cx)).icon("server"),
                     ];
                     this.open_menu(e.position, entries, cx);
                 }))
@@ -1078,15 +1327,15 @@ impl BenchWindow {
                 // onto a row of its own.
                 .min_w(px(0.0))
                 .h(tab_h)
-                .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| {
+                .on_drop(self.on(move |this, d: &DraggedTab, _, cx| {
                     this.drop_hint = None;
                     this.send(ClientMsg::MoveTab { tab: d.tab, bench: this.bench, index: tab_count }, cx);
+                    this.redraw(cx);
                 })),
         );
         // Startup and teardown on demand: a bench opens quietly, and runs its
         // teardown when closed only if its startup ran.
-        let has_startup = bench.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.startup.is_empty());
-        let has_teardown = bench.tabs.iter().flat_map(|t| &t.panes).any(|p| !p.setup.teardown.is_empty());
+        let (has_startup, has_teardown) = (b.has_startup, b.has_teardown);
         // A small icon like the bar's others, in the bench's colour; what it
         // does in its tooltip.
         let run = |id: &'static str, glyph: &'static str, tip: &'static str| {
@@ -1100,36 +1349,31 @@ impl BenchWindow {
                 .tooltip(menu::tooltip(tip))
                 .child(svg().path(icon(glyph)).size(px(16.0 * s)).text_color(hsla(ui.ink(accent))))
         };
-        let lifecycle = if bench.closing {
+        let lifecycle = if b.closing {
             None
-        } else if has_startup && !bench.started {
-            Some(run("run-startup", "go", "Run Startup: each pane's startup now; closing then runs the teardown").on_click(cx.listener(|this, _, _, cx| {
+        } else if has_startup && !b.started {
+            Some(run("run-startup", "go", "Run Startup: each pane's startup now; closing then runs the teardown").on_click(self.on(|this, _: &ClickEvent, _, cx| {
                 this.send(ClientMsg::RunStartup { bench: this.bench }, cx);
             })))
-        } else if bench.started && has_teardown {
-            Some(run("run-teardown", "stop", "Run Teardown: stop what runs and run each pane's teardown; the bench stays open").on_click(cx.listener(|this, _, _, cx| {
+        } else if b.started && has_teardown {
+            Some(run("run-teardown", "stop", "Run Teardown: stop what runs and run each pane's teardown; the bench stays open").on_click(self.on(|this, _: &ClickEvent, _, cx| {
                 this.send(ClientMsg::RunTeardown { bench: this.bench }, cx);
             })))
         } else {
             None
         };
         // Claude's usage limits, on benches that talk to it.
-        let limits = bench
-            .tabs
-            .iter()
-            .any(|t| t.ai_info().is_some())
-            .then(|| cx.try_global::<crate::ai_view::AiLimits>().map(|l| l.0))
-            .flatten()
-            .and_then(|l| crate::ai_view::limit_bars(l, ui, &self.state.read(cx).settings.palette, s));
+        let limits = b.limits.as_ref().and_then(|(l, palette)| crate::ai_view::limit_bars(*l, ui, palette, s));
         // Setup is for terminal tabs: startup, teardown and aliases.
-        let terminal = bench.active_tab().is_some_and(|t| t.project_info().is_none() && t.ai_info().is_none());
+        let terminal = b.terminal;
         // The controls on the right: one row when the tabs leave room for it;
         // when the tabs need more rows, a narrower block of rows of their own
         // (right-aligned, each as tall as a tab row), so the tabs get the width.
-        let (tabs_w, controls_w, widest) = bar_widths(bench, s, limits.is_some(), has_startup && !bench.started || bench.started && has_teardown, terminal);
+        let (tabs_w, controls_w, widest) = bar_widths(b, s, limits.is_some(), has_startup && !b.started || b.started && has_teardown, terminal);
         let room = f32::from(width);
         let stacked = tabs_w + controls_w > room;
         let controls_max = if stacked { widest.max(room * 0.28).min(controls_w) } else { controls_w.max(room) };
+        let setup_open = m.setup_open;
         let controls = div()
             .flex()
             .flex_none()
@@ -1142,7 +1386,7 @@ impl BenchWindow {
             .max_w(px(controls_max + f32::from(pad) * 2.0 + 2.0))
             .children(limits.map(|l| l.h(tab_h).px_1()))
             .children(lifecycle.map(|l| l.h(tab_h)))
-        .when(terminal || self.setup.is_some(), |d| d.child(
+        .when(terminal || setup_open, |d| d.child(
             div()
                 .id("setup-button")
                 .h(tab_h)
@@ -1150,15 +1394,15 @@ impl BenchWindow {
                 .items_center()
                 .px_2()
                 .cursor_pointer()
-                .when(self.setup.is_some(), |d| d.bg(hsla(ui.tab_active)))
+                .when(setup_open, |d| d.bg(hsla(ui.tab_active)))
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
                 .tooltip(menu::tooltip("Setup: startup, teardown, aliases"))
-                .on_click(cx.listener(|this, _, window, cx| this.toggle_setup(window, cx)))
-                .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if self.setup.is_some() { accent } else { ui.text_dim }))),
+                .on_click(self.on(|this, _: &ClickEvent, window, cx| this.toggle_setup(window, cx)))
+                .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if setup_open { accent } else { ui.text_dim }))),
         ))
-            .child(div().h(tab_h).flex().items_center().child(self.render_bench_label(bench, cx)))
+            .child(div().h(tab_h).flex().items_center().child(self.render_bench_label(m)))
             // Links last: stacked, they take the rows below.
-            .children(self.render_links(bench, cx).into_iter().map(|l| div().h(tab_h).flex().items_center().child(l)));
+            .children(self.render_links(b).into_iter().map(|l| div().h(tab_h).flex().items_center().child(l)));
         div()
             .id("tab-bar")
             .flex()
@@ -1176,27 +1420,22 @@ impl BenchWindow {
     }
 
     /// The bench's links, on the tab bar: click opens, right-click for more.
-    /// How large the tab bar is drawn (`[window] tab_bar_scale`).
-    fn bar_scale(&self, cx: &App) -> f32 {
-        self.state.read(cx).settings.config.window.tab_bar_scale.clamp(0.7, 2.0) * crate::theme::ui_scale()
-    }
-
-    fn render_links(&self, bench: &Bench, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let accent = bench.color.accent();
-        let links = bench.links.clone();
-        bench.links.iter().enumerate().map(|(i, link)| {
+    fn render_links(&self, b: &BarState) -> Vec<AnyElement> {
+        let accent = b.accent;
+        let links = b.links.clone();
+        b.links.iter().enumerate().map(|(i, link)| {
             let url = link.url.clone();
             let links = links.clone();
-            crate::links::chip(format!("link-{i}"), link, accent, &self.ui)
+            crate::links::chip(format!("link-{i}"), link, accent, &b.ui)
                 .tooltip(menu::tooltip("Open the link (right-click for more)"))
-                .on_click(cx.listener(move |_, _, _, cx| crate::links::open(url.clone(), false, cx)))
-                .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                .on_click(self.on(move |_, _: &ClickEvent, _, cx| crate::links::open(url.clone(), false, cx)))
+                .on_mouse_down(MouseButton::Right, self.on(move |this, e: &MouseDownEvent, _, cx| {
                     let entries = crate::links::menu(
                         links.clone(),
                         i,
-                        |this: &mut Self, links, cx| this.send(ClientMsg::SetBenchLinks { bench: this.bench, links }, cx),
-                        move |this: &mut Self, window, cx| this.start_edit(EditTarget::RenameLink(i), window, cx),
-                        move |this: &mut Self, window, cx| this.start_edit(EditTarget::EditLink(i), window, cx),
+                        |this: &mut BenchWindow, links, cx| this.send(ClientMsg::SetBenchLinks { bench: this.bench, links }, cx),
+                        move |this: &mut BenchWindow, window, cx| this.start_edit(EditTarget::RenameLink(i), window, cx),
+                        move |this: &mut BenchWindow, window, cx| this.start_edit(EditTarget::EditLink(i), window, cx),
                     );
                     this.open_menu(e.position, entries, cx);
                 }))
@@ -1205,14 +1444,15 @@ impl BenchWindow {
         .collect()
     }
 
-    fn render_bench_label(&self, bench: &Bench, cx: &mut Context<Self>) -> AnyElement {
-        let s = self.bar_scale(cx);
+    fn render_bench_label(&self, m: &BarModel) -> AnyElement {
+        let b = &m.bench;
+        let s = b.scale;
         let in_label = |t: &EditTarget| !matches!(t, EditTarget::TabName(_) | EditTarget::AddTag(_));
-        let editor = self.editing.as_ref().filter(|(t, _, _)| in_label(t)).map(|(_, e, _)| e.clone());
+        let editor = m.editing.as_ref().filter(|(t, _)| in_label(t)).map(|(_, e)| e.clone());
         if let Some(editor) = editor {
             return div().flex().items_center().px_2().child(editor).into_any_element();
         }
-        let accent = bench.color.accent();
+        let accent = b.accent;
         div()
             .id("bench-label")
             .flex()
@@ -1220,30 +1460,53 @@ impl BenchWindow {
             .gap_1p5()
             .px_3()
             .cursor_pointer()
-            .text_color(hsla(self.ui.ink(accent)))
-            .hover(|s| s.bg(hsla(self.ui.tab_hover)))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+            .text_color(hsla(b.ui.ink(accent)))
+            .hover(|s| s.bg(hsla(b.ui.tab_hover)))
+            .on_mouse_down(MouseButton::Left, self.on(|this, e: &MouseDownEvent, _, cx| {
                 let entries = this.bench_menu(cx);
                 this.open_menu(e.position, entries, cx);
             }))
-            .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+            .on_mouse_down(MouseButton::Right, self.on(|this, e: &MouseDownEvent, _, cx| {
                 let entries = this.bench_menu(cx);
                 this.open_menu(e.position, entries, cx);
             }))
-            .child(svg().path(icon("bench")).size(px(14.0 * s)).text_color(hsla(self.ui.ink(accent))))
-            .child(bench.name.clone())
-            .when_some(bench.badge.clone(), |el, badge| {
+            .child(svg().path(icon("bench")).size(px(14.0 * s)).text_color(hsla(b.ui.ink(accent))))
+            .child(b.name.clone())
+            .when_some(b.badge.clone(), |el, badge| {
                 el.child(div().px_1().rounded_sm().bg(hsla_alpha(accent, 0.25)).child(badge))
             })
             .into_any_element()
     }
+}
 
-    fn render_node(&self, node: &PaneNode, path: Vec<bool>, tab: &Tab, accent: Rgb, cx: &mut Context<Self>) -> AnyElement {
+impl Render for TabBar {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.drawn += 1;
+        let started = std::time::Instant::now();
+        let width = window.viewport_size().width;
+        let element = match &self.model {
+            Some(m) => self.render_bar(m, width, cx).into_any_element(),
+            None => div().into_any_element(),
+        };
+        if crate::terminal_view::perf::enabled() {
+            use std::sync::atomic::Ordering;
+            crate::terminal_view::perf::BAR_RENDERS.fetch_add(1, Ordering::Relaxed);
+            crate::terminal_view::perf::BAR_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
+        element
+    }
+}
+
+impl BenchWindow {
+
+    /// A terminal tab's panes, laid out by its split tree (`node` is the
+    /// part of `panes.layout` at `path`).
+    fn render_node(&self, node: &PaneNode, path: Vec<bool>, panes: &Panes, accent: Rgb, cx: &mut Context<Self>) -> AnyElement {
         match node {
             PaneNode::Leaf(id) => {
                 let pane = *id;
-                let split = tab.panes.len() > 1;
-                let active = pane == tab.active_pane;
+                let split = panes.views.len() > 1;
+                let active = pane == panes.active;
                 let mut cell = div()
                     .relative()
                     .size_full()
@@ -1254,7 +1517,7 @@ impl BenchWindow {
                         let entries = this.pane_menu(pane, cx);
                         this.open_menu(e.position, entries, cx);
                     }));
-                if let Some(view) = self.state.read(cx).panes.get(&pane) {
+                if let Some((_, Some(view))) = panes.views.iter().find(|(id, _)| *id == pane) {
                     cell = cell.child(view.clone());
                 }
                 if split && active {
@@ -1280,8 +1543,8 @@ impl BenchWindow {
                     .min_w_0()
                     .min_h_0()
                     .map(|d| if row { d.h_full().w(relative(*ratio)) } else { d.w_full().h(relative(*ratio)) })
-                    .child(self.render_node(first, first_path, tab, accent, cx));
-                let (tab_id, layout, drag_path) = (tab.id, tab.layout.clone(), path.clone());
+                    .child(self.render_node(first, first_path, panes, accent, cx));
+                let (tab_id, drag_layout, drag_path) = (panes.tab, panes.layout.clone(), path.clone());
                 // A thin line inside a wider grab area.
                 let divider = div()
                     .id(SharedString::from(format!("divider-{path:?}")))
@@ -1290,11 +1553,11 @@ impl BenchWindow {
                     .justify_center()
                     .map(|d| if row { d.w(px(5.0)).h_full().flex_row().cursor_col_resize() } else { d.h(px(5.0)).w_full().flex_col().cursor_row_resize() })
                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                        this.drag = Some(SplitDrag { tab: tab_id, path: drag_path.clone(), dir, layout: layout.clone() });
+                        this.drag = Some(SplitDrag { tab: tab_id, path: drag_path.clone(), dir, layout: drag_layout.clone() });
                         cx.stop_propagation();
                     }))
-                    .child(div().bg(hsla(self.ui.divider)).map(|d| if row { d.w(px(1.0)).h_full() } else { d.h(px(1.0)).w_full() }));
-                let second_el = div().flex_1().min_w_0().min_h_0().child(self.render_node(second, second_path, tab, accent, cx));
+                    .child(div().bg(hsla(self.shown.ui.divider)).map(|d| if row { d.w(px(1.0)).h_full() } else { d.h(px(1.0)).w_full() }));
+                let second_el = div().flex_1().min_w_0().min_h_0().child(self.render_node(second, second_path, panes, accent, cx));
                 let bounds = self.split_bounds.clone();
                 div()
                     .relative()
@@ -1347,30 +1610,25 @@ impl MenuHost for BenchWindow {
 }
 
 impl Render for BenchWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = window.viewport_size().width;
-        if crate::terminal_view::perf::enabled() {
-            crate::terminal_view::perf::WINDOW_RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.drawn += 1;
+        let perf = crate::terminal_view::perf::enabled();
+        if perf {
+            crate::terminal_view::perf::bench_frame_started();
         }
-        self.ui = self.state.read(cx).settings.ui.clone();
-        let errors = self.state.read(cx).settings.errors.clone();
-        let Some(bench) = self.bench(cx).cloned() else {
-            return div().size_full().bg(hsla(self.ui.background)).into_any_element();
+        // Drawn from what the window keeps, never from `AppState`: reading
+        // it here would draw the window again at every change to it.
+        let ui = self.shown.ui.clone();
+        let errors = self.shown.errors.clone();
+        let Some((accent, content)) = self.shown.bench.clone() else {
+            return div().size_full().bg(hsla(ui.background)).into_any_element();
         };
-        let accent = bench.color.accent();
-        let content = match bench.active_tab() {
-            Some(tab) if tab.project_info().is_some() => match self.state.read(cx).projects.get(&tab.id) {
-                Some(view) => div().size_full().child(view.clone()).into_any_element(),
-                None => div().into_any_element(),
-            },
-            Some(tab) if tab.ai_info().is_some() => match self.state.read(cx).ai_views.get(&tab.id) {
-                Some(view) => div().size_full().child(view.clone()).into_any_element(),
-                None => div().into_any_element(),
-            },
-            Some(tab) => self.render_node(&tab.layout, Vec::new(), tab, accent, cx),
-            None => div().into_any_element(),
+        let content = match content {
+            Content::Project(Some(view)) => div().size_full().child(view).into_any_element(),
+            Content::Ai(Some(view)) => div().size_full().child(view).into_any_element(),
+            Content::Panes(panes) => self.render_node(&panes.layout, Vec::new(), &panes, accent, cx),
+            Content::Project(None) | Content::Ai(None) | Content::None => div().into_any_element(),
         };
-        let ui = self.ui.clone();
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
 
         div()
@@ -1380,7 +1638,7 @@ impl Render for BenchWindow {
             .flex_col()
             // The terminal background, drawn first and full-window, so the renderer
             // turns it into the frame's clear colour.
-            .bg(hsla(self.state.read(cx).settings.palette.background))
+            .bg(hsla(self.shown.background))
             .child(self.ctrl_wheel_zoom(cx))
             .capture_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
                 if this.menu.is_some() && e.keystroke.key == "escape" {
@@ -1439,7 +1697,7 @@ impl Render for BenchWindow {
                 }
             }))
             .child(div().h(px(3.0)).w_full().flex_none().bg(hsla(accent)))
-            .child(self.render_tab_bar(&bench, width, cx))
+            .child(self.bar.clone())
             .child(
                 // The panel lies over the panes rather than beside them, so opening it
                 // does not resize every terminal in the tab.
@@ -1462,10 +1720,10 @@ impl Render for BenchWindow {
                                 .py_0p5()
                                 .rounded_sm()
                                 .text_size(px(12.0))
-                                .bg(hsla(self.ui.tab_active))
+                                .bg(hsla(ui.tab_active))
                                 .border_1()
-                                .border_color(hsla(self.ui.accent))
-                                .text_color(hsla(self.ui.text))
+                                .border_color(hsla(ui.accent))
+                                .text_color(hsla(ui.text))
                                 .child(format!("{what} · Enter saves · Esc cancels · clicking elsewhere saves")),
                         )
                     }),
@@ -1476,14 +1734,112 @@ impl Render for BenchWindow {
                         .flex_none()
                         .px_3()
                         .py_1()
-                        .bg(hsla_alpha(self.ui.danger, 0.2))
+                        .bg(hsla_alpha(ui.danger, 0.2))
                         .text_size(px(12.0))
-                        .text_color(hsla(self.ui.text))
+                        .text_color(hsla(ui.text))
                         .child(format!("shed.toml: {}", errors.join("; "))),
                 )
             })
             .children(menu)
+            // Painted last: how long the frame took (`SHED_PERF`).
+            .when(perf, |d| d.child(canvas(|_, _, _| {}, |_, _, _, _| crate::terminal_view::perf::bench_frame_painted()).absolute().size_0()))
             .into_any_element()
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shed_client::keeper_conn::KeeperConn;
+
+    fn bench(name: &str, titles: &[&str]) -> Bench {
+        let tabs: Vec<Tab> = titles
+            .iter()
+            .map(|title| {
+                let mut pane = shed_model::Pane::new(PaneId::new(), "/tmp".into());
+                pane.title = Some(title.to_string());
+                Tab::with_pane(pane)
+            })
+            .collect();
+        Bench {
+            id: BenchId::new(),
+            name: name.into(),
+            color: BenchColor::Blue,
+            badge: None,
+            cwd: "/".into(),
+            active_tab: tabs[0].id,
+            tabs,
+            aliases: Default::default(),
+            closing: false,
+            started: false,
+            launcher: name.into(),
+            window: None,
+            links: Vec::new(),
+        }
+    }
+
+    /// A change to one bench draws that bench's window only (and of it, the
+    /// tab bar only when the bar shows the change); a change no window shows
+    /// (a terminal's size, a title under the shown one) draws none.
+    #[gpui::test]
+    fn a_change_draws_only_its_bench_window(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let state = cx.new(|_| AppState::new(KeeperConn::detached(), crate::settings::Settings::default()));
+        let (api, web) = (bench("api", &["~/api", "cargo test"]), bench("web", &["~/web"]));
+        let (api_id, web_id) = (api.id, web.id);
+        state.update(cx, |s, cx| {
+            s.tree = shed_model::Shed { benches: vec![api, web], ..Default::default() };
+            cx.notify();
+        });
+        let open = |id: BenchId, cx: &mut gpui::TestAppContext| {
+            let tracker = PlaceTracker::new(Some(id), KeeperConn::detached(), gpui::WindowBounds::Windowed(gpui::Bounds::default()), None);
+            let st = state.clone();
+            cx.add_window(|window, cx| BenchWindow::new(id, st, tracker, window, cx))
+        };
+        let (a, w) = (open(api_id, cx), open(web_id, cx));
+        cx.run_until_parked();
+        // Each window's draws, and its tab bar's.
+        let drawn = |cx: &mut gpui::TestAppContext| {
+            [a, w].map(|h| h.update(cx, |v, _, cx| (v.drawn, v.bar.read(cx).drawn)).unwrap())
+        };
+        let change = |cx: &mut gpui::TestAppContext, f: &dyn Fn(&mut shed_model::Shed)| {
+            state.update(cx, |s, cx| {
+                f(&mut s.tree);
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+        let [(a0, ab0), (w0, wb0)] = drawn(cx);
+        assert!(a0 > 0 && ab0 > 0 && w0 > 0 && wb0 > 0, "both drawn at first");
+
+        // A terminal's size, and the title of a pane that is not the tab's
+        // shown one: in no window.
+        change(cx, &|tree| {
+            let tab = &mut tree.benches[0].tabs[1];
+            tab.panes[0].cols = 132;
+            let mut hidden = shed_model::Pane::new(PaneId::new(), "/tmp".into());
+            hidden.title = Some("htop".into());
+            tab.panes.push(hidden);
+        });
+        let before = drawn(cx);
+        change(cx, &|tree| tree.benches[0].tabs[1].panes[1].title = Some("top".into()));
+        assert_eq!(drawn(cx), before, "nothing shown changed");
+
+        // A title api's tab bar shows: api's window and bar, not web's.
+        let [(a1, ab1), (w1, wb1)] = drawn(cx);
+        change(cx, &|tree| tree.benches[0].tabs[1].panes[0].title = Some("cargo build".into()));
+        let [(a2, ab2), (w2, wb2)] = drawn(cx);
+        assert!(a2 > a1 && ab2 > ab1, "api's window drew its bar again");
+        assert_eq!((w2, wb2), (w1, wb1), "web's window drew nothing");
+
+        // Web renamed: web's window only.
+        change(cx, &|tree| tree.benches[1].name = "website".into());
+        let [(a3, ab3), (w3, wb3)] = drawn(cx);
+        assert_eq!((a3, ab3), (a2, ab2));
+        assert!(w3 > w2 && wb3 > wb2);
+    }
+}

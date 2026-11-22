@@ -12,13 +12,30 @@ pub mod perf {
     pub static RENDER_US: AtomicU64 = AtomicU64::new(0);
     pub static PAINTS: AtomicU64 = AtomicU64::new(0);
     pub static PAINT_US: AtomicU64 = AtomicU64::new(0);
-    pub static WINDOW_RENDERS: AtomicU64 = AtomicU64::new(0);
     pub static BOARD_RENDERS: AtomicU64 = AtomicU64::new(0);
     pub static BOARD_US: AtomicU64 = AtomicU64::new(0);
     pub static SHED_FRAMES: AtomicU64 = AtomicU64::new(0);
     pub static SHED_FRAME_US: AtomicU64 = AtomicU64::new(0);
+    pub static BENCH_FRAMES: AtomicU64 = AtomicU64::new(0);
+    pub static BAR_RENDERS: AtomicU64 = AtomicU64::new(0);
+    pub static BAR_US: AtomicU64 = AtomicU64::new(0);
+    pub static BENCH_FRAME_US: AtomicU64 = AtomicU64::new(0);
     thread_local! {
         static SHED_FRAME_START: Cell<Option<Instant>> = const { Cell::new(None) };
+        static BENCH_FRAME_START: Cell<Option<Instant>> = const { Cell::new(None) };
+    }
+
+    /// A bench window started a frame (its root view renders).
+    pub fn bench_frame_started() {
+        BENCH_FRAME_START.with(|s| s.set(Some(Instant::now())));
+    }
+
+    /// A bench window's frame was painted (as `shed_frame_painted`).
+    pub fn bench_frame_painted() {
+        if let Some(started) = BENCH_FRAME_START.with(|s| s.take()) {
+            BENCH_FRAMES.fetch_add(1, Ordering::Relaxed);
+            BENCH_FRAME_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
     }
 
     /// The Shed window started a frame (its root view renders).
@@ -45,9 +62,12 @@ pub mod perf {
         let (r, rus, p, pus) = (take(&RENDERS), take(&RENDER_US), take(&PAINTS), take(&PAINT_US));
         let (b, bus) = (take(&BOARD_RENDERS), take(&BOARD_US));
         let (f, fus) = (take(&SHED_FRAMES), take(&SHED_FRAME_US));
+        let (bf, bfus) = (take(&BENCH_FRAMES), take(&BENCH_FRAME_US));
+        let (tb, tbus) = (take(&BAR_RENDERS), take(&BAR_US));
         format!(
-            "window renders {}/s, terminal renders {r}/s ({} µs avg), paints {p}/s ({} µs avg), pegboard renders {b}/s ({} µs avg), Shed window frames {f}/s ({} µs avg)",
-            take(&WINDOW_RENDERS),
+            "bench window frames {bf}/s ({} µs avg), tab bar renders {tb}/s ({} µs avg), terminal renders {r}/s ({} µs avg), paints {p}/s ({} µs avg), pegboard renders {b}/s ({} µs avg), Shed window frames {f}/s ({} µs avg)",
+            bfus.checked_div(bf).unwrap_or(0),
+            tbus.checked_div(tb).unwrap_or(0),
             rus.checked_div(r).unwrap_or(0),
             pus.checked_div(p).unwrap_or(0),
             bus.checked_div(b).unwrap_or(0),
