@@ -359,6 +359,7 @@ fn join(host: &str, id: &str, installed: &mut bool, tty: &Tty) -> Join {
 
 pub fn connect(host: &str, id: &str) -> anyhow::Result<()> {
     hear_reconnect();
+    note_used(host);
     let tty = Tty::save();
     let mut installed = false;
     let mut failures = 0;
@@ -389,23 +390,181 @@ pub fn connect(host: &str, id: &str) -> anyhow::Result<()> {
     }
 }
 
-/// Hosts named in `~/.ssh/config`, to offer for a new remote tab.
-pub fn known_hosts() -> Vec<String> {
-    let Some(home) = std::env::var_os("HOME") else { return Vec::new() };
-    let Ok(text) = std::fs::read_to_string(PathBuf::from(home).join(".ssh/config")) else { return Vec::new() };
-    let mut hosts: Vec<String> = text
-        .lines()
-        .filter_map(|l| {
-            let l = l.trim();
-            let (key, rest) = l.split_once(char::is_whitespace)?;
-            key.eq_ignore_ascii_case("host").then_some(rest)
+/// Services reached over ssh only for Git: never a shell to offer.
+const GIT_SERVICES: &[&str] = &["github.com", "gitlab.com", "bitbucket.org", "ssh.github.com", "codeberg.org", "git.sr.ht", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"];
+
+/// `host` (maybe `user@host`) is a Git service's.
+fn is_git_service(host: &str) -> bool {
+    let h = host.rsplit('@').next().unwrap_or(host).to_ascii_lowercase();
+    GIT_SERVICES.contains(&h.as_str()) || h.starts_with("altssh.")
+}
+
+/// How deep `Include`s are followed (they may include each other).
+const MAX_INCLUDE_DEPTH: usize = 4;
+
+/// The hosts an ssh config names on its `Host` lines (patterns left out),
+/// in order, each with whether it is for Git only: its block says `User
+/// git`, or its `HostName` (or its name) is a Git service's. `Match` blocks
+/// name no host. `Include`d files are read through `include` (given the
+/// path as written; it gives the text of each file it names).
+pub fn config_hosts(text: &str, include: &mut dyn FnMut(&str) -> Vec<String>) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    read_config(text, include, 0, &mut out);
+    out
+}
+
+fn read_config(text: &str, include: &mut dyn FnMut(&str) -> Vec<String>, depth: usize, out: &mut Vec<(String, bool)>) {
+    // The hosts of the block being read, by their place in `out`.
+    let mut block: Vec<usize> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // `Key value` or `Key=value`.
+        let at = line.find(|c: char| c.is_whitespace() || c == '=').unwrap_or(line.len());
+        let (key, value) = (line[..at].to_ascii_lowercase(), line[at..].trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim());
+        let value = value.trim_matches('"');
+        match key.as_str() {
+            "host" => {
+                block.clear();
+                for name in value.split_whitespace().filter(|h| !h.contains(['*', '?', '!'])) {
+                    let at = out.iter().position(|(h, _)| h == name).unwrap_or_else(|| {
+                        out.push((name.to_string(), false));
+                        out.len() - 1
+                    });
+                    if is_git_service(name) {
+                        out[at].1 = true;
+                    }
+                    block.push(at);
+                }
+            }
+            "match" => block.clear(),
+            "user" if value == "git" => block.iter().for_each(|&i| out[i].1 = true),
+            "hostname" if is_git_service(value) => block.iter().for_each(|&i| out[i].1 = true),
+            "include" if depth < MAX_INCLUDE_DEPTH => {
+                for path in value.split_whitespace() {
+                    for text in include(path) {
+                        read_config(&text, include, depth + 1, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `name` matches `pattern` (`*` any run, `?` one character).
+fn wildcard(pattern: &str, name: &str) -> bool {
+    fn go(p: &[char], n: &[char]) -> bool {
+        match p.split_first() {
+            None => n.is_empty(),
+            Some(('*', rest)) => (0..=n.len()).any(|i| go(rest, &n[i..])),
+            Some(('?', rest)) => !n.is_empty() && go(rest, &n[1..]),
+            Some((c, rest)) => n.first() == Some(c) && go(rest, &n[1..]),
+        }
+    }
+    go(&pattern.chars().collect::<Vec<_>>(), &name.chars().collect::<Vec<_>>())
+}
+
+/// The files an `Include` names, as ssh finds them (`~/…`, or relative to
+/// `~/.ssh`; a wildcard in the file's name), their text each.
+fn read_include(ssh_dir: &std::path::Path, home: &std::path::Path, path: &str) -> Vec<String> {
+    let full = match path.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None if path.starts_with('/') => PathBuf::from(path),
+        None => ssh_dir.join(path),
+    };
+    let (Some(dir), Some(name)) = (full.parent(), full.file_name().map(|n| n.to_string_lossy().into_owned())) else { return Vec::new() };
+    let mut files: Vec<PathBuf> = if name.contains(['*', '?']) {
+        std::fs::read_dir(dir).map(|d| d.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| wildcard(&name, &n.to_string_lossy()))).collect()).unwrap_or_default()
+    } else {
+        vec![full]
+    };
+    files.sort();
+    // Small text files only: an Include of something else reads nothing.
+    files.iter().filter(|p| p.metadata().is_ok_and(|m| m.is_file() && m.len() < 1 << 20)).filter_map(|p| std::fs::read_to_string(p).ok()).collect()
+}
+
+/// Hosts to offer for a new remote tab: `recent` ones (those remote tabs
+/// used, most recent first), then those named in `~/.ssh/config`. Hosts
+/// only for Git (GitHub and the like) are left out, unless a remote tab
+/// used one.
+pub fn known_hosts(recent: &[String]) -> Vec<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let config = home.as_ref().map_or(Vec::new(), |home| {
+        let ssh = home.join(".ssh");
+        let text = std::fs::read_to_string(ssh.join("config")).unwrap_or_default();
+        config_hosts(&text, &mut |path| read_include(&ssh, home, path))
+    });
+    offered_hosts(recent, &config)
+}
+
+/// `recent` first, then the config's hosts but those for Git only; once each.
+fn offered_hosts(recent: &[String], config: &[(String, bool)]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for host in recent.iter().filter(|h| !h.trim().is_empty()) {
+        if !out.contains(host) {
+            out.push(host.clone());
+        }
+    }
+    for (host, git) in config {
+        if !git && !is_git_service(host) && !out.contains(host) {
+            out.push(host.clone());
+        }
+    }
+    out
+}
+
+/// Where the hosts remote tabs connected to are kept, latest first.
+fn used_file() -> PathBuf {
+    shed_model::paths::state_dir().join("remote-hosts")
+}
+
+/// How many hosts are remembered as used.
+const USED_KEPT: usize = 30;
+
+/// Remembers that a remote tab connected to `host` now.
+pub fn note_used(host: &str) {
+    let file = used_file();
+    let old = std::fs::read_to_string(&file).unwrap_or_default();
+    let hosts: Vec<&str> = std::iter::once(host).chain(old.lines().map(str::trim).filter(|h| !h.is_empty() && *h != host)).take(USED_KEPT).collect();
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = shed_model::paths::write_whole(&file, hosts.join("\n") + "\n");
+}
+
+/// The hosts remote tabs use, most recently used first: those they
+/// connected to lately, then those of running benches, then those of saved
+/// benches, the latest saved first.
+pub fn recent_hosts(tree: &shed_model::Shed) -> Vec<String> {
+    let used: Vec<String> = std::fs::read_to_string(used_file()).unwrap_or_default().lines().map(str::trim).filter(|h| !h.is_empty()).map(String::from).collect();
+    recent_from(used, tree, &shed_save::Store::default())
+}
+
+fn recent_from(used: Vec<String>, tree: &shed_model::Shed, store: &shed_save::Store) -> Vec<String> {
+    let running = tree.benches.iter().flat_map(|b| &b.tabs).filter_map(|t| t.remote_info()).map(|r| r.host.clone());
+    let mut saved: Vec<(String, Vec<String>)> = std::fs::read_dir(&store.dir)
+        .map(|d| {
+            d.filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+                .filter_map(|p| std::fs::read_to_string(p).ok())
+                .filter(|text| text.contains("[tabs.remote]"))
+                .filter_map(|text| shed_save::SavedBench::from_toml(&text).ok())
+                .map(|b| (b.saved.clone(), b.tabs.iter().filter_map(|t| t.remote.as_ref()).map(|r| r.host.clone()).collect()))
+                .collect()
         })
-        .flat_map(|rest| rest.split_whitespace())
-        .filter(|h| !h.contains(['*', '?', '!']))
-        .map(String::from)
-        .collect();
-    hosts.dedup();
-    hosts
+        .unwrap_or_default();
+    saved.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut out: Vec<String> = Vec::new();
+    for host in used.into_iter().chain(running).chain(saved.into_iter().flat_map(|(_, hosts)| hosts)) {
+        if !host.trim().is_empty() && !out.contains(&host) {
+            out.push(host);
+        }
+    }
+    out
 }
 
 /// A shell the server keeps, as `shedd list` describes it.
@@ -497,6 +656,79 @@ pub fn describe(shell: &RemoteShell) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A config as people write them: patterns, several names on a line,
+    /// `Match` blocks, `Include`s, Git hosts by `User git` or `HostName`.
+    #[test]
+    fn ssh_config_hosts_leave_git_and_patterns_out() {
+        let config = "# mine\nHost *\n  ServerAliveInterval 30\n\nHost web db.internal  !nope *.corp\n  User deploy\n\nHost github.com\n  IdentityFile ~/.ssh/gh\n\nHost gh-work\n  HostName ssh.github.com\n  Port 443\n\nHost forge\n  HostName git.example.org\n  User git\n\nMatch host web exec \"true\"\n  User git\n\nInclude config.d/*\nHost=box\n  HostName 10.0.0.5\n";
+        let mut asked = Vec::new();
+        let mut include = |path: &str| {
+            asked.push(path.to_string());
+            vec!["Host lab\n  User me\nHost gitlab.com\nInclude loop\n".to_string()]
+        };
+        let hosts = config_hosts(config, &mut include);
+        let names: Vec<(&str, bool)> = hosts.iter().map(|(h, g)| (h.as_str(), *g)).collect();
+        assert_eq!(names[..5], [("web", false), ("db.internal", false), ("github.com", true), ("gh-work", true), ("forge", true)]);
+        assert!(names.contains(&("lab", false)) && names.contains(&("gitlab.com", true)) && names.contains(&("box", false)), "{names:?}");
+        // An Include that includes again stops after a few levels.
+        assert_eq!(asked.len(), MAX_INCLUDE_DEPTH, "{asked:?}");
+        let offered = offered_hosts(&["prod".into(), "gh-work".into()], &hosts);
+        assert_eq!(offered, ["prod", "gh-work", "web", "db.internal", "lab", "box"]);
+        assert!(is_git_service("git@altssh.gitlab.com") && is_git_service("vs-ssh.visualstudio.com") && !is_git_service("gitea.home"));
+    }
+
+    #[test]
+    fn includes_are_found_as_ssh_finds_them() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        std::fs::create_dir_all(ssh.join("config.d")).unwrap();
+        std::fs::write(ssh.join("config.d/a.conf"), "Host a").unwrap();
+        std::fs::write(ssh.join("config.d/b.conf"), "Host b").unwrap();
+        std::fs::write(ssh.join("config.d/notes.txt"), "Host c").unwrap();
+        assert_eq!(read_include(&ssh, home.path(), "config.d/*.conf"), ["Host a", "Host b"]);
+        assert_eq!(read_include(&ssh, home.path(), "~/.ssh/config.d/b.conf"), ["Host b"]);
+        assert!(read_include(&ssh, home.path(), "missing").is_empty());
+        assert!(read_include(&ssh, home.path(), "config.d").is_empty(), "a folder is no file");
+        assert!(wildcard("*.conf", "x.conf") && wildcard("a?c", "abc") && !wildcard("*.conf", "x.txt"));
+    }
+
+    /// Recent hosts: those connected to lately, then running benches', then
+    /// saved benches' (the latest saved first), once each.
+    #[test]
+    fn recent_hosts_come_latest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = shed_save::Store::new(dir.path().to_path_buf());
+        let saved = |name: &str, when: &str, hosts: &[&str]| {
+            let tabs: String = hosts.iter().map(|h| format!("\n[[tabs]]\nid = \"{}\"\n\n[tabs.remote]\nhost = \"{h}\"\nid = \"x\"\n", shed_model::TabId::new())).collect();
+            let text = format!("name = \"{name}\"\nid = \"{}\"\ncolor = \"blue\"\ncwd = \"/\"\nsaved = \"{when}\"\n{tabs}", shed_model::BenchId::new());
+            assert!(shed_save::SavedBench::from_toml(&text).is_ok(), "{text}");
+            std::fs::write(dir.path().join(format!("{name}.toml")), text).unwrap();
+        };
+        saved("old", "2026-01-01T00:00:00Z", &["old-host", "shared"]);
+        saved("new", "2026-06-01T00:00:00Z", &["new-host"]);
+        std::fs::write(dir.path().join("plain.toml"), "name = \"plain\"").unwrap();
+        let mut tree = shed_model::Shed::default();
+        let mut tab = shed_model::Tab::with_pane(shed_model::Pane::new(shed_model::PaneId::new(), "/".into()));
+        tab.kind = shed_model::TabKind::Remote(shed_model::RemoteTab { host: "running-host".into(), id: "r".into() });
+        tree.benches.push(shed_model::Bench {
+            id: shed_model::BenchId::new(),
+            name: "run".into(),
+            color: shed_model::BenchColor::Blue,
+            badge: None,
+            cwd: "/".into(),
+            active_tab: tab.id,
+            tabs: vec![tab],
+            aliases: Default::default(),
+            closing: false,
+            launcher: "run".into(),
+            window: None,
+            started: false,
+            links: Vec::new(),
+        });
+        let hosts = recent_from(vec!["shared".into()], &tree, &store);
+        assert_eq!(hosts, ["shared", "running-host", "new-host", "old-host"]);
+    }
 
     #[test]
     fn lists_parse() {

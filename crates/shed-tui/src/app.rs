@@ -636,12 +636,20 @@ impl App {
                         app.send(ClientMsg::NewAiTab { bench, folder });
                     }
                 }),
-                3 => app.ask_with_hint("Remote shell", "a host as ssh takes it: server, user@server", "", |app, host| {
+                3 => {
+                    // Hosts remote tabs used (latest first), then ~/.ssh/config's.
+                    let hosts = shed_client::remote::known_hosts(&shed_client::remote::recent_hosts(&app.tree));
+                    let hint = match hosts.len() {
+                        0 => "a host as ssh takes it: server, user@server".to_string(),
+                        _ => format!("a host as ssh takes it; known: {}", hosts.iter().take(5).cloned().collect::<Vec<_>>().join(", ")),
+                    };
+                    app.ask_with_hint("Remote shell", hint, "", |app, host| {
                     let host = host.trim().to_string();
                     if let (Some(bench), false) = (app.bench, host.is_empty()) {
                         app.send(ClientMsg::NewRemoteTab { bench, host, join: None });
                     }
-                }),
+                    })
+                }
                 _ => app.ask("Command to run", "", move |app, command| {
                     if let (Some(bench), false) = (app.bench, command.trim().is_empty()) {
                         app.send(ClientMsg::NewCommandTab { bench, cwd: here, command });

@@ -547,11 +547,16 @@ impl BenchWindow {
         entries
     }
 
-    /// Servers for a new remote tab: those in `~/.ssh/config`, or one to type.
-    fn remote_host_menu(&mut self, _: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
-        let mut entries: Vec<MenuEntry<Self>> = shed_client::remote::known_hosts()
+    /// Servers for a new remote tab: those remote tabs used (latest first,
+    /// marked so), those in `~/.ssh/config` (not Git hosts), or one to type.
+    fn remote_host_menu(&mut self, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+        let recent = shed_client::remote::recent_hosts(&self.state.read(cx).tree);
+        let mut entries: Vec<MenuEntry<Self>> = shed_client::remote::known_hosts(&recent)
             .into_iter()
-            .map(|host| more(host.clone(), move |this: &mut Self, cx| this.remote_shell_menu(&host, cx)).icon("server"))
+            .map(|host| {
+                let used = recent.contains(&host);
+                more(host.clone(), move |this: &mut Self, cx| this.remote_shell_menu(&host, cx)).icon(if used { "history" } else { "server" })
+            })
             .collect();
         entries.push(item("Other Host…", |this, window, cx| this.start_edit(EditTarget::RemoteHost, window, cx)));
         entries

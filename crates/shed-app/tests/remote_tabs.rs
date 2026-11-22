@@ -121,6 +121,8 @@ fn two_tabs_share_a_remote_shell() {
     unsafe {
         std::env::set_var("SHED_SSH", fake_ssh(dir.path(), &server.root));
         std::env::set_var("SHED_REMOTE_SHEDD", &shedd);
+        // `shed remote connect` notes the hosts it joins there, not in your own state.
+        std::env::set_var("XDG_STATE_HOME", dir.path().join("pc-state"));
     }
     let env = start_in(dir.path(), "local.sock");
     let mut c = Client::connect(&env.socket);

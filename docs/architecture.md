@@ -266,6 +266,12 @@ into a `PushReview` the Changes panel shows until confirmed.
 
 A remote tab (`TabKind::Remote { host, id }`) is a terminal tab whose pane runs
 `shed remote connect HOST ID`, again whenever the bench loads (the pane's startup).
+Each connect notes the host first in `~/.local/state/shed/remote-hosts`; the
+hosts offered for a new remote tab (`shed_client::remote::known_hosts`) are those,
+then the running benches' remote tabs', then the saved benches' (latest saved
+first), then `~/.ssh/config`'s `Host` names (`config_hosts`: patterns and `Match`
+blocks left out, `Include`s followed a few levels deep), without Git-only hosts
+(`User git`, a Git service's name or `HostName`) unless a remote tab used one.
 That makes sure the server has this build of `shedd` (`uname -m` and an id file
 checked over ssh; the binary sent through ssh's stdin when they differ), then runs
 `ssh -t HOST ~/.local/bin/shedd attach ID` in a loop (ssh's `ControlMaster`

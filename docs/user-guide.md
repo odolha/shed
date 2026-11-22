@@ -632,9 +632,13 @@ and comes back, screen and scrollback and all, when it opens again. It is marked
 with a server icon.
 
 Open one with **New Remote Tab** in the new-tab button's menu or the bench's menu:
-pick a host from your `~/.ssh/config`, then **New Shell**, or **Other Host…** and
-type it as ssh takes it (`user@host`). Or run `shed remote new HOST` in a terminal
-of the bench.
+pick a host, then **New Shell**, or **Other Host…** and type it as ssh takes it
+(`user@host`). Or run `shed remote new HOST` in a terminal of the bench. The hosts
+offered are first those remote tabs used, in any bench (open or closed), the
+latest first (with a clock icon), then those in your `~/.ssh/config` (and the
+files it includes). Hosts only for Git are left out: entries with `User git`, and
+GitHub, GitLab, Bitbucket, Codeberg, sourcehut and Azure DevOps, unless a remote
+tab used one. `shed tui` names the same hosts when it asks for one.
 
 The first time, Shed copies its keeper (`shedd`) to `~/.local/bin` on the server
 over ssh (again only when Shed changes); nothing else is installed and no root is
