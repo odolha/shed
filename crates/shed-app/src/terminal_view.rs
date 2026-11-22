@@ -15,6 +15,25 @@ pub mod perf {
     pub static WINDOW_RENDERS: AtomicU64 = AtomicU64::new(0);
     pub static BOARD_RENDERS: AtomicU64 = AtomicU64::new(0);
     pub static BOARD_US: AtomicU64 = AtomicU64::new(0);
+    pub static SHED_FRAMES: AtomicU64 = AtomicU64::new(0);
+    pub static SHED_FRAME_US: AtomicU64 = AtomicU64::new(0);
+    thread_local! {
+        static SHED_FRAME_START: Cell<Option<Instant>> = const { Cell::new(None) };
+    }
+
+    /// The Shed window started a frame (its root view renders).
+    pub fn shed_frame_started() {
+        SHED_FRAME_START.with(|s| s.set(Some(Instant::now())));
+    }
+
+    /// The Shed window's frame was painted: the time since it started, for
+    /// every view laid out, prepainted and painted (the GPU's part is not in it).
+    pub fn shed_frame_painted() {
+        if let Some(started) = SHED_FRAME_START.with(|s| s.take()) {
+            SHED_FRAMES.fetch_add(1, Ordering::Relaxed);
+            SHED_FRAME_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
+    }
 
     pub fn enabled() -> bool {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -25,12 +44,14 @@ pub mod perf {
         let take = |a: &AtomicU64| a.swap(0, Ordering::Relaxed);
         let (r, rus, p, pus) = (take(&RENDERS), take(&RENDER_US), take(&PAINTS), take(&PAINT_US));
         let (b, bus) = (take(&BOARD_RENDERS), take(&BOARD_US));
+        let (f, fus) = (take(&SHED_FRAMES), take(&SHED_FRAME_US));
         format!(
-            "window renders {}/s, terminal renders {r}/s ({} µs avg), paints {p}/s ({} µs avg), Shed window renders {b}/s ({} µs avg)",
+            "window renders {}/s, terminal renders {r}/s ({} µs avg), paints {p}/s ({} µs avg), pegboard renders {b}/s ({} µs avg), Shed window frames {f}/s ({} µs avg)",
             take(&WINDOW_RENDERS),
             rus.checked_div(r).unwrap_or(0),
             pus.checked_div(p).unwrap_or(0),
-            bus.checked_div(b).unwrap_or(0)
+            bus.checked_div(b).unwrap_or(0),
+            fus.checked_div(f).unwrap_or(0)
         )
     }
 }

@@ -15,7 +15,7 @@ pub enum BenchStatus {
 }
 
 /// A bench as listed.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ListedBench {
     pub bench: Bench,
     pub status: BenchStatus,

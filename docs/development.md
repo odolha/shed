@@ -164,9 +164,15 @@ SHED_NEXUS_WEB=1 cargo test -p shed-nexus --test account web   # the built-in ap
   level for both binaries; `shedd --foreground` logs to stderr.
 - `shed debug-type 'echo hi\r'` types into the first pane through the keeper.
 - `SHED_PERF=1` makes the window process print redraws per second and their cost,
-  for terminals and for the Shed window, and how long each replay took.
-  `SHED_PERF_FRAMES=60` makes the pegboard render 60 times a second, as fast
-  hovering does, to measure a frame without moving the mouse.
+  for terminals and for the Shed window (its bench views drawn, and its frames
+  with the time from rendering to painting, without the GPU's part), and how
+  long each replay took. `SHED_PERF_FRAMES=60` makes the pegboard's first bench
+  draw again 60 times a second, as hovering in it does, to measure a frame
+  without moving the mouse. To compare builds, run each against the same world
+  (benches with many tabs, some printing every second, and a terminal whose
+  title a program changes ten times a second) on a private Xvfb, and read the
+  window process's CPU from `/proc/<pid>/stat` over ten seconds, with the Shed
+  window active and not.
   It applies to the process that owns the windows, so use a separate
   `SHED_RUNTIME_DIR`. Per-process GPU time is in `/proc/<pid>/fdinfo/*`
   (`drm-engine-render`).

@@ -761,9 +761,18 @@ which with the vendored `gpui_ce_render` (quads rasterized only inside their cli
 cost their border rather than their area. Shed never uses GPUI's `opacity`, which
 draws through a window-sized layer. GPUI redraws a whole window whenever something
 under the pointer changes its hover style, and renders again the view that holds
-it and every view above it (other views are kept), so the Shed window's frames are
-kept to a few milliseconds: the pegboard's card previews are painted line by line
-rather than as an element per line. The vendored `gpui_ce_linux` fixes key releases lost on X11, and window placement
+it and every view above it (other views are kept). It also redraws a window
+whenever an entity read while drawing it changes. So the Shed window draws from
+what it keeps rather than from `AppState` (which changes with every title a
+program sets, every tool and folder change): the window keeps what its header
+shows, and the pegboard has a view per bench (`BenchCard`) holding what that
+bench shows (`CardModel`: the bench without what is not drawn, such as the
+titles under a tab's own name, its previews, the selection). `Pegboard::sync`
+makes these again whenever the tree, the keeper's answer, the filter or the
+selection change, and only a bench that shows differently is drawn again; a
+change nothing shows draws no frame at all, and a hover draws one bench. Menus
+read the bench as it is when they open. The card previews are painted line by
+line rather than as an element per line. The vendored `gpui_ce_linux` fixes key releases lost on X11, and window placement
 there (see above); it also stops an idle window's frame timer, which upstream ran
 at the display's refresh rate for as long as the window was visible.
 The patches are described in `SHED_PATCHES.md` in their folders.

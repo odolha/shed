@@ -37,7 +37,42 @@ pub struct ShedWindow {
     listing: Option<gpui::Task<()>>,
     /// The sign-in dialog, while open.
     sign_in: Option<SignInDialog>,
+    /// What the window shows of `AppState`, as of its last change.
+    shown: Shown,
     _following: Subscription,
+}
+
+/// What the header and banners show of `AppState`. Kept here and compared,
+/// so that the window draws again only when this changes: rendering never
+/// reads `AppState`, which changes with every title a program sets.
+#[derive(Clone, PartialEq)]
+struct Shown {
+    ui: crate::theme::UiColors,
+    running: usize,
+    appearance: Option<Appearance>,
+    compact: bool,
+    notice: Option<String>,
+    workspace: Workspace,
+    switching: Option<String>,
+    nexus_url: String,
+    nexus_on: bool,
+}
+
+impl Shown {
+    fn of(state: &AppState) -> Self {
+        let config = &state.settings.config;
+        Self {
+            ui: state.settings.ui.clone(),
+            running: state.tree.benches.len(),
+            appearance: config.appearance(),
+            compact: config.window.compact_pegboard,
+            notice: state.notice.clone(),
+            workspace: state.workspace.clone(),
+            switching: state.switching.clone(),
+            nexus_url: config.nexus.url.clone(),
+            nexus_on: config.nexus.active(),
+        }
+    }
 }
 
 /// Signing this desktop in to a nexus: its address, user, password and a
@@ -66,7 +101,14 @@ impl ShedWindow {
             // The window goes when Shed does, once every bench is closed.
             false
         });
-        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        cx.observe(&state, |this: &mut Self, state, cx| {
+            let shown = Shown::of(state.read(cx));
+            if shown != this.shown {
+                this.shown = shown;
+                cx.notify();
+            }
+        })
+        .detach();
         // `theme = "auto"` follows the desktop as it switches.
         cx.observe_window_appearance(window, |this, window, cx| {
             let dark = is_dark(window.appearance());
@@ -93,20 +135,23 @@ impl ShedWindow {
             cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
         })
         .detach();
-        // SHED_PERF_FRAMES=<n>: redraw the pegboard n times a second, as
-        // hovering does, to measure what a frame of this window costs.
+        // SHED_PERF_FRAMES=<n>: redraw the first bench n times a second, as
+        // hovering in it does, to measure what a frame of this window costs.
         if let Some(fps) = std::env::var("SHED_PERF_FRAMES").ok().and_then(|v| v.parse::<u64>().ok()).filter(|n| *n > 0) {
             let board = board.downgrade();
             cx.spawn_in(window, async move |_, cx| loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(1000 / fps)).await;
-                if board.update(cx, |_, cx| cx.notify()).is_err() {
-                    break;
+                let Ok(card) = board.update(cx, |board, _| board.first_card()) else { break };
+                if let Some(card) = card {
+                    card.update(cx, |_, cx| cx.notify());
                 }
             })
             .detach();
         }
         let following = PlaceTracker::follow(window, cx);
+        let shown = Shown::of(state.read(cx));
         Self {
+            shown,
             state,
             board,
             quitting: false,
@@ -391,10 +436,14 @@ impl ShedWindow {
 
 impl Render for ShedWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = self.state.read(cx);
-        let ui = state.settings.ui.clone();
-        let running = state.tree.benches.len();
-        let current = state.settings.config.appearance();
+        let perf = crate::terminal_view::perf::enabled();
+        if perf {
+            crate::terminal_view::perf::shed_frame_started();
+        }
+        let shown = self.shown.clone();
+        let ui = shown.ui.clone();
+        let running = shown.running;
+        let current = shown.appearance;
         let appearances = [
             (Appearance::Auto, "theme-auto", "Follow the desktop's light or dark"),
             (Appearance::Light, "theme-light", "Light"),
@@ -425,7 +474,7 @@ impl Render for ShedWindow {
                     }))
             }));
         // Cards with previews, or every bench on a line.
-        let compact = state.settings.config.window.compact_pegboard;
+        let compact = shown.compact;
         let views = [(false, "view-cards", "Cards with previews"), (true, "view-list", "Compact: a line per bench")];
         let view_switch = div()
             .flex()
@@ -467,7 +516,7 @@ impl Render for ShedWindow {
                 .child(text)
         });
         // What the keeper last refused, until dismissed.
-        let notice = state.notice.clone().map(|text| {
+        let notice = shown.notice.clone().map(|text| {
             div()
                 .flex_none()
                 .flex()
@@ -555,6 +604,8 @@ impl Render for ShedWindow {
                     .children(self.sign_in_dialog(cx)),
             )
             .children(self.menu.as_ref().map(|m| menu::render(m, &ui, cx)))
+            // Painted last: how long the frame took (`SHED_PERF`).
+            .when(perf, |d| d.child(gpui::canvas(|_, _, _| {}, |_, _, _, _| crate::terminal_view::perf::shed_frame_painted()).absolute().size_0()))
     }
 }
 
@@ -579,15 +630,15 @@ impl ShedWindow {
     /// through the nexus. Shown once this desktop is signed in to a nexus
     /// (or showing another workspace); its menu also signs in.
     fn switcher(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let state = self.state.read(cx);
-        let ui = state.settings.ui.clone();
-        let remote = state.is_remote();
-        let label = match &state.switching {
+        let shown = &self.shown;
+        let ui = shown.ui.clone();
+        let remote = shown.workspace != Workspace::Local;
+        let label = match &shown.switching {
             Some(name) => format!("Connecting to {name}…"),
-            None => format!("{} ▾", state.workspace.label()),
+            None => format!("{} ▾", shown.workspace.label()),
         };
         let tip = if remote {
-            format!("Showing {}'s benches through the nexus; its terminals and AI tabs work here. Click for other workspaces.", state.workspace.label())
+            format!("Showing {}'s benches through the nexus; its terminals and AI tabs work here. Click for other workspaces.", shown.workspace.label())
         } else {
             "The benches of this PC. Click for other workspaces, through a nexus.".into()
         };
@@ -616,7 +667,7 @@ impl ShedWindow {
     /// The sign-in dialog, over the pegboard while open.
     fn sign_in_dialog(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let d = self.sign_in.as_ref()?;
-        let ui = self.state.read(cx).settings.ui.clone();
+        let ui = self.shown.ui.clone();
         let field = |label: &'static str, editor: &Entity<LineEditor>| {
             div()
                 .flex()
@@ -696,19 +747,19 @@ impl ShedWindow {
     /// While a nexus is set: whether this machine is linked to it (reachable
     /// from the web and phone apps), switching the link on or off.
     fn link_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let state = self.state.read(cx);
-        let nexus = state.settings.config.nexus.clone();
-        if nexus.url.trim().is_empty() {
+        let shown = &self.shown;
+        if shown.nexus_url.trim().is_empty() {
             return None;
         }
-        let ui = state.settings.ui.clone();
-        let on = nexus.active();
+        let ui = shown.ui.clone();
+        let on = shown.nexus_on;
+        let url = shown.nexus_url.clone();
         let (label, color, tip): (String, _, String) = match (&self.link, on) {
             (_, false) => ("Link off".into(), ui.text_dim, "Not reachable from the web and phone apps; click to link again".into()),
             (Some(l), true) if l.state == "connected" => (
                 format!("Linked{}", l.name.as_ref().map(|n| format!(" · {n}")).unwrap_or_default()),
                 ui.accent,
-                format!("Reachable from the web and phone apps through {}; click to stop", nexus.url),
+                format!("Reachable from the web and phone apps through {url}; click to stop"),
             ),
             (Some(l), true) if l.state == "refused" => (
                 "Link refused".into(),
@@ -718,7 +769,7 @@ impl ShedWindow {
             (Some(l), true) => (
                 "Linking…".into(),
                 ui.text_dim,
-                l.error.clone().map(|e| format!("Not connected yet: {e}")).unwrap_or_else(|| format!("Connecting to {}", nexus.url)),
+                l.error.clone().map(|e| format!("Not connected yet: {e}")).unwrap_or_else(|| format!("Connecting to {url}")),
             ),
             (None, true) => ("Not linked".into(), ui.text_dim, "No link runs: pair this machine with shed nexus join".into()),
         };
