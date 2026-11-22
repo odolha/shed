@@ -96,7 +96,9 @@ impl AppState {
             opening_shed: false,
             pending: HashSet::new(),
             opening: HashSet::new(),
-            desktop: Desktop::new(shed_model::paths::data_home()),
+            // Unit tests open bench windows too: their launchers and icons go
+            // to a folder of the test's, never to the user's desktop.
+            desktop: Desktop::new(if cfg!(test) { std::env::temp_dir().join(format!("shed-test-desktop-{}", std::process::id())) } else { shed_model::paths::data_home() }),
             identities: HashMap::new(),
         }
     }
