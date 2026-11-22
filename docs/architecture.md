@@ -1086,7 +1086,10 @@ nexus as a connector of kind `desktop` (`shed nexus signin`, or the Shed
 window's switcher; `shed_link::pairing::sign_in`), apart from the workspace's
 pairing: the token is in `nexus-client.json` in Shed's data folder (0600,
 `shed_client::nexus_client::SignIn`), while `nexus.json` grants no connector
-access. `nexus_client::workspaces` lists the nexus's workspaces (a short `/api`
+access. Signing out (`shed_link::pairing::sign_out_from`) posts
+`/api/v1/logout` with the token first (the nexus revokes the device and
+closes its connections), then deletes the file, which goes even when the
+nexus cannot be reached (then the user is told to revoke it in the web app). `nexus_client::workspaces` lists the nexus's workspaces (a short `/api`
 connection: `Hello`, `Welcome`); the switcher leaves out this PC's own
 pairing.
 

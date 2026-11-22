@@ -298,13 +298,81 @@ pub fn signin(url: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `shed nexus signout`: forgets this desktop's sign-in here.
-pub fn signout() -> anyhow::Result<()> {
-    if SignIn::remove().context("removing the sign-in")? {
-        println!("Signed out here. Revoke the device in the web app (Devices) too, to end its token there.");
-    } else {
-        println!("Not signed in to a nexus.");
+/// How signing out went.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SignedOut {
+    /// The nexus revoked this desktop (its token is dead, its connections
+    /// closed) and the sign-in is forgotten here.
+    Revoked,
+    /// The nexus could not be told (why): the sign-in is forgotten here
+    /// only, and the device should be revoked in the web app.
+    HereOnly(String),
+    NotSignedIn,
+}
+
+impl SignedOut {
+    /// For people.
+    pub fn message(&self) -> String {
+        match self {
+            SignedOut::Revoked => "Signed out: the nexus no longer accepts this desktop.".into(),
+            SignedOut::HereOnly(why) => format!(
+                "Signed out here, but the nexus could not be told ({why}). Revoke this desktop in the web app (Devices) to end its token there."
+            ),
+            SignedOut::NotSignedIn => "Not signed in to a nexus.".into(),
+        }
     }
+}
+
+/// Revokes a sign-in at its nexus (`POST /api/v1/logout` with its token:
+/// the device is revoked and its connections closed). A token the nexus
+/// no longer knows counts as revoked.
+pub async fn revoke(sign_in: &SignIn, ca_file: Option<&Path>) -> anyhow::Result<()> {
+    let client = http(ca_file)?;
+    let url = crate::tls::api_url(&sign_in.url, "api/v1/logout")?;
+    let response = client
+        .post(&url)
+        .bearer_auth(&sign_in.token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .with_context(|| format!("reaching {}", sign_in.url))?;
+    let status = response.status();
+    if status.is_success() || status == reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(());
+    }
+    let text = response.text().await.unwrap_or_default();
+    let why = serde_json::from_str::<ApiError>(&text).map(|e| e.to_string()).unwrap_or(text);
+    bail!("the nexus said {status}: {why}")
+}
+
+/// Signs this desktop out: revoked at the nexus first, then forgotten
+/// here (forgotten here even when the nexus cannot be reached).
+pub async fn sign_out_from(path: &Path, ca_file: Option<&Path>) -> anyhow::Result<SignedOut> {
+    let Some(sign_in) = SignIn::load_from(path) else { return Ok(SignedOut::NotSignedIn) };
+    let told = revoke(&sign_in, ca_file).await;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).context("removing the sign-in"),
+    }
+    Ok(match told {
+        Ok(()) => SignedOut::Revoked,
+        Err(e) => SignedOut::HereOnly(format!("{e:#}")),
+    })
+}
+
+/// `sign_out_from` for this desktop's sign-in, blocking (for the windows,
+/// on a thread of their own).
+pub fn sign_out_blocking() -> anyhow::Result<SignedOut> {
+    let ca = shed_client::nexus_client::configured_ca_file();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    rt.block_on(sign_out_from(&paths::nexus_client_path(), ca.as_deref()))
+}
+
+/// `shed nexus signout`: revokes this desktop's sign-in at the nexus and
+/// forgets it here.
+pub fn signout() -> anyhow::Result<()> {
+    println!("{}", sign_out_blocking()?.message());
     Ok(())
 }
 

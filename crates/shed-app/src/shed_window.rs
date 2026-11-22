@@ -210,14 +210,30 @@ impl ShedWindow {
     fn sign_out(&mut self, cx: &mut Context<Self>) {
         // Showing another workspace through it: back to this PC first.
         self.state.update(cx, |state, cx| state.switch_to(Workspace::Local, cx));
-        if let Err(e) = shed_client::nexus_client::SignIn::remove() {
-            self.state.update(cx, |state, cx| {
-                state.notice = Some(format!("Cannot sign out: {e}"));
-                cx.notify();
-            });
-        }
         self.workspaces = None;
         cx.notify();
+        // The nexus revokes this desktop first; it is forgotten here either way.
+        let state = self.state.clone();
+        cx.spawn(async move |this, cx| {
+            let done = cx.background_executor().spawn(async { shed_link::pairing::sign_out_blocking() }).await;
+            let notice = match done {
+                Ok(shed_link::pairing::SignedOut::Revoked) | Ok(shed_link::pairing::SignedOut::NotSignedIn) => None,
+                Ok(other) => Some(other.message()),
+                Err(e) => Some(format!("Cannot sign out: {e:#}")),
+            };
+            state.update(cx, |state, cx| {
+                if notice.is_some() {
+                    state.notice = notice;
+                }
+                cx.notify();
+            });
+            this.update(cx, |this, cx| {
+                this.workspaces = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {

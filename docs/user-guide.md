@@ -1155,7 +1155,9 @@ itself, through the nexus.
    `~/.local/share/shed/nexus-client.json`, readable only by you. Signing in is
    apart from linking this PC (`shed nexus join`), which never lets anyone
    show other workspaces. `shed nexus signout` (or **Sign Out** in the
-   switcher) forgets it here.
+   switcher) has the nexus revoke this desktop, then forgets it here; if the
+   nexus cannot be reached it is forgotten here only, and Shed says to revoke
+   it in the web app's Devices.
 2. **Let desktops in** on the workspace to show, in its `shed.toml`:
 
    ```toml

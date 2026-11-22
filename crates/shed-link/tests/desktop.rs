@@ -213,3 +213,33 @@ async fn the_desktop_speaks_to_another_workspaces_keeper_through_the_nexus() {
     }
     assert!(error.contains("desktop_clients"), "{error}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_out_revokes_the_desktop_at_the_nexus() {
+    let hub = nexus::start().await;
+    let mut account = nexus::set_up(&hub).await;
+    let code = account.recovery.pop().unwrap();
+    let signed = shed_link::pairing::sign_in(&hub.base, "me", nexus::PASSWORD, &code, None).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nexus-client.json");
+    signed.save_to(&path).unwrap();
+    let bearer = [("authorization", format!("Bearer {}", signed.token))];
+    assert!(nexus::connect(&hub.ws_url("/api"), &bearer).await.is_ok(), "signed in");
+
+    // The nexus is told: the token stops working there, and it is gone here.
+    let out = shed_link::pairing::sign_out_from(&path, None).await.unwrap();
+    assert_eq!(out, shed_link::pairing::SignedOut::Revoked);
+    assert!(!path.exists());
+    assert_eq!(nexus::connect(&hub.ws_url("/api"), &bearer).await.err(), Some(401));
+    assert_eq!(shed_link::pairing::sign_out_from(&path, None).await.unwrap(), shed_link::pairing::SignedOut::NotSignedIn);
+
+    // A nexus that cannot be reached: forgotten here, and said so.
+    let code = account.recovery.pop().unwrap();
+    let mut signed = shed_link::pairing::sign_in(&hub.base, "me", nexus::PASSWORD, &code, None).await.unwrap();
+    signed.url = "http://127.0.0.1:9".into();
+    signed.save_to(&path).unwrap();
+    let out = shed_link::pairing::sign_out_from(&path, None).await.unwrap();
+    assert!(matches!(&out, shed_link::pairing::SignedOut::HereOnly(_)), "{out:?}");
+    assert!(out.message().contains("web app"), "{}", out.message());
+    assert!(!path.exists());
+}
