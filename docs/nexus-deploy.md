@@ -1,9 +1,10 @@
 # Deploying a nexus
 
-How to run `shed-nexus` on a server of your own: as its own user, under
-systemd with its sandboxing, behind nginx with a Let's Encrypt certificate, and
-optionally with a ntfy server for notifications on the phone. [How Shed works](architecture.md#the-nexus)
-describes what the nexus does.
+How to run `shed-nexus` on a server of your own, on Ubuntu or Debian: one
+binary (the web app is built into it) and one script, which sets it up as its
+own user under systemd with its sandboxing, behind nginx with a Let's Encrypt
+certificate. Optionally a ntfy server brings notifications to the phone.
+[How Shed works](architecture.md#the-nexus) describes what the nexus does.
 
 Everything below uses placeholders: `nexus.example.com` for the nexus,
 `ntfy.example.com` for ntfy, `admin@example.com` for the contact. Use your own.
@@ -12,194 +13,99 @@ Everything below uses placeholders: `nexus.example.com` for the nexus,
 workspace's shells. Run it on a machine you trust, keep it updated, and keep its
 data folder private.
 
-## 1. Build and install
+In short, as root on the server:
 
-On the server (or build elsewhere for the same architecture):
+```sh
+curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal && . ~/.cargo/env
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && . ~/.nvm/nvm.sh
+nvm install 24
+apt install -y build-essential git
+cargo install --locked --git https://github.com/odolha/shed shed-nexus
+git clone https://github.com/odolha/shed /root/shed
+/root/shed/packaging/nexus/install.sh DOMAIN=nexus.example.com EMAIL=admin@example.com
+```
+
+and open the setup link it prints. The steps, one by one:
+
+## 0. DNS
+
+Point `nexus.example.com` at the server: an `A` record with its IPv4 address
+(and `AAAA` for IPv6). certbot needs it to resolve before step 3. Open ports
+80 and 443 in the provider's firewall; the nexus itself stays on loopback.
+
+## 1. Rust and Node
+
+Building needs Rust (1.95 or newer) and, for the web app built into the
+binary, Node 24.15 or newer (or 22.22.3+) with npm. With
+[rustup](https://rustup.rs) and [nvm](https://github.com/nvm-sh/nvm):
+
+```sh
+curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal && . ~/.cargo/env
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && . ~/.nvm/nvm.sh
+nvm install 24
+apt install -y build-essential git      # a C compiler (SQLite is built in) and git
+```
+
+Node is needed only to build; the server never runs it. Without Node, build
+with `SHED_NEXUS_NO_WEB=1`: the nexus then serves only the API (the Android
+app and workspaces' links work; the browser app does not, unless `web_dir`
+points at a build of `web/`, see [Settings](#settings)).
+
+## 2. Build shed-nexus
 
 ```sh
 cargo install --locked --git https://github.com/odolha/shed shed-nexus
-sudo install -m 0755 ~/.cargo/bin/shed-nexus /usr/local/bin/
 ```
 
-or from a checkout, `cargo build --release -p shed-nexus` and install
-`target/release/shed-nexus`. It needs no C libraries at run time (SQLite and
-TLS are built in).
+This builds the web app (`npm ci` and `npm run build`, in cargo's build folder)
+and the nexus, which carries it, into `~/.cargo/bin/shed-nexus`. It needs no
+C libraries at run time (SQLite and TLS are built in), so it can also be built
+on another machine of the same architecture and copied over. From a checkout,
+`cargo build --release -p shed-nexus` gives `target/release/shed-nexus`.
 
-The web app is built from the checkout's `web/` folder (Node 24.15 or newer;
-see [web/README.md](../web/README.md)) into a folder the nexus serves:
+## 3. Run the script
 
 ```sh
-cd web && npm ci && npm run build && cd ..
-sudo install -d /usr/local/share/shed-nexus
-sudo cp -r web/dist/shed-web /usr/local/share/shed-nexus/web
+git clone https://github.com/odolha/shed /root/shed
+/root/shed/packaging/nexus/install.sh DOMAIN=nexus.example.com EMAIL=admin@example.com
 ```
 
-and `web_dir = "/usr/local/share/shed-nexus/web"` in the settings (below).
-Without it, the nexus serves only the API.
+With a ntfy topic for phones ([5](#5-notifications-on-the-phone-with-ntfy-optional)),
+add `NTFY_URL=https://ntfy.example.com/alerts-shed`. `BIN=/path/to/shed-nexus`
+installs another binary than the one `cargo install` made; `DRY_RUN=1` only
+prints what it would do. The script installs nginx and certbot if missing,
+installs the binary to `/usr/local/bin`, makes the `shed-nexus` user, the
+settings, the secrets file, the systemd service and the nginx site, gets the
+certificate, starts the nexus and prints the setup link. It is safe to run
+again: it never overwrites the settings, the secrets or the nginx site once
+they exist ([What the script did](#what-the-script-did) has the details).
 
-## 2. A user of its own
+## 4. The account
 
-The nexus never runs as root:
+Open the setup link the script printed
+(`https://nexus.example.com/setup#code=…`): choose a user name and password,
+add the authenticator (scan the QR code), confirm with a code from it, and keep
+the recovery codes somewhere safe (each signs you in once if the authenticator
+is lost). The link is new at every start of the nexus and works only until the
+account exists. Later, to see it again:
 
 ```sh
-sudo useradd --system --home-dir /var/lib/shed-nexus --shell /usr/sbin/nologin shed-nexus
+cat /var/lib/shed-nexus/setup-link.txt
 ```
 
-systemd makes `/var/lib/shed-nexus` (mode 0700, owned by `shed-nexus`) when the
-service starts. The nexus keeps its database (`nexus.db`) and its push key
-(`vapid.key`, 0600) there.
+The nexus keeps it in that file (0600, its own) rather than in its log, and
+the code is in the link's fragment (after `#`), which browsers never send, so
+it stays out of nginx's access log too.
 
-## 3. Settings
-
-```sh
-sudo install -d -m 0755 /etc/shed-nexus
-sudo install -m 0644 packaging/nexus/nexus.toml /etc/shed-nexus/
-sudoedit /etc/shed-nexus/nexus.toml
-```
-
-At least set `public_url = "https://nexus.example.com"`, and `web_dir` for
-the web app. The sample
-(`packaging/nexus/nexus.toml`) lists every setting with its default. With nginx
-in front as below, keep `listen` on `127.0.0.1` and `trusted_proxy = true`: the
-nexus then believes `X-Forwarded-For` from loopback only (set
-`trusted_proxies` to the proxy's addresses if it runs elsewhere) and takes the
-client to be the right-most address in it that is not a trusted proxy. Without
-it, every client would look like the proxy, and one address's failed sign-ins
-would lock out everyone.
-
-Limits worth knowing (all in the sample):
-
-- `[login]`: failed sign-ins lock out their address (an IPv4 address or an
-  IPv6 /64) for `lockout_minutes`. With `global_max_failures` failures from
-  everywhere, the nexus slows down rather than locking everyone out: addresses
-  that never signed in share `slow_per_minute` attempts, while those your
-  devices signed in or were seen from are not held back. Wrong one-time codes
-  from a signed-in device (revoking, pairing, the password) are counted per
-  device, apart from sign-ins.
-- `max_connections` and `header_timeout_secs`: connections at once, and how
-  long a client may take to send a request's headers.
-- Push endpoints must be on public addresses (`[push] allow_private_endpoints`
-  for a ntfy on your network); `[push] ntfy_url` is a ntfy topic for phones
-  ([7](#7-notifications-on-the-phone-with-ntfy-optional)).
-
-Optional filters:
-
-- `allowed_networks`: only these address ranges reach the nexus at all.
-- `[geo]`: a country allow-list. Download a GeoIP CSV of ranges, such as db-ip's
-  free "IP to Country Lite" (CSV, `start,end,country`), into the data folder,
-  and set `database` and `countries`. Update the file monthly and restart. Without
-  `countries`, the database still shows the country of each device and audit
-  entry.
-
-## 4. systemd
-
-```sh
-sudo install -m 0644 packaging/nexus/shed-nexus.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now shed-nexus
-journalctl -u shed-nexus -f
-```
-
-The unit runs the nexus as `shed-nexus` with `NoNewPrivileges`, no
-capabilities, `ProtectSystem=strict` (everything read-only but
-`/var/lib/shed-nexus`), `ProtectHome`, private `/tmp` and devices, a system
-call filter, and `MemoryMax`/`TasksMax` limits. If you move the data folder,
-change `ReadWritePaths` and `StateDirectory` to match.
-
-Until the account exists, the nexus writes a setup link to `setup-link.txt` in
-its data folder (0600, readable by `shed-nexus` only) at every start, and logs
-where it is, not the link itself:
-
-```sh
-sudo cat /var/lib/shed-nexus/setup-link.txt
-# https://nexus.example.com/setup#code=…
-```
-
-The code is in the link's fragment (after `#`), which browsers never send, so
-it does not end up in nginx's access log either. Open the link once nginx is
-up (below): choose a user name and password, add the authenticator (scan the
-QR code), confirm with a code from it, and keep the recovery codes somewhere
-safe. The code is new at every start and works only until the account exists;
-the file is removed then.
-
-## 5. nginx and certbot
-
-Install nginx and certbot (`sudo apt install nginx certbot python3-certbot-nginx`
-on Debian and Ubuntu), point `nexus.example.com`'s DNS at the server, and add
-`/etc/nginx/sites-available/shed-nexus`:
-
-```nginx
-server {
-    listen 80;
-    listen [::]:80;
-    server_name nexus.example.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:7870;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        # The client's address, replacing whatever the client sent; the
-        # nexus believes it from loopback (trusted_proxy).
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        client_max_body_size 1m;
-    }
-
-    # The WebSockets: workspaces' links and the apps.
-    location ~ ^/(link|api)$ {
-        proxy_pass http://127.0.0.1:7870;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        # Sockets stay open; the nexus pings every 30 s.
-        proxy_read_timeout 1h;
-        proxy_send_timeout 1h;
-    }
-}
-```
-
-```sh
-sudo ln -s /etc/nginx/sites-available/shed-nexus /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d nexus.example.com --redirect -m admin@example.com --agree-tos
-```
-
-certbot adds the `listen 443 ssl` lines, the certificate, the redirect from
-HTTP, and a timer that renews it. Open only ports 80 and 443 in the firewall;
-port 7870 stays on loopback.
-
-The nexus sets its own security headers (a strict Content-Security-Policy,
-`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, and HSTS when
-`public_url` is `https:`); nginx need not add them.
-
-## 6. Linking workspaces
-
-On each machine running Shed, `shed nexus join https://nexus.example.com`
-prints a code such as `K7QF-2M9D`. In the web app (or the Android app), under
-**Devices** → **Approve a Workspace…**, type that code (the list of waiting requests shows which machine asks and from where,
-but not the code, so a request someone else made cannot be approved by
-mistake), give the workspace a name and approve it with a code from your
-authenticator. The workspace keeps its token in a 0600 file in Shed's data
-folder (`nexus.json`, with the nexus's address: the link dials only that
-nexus, and only over `https`, plain `http` being for a nexus on the same
-machine). From then on the keeper runs the link (`shed link`) while Shed
-runs; `shed nexus status` says how it is doing. Revoke the workspace under
-Devices to cut it off at once; `shed nexus leave` unlinks it from its side. The
-[user guide](user-guide.md#linking-a-workspace) has the rest (view-only
-workspaces, private tabs).
-
-## 7. Notifications on the phone with ntfy (optional)
+## 5. Notifications on the phone with ntfy (optional)
 
 While a Shed app is open and in view (the web app's page, or the Android app
 in the foreground), notifications come to the apps directly and nothing is
 pushed. When none is, browsers get Web Push through their vendor's push
 service, with nothing to set up here, and phones get a message on a **ntfy
-topic** you run, read by the ntfy app (the same way other projects' alerts
-can come, one topic each: `alerts-shed`, `alerts-<project>`). Tapping one opens
-its tab in Shed's app (`shed://w/…/b/…/t/…`).
+topic** you run, read by the ntfy app (the same way other projects' alerts can
+come, one topic each: `alerts-shed`, `alerts-<project>`). Tapping one opens its
+tab in Shed's app (`shed://w/…/b/…/t/…`).
 
 Install the ntfy server (see ntfy's documentation for its package repository),
 then in `/etc/ntfy/server.yml`:
@@ -223,32 +129,26 @@ token; the phone reads (all `alerts-*` topics, or just `alerts-shed`); nobody
 else can do either (`deny-all`):
 
 ```sh
-sudo ntfy user add shed-bot                     # its password is not used: the nexus uses a token
-sudo ntfy access shed-bot 'alerts-shed' write-only
-sudo ntfy token add shed-bot                    # prints tk_…
-sudo ntfy user add phone                        # (if not there yet) the phone signs in with it
-sudo ntfy access phone 'alerts-*' read-only     # or 'alerts-shed'
-sudo systemctl enable --now ntfy
+ntfy user add shed-bot                     # its password is not used: the nexus uses a token
+ntfy access shed-bot 'alerts-shed' write-only
+ntfy token add shed-bot                    # prints tk_…
+ntfy user add phone                        # (if not there yet) the phone signs in with it
+ntfy access phone 'alerts-*' read-only     # or 'alerts-shed'
+systemctl enable --now ntfy
 ```
 
-The topic goes in `nexus.toml`:
-
-```toml
-[push]
-ntfy_url = "https://ntfy.example.com/alerts-shed"
-```
-
-and the token in the service's env file, readable by root only (systemd reads
-it for the nexus), never in `nexus.toml` or git. `SHED_NEXUS_NTFY_URL` there
-wins over `ntfy_url` (`http://127.0.0.1:2586/alerts-shed` works too, with ntfy
-on the same machine):
+The topic is `ntfy_url` under `[push]` in `/etc/shed-nexus/nexus.toml` (the
+script writes it given `NTFY_URL`; otherwise add it by hand). The token goes in
+the service's env file, readable by root only (systemd reads it for the
+nexus), never in `nexus.toml` or git; the script made the file:
 
 ```sh
-sudo install -m 600 /dev/null /etc/shed-nexus.env
-echo 'SHED_NEXUS_NTFY_TOKEN=tk_…' | sudo tee -a /etc/shed-nexus.env >/dev/null
-sudo systemctl restart shed-nexus
+echo 'SHED_NEXUS_NTFY_TOKEN=tk_…' >> /etc/shed-nexus.env
+systemctl restart shed-nexus
 ```
 
+`SHED_NEXUS_NTFY_URL` in that file wins over `ntfy_url`
+(`http://127.0.0.1:2586/alerts-shed` works too, with ntfy on the same machine).
 The nexus POSTs each notification to the topic with `Authorization: Bearer`
 and the token: the text in the body (workspace, bench and tab), `Title`,
 `Priority` (4 when Claude waits for an answer or a workspace went offline, 3
@@ -277,15 +177,124 @@ anyone publish to them, UnifiedPush's usual set-up (safe enough: the topics'
 names are long and random and only the phone can decrypt what is sent):
 
 ```sh
-sudo ntfy access everyone 'up*' write-only
-sudo ntfy access phone 'up*' read-only
+ntfy access everyone 'up*' write-only
+ntfy access phone 'up*' read-only
 ```
 
 A ntfy on a private network needs `allow_private_endpoints = true` in the
 nexus's `[push]` (and `allow_http_endpoints = true` without TLS) for
 UnifiedPush endpoints; the topic in `ntfy_url` may be anywhere.
 
-## 8. A server workspace (optional)
+## 6. Linking workspaces
+
+On each machine running Shed, `shed nexus join https://nexus.example.com`
+prints a code such as `K7QF-2M9D`. In the web app (or the Android app), under
+**Devices** → **Approve a Workspace…**, type that code (the list of waiting
+requests shows which machine asks and from where, but not the code, so a
+request someone else made cannot be approved by mistake), give the workspace a
+name and approve it with a code from your authenticator. The workspace keeps
+its token in a 0600 file in Shed's data folder (`nexus.json`, with the nexus's
+address: the link dials only that nexus, and only over `https`, plain `http`
+being for a nexus on the same machine). From then on the keeper runs the link
+(`shed link`) while Shed runs; `shed nexus status` says how it is doing.
+Revoke the workspace under Devices to cut it off at once; `shed nexus leave`
+unlinks it from its side. The [user guide](user-guide.md#linking-a-workspace)
+has the rest (view-only workspaces, private tabs).
+
+## 7. The phone
+
+In a browser, `https://nexus.example.com` is the web app; it can be added to
+the home screen. The Android app ([android/README.md](../android/README.md)
+has how to build and install it) asks for the nexus's address, the user name,
+the password and a code; then, for notifications while it is closed, the ntfy
+app as in [5](#5-notifications-on-the-phone-with-ntfy-optional).
+
+## What the script did
+
+`packaging/nexus/install.sh`, step by step, with what to do by hand on a
+system it does not cover:
+
+- **Packages**: `apt install nginx certbot python3-certbot-nginx curl`, if
+  missing.
+- **The binary**: `install -m 0755 ~/.cargo/bin/shed-nexus /usr/local/bin/`
+  (each run, if it changed).
+- **The user**: `useradd --system --home-dir /var/lib/shed-nexus --shell
+  /usr/sbin/nologin shed-nexus`. The nexus never runs as root. systemd makes
+  `/var/lib/shed-nexus` (0700, owned by `shed-nexus`) when the service starts;
+  the nexus keeps its database (`nexus.db`) and its push key (`vapid.key`,
+  0600) there.
+- **Settings**: `/etc/shed-nexus/nexus.toml` from the sample
+  (`packaging/nexus/nexus.toml`), with `public_url =
+  "https://nexus.example.com"`, `trusted_proxy = true`, `[push] subject =
+  "mailto:admin@example.com"` and `ntfy_url` if given. Only when there is none:
+  after that it is yours to edit.
+- **Secrets**: `/etc/shed-nexus.env`, 0600 root, empty but for a comment, if
+  missing.
+- **systemd**: `packaging/nexus/shed-nexus.service` to
+  `/etc/systemd/system/` (each run), `systemctl daemon-reload`, `enable`,
+  `restart`. The unit runs the nexus as `shed-nexus` with `NoNewPrivileges`, no
+  capabilities, `ProtectSystem=strict` (everything read-only but
+  `/var/lib/shed-nexus`), `ProtectHome`, private `/tmp` and devices, a system
+  call filter, and `MemoryMax`/`TasksMax` limits. If you move the data folder,
+  change `ReadWritePaths` and `StateDirectory` to match. Its log:
+  `journalctl -u shed-nexus -f`.
+- **nginx**: `packaging/nexus/nginx-site.conf` with your domain as
+  `/etc/nginx/sites-available/shed-nexus`, linked into `sites-enabled`, then
+  `nginx -t` and a reload. Only when there is none (certbot edits it). It
+  passes the client's address in `X-Forwarded-For`, which the nexus believes
+  from loopback only, upgrades `/link` and `/api` to WebSockets with long
+  timeouts, and compresses the web app's files. With ufw on, `ufw allow 'Nginx
+  Full'`.
+- **Certificate**: `certbot --nginx -d nexus.example.com --redirect -m
+  admin@example.com --agree-tos --non-interactive`, unless the site has one.
+  certbot adds the `listen 443 ssl` lines, the certificate, the redirect from
+  HTTP, and a timer that renews it.
+- **Start**: waits for the nexus to answer and prints the setup link from
+  `/var/lib/shed-nexus/setup-link.txt` (or says the account exists).
+
+The nexus sets its own security headers (a strict Content-Security-Policy,
+`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, and HSTS when
+`public_url` is `https:`); nginx need not add them.
+
+## Settings
+
+The sample (`packaging/nexus/nexus.toml`) lists every setting with its default;
+edit `/etc/shed-nexus/nexus.toml` and `systemctl restart shed-nexus`. With
+nginx in front, keep `listen` on `127.0.0.1` and `trusted_proxy = true`: the
+nexus then believes `X-Forwarded-For` from loopback only (set
+`trusted_proxies` to the proxy's addresses if it runs elsewhere) and takes the
+client to be the right-most address in it that is not a trusted proxy. Without
+it, every client would look like the proxy, and one address's failed sign-ins
+would lock out everyone.
+
+Limits worth knowing (all in the sample):
+
+- `[login]`: failed sign-ins lock out their address (an IPv4 address or an
+  IPv6 /64) for `lockout_minutes`. With `global_max_failures` failures from
+  everywhere, the nexus slows down rather than locking everyone out: addresses
+  that never signed in share `slow_per_minute` attempts, while those your
+  devices signed in or were seen from are not held back. Wrong one-time codes
+  from a signed-in device (revoking, pairing, the password) are counted per
+  device, apart from sign-ins.
+- `max_connections` and `header_timeout_secs`: connections at once, and how
+  long a client may take to send a request's headers.
+- Push endpoints must be on public addresses (`[push] allow_private_endpoints`
+  for a ntfy on your network); `[push] ntfy_url` is a ntfy topic for phones
+  ([5](#5-notifications-on-the-phone-with-ntfy-optional)).
+
+Optional:
+
+- `web_dir`: serve the web app from a folder (a build of `web/`, `npm run
+  build` → `web/dist/shed-web`) instead of the one built in, for a nexus built
+  with `SHED_NEXUS_NO_WEB=1` or a web app of another version.
+- `allowed_networks`: only these address ranges reach the nexus at all.
+- `[geo]`: a country allow-list. Download a GeoIP CSV of ranges, such as db-ip's
+  free "IP to Country Lite" (CSV, `start,end,country`), into the data folder,
+  and set `database` and `countries`. Update the file monthly and restart. Without
+  `countries`, the database still shows the country of each device and audit
+  entry.
+
+## A server workspace (optional)
 
 A server can run Shed itself, so benches and Claude Code keep working while
 your PCs are off: a keeper for a user of its own, reached with `shed tui` over
@@ -335,8 +344,17 @@ https://nexus.example.com` links the workspace as in [6](#6-linking-workspaces).
 
 Back up `/var/lib/shed-nexus` (`nexus.db` with `sqlite3 nexus.db ".backup
 /path/to/nexus.db"` while it runs, and `vapid.key`; without the key, browsers
-and phones must subscribe to push again). To upgrade, install the new binary,
-build the web app again and put it in place of the old folder (`sudo rm -r
-/usr/local/share/shed-nexus/web` first, then the `cp` above), and `sudo
-systemctl restart shed-nexus`; the database is migrated when it opens.
-Workspaces reconnect on their own.
+and phones must subscribe to push again) and `/etc/shed-nexus*`.
+
+To upgrade, build the new version and run the script again (it installs the
+binary, refreshes the unit and restarts; the domain comes from the settings):
+
+```sh
+cargo install --locked --git https://github.com/odolha/shed shed-nexus
+git -C /root/shed pull
+/root/shed/packaging/nexus/install.sh
+```
+
+or by hand, `install -m 0755 ~/.cargo/bin/shed-nexus /usr/local/bin/` and
+`systemctl restart shed-nexus`. The web app comes with the binary; the
+database is migrated when it opens. Workspaces reconnect on their own.

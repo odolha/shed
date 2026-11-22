@@ -1,5 +1,6 @@
 # The Shed nexus as a system service, as its own unprivileged user, sandboxed.
-# See docs/nexus-deploy.md. Install:
+# packaging/nexus/install.sh installs it (and refreshes it on every run); see
+# docs/nexus-deploy.md. By hand:
 #
 #   sudo useradd --system --home-dir /var/lib/shed-nexus --shell /usr/sbin/nologin shed-nexus
 #   sudo install -m 0755 shed-nexus /usr/local/bin/

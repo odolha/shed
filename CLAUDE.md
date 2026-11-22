@@ -124,7 +124,8 @@ Crates (`crates/`), lowest first:
   SQLite); reads only the API's envelope (`src/raw.rs`). Release builds carry
   the web app (`build.rs` builds `web/` with npm into `OUT_DIR`, `src/web.rs`
   serves it; debug builds skip it unless `SHED_NEXUS_WEB=1`,
-  `SHED_NEXUS_NO_WEB=1` skips it always). See `docs/nexus-plan.md`, `docs/nexus-deploy.md`.
+  `SHED_NEXUS_NO_WEB=1` skips it always). `packaging/nexus/install.sh` deploys
+  it. See `docs/nexus-plan.md`, `docs/nexus-deploy.md`.
 
 Outside `crates/`: `web/` is the web app the nexus serves (Angular, signals,
 zoneless; `web/README.md`, `web/mock/` a pretend nexus); `android/` the Android

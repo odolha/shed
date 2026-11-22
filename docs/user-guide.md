@@ -1079,7 +1079,7 @@ None of it is needed: without a nexus, Shed works just the same on its own.
 
 **The account** is made once. On its first start the nexus writes a one-time
 setup link to a file in its data folder and its log says where ([Deploying a
-nexus](nexus-deploy.md#4-systemd)); the code is in the link after `#`, so it
+nexus](nexus-deploy.md#4-the-account)); the code is in the link after `#`, so it
 stays out of servers' logs. Open it, choose a user name and password, scan the
 QR code with an authenticator app, type the code it shows, and keep the
 recovery codes (each signs you in once if the authenticator is lost).
@@ -1286,7 +1286,7 @@ Claude Code keep working while your PCs are off. There, Shed is built without
 windows (the CLI, `shed tui` and the keeper), the keeper runs as a user service
 that stays up with nothing open, and Claude Code is signed in once (its usage
 limits are the account's, shown on every workspace using it). [Deploying a
-nexus](nexus-deploy.md#8-a-server-workspace-optional) has the steps. Then, from
+nexus](nexus-deploy.md#a-server-workspace-optional) has the steps. Then, from
 anywhere:
 
 ```sh

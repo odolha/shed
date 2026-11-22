@@ -354,5 +354,7 @@ signing is not configured. More in [android/README.md](../android/README.md).
 - `packaging/arch/PKGBUILD` builds the latest commit from GitHub (`makepkg -si`).
 - `packaging/linux/` holds the desktop entry, the optional systemd user unit and
   the copyright notice they share.
-- `packaging/nexus/` holds a sample `nexus.toml` and the nexus's systemd unit;
-  [Deploying a nexus](nexus-deploy.md) uses them.
+- `packaging/nexus/` holds `install.sh` (sets up or updates a nexus on Debian
+  and Ubuntu: user, settings, systemd, nginx, certbot; `DRY_RUN=1` prints what
+  it would do), a sample `nexus.toml`, the nexus's systemd unit and the nginx
+  site; [Deploying a nexus](nexus-deploy.md) uses them.
