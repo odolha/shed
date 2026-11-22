@@ -2308,7 +2308,7 @@ impl AiView {
     fn selected_copy(&mut self) -> Option<Copy> {
         let sel = self.selection.filter(|s| !s.is_empty())?;
         let (a, b) = sel.ordered();
-        let mut copy = Copy::default();
+        let mut copy = if (a.entry, a.piece) == (b.entry, b.piece) { Copy::within_one() } else { Copy::default() };
         for i in a.entry..=b.entry {
             let parsed = self.entry_pieces(i);
             for (j, piece) in parsed.pieces.iter().enumerate() {

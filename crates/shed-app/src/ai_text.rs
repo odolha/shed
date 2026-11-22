@@ -225,19 +225,48 @@ fn inline_md(text: &Text, range: Range<usize>) -> String {
 }
 
 /// Builds what a copy of selected pieces holds: plain text and Markdown.
+///
+/// A block's own marks (a list item's bullet or number and indent, a
+/// heading's `#`, a quote's `>`, a code block's fences) come only with a
+/// part that starts where the block's text starts; a selection within one
+/// block (`Copy::within_one`) copies its characters alone, unless it holds
+/// the whole block.
 #[derive(Default)]
 pub struct Copy {
     pub plain: String,
     pub markdown: String,
     last: Option<Kind>,
+    /// The selection lies in one piece.
+    one: bool,
 }
 
 impl Copy {
+    /// For a selection that starts and ends in the same piece.
+    pub fn within_one() -> Self {
+        Copy { one: true, ..Default::default() }
+    }
+
     /// Adds `range` of `piece`.
     pub fn add(&mut self, piece: &Piece, range: Range<usize>) {
         let text = &piece.text.text;
         let range = text.floor_char_boundary(range.start.min(text.len()))..text.floor_char_boundary(range.end.min(text.len()));
         let slice = &text[range.clone()];
+        // Its marks, only with its start (and, alone, only whole).
+        let whole = range.start == 0 && (!self.one || (range.end >= text.len() && !matches!(piece.kind, Kind::Cell { .. })));
+        // (Only a selection's first piece starts inside its text.)
+        if !whole {
+            if self.last.is_some() {
+                self.plain.push_str("\n\n");
+                self.markdown.push_str("\n\n");
+            }
+            self.plain.push_str(slice);
+            match piece.kind {
+                Kind::Code { .. } => self.markdown.push_str(slice),
+                _ => self.markdown.push_str(&inline_md(&piece.text, range)),
+            }
+            self.last = Some(piece.kind.clone());
+            return;
+        }
         let (plain_sep, md_sep) = match (&self.last, &piece.kind) {
             (None, _) => ("", ""),
             (Some(Kind::Item { .. }), Kind::Item { .. }) => ("\n", "\n"),
@@ -330,6 +359,47 @@ mod tests {
         let mut part = Copy::default();
         part.add(&ps[0], 5..9);
         assert_eq!(part.markdown, "**argo**");
+    }
+
+    /// Marks come only with a block's start: part of a bullet's text is
+    /// that text alone, as is part of a code block or a heading.
+    #[test]
+    fn partial_selections_leave_the_marks_out() {
+        let ps = parts("# Title here\n\n- first item\n- second item\n  1. nested one\n\n> quoted words\n\n```sh\nls -la\ncd x\n```");
+        let kinds: Vec<&Kind> = ps.iter().map(|p| &p.kind).collect();
+        assert!(matches!(kinds[0], Kind::Heading(1)) && matches!(kinds[1], Kind::Item { .. }) && matches!(kinds[5], Kind::Code { .. }), "{kinds:?}");
+        let one = |p: &Piece, r: Range<usize>| {
+            let mut c = Copy::within_one();
+            c.add(p, r);
+            (c.plain, c.markdown)
+        };
+        // Inside one item, from after its start: its characters.
+        assert_eq!(one(&ps[1], 6..10), ("item".into(), "item".into()));
+        // From its start to before its end: still only characters.
+        assert_eq!(one(&ps[2], 0..6), ("second".into(), "second".into()));
+        // The whole item: as it is, marker and all.
+        assert_eq!(one(&ps[1], 0..10), ("• first item".into(), "- first item".into()));
+        let heading = one(&ps[0], 2..5);
+        assert!(heading.0 == "tle" && !heading.1.contains('#'), "{heading:?}");
+        assert_eq!(one(&ps[4], 0..6), ("quoted".into(), "quoted".into()));
+        assert_eq!(one(&ps[5], 4..9), ("la\ncd".into(), "la\ncd".into()));
+        assert_eq!(one(&ps[3], 0..6).1, "nested");
+        // Across items: the first from its middle has no marker, the
+        // later ones (started at their start) keep theirs.
+        let mut c = Copy::default();
+        c.add(&ps[1], 6..10);
+        c.add(&ps[2], 0..ps[2].text.text.len());
+        c.add(&ps[3], 0..6);
+        assert_eq!(c.plain, "item\n• second item\n  1. nested");
+        assert_eq!(c.markdown, "item\n- second item\n  1. nested");
+        // A code block entered from the paragraph before: fenced.
+        let mut c = Copy::default();
+        c.add(&ps[4], 3..ps[4].text.text.len());
+        c.add(&ps[5], 0..2);
+        assert_eq!(c.markdown, "ted words\n\n```sh\nls\n```");
+        // One table cell: its text.
+        let t = parts("| a | b |\n|---|---|\n| one | two |");
+        assert_eq!(one(&t[2], 0..3), ("one".into(), "one".into()));
     }
 
     #[test]

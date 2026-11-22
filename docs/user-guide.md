@@ -499,7 +499,10 @@ terminal of the bench.
   files Claude changed since are put back) or **Revert the Conversation Only**
   (the files stay as they are); the conversation as it was stays in the list.
 - **Copying**: drag over the text to select it (double-click a word, triple-click
-  a paragraph, Shift+click to extend), then Ctrl+C. Each answer has a **Copy**
+  a paragraph, Shift+click to extend), then Ctrl+C. Part of a list item, heading,
+  quote or code block copies just the characters selected; its bullet, number,
+  `#`, `>` or code fences come along only when the selection starts at the start
+  of its text (and, within one item, holds all of it). Each answer has a **Copy**
   button when the mouse is over it (on the last part of a response with tools in
   between, **Copy whole response** copies everything Claude said in it; also
   **Copy Response** in the right-click menu), and each code block one above it
