@@ -38,11 +38,39 @@ fun shedLink(workspace: String, bench: String? = null, tab: String? = null): Uri
     return text.toUri()
 }
 
+/** How this phone hears about things while no Shed app is in view. */
+sealed interface PushMode {
+    /** The nexus publishes to a ntfy topic: subscribe to it in the ntfy app. No UnifiedPush then. */
+    data class Ntfy(val topic: String) : PushMode
+
+    /** UnifiedPush, registered with the nexus's VAPID key. */
+    data class Unified(val vapid: String) : PushMode
+
+    /** The nexus pushes nothing. */
+    data object Off : PushMode
+}
+
+/** What the nexus's `PushInfo` means for this phone. */
+fun pushMode(info: PushInfo): PushMode {
+    val topic = info.ntfyTopic?.trim().orEmpty()
+    val vapid = info.vapidKey
+    return when {
+        topic.isNotEmpty() -> PushMode.Ntfy(topic)
+        vapid != null -> PushMode.Unified(vapid)
+        else -> PushMode.Off
+    }
+}
+
+/** Whether a UnifiedPush registration here should go: the nexus reaches phones through its topic. */
+fun leaveUnifiedPush(mode: PushMode, registered: Boolean): Boolean = mode is PushMode.Ntfy && registered
+
 /**
- * Push through UnifiedPush: a distributor app (ntfy) on the phone holds the
- * connection to a push server; the nexus sends to the endpoint it gives,
- * encrypted for this app (RFC 8291; the connector library keeps the keys and
- * decrypts). No Google services.
+ * Push when no Shed app is in view. With a ntfy topic at the nexus
+ * ([PushMode.Ntfy]) the phone reads it in the ntfy app and this app does not
+ * register. Otherwise UnifiedPush: a distributor app (ntfy) on the phone
+ * holds the connection to a push server; the nexus sends to the endpoint it
+ * gives, encrypted for this app (RFC 8291; the connector library keeps the
+ * keys and decrypts). No Google services.
  */
 object Push {
     private const val TAG = "ShedPush"
@@ -85,15 +113,26 @@ object Push {
         }
     }
 
-    /** Registers again (a new sign-in, an app start), if push is on. */
+    /** Whether this phone is registered for UnifiedPush (or thinks so). */
+    fun registered(context: Context): Boolean =
+        context.shed.settings.pushEnabled || context.shed.settings.pushEndpoint != null
+
+    /**
+     * Registers again (a new sign-in, an app start), if push is on; leaves
+     * UnifiedPush when the nexus has a ntfy topic for phones instead.
+     */
     fun refresh(context: Context) {
         val app = context.shed
-        if (!app.settings.pushEnabled || UnifiedPush.getAckDistributor(context) == null) return
+        if (!registered(context)) return
         val session = app.session.value ?: return
         app.scope.launch {
             runCatching {
-                val info = session.http.get("/push", PushInfo.serializer())
-                info.vapidKey?.let { UnifiedPush.register(context, vapid = it) }
+                val mode = pushMode(session.http.get("/push", PushInfo.serializer()))
+                when {
+                    leaveUnifiedPush(mode, registered(context)) -> disable(context)
+                    mode is PushMode.Unified && app.settings.pushEnabled && UnifiedPush.getAckDistributor(context) != null ->
+                        UnifiedPush.register(context, vapid = mode.vapid)
+                }
             }.onFailure { Log.d(TAG, "push refresh: ${it.message}") }
         }
     }

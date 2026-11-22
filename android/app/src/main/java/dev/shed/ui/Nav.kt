@@ -1,6 +1,8 @@
 package dev.shed.ui
 
 import android.net.Uri
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -8,17 +10,22 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import dev.shed.R
 import dev.shed.Session
 import dev.shed.api.Policy
 import dev.shed.api.WorkspaceInfo
 import dev.shed.api.WorkspaceState
+import dev.shed.push.shedLink
 import dev.shed.shed
+import dev.shed.ui.common.LocalSnackbar
 import dev.shed.ui.ai.AiScreen
 import dev.shed.ui.ai.ReviewScreen
 import dev.shed.ui.bench.BenchScreen
@@ -30,6 +37,7 @@ import dev.shed.ui.logbook.LogbookScreen
 import dev.shed.ui.settings.SettingsScreen
 import dev.shed.ui.workspaces.WorkspacesScreen
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 /** The signed-in session, for every screen under `Nav`. */
 val LocalSession = staticCompositionLocalOf<Session> { error("no session") }
@@ -82,6 +90,7 @@ fun Nav(link: MutableStateFlow<Uri?>) {
         link.value = null
         open(nav, uri)
     }
+    LiveNotifications(current, nav)
     CompositionLocalProvider(LocalSession provides current) {
         NavHost(nav, startDestination = Routes.WORKSPACES) {
             composable(Routes.WORKSPACES) { WorkspacesScreen(nav) }
@@ -102,6 +111,31 @@ fun Nav(link: MutableStateFlow<Uri?>) {
                 arguments = listOf(navArgument("tab") { type = NavType.StringType; defaultValue = "" }),
             ) {
                 LogbookScreen(nav, it.arg("ws"), it.arg("tab").ifEmpty { null })
+            }
+        }
+    }
+}
+
+/**
+ * Notifications the nexus sends live while the app is in view: a snackbar,
+ * whose Open goes to the tab (none for the tab already open).
+ */
+@Composable
+private fun LiveNotifications(session: Session, nav: NavHostController) {
+    val snackbar = LocalSnackbar.current
+    val openLabel = LocalContext.current.getString(R.string.open)
+    LaunchedEffect(session) {
+        session.socket.notifications.collect { frame ->
+            val inView = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            // Out of view, another app of yours is in front of you: it says so.
+            if (!inView) return@collect
+            val entry = nav.currentBackStackEntry
+            val n = frame.notification
+            if (showsTab(entry?.destination?.route, entry?.arg("ws"), entry?.arg("tab"), frame.workspace, n.tab)) return@collect
+            val text = liveNoticeText(frame, session.socket.workspaces.value)
+            launch {
+                val result = snackbar.showSnackbar(text, actionLabel = openLabel, withDismissAction = true, duration = SnackbarDuration.Long)
+                if (result == SnackbarResult.ActionPerformed) open(nav, shedLink(frame.workspace, n.bench, n.tab))
             }
         }
     }

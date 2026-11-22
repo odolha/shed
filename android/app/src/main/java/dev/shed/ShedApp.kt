@@ -69,6 +69,7 @@ class ShedApp : Application() {
                 foreground = true
                 stopJob?.cancel()
                 _session.value?.socket?.let {
+                    it.setVisible(true)
                     it.start()
                     it.retryNow()
                 }
@@ -76,7 +77,9 @@ class ShedApp : Application() {
 
             override fun onStop(owner: LifecycleOwner) {
                 foreground = false
-                // Notifications come by push; the socket can rest a while after.
+                // Out of view: notifications are pushed (or go live to another
+                // app in view); the socket can rest a while after.
+                _session.value?.socket?.setVisible(false)
                 stopJob = scope.launch {
                     delay(60_000)
                     _session.value?.socket?.stop()
@@ -109,6 +112,7 @@ class ShedApp : Application() {
             }
         }
         if (foreground || ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+            socket.setVisible(true)
             socket.start()
         }
         Push.refresh(this)

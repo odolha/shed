@@ -1034,13 +1034,18 @@ connection dials again with a backoff and subscribes again under the same ids
 (the first event of each is the whole thing again); a subscription that
 `Ended` because its workspace went offline starts again when the workspace
 comes back; `Goodbye` with `Unauthorized` signs the phone out. The socket runs
-while the app is in the foreground and a minute after; notifications come by
-push. The device token is sealed with an AES-GCM key kept in the Android
+while the app is in the foreground and a minute after, and says `Visible`
+(true from `ON_START`, false from `ON_STOP`); live notifications become a
+snackbar in `Nav` whose Open follows the tab's `shed://` link, and otherwise
+notifications come by push. The device token is sealed with an AES-GCM key kept in the Android
 Keystore. Terminals arrive as `Screen` events: the app keeps the rows, joins
 those that wrap and cuts them again to the phone's width (the alternate screen
-is shown as a grid, fitted or panned). Push is UnifiedPush: the connector
-library keeps the RFC 8291 keys and decrypts; the app hands the distributor's
-endpoint to `POST /api/v1/push/subscribe`.
+is shown as a grid, fitted or panned). Push is the nexus's ntfy topic when it
+has one (`PushInfo::ntfy_topic`: Settings tells the user to subscribe to it in
+the ntfy app, and the app leaves UnifiedPush; ntfy's `Click` opens the
+`shed://` link through the activity's intent filter), else UnifiedPush: the
+connector library keeps the RFC 8291 keys and decrypts; the app hands the
+distributor's endpoint to `POST /api/v1/push/subscribe`.
 
 ## The code
 

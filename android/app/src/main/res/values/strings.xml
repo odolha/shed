@@ -326,6 +326,9 @@
     <string name="push_no_distributor">Notifications come through UnifiedPush, without Google. Install a distributor such as ntfy (from F-Droid), point it at your push server, then come back here.</string>
     <string name="push_off_at_nexus">Push is off on this nexus ([push] enabled = false in its nexus.toml).</string>
     <string name="push_not_subscribed">The nexus no longer pushes to this phone (its push service dropped the subscription). Turn notifications on again.</string>
+    <string name="push_ntfy_topic">Notifications when Shed isn\'t open come through ntfy: subscribe to %1$s in the ntfy app (signed in to your server).</string>
+    <string name="push_ntfy_kinds">The topic carries what any of your phones has on here:</string>
+    <string name="push_live">While Shed is open in front of you, here or in a browser, notifications show inside it instead.</string>
     <string name="push_unsubscribe_failed">This phone stopped listening, but the nexus could not be told; it may keep sending until it notices.</string>
     <string name="channel_ai_waiting">Claude waits for an answer</string>
     <string name="channel_ai_done">Claude finished a turn</string>

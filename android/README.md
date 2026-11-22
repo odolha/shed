@@ -62,28 +62,36 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 A workspace that allows viewing only (its policy is `view`) shows everything
 but offers no changes.
 
-## Notifications (UnifiedPush and ntfy)
+## Notifications (ntfy)
 
-Push goes through [UnifiedPush](https://unifiedpush.org), not Google: a
-*distributor* app on the phone keeps one connection to a push server, and the
-nexus sends to the endpoint it gives. Messages are encrypted for the app
-(RFC 8291), so the push server sees only ciphertext.
+While the app is in the foreground it tells the nexus so (`Visible`); while
+it, or Shed in a browser, is in front of you, notifications come over the
+connection and show as a banner at the bottom (**Open** goes to the tab),
+and nothing is pushed. Only when no Shed app is in view does the nexus push,
+in one of two ways, never through Google:
 
-1. Run a ntfy server (or use one you trust) and turn push on in the nexus
-   (`[push] enabled = true`); see "Push to Android with ntfy" in
-   [Deploying a nexus](../docs/nexus-deploy.md).
-2. Install the ntfy app (F-Droid), set its default server to yours
-   (`https://ntfy.example.com`) and sign in there if your server needs it.
-3. In Shed: **Settings → Push notifications**. Pick ntfy if asked. Then choose
-   which kinds you want: Claude waits for an answer, Claude finished a turn, a
-   long command finished, a workspace went offline. Each has its own Android
-   notification channel; tapping a notification opens its tab
-   (`shed://w/{workspace}/b/{bench}/t/{tab}`).
-4. Settings shows whether the nexus pushes to this phone. Turning push off
-   unregisters from the distributor and tells the nexus
-   (`POST /api/v1/push/unsubscribe`); turning it on again registers anew.
-
-Without a distributor installed, Settings says how to get one.
+- **A ntfy topic** (the usual way, with a ntfy server you run; see
+  "Notifications on the phone with ntfy" in
+  [Deploying a nexus](../docs/nexus-deploy.md)): the nexus publishes to it
+  (`[push] ntfy_url`), and the phone reads it in the ntfy app. Install the ntfy
+  app (F-Droid), set its default server to yours (`https://ntfy.example.com`),
+  sign in (Settings → Users) and subscribe to the topic Shed's **Settings →
+  Notifications** shows (with **Copy**). Shed's app does not register for
+  UnifiedPush then (and leaves it if it had). Tapping a notification opens
+  its tab (`shed://w/{workspace}/b/{bench}/t/{tab}`, which the app takes even
+  when closed). The kinds chosen in Settings decide what the topic carries
+  (what any of your phones wants).
+- **UnifiedPush**, when the nexus has no topic: a *distributor* app on the
+  phone (ntfy) keeps one connection to a push server, and the nexus sends to
+  the endpoint it gives, encrypted for the app (RFC 8291), so the push server
+  sees only ciphertext. In Shed: **Settings → Notifications**, turn on Push
+  notifications, pick ntfy if asked, then choose which kinds you want: Claude
+  waits for an answer, Claude finished a turn, a long command finished, a
+  workspace went offline. Each has its own Android notification channel.
+  Settings shows whether the nexus pushes to this phone; turning push off
+  unregisters from the distributor and tells the nexus
+  (`POST /api/v1/push/unsubscribe`). Without a distributor installed, Settings
+  says how to get one.
 
 ## The code
 
@@ -94,8 +102,8 @@ Without a distributor installed, Settings says how to get one.
 | `api/Api.kt` | The API's types, generated from `crates/shed-api` (`cargo run -p shed-codegen`); never edited by hand |
 | `net/` | `ShedJson` (the JSON setup; entries, events and enum values a newer workspace sends read as unknown), `NexusHttp` (`/api/v1/…`, bearer token), `NexusSocket` (the `/api` WebSocket: requests by id, subscriptions as flows, reconnects) |
 | `data/` | The account (token sealed with a Keystore AES-GCM key) and the app's settings |
-| `push/` | UnifiedPush: registering, the endpoint to the nexus, notifications |
-| `ui/` | Compose screens: `Nav.kt` (routes and `shed://` links), `workspaces/`, `bench/`, `ai/` (transcript, Markdown, prompt, sessions, drafts, review), `terminal/` (screen model and re-wrapping), `logbook/`, `project/`, `git/`, `devices/`, `settings/`, `common/` |
+| `push/` | How pushes come (`pushMode`: a ntfy topic or UnifiedPush), UnifiedPush registering, the endpoint to the nexus, notifications |
+| `ui/` | Compose screens: `Nav.kt` (routes, `shed://` links, live notifications as a snackbar; `LiveNotice.kt` their text), `workspaces/`, `bench/`, `ai/` (transcript, Markdown, prompt, sessions, drafts, review), `terminal/` (screen model and re-wrapping), `logbook/`, `project/`, `git/`, `devices/`, `settings/`, `common/` |
 | `ShedApp.kt`, `MainActivity.kt` | The session (connects in the foreground, rests a minute after), the lock |
 
 Tests (`app/src/test`) run on the JVM: JSON round-trips (and what a newer

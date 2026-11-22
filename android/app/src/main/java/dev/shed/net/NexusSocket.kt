@@ -8,6 +8,7 @@ import dev.shed.api.ClientFrame
 import dev.shed.api.ClientHello
 import dev.shed.api.ErrorCode
 import dev.shed.api.Event
+import dev.shed.api.NotificationFrame
 import dev.shed.api.Reply
 import dev.shed.api.Request
 import dev.shed.api.Response
@@ -26,8 +27,11 @@ import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
@@ -70,7 +74,10 @@ sealed interface SubEvent {
 /**
  * The one WebSocket to the nexus's `/api`: `Hello` → `Welcome`, requests
  * answered by id, subscriptions as flows. It reconnects with a backoff and
- * subscribes again to everything still watched; `Goodbye` ends it.
+ * subscribes again to everything still watched; `Goodbye` ends it. It tells
+ * the nexus whether the app is in view (`Visible`, after each welcome and on
+ * change); while some app is, notifications come live ([notifications])
+ * instead of being pushed.
  */
 class NexusSocket(
     private val client: OkHttpClient,
@@ -92,6 +99,11 @@ class NexusSocket(
     private val _states = MutableStateFlow<Map<String, WorkspaceState>>(emptyMap())
     val states: StateFlow<Map<String, WorkspaceState>> = _states.asStateFlow()
 
+    private val _notifications = MutableSharedFlow<NotificationFrame>(extraBufferCapacity = 16)
+
+    /** Notifications the nexus sends live, while some Shed app is in view. */
+    val notifications: SharedFlow<NotificationFrame> = _notifications.asSharedFlow()
+
     /** The nexus's version, once welcomed. */
     var nexusVersion: String = ""
         private set
@@ -104,6 +116,7 @@ class NexusSocket(
     private var socket: WebSocket? = null
     private var welcomed = false
     private var running = false
+    private var visible = false
     private var attempt = 0
     private var nextId = 1u
     private var retryJob: Job? = null
@@ -146,6 +159,15 @@ class NexusSocket(
             ws
         }
         ws?.close(1000, "bye")
+    }
+
+    /** Tells the nexus whether the app is in view (now, and after every reconnect). */
+    fun setVisible(inView: Boolean) {
+        synchronized(lock) {
+            if (visible == inView) return
+            visible = inView
+            if (welcomed) socket?.send(encode(ClientFrame.Visible(inView)))
+        }
     }
 
     /** Sends a call to a workspace and waits for its answer. */
@@ -270,6 +292,7 @@ class NexusSocket(
                         sub.out.trySend(SubEvent.Ended(ApiError(ErrorCode.Offline, "the workspace is offline")))
                     }
                 }
+                webSocket.send(encode(ClientFrame.Visible(visible)))
                 _connection.value = Connection.Online
             }
             is ServerFrame.Response -> pending.remove(frame.content.id)?.complete(frame.content)
@@ -293,6 +316,7 @@ class NexusSocket(
                 }
             }
             is ServerFrame.State -> _states.value = _states.value + (frame.content.workspace to frame.content.state)
+            is ServerFrame.Notification -> _notifications.tryEmit(frame.content)
             is ServerFrame.Goodbye -> {
                 socket = null
                 webSocket.close(1000, null)

@@ -1266,11 +1266,15 @@ Settings.
   **Approve a Workspace…** with the code it showed (see
   [Linking a workspace](#linking-a-workspace)); **Reject…** on a waiting
   request you did not make.
-- **Notifications** come through UnifiedPush (the ntfy app, with your own ntfy
-  server), never through Google: Claude waiting for you, a turn done, a long
-  command finished, a workspace gone offline, each on or off. Tapping one opens
-  its tab. Settings shows whether the nexus pushes to this phone; turning
-  notifications off tells it to stop.
+- **Notifications**: Claude waiting for you, a turn done, a long command
+  finished, a workspace gone offline, each on or off. While the app (or Shed
+  in a browser) is in front of you they show inside it, as a banner at the
+  bottom with **Open**. Otherwise they come through ntfy, never through Google:
+  usually a ntfy topic your nexus publishes to, which you subscribe to in the
+  ntfy app (Settings → Notifications shows it, with **Copy**); with a nexus
+  that has no topic, through UnifiedPush, where Settings shows whether the
+  nexus pushes to this phone and turning notifications off tells it to stop.
+  Tapping a notification opens its tab, even with the app closed.
 
 Private tabs show as private: what is in them never leaves the computer. A
 workspace that allows viewing only shows everything and offers no changes.

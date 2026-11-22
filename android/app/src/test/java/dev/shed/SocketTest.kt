@@ -7,6 +7,9 @@ import dev.shed.api.ClientFrame
 import dev.shed.api.ErrorCode
 import dev.shed.api.Event
 import dev.shed.api.EventFrame
+import dev.shed.api.Notification
+import dev.shed.api.NotificationFrame
+import dev.shed.api.NotificationKind
 import dev.shed.api.Policy
 import dev.shed.api.Reply
 import dev.shed.api.Response
@@ -24,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -53,6 +57,8 @@ class SocketTest {
     /** A fake nexus connection: welcomes, answers requests, records what came. */
     private inner class Fake(private val onRequest: (WebSocket, ClientFrame.Request) -> Unit = ::pong) : WebSocketListener() {
         val frames = LinkedBlockingQueue<ClientFrame>()
+        /** `Visible` frames, kept apart from the rest. */
+        val visible = LinkedBlockingQueue<Boolean>()
         @Volatile var socket: WebSocket? = null
 
         override fun onOpen(webSocket: WebSocket, response: HttpResponse) {
@@ -61,6 +67,10 @@ class SocketTest {
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             val frame = ShedJson.decodeFromString(ClientFrame.serializer(), text)
+            if (frame is ClientFrame.Visible) {
+                visible.add(frame.content)
+                return
+            }
             frames.add(frame)
             when (frame) {
                 is ClientFrame.Hello -> send(webSocket, ServerFrame.Welcome(Welcome(1u, "0.1.0", listOf(WS), emptyList())))
@@ -207,6 +217,35 @@ class SocketTest {
         send(fake.socket!!, ServerFrame.Event(EventFrame(sub.content.id, Event.GitChanged)))
         assertEquals(listOf(SubEvent.Data(Event.GitChanged)), withTimeout(5_000) { events.await() })
         assertEquals(Connection.Online, socket.connection.value)
+        socket.stop()
+    }
+
+    @Test
+    fun saysWhetherInViewAndGetsLiveNotifications() = runBlocking {
+        val first = Fake()
+        val second = Fake()
+        server.enqueue(MockResponse().withWebSocketUpgrade(first))
+        server.enqueue(MockResponse().withWebSocketUpgrade(second))
+        val socket = socket()
+        socket.setVisible(true)
+        socket.start()
+        // After the welcome, as it is; then on every change only.
+        assertEquals(true, first.visible.poll(5, TimeUnit.SECONDS))
+        socket.setVisible(true)
+        socket.setVisible(false)
+        assertEquals(false, first.visible.poll(5, TimeUnit.SECONDS))
+
+        val frame = NotificationFrame("w1", Notification(NotificationKind.AiDone, "Claude is done", "api · claude", "b1", "t1"))
+        val live = async(Dispatchers.Default) { socket.notifications.first() }
+        // Collecting has started by the time the welcome is in.
+        withTimeout(5_000) { socket.connection.first { it == Connection.Online } }
+        delay(100)
+        send(first.socket!!, ServerFrame.Notification(frame))
+        assertEquals(frame, withTimeout(5_000) { live.await() })
+
+        // A new connection hears how it is now.
+        first.socket!!.close(1001, "restart")
+        assertEquals(false, second.visible.poll(5, TimeUnit.SECONDS))
         socket.stop()
     }
 

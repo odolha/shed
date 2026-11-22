@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -42,14 +43,19 @@ import dev.shed.api.PushPrefs
 import dev.shed.data.ThemeChoice
 import dev.shed.net.Empty
 import dev.shed.push.Push
+import dev.shed.push.PushMode
+import dev.shed.push.leaveUnifiedPush
+import dev.shed.push.pushMode
 import dev.shed.shed
 import dev.shed.ui.LocalSession
 import dev.shed.ui.common.ConfirmDialog
 import dev.shed.ui.common.HSpace
+import dev.shed.ui.common.LocalSnackbar
 import dev.shed.ui.common.SectionTitle
 import dev.shed.ui.common.ShedScaffold
 import dev.shed.ui.common.errorText
 import dev.shed.ui.common.rememberRunner
+import dev.shed.ui.logbook.copy
 import dev.shed.ui.theme.LocalShed
 import kotlinx.coroutines.launch
 
@@ -70,6 +76,7 @@ fun SettingsScreen(nav: NavController) {
     var signingOut by remember { mutableStateOf(false) }
     val distributors = remember { Push.distributors(context) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    val snackbar = LocalSnackbar.current
 
     val pushChanged by Push.changed.collectAsState()
     LaunchedEffect(pushChanged) {
@@ -84,6 +91,14 @@ fun SettingsScreen(nav: NavController) {
             pushError = errorText(context, e)
         }
     }
+    val mode = info?.let(::pushMode)
+    // The nexus reaches phones through its ntfy topic: no UnifiedPush here too.
+    LaunchedEffect(mode) {
+        if (mode != null && leaveUnifiedPush(mode, Push.registered(context))) {
+            pushOn = false
+            Push.disable(context)
+        }
+    }
 
     ShedScaffold(title = stringResource(R.string.settings_title), onBack = { nav.popBackStack() }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
@@ -94,8 +109,47 @@ fun SettingsScreen(nav: NavController) {
             )
 
             SectionTitle(stringResource(R.string.settings_notifications))
+            val prefs = info?.prefs?.kinds.orEmpty()
+            val kindSwitches = @Composable {
+                for ((kind, label) in listOf(
+                    NotificationKind.AiWaiting to R.string.channel_ai_waiting,
+                    NotificationKind.AiDone to R.string.channel_ai_done,
+                    NotificationKind.CommandDone to R.string.channel_command_done,
+                    NotificationKind.WorkspaceOffline to R.string.channel_workspace_offline,
+                )) {
+                    SwitchRow(stringResource(label), kind in prefs, indent = true) { on ->
+                        val kinds = if (on) prefs + kind else prefs - kind
+                        runner.run {
+                            session.http.post("/push/prefs", PushPrefs(kinds), PushPrefs.serializer(), Empty.serializer())
+                            info = info?.copy(prefs = PushPrefs(kinds))
+                        }
+                    }
+                }
+            }
             val vapid = info?.vapidKey
             when {
+                mode is PushMode.Ntfy -> {
+                    Text(stringResource(R.string.push_ntfy_topic, mode.topic), modifier = Modifier.padding(horizontal = 16.dp))
+                    val copied = stringResource(R.string.copied)
+                    OutlinedButton(
+                        onClick = {
+                            copy(context, mode.topic)
+                            scope.launch { snackbar.showSnackbar(copied) }
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        Icon(Icons.Default.ContentCopy, null)
+                        HSpace(8)
+                        Text(stringResource(R.string.copy))
+                    }
+                    Text(
+                        stringResource(R.string.push_ntfy_kinds),
+                        color = shed.textDim,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                    kindSwitches()
+                }
                 distributors.isEmpty() -> Text(
                     stringResource(R.string.push_no_distributor),
                     color = shed.textDim,
@@ -126,25 +180,15 @@ fun SettingsScreen(nav: NavController) {
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
-                    val prefs = info?.prefs?.kinds.orEmpty()
-                    if (pushOn) {
-                        for ((kind, label) in listOf(
-                            NotificationKind.AiWaiting to R.string.channel_ai_waiting,
-                            NotificationKind.AiDone to R.string.channel_ai_done,
-                            NotificationKind.CommandDone to R.string.channel_command_done,
-                            NotificationKind.WorkspaceOffline to R.string.channel_workspace_offline,
-                        )) {
-                            SwitchRow(stringResource(label), kind in prefs, indent = true) { on ->
-                                val kinds = if (on) prefs + kind else prefs - kind
-                                runner.run {
-                                    session.http.post("/push/prefs", PushPrefs(kinds), PushPrefs.serializer(), Empty.serializer())
-                                    info = info?.copy(prefs = PushPrefs(kinds))
-                                }
-                            }
-                        }
-                    }
+                    if (pushOn) kindSwitches()
                 }
             }
+            Text(
+                stringResource(R.string.push_live),
+                color = shed.textDim,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
             pushError?.let { Text(it, color = shed.danger, modifier = Modifier.padding(horizontal = 16.dp)) }
 
             SectionTitle(stringResource(R.string.settings_security))
