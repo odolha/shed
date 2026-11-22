@@ -738,7 +738,7 @@ impl TerminalView {
             }
         });
         if let Some(url) = target {
-            cx.open_url(&url);
+            crate::links::open_external(&url, cx);
         }
     }
 }

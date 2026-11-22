@@ -2430,7 +2430,7 @@ impl AiView {
                     match ai_text::parse_file_link(url) {
                         // A file: in its project tab, at its line.
                         Some((path, place)) => this.reveal_file(path, place, cx),
-                        None => cx.open_url(url),
+                        None => crate::links::open_external(url, cx),
                     }
                 }
             }))
@@ -4542,7 +4542,7 @@ fn thumbnails(entry: usize, pictures: &[String], fetched: Option<&[Option<Arc<gp
             .cursor_pointer()
             .tooltip(menu::tooltip("Open the picture"))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(move |_, _, cx| cx.open_url(&url))
+            .on_click(move |_, _, cx| crate::links::open_external(&url, cx))
             .child(
                 gpui::img(PathBuf::from(path))
                     .h(px(height * z))

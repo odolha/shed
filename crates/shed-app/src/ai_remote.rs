@@ -100,7 +100,8 @@ pub fn open_picture(image: &gpui::Image, cx: &mut gpui::App) {
         gpui::ImageFormat::Jpeg => "jpg",
         gpui::ImageFormat::Gif => "gif",
         gpui::ImageFormat::Webp => "webp",
-        gpui::ImageFormat::Svg => "svg",
+        // Pictures only: an SVG (which may carry script) opens nowhere.
+        gpui::ImageFormat::Svg => return,
         _ => "png",
     };
     let dir = std::env::temp_dir().join(format!("shed-pictures-{}", std::process::id()));

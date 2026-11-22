@@ -1183,7 +1183,11 @@ session; the turn's scope is greyed out), converted to the
 `shed_review::Found` the review draws, with that workspace's Viewed marks
 and explanations beside it (`Marks`; changed with `AiSetViewed`,
 `AiExplain`); the review's Git actions are hidden there. `pick_folder`
-opens `folder_browser.rs`, a small window over `Browse`. No desktop
+opens `folder_browser.rs`, a small window over `Browse`. What another
+workspace can make this desktop open (its benches' link chips, links in its
+terminals and in Claude's answers) opens only if it is an `http` or `https`
+address (`links::may_open`, `open_external`): never a file here or another
+scheme's handler; its pictures open from a temporary copy, SVGs not at all. No desktop
 launchers or icons are written. Bench windows' titles end with the
 workspace's name and their app IDs include it; their places are not taken
 from, or sent to, that keeper (it keeps its own screens' places).

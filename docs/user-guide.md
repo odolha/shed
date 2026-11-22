@@ -1208,7 +1208,10 @@ or a draft are sent to that workspace first (up to 16 MB each; not
 folders), and their path there is what Claude reads. New project and AI
 tabs choose a folder in a browser of that workspace's folders (Up, a path
 to type, Open This Folder). Its benches get no desktop launchers here.
-Notifications from its AI tabs come here as usual.
+Notifications from its AI tabs come here as usual. Links it shows (its
+benches' links, Ctrl+click in its terminals, links in Claude's answers) open
+here only if they are web pages (`http`, `https`); files and other kinds of
+links are not opened from another workspace.
 
 ## Shed in a browser
 

@@ -1,6 +1,10 @@
 //! A bench's links: web pages that go with its work, shown as chips on its
 //! tab bar and in Shed, opened through the browser extension when it is
 //! there (bringing an open tab forward) and the usual way when not.
+//!
+//! While another workspace is shown, what it says to open (its benches'
+//! links, its terminals' links, Claude's answers there) opens here only if
+//! it is a web page (`may_open`): never a file, nor another scheme's handler.
 
 use gpui::{App, ClipboardItem, Context, Div, SharedString, Stateful, div, prelude::*, svg};
 use shed_model::{ProjectLink, Rgb};
@@ -11,8 +15,36 @@ use crate::theme::{UiColors, hsla, hsla_alpha};
 
 pub use shed_model::links::{parse, renamed, unparse, with};
 
+/// Whether the desktop opens `url` for the workspace shown: anything for
+/// this PC's; for another's (`remote`), only `http` and `https` addresses.
+pub fn may_open(url: &str, remote: bool) -> bool {
+    if !remote {
+        return true;
+    }
+    let url = url.trim_start().to_ascii_lowercase();
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// Whether another workspace is shown.
+fn showing_remote(cx: &App) -> bool {
+    cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()).is_some_and(|s| s.read(cx).is_remote())
+}
+
+/// Opens `url` with the system's handler, as `may_open` lets it.
+pub fn open_external(url: &str, cx: &mut App) {
+    if !may_open(url, showing_remote(cx)) {
+        tracing::warn!("not opening a link from another workspace that is not a web page");
+        return;
+    }
+    cx.open_url(url);
+}
+
 /// Opens a link, in a tab of its own when `new_tab`.
 pub fn open(url: String, new_tab: bool, cx: &mut App) {
+    if !may_open(&url, showing_remote(cx)) {
+        tracing::warn!("not opening a link from another workspace that is not a web page");
+        return;
+    }
     cx.spawn(async move |cx| {
         let u = url.clone();
         let asked = cx.background_executor().spawn(async move { crate::browser::open(&u, new_tab) }).await;
@@ -70,4 +102,20 @@ pub fn menu<V: 'static>(
         })
         .icon("close"),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::may_open;
+
+    #[test]
+    fn another_workspace_opens_only_web_pages() {
+        for url in ["https://example.com/x", "http://localhost:3000", "HTTPS://Example.com"] {
+            assert!(may_open(url, true), "{url}");
+        }
+        for url in ["file:///etc/passwd", "file:///tmp/x.desktop", "mailto:a@b.c", "ssh://host", "javascript:alert(1)", "/home/me/x", "vscode://file/x", ""] {
+            assert!(!may_open(url, true), "{url}");
+            assert!(may_open(url, false), "this PC's: as before ({url})");
+        }
+    }
 }
