@@ -1033,6 +1033,9 @@ impl AppState {
             }
         }
         self.sync_projects(cx);
+        // (Another workspace's keeper may send no tree soon after: its
+        // window places are not sent to it.)
+        self.sync_ai(cx);
         let bench = self.tree.bench(bench_id).unwrap();
         // Another workspace's windows are placed on its own screens: these
         // open and stay where this PC puts them.
