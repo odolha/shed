@@ -246,6 +246,9 @@ struct ClientRt {
     kind: ClientKind,
     tx: mpsc::UnboundedSender<Arc<[u8]>>,
     attached: HashSet<BenchId>,
+    /// A desktop's connection through the nexus (the link said so): it may
+    /// not be this machine's window process.
+    tunnelled: bool,
 }
 
 impl State {
@@ -293,7 +296,8 @@ impl State {
         }
     }
 
-    /// The window clients showing `bench`.
+    /// This machine's window clients showing `bench` (not other computers'
+    /// desktops, `ClientKind::Remote`).
     fn is_open(&self, bench: BenchId) -> bool {
         self.clients.values().any(|c| c.kind == ClientKind::Window && c.attached.contains(&bench))
     }
@@ -309,9 +313,10 @@ impl State {
     }
 
     /// Where to show what `asking` asked to show: a terminal client
-    /// (`shed tui`) shows it itself; anyone else's goes to a window.
+    /// (`shed tui`) and another computer's desktop show it themselves;
+    /// anyone else's goes to a window.
     fn show_client(&self, asking: ClientId) -> Option<ClientId> {
-        if self.clients.get(&asking).is_some_and(|c| c.kind == ClientKind::Tui) {
+        if self.clients.get(&asking).is_some_and(|c| matches!(c.kind, ClientKind::Tui | ClientKind::Remote)) {
             return Some(asking);
         }
         self.window_client(asking)
@@ -548,7 +553,7 @@ impl Keeper {
             let mut st = self.lock();
             let id = st.next_client;
             st.next_client += 1;
-            st.clients.insert(id, ClientRt { kind: ClientKind::Cli, tx, attached: HashSet::new() });
+            st.clients.insert(id, ClientRt { kind: ClientKind::Cli, tx, attached: HashSet::new(), tunnelled: false });
             id
         };
         debug!(client = id, "connected");
@@ -609,7 +614,13 @@ impl Keeper {
         match msg {
             ClientMsg::Hello { version, kind } => {
                 let mut st = self.lock();
+                let mut kind = kind;
                 if let Some(c) = st.clients.get_mut(&client) {
+                    // A desktop through the nexus is never this machine's
+                    // window process, whatever it says.
+                    if c.tunnelled && kind == ClientKind::Window {
+                        kind = ClientKind::Remote;
+                    }
                     c.kind = kind;
                 }
                 if version != PROTOCOL_VERSION {
@@ -758,6 +769,19 @@ impl Keeper {
             }
             ClientMsg::NewRemoteTab { bench, host, join } => self.new_remote_tab(client, bench, host, join),
             ClientMsg::ReconnectRemote { tab } => self.reconnect_remote(tab),
+            ClientMsg::Tunnelled { device } => {
+                let mut st = self.lock();
+                if let Some(c) = st.clients.get_mut(&client) {
+                    c.tunnelled = true;
+                    if c.kind == ClientKind::Window {
+                        c.kind = ClientKind::Remote;
+                    }
+                }
+                match device {
+                    Some(d) => info!(client, device = %d.id, "a desktop connected through the nexus: {}", d.name),
+                    None => info!(client, "a desktop connected through the nexus"),
+                }
+            }
             ClientMsg::NewCommandTab { bench, cwd, command } => {
                 let mut st = self.lock();
                 let Some(b) = st.tree.bench(bench) else { return };

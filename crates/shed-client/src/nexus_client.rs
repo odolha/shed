@@ -178,7 +178,8 @@ fn refused(workspace: &str, error: Option<ApiError>) -> anyhow::Error {
 }
 
 /// Connects to `workspace`'s keeper through the nexus at `url`: opens the
-/// tunnel, says `Hello` as `kind` and waits for the keeper's welcome. A
+/// tunnel, says `Hello` and waits for the keeper's welcome, then says it
+/// is a `kind` (Shed's windows: `ClientKind::Remote`). A
 /// keeper of another protocol version is refused here, before anything is
 /// shown. Frames from the keeper come on the channel, which closes when the
 /// tunnel ends (an `Error` frame first says why, if it was not asked for).
@@ -267,9 +268,10 @@ async fn tunnel(
         })
         .await
         .map_err(|_| anyhow::anyhow!("{name} did not answer"))??;
-        // Hello, as a client of that keeper, and its welcome.
+        // Hello, as a plain client every keeper reads (so one of another
+        // version says so, in words), and its welcome; then as `dial.kind`.
         let mut hello = Vec::new();
-        Frame::Client(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: dial.kind }).encode_into(&mut hello);
+        Frame::Client(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Cli }).encode_into(&mut hello);
         ws.send(Message::binary(tunnel_data(TUNNEL, &hello))).await?;
         let mut early = Vec::new();
         tokio::time::timeout(WAIT, async {
@@ -311,6 +313,9 @@ async fn tunnel(
         })
         .await
         .map_err(|_| anyhow::anyhow!("{name}'s keeper did not answer"))??;
+        let mut hello = Vec::new();
+        Frame::Client(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: dial.kind }).encode_into(&mut hello);
+        ws.send(Message::binary(tunnel_data(TUNNEL, &hello))).await?;
         anyhow::Ok((ws, name, early))
     };
     let (ws, name, early) = match opened.await {

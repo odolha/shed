@@ -366,6 +366,87 @@ fn show_goes_to_the_window_process() {
     assert_eq!(again, shown);
 }
 
+/// Status as a CLI client sees it.
+fn status(socket: &Path) -> shed_proto::KeeperStatus {
+    let mut cli = Client::connect(socket);
+    cli.msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Cli });
+    cli.msg(ClientMsg::Status);
+    cli.expect("status", |f| match f {
+        Frame::Keeper(KeeperMsg::Status(s)) => Some(s),
+        _ => None,
+    })
+}
+
+/// Shed's desktop on another computer (through the nexus) is not this
+/// machine's window process: it is no window here, other clients' requests
+/// to show never go to it, its own come back to it, and a window opened
+/// here meanwhile is the one `shed` reaches.
+#[test]
+fn a_remote_desktop_is_not_this_machines_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+    let mut remote = Client::connect(&socket);
+    remote.msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Remote });
+    let (bench, _) = remote.attach();
+
+    // It hears the tree, but no window is counted, nor its bench open here.
+    let s = status(&socket);
+    assert_eq!(s.windows, 0, "a remote desktop is no window here");
+    assert!(s.open.is_empty(), "{:?}", s.open);
+
+    // What it asks to show it shows itself.
+    remote.msg(ClientMsg::Show(shed_proto::ShowTarget::Bench(bench)));
+    let shown = remote.expect("its own show", |f| match f {
+        Frame::Keeper(KeeperMsg::Show { bench }) => Some(bench),
+        _ => None,
+    });
+    assert_eq!(shown, bench);
+    remote.msg(ClientMsg::Show(shed_proto::ShowTarget::Shed));
+    remote.expect("its own Shed window", |f| matches!(f, Frame::Keeper(KeeperMsg::ShowShed)).then_some(()));
+
+    // Someone here asking to show a bench is not sent to it.
+    let mut cli = Client::connect(&socket);
+    cli.msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Cli });
+    cli.msg(ClientMsg::Show(shed_proto::ShowTarget::Bench(bench)));
+    let error = cli.expect("no window here", |f| match f {
+        Frame::Keeper(KeeperMsg::Error(e)) => Some(e),
+        _ => None,
+    });
+    assert!(error.contains("no window"), "{error}");
+
+    // A window here (a local `shed`) opens as usual and gets this machine's requests.
+    let mut window = Client::connect(&socket);
+    window.msg(ClientMsg::Show(shed_proto::ShowTarget::Shed));
+    window.expect("the Shed window here", |f| matches!(f, Frame::Keeper(KeeperMsg::ShowShed)).then_some(()));
+    cli.msg(ClientMsg::Show(shed_proto::ShowTarget::Bench(bench)));
+    let here = window.expect("show here", |f| match f {
+        Frame::Keeper(KeeperMsg::Show { bench }) => Some(bench),
+        _ => None,
+    });
+    assert_eq!(here, bench);
+    // The remote desktop's bench is detached here: a window shows it.
+    cli.msg(ClientMsg::Show(shed_proto::ShowTarget::Detached));
+    window.expect("detached here", |f| matches!(f, Frame::Keeper(KeeperMsg::Show { bench: b }) if b == bench).then_some(()));
+    assert_eq!(status(&socket).windows, 1);
+    // And the remote desktop's own requests still go to it.
+    remote.msg(ClientMsg::Show(shed_proto::ShowTarget::Bench(bench)));
+    remote.expect("its own show again", |f| matches!(f, Frame::Keeper(KeeperMsg::Show { bench: b }) if b == bench).then_some(()));
+    drop(window);
+
+    // A connection the link opened for a tunnel is never a window, even
+    // if the desktop says it is (an older one).
+    let mut tunnelled = Client::connect(&socket);
+    tunnelled.msg(ClientMsg::Tunnelled { device: Some(shed_proto::TunnelDevice { id: "d1".into(), name: "Shed on laptop".into() }) });
+    tunnelled.msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Window });
+    tunnelled.msg(ClientMsg::Show(shed_proto::ShowTarget::Shed));
+    tunnelled.expect("its own Shed window", |f| matches!(f, Frame::Keeper(KeeperMsg::ShowShed)).then_some(()));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while status(&socket).windows != 0 {
+        assert!(Instant::now() < deadline, "the closed window still counts");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn tag_rules_follow_tools() {
     let dir = tempfile::tempdir().unwrap();

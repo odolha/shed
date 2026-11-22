@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 50;
+pub const PROTOCOL_VERSION: u32 = 51;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -40,13 +40,27 @@ pub enum ClientKind {
     /// hears, and what it asks to show it shows itself, but it is not the
     /// window process: other clients' requests to show go to a window.
     Tui,
+    /// Shed's desktop app on another computer, through the nexus (a
+    /// tunnel). It hears and does what a window does, and what it asks to
+    /// show it shows itself, but it is not this machine's window process:
+    /// it counts as no window here, other clients' requests to show never go
+    /// to it, and the benches it shows are not this machine's shown ones.
+    Remote,
 }
 
 impl ClientKind {
     /// Whether it hears the tree and AI tabs' conversations.
     pub fn follows_tree(self) -> bool {
-        matches!(self, ClientKind::Window | ClientKind::Link | ClientKind::Tui)
+        matches!(self, ClientKind::Window | ClientKind::Link | ClientKind::Tui | ClientKind::Remote)
     }
+}
+
+/// Who is at the other end of a tunnel: the nexus's device.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelDevice {
+    /// The device's id at the nexus.
+    pub id: String,
+    pub name: String,
 }
 
 /// Sent by a window or CLI client to the keeper.
@@ -198,6 +212,11 @@ pub enum ClientMsg {
     /// once (the shell on the server keeps running); one whose connecting
     /// was stopped starts it again.
     ReconnectRemote { tab: TabId },
+    /// From the link, before anything else on a connection it opened for a
+    /// tunnel: the connection is a desktop's through the nexus (`device`
+    /// when the nexus said which). The keeper treats a window there as
+    /// `ClientKind::Remote`.
+    Tunnelled { device: Option<TunnelDevice> },
 }
 
 /// One change to an AI tab's settings or kept state.

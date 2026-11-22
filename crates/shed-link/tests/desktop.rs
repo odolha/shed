@@ -93,11 +93,21 @@ async fn tunnels_reach_the_keeper_only_when_desktops_are_let_in() {
     })
     .await;
     assert_eq!(tree.benches.len(), 1);
+    // The link said whose connection it is: even saying `Window`, the
+    // desktop is not this machine's window process.
+    let (conn, rx) = shed_client::keeper_conn::connect_at(&env.socket, ClientKind::Cli).unwrap();
+    conn.send_msg(ClientMsg::Status);
+    loop {
+        if let Ok(Frame::Keeper(KeeperMsg::Status(s))) = rx.recv().await {
+            assert_eq!(s.windows, 0, "a tunnelled desktop counts as no window");
+            assert!(s.open.is_empty());
+            break;
+        }
+    }
 
     // Closed by the nexus: the keeper sees the client go (the bench stays).
     let close = serde_json::to_string(&NexusFrame::TunnelClose(TunnelId { id: 7 })).unwrap();
     fake.socket.send(Message::text(close)).await.unwrap();
-    let (conn, rx) = shed_client::keeper_conn::connect_at(&env.socket, ClientKind::Cli).unwrap();
     conn.send_msg(ClientMsg::Status);
     let mut clients = u32::MAX;
     for _ in 0..50 {
@@ -148,7 +158,7 @@ async fn the_desktop_speaks_to_another_workspaces_keeper_through_the_nexus() {
     assert_eq!(listed.iter().map(|w| (w.name.as_str(), w.online)).collect::<Vec<_>>(), [("desk", true)]);
 
     let (base, token, ws) = (hub.base.clone(), desktop.clone(), workspace.clone());
-    let (conn, rx) = tokio::task::spawn_blocking(move || shed_client::nexus_client::connect_tunnel(&base, &token, &ws, None, ClientKind::Window))
+    let (conn, rx) = tokio::task::spawn_blocking(move || shed_client::nexus_client::connect_tunnel(&base, &token, &ws, None, ClientKind::Remote))
         .await
         .unwrap()
         .expect("the tunnel opens");
@@ -194,7 +204,7 @@ async fn the_desktop_speaks_to_another_workspaces_keeper_through_the_nexus() {
     let mut error = String::new();
     for _ in 0..100 {
         let (base, token, ws) = (hub.base.clone(), desktop.clone(), workspace2.clone());
-        let result = tokio::task::spawn_blocking(move || shed_client::nexus_client::connect_tunnel(&base, &token, &ws, None, ClientKind::Window)).await.unwrap();
+        let result = tokio::task::spawn_blocking(move || shed_client::nexus_client::connect_tunnel(&base, &token, &ws, None, ClientKind::Remote)).await.unwrap();
         error = format!("{:#}", result.err().expect("refused"));
         if !error.contains("offline") {
             break;

@@ -301,7 +301,7 @@ impl AppState {
             let connected = cx
                 .background_executor()
                 .spawn(async move {
-                    let remote = shed_client::keeper_conn::connect_remote(&sign_in.url, &sign_in.token, &id, ClientKind::Window)?;
+                    let remote = shed_client::keeper_conn::connect_remote(&sign_in.url, &sign_in.token, &id, ClientKind::Remote)?;
                     let standby = if need_standby { Some(shed_client::keeper_conn::connect(ClientKind::Window, true)?) } else { None };
                     // Its files, Git and the like come as calls (connecting when first needed).
                     let api = shed_client::nexus_api::NexusApi::new(&sign_in, shed_client::nexus_client::configured_ca_file()).workspace(&id);

@@ -1179,7 +1179,9 @@ If the workspace cannot be reached, or does not let desktops in, or runs
 another version of Shed, a note above the benches says why and nothing
 changes. If the connection drops, Shed comes back to This PC and says so.
 Closing Shed's window closes this PC's benches as always; the other
-workspace's keep running there.
+workspace's keep running there. Someone at that workspace is not disturbed:
+running `shed` or a bench's launcher there opens Shed's own window as usual,
+and the benches you show from here are not that computer's open windows.
 
 What lives on that workspace's disk comes through the nexus too. Its
 **project tabs** work as here: the file tree, the editor (coloured here),

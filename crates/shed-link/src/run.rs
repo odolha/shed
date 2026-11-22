@@ -505,7 +505,7 @@ impl Link {
         if self.opts.policy != Policy::Full {
             return refuse("this workspace lets connectors look only ([nexus] control = \"view\"); desktops need full control");
         }
-        self.tunnels.open(id, out, data);
+        self.tunnels.open(id, None, out, data);
     }
 
     /// The nexus is gone: every subscription with it, and every tunnel.

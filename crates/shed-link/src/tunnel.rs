@@ -1,9 +1,11 @@
 //! Tunnels: Shed's desktop app on another computer, signed in to the nexus,
 //! speaking this workspace's keeper protocol through it. Each tunnel is a
 //! connection of its own to the keeper's socket; bytes go both ways as they
-//! are (the desktop says `Hello` and is a client like a local window). It
-//! sees everything a window does, private tabs too, so it is allowed only
-//! with `[nexus] desktop_clients = true` and full control.
+//! are (the desktop says `Hello` and is a client like a local window). The
+//! link's first frame there (`ClientMsg::Tunnelled`, with the nexus's device)
+//! tells the keeper whose it is, so it is never taken for this machine's
+//! window process. It sees everything a window does, private tabs too, so
+//! it is allowed only with `[nexus] desktop_clients = true` and full control.
 //!
 //! Bytes from the keeper wait for the nexus in a bounded channel (the
 //! tunnel reads no more until there is room); bytes for the keeper that do
@@ -14,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use shed_api::wire::{LinkFrame, TunnelClosed, TunnelId, tunnel_data};
 use shed_api::{ApiError, ErrorCode};
+use shed_proto::{ClientMsg, Frame, TunnelDevice};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -47,13 +50,17 @@ impl Tunnels {
 
     /// Opens tunnel `id` to the keeper; it says `TunnelOpened` once
     /// connected, `TunnelClosed` when it ends.
-    pub(crate) fn open(&mut self, id: u32, out: Out, data: mpsc::Sender<Vec<u8>>) {
+    pub(crate) fn open(&mut self, id: u32, device: Option<TunnelDevice>, out: Out, data: mpsc::Sender<Vec<u8>>) {
         self.close(id);
         let (to_keeper, from_nexus) = mpsc::channel(QUEUE);
         let socket = self.socket.clone();
         let ended = self.ended_tx.clone();
+        match &device {
+            Some(d) => info!(id, device = %d.id, "{} opened a tunnel to the keeper", d.name),
+            None => info!(id, "a desktop opened a tunnel to the keeper"),
+        }
         let task = tokio::spawn(async move {
-            let error = run(id, &socket, &out, data, from_nexus).await.err();
+            let error = run(id, device, &socket, &out, data, from_nexus).await.err();
             if let Some(e) = &error {
                 debug!(id, "tunnel ended: {}", e.message);
             } else {
@@ -63,7 +70,6 @@ impl Tunnels {
             let _ = ended.send(id);
         });
         self.open.insert(id, Tunnel { to_keeper, task });
-        info!(id, "a desktop opened a tunnel to the keeper");
     }
 
     /// Bytes from the desktop for the keeper. A tunnel that cannot take
@@ -108,6 +114,7 @@ impl Drop for Tunnels {
 
 async fn run(
     id: u32,
+    device: Option<TunnelDevice>,
     socket: &Path,
     out: &Out,
     data: mpsc::Sender<Vec<u8>>,
@@ -116,8 +123,11 @@ async fn run(
     let stream = tokio::net::UnixStream::connect(socket)
         .await
         .map_err(|e| ApiError::new(ErrorCode::Failed, format!("cannot reach the keeper: {e}")))?;
-    let _ = out.send(LinkFrame::TunnelOpened(TunnelId { id }));
     let (mut rd, mut wr) = stream.into_split();
+    // Whose connection this is, before any of the desktop's bytes.
+    let said = Frame::Client(ClientMsg::Tunnelled { device }).encode();
+    wr.write_all(&said).await.map_err(|e| ApiError::new(ErrorCode::Failed, format!("the keeper's socket: {e}")))?;
+    let _ = out.send(LinkFrame::TunnelOpened(TunnelId { id }));
     let mut buf = vec![0u8; READ];
     loop {
         tokio::select! {

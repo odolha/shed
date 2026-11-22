@@ -80,7 +80,14 @@ terminal interface (`shed tui`, `ClientKind::Tui`): it hears what windows hear,
 and what it asks to show (`Show`) the keeper hands back to it, but it is not
 the window process, so `shed load` and launchers still go to a window, and
 `KeeperStatus::windows` does not count it. Its benches are not "shown" for the
-session either, and its `Detach` does not hide a bench a window shows. The tree
+session either, and its `Detach` does not hide a bench a window shows. Shed's
+desktop app on another computer, through the nexus, is `ClientKind::Remote`,
+treated the same way: it does what a window does and its own `Show`s come
+back to it, but it is no window here (a `shed` or launcher on this machine
+opens its own window while one is attached), and the benches it shows are
+not this machine's shown ones. The link starts each tunnel's connection with
+`Tunnelled` (the nexus's device, logged), and the keeper takes a window on
+such a connection for `Remote` whatever it says. The tree
 is broadcast whole (`TreeChanged`) after every change to windows and the link; windows render from it, and every action a window or the CLI takes
 (new tab, split, rename, move a tab, set colours, setup, aliases) is a message the
 keeper applies to it.
@@ -1060,8 +1067,10 @@ keeps current (connecting, connected, offline, refused).
 (`TunnelClosed`, `Forbidden`, saying which setting) unless `shed.toml` has
 `[nexus] desktop_clients = true` and control is `full`. Otherwise it opens a
 connection of its own to the keeper's socket, says `TunnelOpened`, and pipes
-bytes as they are: the desktop says `Hello` and is the keeper's client like
-any window, so none of the link's policy applies (private tabs included; the
+bytes as they are, after its own first frame, `ClientMsg::Tunnelled` (the
+device the nexus says opened it): the desktop says `Hello` as
+`ClientKind::Remote` and is the keeper's client like a window, though never
+this machine's window process, so none of the link's policy applies (private tabs included; the
 user's own signed-in desktops). Bytes from the keeper go to the nexus through
 a bounded channel (64 pieces of up to 64 KB), so a tunnel reads no more from
 the keeper while the nexus is behind; bytes for the keeper that do not fit in
@@ -1085,7 +1094,9 @@ pairing.
 with the bearer token (rustls, the web's roots plus `[nexus] ca_file`, as the
 link), opens a tunnel, sends the keeper's `Hello` and waits for its `Welcome`:
 a keeper of another protocol version, an offline workspace and one that does
-not let desktops in are refused there, in words, before anything changes. It
+not let desktops in are refused there, in words, before anything changes
+(the first `Hello` is as a CLI client, which every keeper reads; then it says
+`ClientKind::Remote`). It
 runs on a thread with its own small tokio runtime; frames to send are encoded
 with shed-proto's framing and go in binary messages of at most 256 KB; bytes
 that come back go through a `FrameDecoder` to the same kind of channel a
