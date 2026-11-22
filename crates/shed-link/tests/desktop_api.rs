@@ -102,6 +102,9 @@ async fn the_desktop_reads_another_workspace_through_the_nexus() {
     assert_eq!(hash.len(), 40);
     let Reply::GitStatus(s) = ws.call(Call::GitStatus(TabOnly { tab: project.clone() })).await.unwrap() else { panic!("not a status") };
     assert_eq!(s.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["b.txt"]);
+    let Reply::Blame(blame) = ws.call(Call::GitBlame(GitFilePath { tab: project.clone(), path: "a.txt".into() })).await.unwrap() else { panic!("not blame") };
+    assert_eq!(blame.len(), 3);
+    assert_eq!(blame[1].summary, "second");
     let Reply::Commits(log) = ws.call(Call::GitLog(GitLog { tab: project.clone(), path: None, limit: 5 })).await.unwrap() else { panic!("not a log") };
     assert_eq!(log.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["second", "first"]);
 

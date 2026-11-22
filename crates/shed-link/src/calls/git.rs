@@ -27,6 +27,7 @@ pub(super) async fn call(tree: &Shed, call: Call) -> Result<Reply, ApiError> {
         Call::GitCommitFiles(a) => &a.tab,
         Call::GitSwitch(a) | Call::GitCreateBranch(a) => &a.tab,
         Call::GitPush(a) => &a.tab,
+        Call::GitBlame(a) => &a.tab,
         _ => return Err(ApiError::new(ErrorCode::Unsupported, "not a Git call")),
     };
     let (root, _) = super::project::root_of(tree, tab)?;
@@ -108,6 +109,15 @@ fn blocking(repo: &Repo, scope: &GitScope, call: Call) -> Result<Reply, ApiError
                 return Err(invalid("no branch is checked out"));
             }
             review.confirm(repo).map(Reply::Text).map_err(git_err)
+        }
+        Call::GitBlame(a) => {
+            let lines = repo.blame(&scope.path(&a.path)?).map_err(git_err)?;
+            Ok(Reply::Blame(
+                lines
+                    .into_iter()
+                    .map(|l| api::BlameLine { hash: l.hash, author: l.author, time: l.time.min(u32::MAX as u64) as u32, summary: l.summary })
+                    .collect(),
+            ))
         }
         _ => Err(ApiError::new(ErrorCode::Unsupported, "not a Git call")),
     }

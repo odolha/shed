@@ -1899,8 +1899,18 @@ impl ProjectView {
         }
         let Ok(rel) = path.strip_prefix(&git.session.repo.root) else { return };
         let (repo, rel, p) = (git.session.repo.clone(), rel.display().to_string(), path.clone());
+        // Another workspace's blame is one of its calls.
+        let remote = self.remote.as_ref().map(|r| r.ws.call(shed_api::calls::Call::GitBlame(shed_api::calls::GitFilePath { tab: r.tab.clone(), path: rel.clone() })));
         let task = cx.spawn(async move |this, cx| {
-            let lines = cx.background_executor().spawn(async move { repo.blame(&rel).unwrap_or_default() }).await;
+            let lines = match remote {
+                Some(reply) => match reply.await {
+                    Ok(shed_api::calls::Reply::Blame(lines)) => {
+                        lines.into_iter().map(|l| shed_git::BlameLine { hash: l.hash, author: l.author, time: l.time as u64, summary: l.summary }).collect()
+                    }
+                    _ => Vec::new(),
+                },
+                None => cx.background_executor().spawn(async move { repo.blame(&rel).unwrap_or_default() }).await,
+            };
             this.update(cx, |this, cx| {
                 this.blame = Some((p, lines));
                 this.blame_task = None;
@@ -1976,8 +1986,7 @@ impl ProjectView {
                         .on_click(cx.listener(move |this, _, _, cx| this.set_wrap(!on, cx)))
                         .child("Wrap")
                 })
-                // Blame is not among another workspace's calls.
-                .when(self.git.is_some() && self.remote.is_none(), |d| {
+                .when(self.git.is_some(), |d| {
                     let on = self.blame_on;
                     d.child(
                         div()

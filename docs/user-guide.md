@@ -1185,11 +1185,11 @@ What lives on that workspace's disk comes through the nexus too. Its
 **project tabs** work as here: the file tree, the editor (coloured here),
 opening by name (Ctrl+P), search and replace in files, following changes made
 there, and the Git panel (status, diffs, staging and discarding by file or by
-hunk, commit, push, pull, fetch, switching and making branches, history).
-Files opened from its terminals (Ctrl+click) or from Claude's answers, and
+hunk, commit, push, pull, fetch, switching and making branches, history,
+blame). Files opened from its terminals (Ctrl+click) or from Claude's answers, and
 those Claude edits, open in its project tabs. Unsaved edits are kept aside on
 this PC under the workspace's name, never mixed with this PC's own files.
-Not there for another workspace, and said so where they would be: blame, the
+Not there for another workspace, and said so where they would be: the
 three-way view of a conflict, merging, rebasing, deleting branches, the stash
 and finishing a merge from the panel (use a terminal tab there), the file
 manager, and what a private tab holds (the workspace keeps it to itself).

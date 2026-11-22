@@ -1138,8 +1138,8 @@ are kept aside under `remote-<workspace>/<path>` (relative, so never one of
 this machine's paths). The Git panel's operations are a `GitOp`: `run` with a
 local `Repo`, or `call` as the API's `Git…` call; those it has no call for
 (merge, rebase, delete branch, stash, finishing an operation, taking a side)
-say so in the panel, the menu shows them disabled, and blame and the
-three-way view are not offered. A remote panel's `GitSession` holds a `Repo`
+say so in the panel, the menu shows them disabled, and the three-way view
+is not offered; blame is `Call::GitBlame`. A remote panel's `GitSession` holds a `Repo`
 naming the workspace's repository (`GitStatus::root`) that nothing runs `git`
 in; branches come with each status (`GitBranches`) for the menu. Files
 opened from terminals or Claude's answers go to the bench's project tab

@@ -567,6 +567,16 @@ export interface BenchOnly {
 	bench: string;
 }
 
+/** A line's last change (`Call::GitBlame`). */
+export interface BlameLine {
+	/** Short; all zeros for a change not committed yet. */
+	hash: string;
+	author: string;
+	/** Unix seconds. */
+	time: number;
+	summary: string;
+}
+
 export interface Branches {
 	current?: string | null;
 	local: string[];
@@ -842,6 +852,12 @@ export interface GitFile {
 	conflict?: boolean;
 	/** Renamed from. */
 	from?: string | null;
+}
+
+/** A file of the tab's repository, by its path relative to the repository. */
+export interface GitFilePath {
+	tab: string;
+	path: string;
 }
 
 export type HunkAction =
@@ -1450,7 +1466,12 @@ export type Call =
 	 * made into the home folder), to show and to go up from. → `Browsed`.
 	 * Refused by a view-only workspace, as `BrowseFolders`.
 	 */
-	| { type: "Browse", content: Browse };
+	| { type: "Browse", content: Browse }
+	/**
+	 * Who last changed each line of a file (relative to the repository).
+	 * → `Blame`
+	 */
+	| { type: "GitBlame", content: GitFilePath };
 
 /** A call on a workspace. Answered by one `Response` with the same id. */
 export interface Request {
@@ -1485,7 +1506,9 @@ export type Reply =
 	| { type: "CommitFiles", content: CommitFile[] }
 	| { type: "Branches", content: Branches }
 	| { type: "Text", content: string }
-	| { type: "Browsed", content: Browsed };
+	| { type: "Browsed", content: Browsed }
+	/** Per line of the file, from the first. */
+	| { type: "Blame", content: BlameLine[] };
 
 export interface Response {
 	id: number;

@@ -381,7 +381,8 @@ pub(crate) async fn call(ctx: Arc<Ctx>, call: Call) -> Result<Reply, ApiError> {
         | Call::GitCreateBranch(_)
         | Call::GitFetch(_)
         | Call::GitPull(_)
-        | Call::GitPush(_) => git::call(&tree, call).await,
+        | Call::GitPush(_)
+        | Call::GitBlame(_) => git::call(&tree, call).await,
     }
 }
 

@@ -171,6 +171,11 @@ pub enum Call {
     /// made into the home folder), to show and to go up from. → `Browsed`.
     /// Refused by a view-only workspace, as `BrowseFolders`.
     Browse(Browse),
+
+    // ---- added later (kept at the end)
+    /// Who last changed each line of a file (relative to the repository).
+    /// → `Blame`
+    GitBlame(GitFilePath),
 }
 
 impl Call {
@@ -195,6 +200,7 @@ impl Call {
                 | Call::GitBranches(_)
                 | Call::BrowseFolders(_)
                 | Call::Browse(_)
+                | Call::GitBlame(_)
         )
     }
 }
@@ -227,6 +233,8 @@ pub enum Reply {
     Branches(Branches),
     Text(String),
     Browsed(Browsed),
+    /// Per line of the file, from the first.
+    Blame(Vec<BlameLine>),
 }
 
 // ---------------------------------------------------------------- arguments
@@ -1134,6 +1142,28 @@ pub struct Branches {
 pub struct GitBranch {
     pub tab: String,
     pub branch: String,
+}
+
+/// A file of the tab's repository, by its path relative to the repository.
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFilePath {
+    pub tab: String,
+    pub path: String,
+}
+
+/// A line's last change (`Call::GitBlame`).
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameLine {
+    /// Short; all zeros for a change not committed yet.
+    pub hash: String,
+    pub author: String,
+    /// Unix seconds.
+    pub time: u32,
+    pub summary: String,
 }
 
 #[typeshare]

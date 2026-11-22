@@ -696,6 +696,17 @@ data class BenchOnly (
 	val bench: String
 )
 
+/// A line's last change (`Call::GitBlame`).
+@Serializable
+data class BlameLine (
+	/// Short; all zeros for a change not committed yet.
+	val hash: String,
+	val author: String,
+	/// Unix seconds.
+	val time: UInt,
+	val summary: String
+)
+
 @Serializable
 data class Branches (
 	val current: String? = null,
@@ -1034,6 +1045,13 @@ data class GitFile (
 	val conflict: Boolean? = null,
 	/// Renamed from.
 	val from: String? = null
+)
+
+/// A file of the tab's repository, by its path relative to the repository.
+@Serializable
+data class GitFilePath (
+	val tab: String,
+	val path: String
 )
 
 @Serializable
@@ -1851,6 +1869,11 @@ sealed class Call {
 	@Serializable
 	@SerialName("Browse")
 	data class Browse(val content: dev.shed.api.Browse): Call()
+	/// Who last changed each line of a file (relative to the repository).
+	/// → `Blame`
+	@Serializable
+	@SerialName("GitBlame")
+	data class GitBlame(val content: GitFilePath): Call()
 }
 
 /// A call on a workspace. Answered by one `Response` with the same id.
@@ -1931,6 +1954,10 @@ sealed class Reply {
 	@Serializable
 	@SerialName("Browsed")
 	data class Browsed(val content: dev.shed.api.Browsed): Reply()
+	/// Per line of the file, from the first.
+	@Serializable
+	@SerialName("Blame")
+	data class Blame(val content: List<BlameLine>): Reply()
 }
 
 @Serializable
