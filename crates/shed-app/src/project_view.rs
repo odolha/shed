@@ -25,6 +25,10 @@ use shed_client::keeper_conn::KeeperConn;
 #[path = "project_git.rs"]
 mod git;
 use git::{DiffSource, GitState};
+#[path = "project_remote.rs"]
+mod remote;
+use remote::Remote;
+use shed_client::nexus_api::RemoteWorkspace;
 use crate::line_editor::LineEditor;
 use crate::menu::{self, Menu, MenuEntry, MenuHost};
 use crate::settings::Settings;
@@ -75,6 +79,10 @@ enum Content {
     Picture(Option<crate::picture::Picture>, crate::picture::Zoom),
     Binary,
     TooLarge(u64),
+    /// Being read (from another workspace).
+    Loading,
+    /// Could not be read, saying why.
+    Unreadable(String),
 }
 
 /// How a file open in the editor stands against the disk.
@@ -159,9 +167,11 @@ impl SearchPanel {
 /// Open by name (Ctrl+P).
 struct QuickOpen {
     editor: Entity<LineEditor>,
-    /// Indices into the file list, with the matched chars of each path.
-    results: Vec<(usize, Vec<u32>)>,
+    /// Paths (relative to the root), with the matched chars of each.
+    results: Vec<(PathBuf, Vec<u32>)>,
     selected: usize,
+    /// Asking another workspace for them.
+    task: Option<Task<()>>,
     _sub: Subscription,
 }
 
@@ -217,10 +227,24 @@ pub struct ProjectView {
     blame_task: Option<(PathBuf, Task<()>)>,
     /// A conflicted file shown three ways: our version and theirs beside it.
     merge_sides: Option<(PathBuf, Entity<TextView>, Entity<TextView>)>,
+    /// Another workspace's project: read through the nexus, not the disk.
+    remote: Option<Remote>,
 }
 
 impl ProjectView {
-    pub fn new(bench: BenchId, tab: TabId, project: &Project, accent: Rgb, conn: KeeperConn, settings: Settings, cx: &mut Context<Self>) -> Self {
+    /// A project tab's view: of a folder on this machine, or (`remote`)
+    /// on another workspace, read through the nexus.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        bench: BenchId,
+        tab: TabId,
+        project: &Project,
+        accent: Rgb,
+        conn: KeeperConn,
+        settings: Settings,
+        remote: Option<RemoteWorkspace>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut view = Self {
             bench,
             tab,
@@ -259,15 +283,19 @@ impl ProjectView {
             blame: None,
             blame_task: None,
             merge_sides: None,
+            remote: remote.map(|ws| Remote::new(ws, crate::workspace_api::tab(tab))),
         };
         view.rebuild();
         view.start_walk(cx);
         let settings = view.settings.clone();
-        view.git = GitState::new(&view.root, &settings, cx);
+        // Another workspace's repository is known once its status comes.
+        if view.remote.is_none() {
+            view.git = GitState::new(&view.root, &settings, cx);
+        }
         view.git_refresh(cx);
         view.start_fetching(cx);
         for path in &project.open {
-            if path.is_file() {
+            if view.remote.is_some() || path.is_file() {
                 view.open_file(path.clone(), None, false, cx);
             }
         }
@@ -346,6 +374,9 @@ impl ProjectView {
     pub fn set_project(&mut self, project: &Project, cx: &mut Context<Self>) {
         if project.root != self.root {
             self.root = project.root.clone();
+            if let Some(r) = &mut self.remote {
+                r.forget_folders();
+            }
             self.expanded.clear();
             self.selected = None;
             self.open.clear();
@@ -377,6 +408,9 @@ impl ProjectView {
     /// Lists the project's files and starts watching its folders, away
     /// from the UI thread.
     fn start_walk(&mut self, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            return self.remote_start(cx);
+        }
         let (root, exclude) = (self.root.clone(), self.exclude.clone());
         self.watch = None;
         self.walking = Some(cx.spawn(async move |this, cx| {
@@ -469,19 +503,31 @@ impl ProjectView {
     /// An open file changed on disk: unedited, it reloads in place; with
     /// unsaved edits, it says so and waits.
     fn follow_disk(&mut self, i: usize, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            return self.remote_follow(i, cx);
+        }
         let path = self.open[i].path.clone();
         if let Content::Picture(p, _) = &mut self.open[i].content {
             *p = crate::picture::read(&path);
             self.open[i].disk = if path.exists() { Disk::Same } else { Disk::Deleted };
             return;
         }
-        let Some(view) = self.open[i].view().cloned() else { return };
+        if self.open[i].view().is_none() {
+            return;
+        }
         let Ok(text) = std::fs::read_to_string(&path) else {
             if !path.exists() {
                 self.open[i].disk = Disk::Deleted;
             }
             return;
         };
+        self.follow_text(i, text, cx);
+    }
+
+    /// An open file's text as it is now on disk: unedited, it reloads in
+    /// place; with unsaved edits, it says so and waits.
+    fn follow_text(&mut self, i: usize, text: String, cx: &mut Context<Self>) {
+        let Some(view) = self.open[i].view().cloned() else { return };
         let (dirty, same) = {
             let v = view.read(cx);
             (v.buffer.is_dirty(), v.buffer.text() == text)
@@ -504,7 +550,11 @@ impl ProjectView {
     }
 
     fn add_children(&self, dir: &Path, depth: usize, rows: &mut Vec<Row>) {
-        for row in read_folder(dir, depth) {
+        let folder = match &self.remote {
+            None => read_folder(dir, depth),
+            Some(r) => r.rows(dir, depth),
+        };
+        for row in folder {
             let open = row.dir && self.expanded.contains(&row.path);
             let path = row.path.clone();
             rows.push(row);
@@ -516,7 +566,11 @@ impl ProjectView {
 
     /// Reads everything again: the tree, the file list, open files.
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.expanded.retain(|dir| dir.is_dir());
+        match &mut self.remote {
+            None => self.expanded.retain(|dir| dir.is_dir()),
+            Some(r) => r.forget_folders(),
+        }
+        self.notice = None;
         self.rebuild();
         self.start_walk(cx);
         for i in 0..self.open.len() {
@@ -643,7 +697,7 @@ impl ProjectView {
     /// Opens a file, or shows it if open, without taking the keyboard: for
     /// following what the AI edits.
     pub fn show_quietly(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if !path.is_file() {
+        if self.remote.is_none() && !path.is_file() {
             return;
         }
         self.open_file(path.clone(), None, false, cx);
@@ -684,6 +738,11 @@ impl ProjectView {
         self.active = Some(i);
         if let (Some((line, col)), Some(view)) = (at, self.open[i].view().cloned()) {
             view.update(cx, |v, cx| v.go_to(line.saturating_sub(1), col.unwrap_or(1).saturating_sub(1), cx));
+        } else if matches!(self.open[i].content, Content::Loading) {
+            // Being read from another workspace: placed once it is there.
+            let at = at.map(|(line, col)| (line.saturating_sub(1), col.unwrap_or(1).saturating_sub(1)));
+            let path = self.open[i].path.clone();
+            self.remote_pending(&path, remote::Pending { at, select: None, focus });
         }
         self.focus_editor |= focus;
         self.publish();
@@ -692,6 +751,9 @@ impl ProjectView {
     }
 
     fn load(&mut self, path: PathBuf, cx: &mut Context<Self>) -> OpenFile {
+        if self.remote.is_some() {
+            return self.remote_load(path, cx);
+        }
         let lang = shed_project::detect(&path);
         let mut file = OpenFile { path: path.clone(), content: Content::Binary, lang, disk: Disk::Same, restored: false, highlight: None, recovery: None, _sub: None };
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -708,11 +770,19 @@ impl ProjectView {
             return file;
         }
         let text = String::from_utf8_lossy(&bytes).into_owned();
+        self.edit_text(&mut file, &text, cx);
+        file
+    }
+
+    /// Puts a file's text in an editor: with unsaved edits from before
+    /// brought back, following its changes and keys.
+    fn edit_text(&mut self, file: &mut OpenFile, text: &str, cx: &mut Context<Self>) {
+        let lang = file.lang;
         let options = TextOptions { line_numbers: true, wrap: self.settings.config.editor.wrap, comment: lang.and_then(|l| l.comment), ..Default::default() };
         let settings = self.settings.clone();
-        let view = cx.new(|cx| TextView::new(&text, options, &settings, cx));
+        let view = cx.new(|cx| TextView::new(text, options, &settings, cx));
         // Unsaved edits from before (a crash, a closed bench) come back.
-        if let Some(saved) = shed_project::recovery::read(&path)
+        if let Some(saved) = shed_project::recovery::read(&self.recovery_key(&file.path))
             && saved != text
         {
             view.update(cx, |v, _| {
@@ -739,7 +809,15 @@ impl ProjectView {
             }
         }));
         file.content = Content::Text(view);
-        file
+    }
+
+    /// Where a file's unsaved edits are kept aside: by its path, or for
+    /// another workspace's file under a key naming that workspace.
+    fn recovery_key(&self, path: &Path) -> PathBuf {
+        match &self.remote {
+            None => path.to_path_buf(),
+            Some(r) => remote::recovery_key(&r.ws.id, path),
+        }
     }
 
     /// Colours an open file again, once typing pauses, off the UI thread.
@@ -775,6 +853,8 @@ impl ProjectView {
     fn schedule_recovery(&mut self, i: usize, cx: &mut Context<Self>) {
         let Some(file) = self.open.get_mut(i) else { return };
         let (Some(view), path) = (file.view().cloned(), file.path.clone()) else { return };
+        let path = self.recovery_key(&path);
+        let Some(file) = self.open.get_mut(i) else { return };
         file.recovery = Some(cx.spawn(async move |_, cx| {
             cx.background_executor().timer(RECOVERY_DELAY).await;
             let (dirty, text) = view.read_with(cx, |v, _| (v.buffer.is_dirty(), v.buffer.text()));
@@ -787,6 +867,9 @@ impl ProjectView {
     }
 
     fn save(&mut self, i: usize, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            return self.remote_save(i, cx);
+        }
         let Some(file) = self.open.get_mut(i) else { return };
         let Some(view) = file.view().cloned() else { return };
         let text = view.read(cx).buffer.text();
@@ -825,6 +908,7 @@ impl ProjectView {
             cx,
         );
         let path = self.open[i].path.clone();
+        let key = self.recovery_key(&path);
         cx.spawn(async move |this, cx| {
             let answer = answer.await;
             this.update(cx, |this, cx| {
@@ -835,7 +919,7 @@ impl ProjectView {
                         this.drop_file(i, cx);
                     }
                     Ok(1) => {
-                        shed_project::recovery::remove(&path);
+                        shed_project::recovery::remove(&key);
                         this.drop_file(i, cx);
                     }
                     _ => {}
@@ -871,6 +955,9 @@ impl ProjectView {
 
     /// Takes the file as it is on disk, dropping the edits here.
     fn take_disk(&mut self, i: usize, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            return self.remote_take_disk(i, cx);
+        }
         let Some(file) = self.open.get_mut(i) else { return };
         let Some(view) = file.view().cloned() else { return };
         if let Ok(text) = std::fs::read_to_string(&file.path) {
@@ -886,14 +973,17 @@ impl ProjectView {
         let editor = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint());
         window.focus(&editor.read(cx).focus_handle(cx), cx);
         let sub = cx.observe(&editor, |this, _, cx| this.refresh_quick(cx));
-        self.quick = Some(QuickOpen { editor, results: Vec::new(), selected: 0, _sub: sub });
+        self.quick = Some(QuickOpen { editor, results: Vec::new(), selected: 0, task: None, _sub: sub });
         cx.notify();
     }
 
     fn refresh_quick(&mut self, cx: &mut Context<Self>) {
         let Some(quick) = &mut self.quick else { return };
         let query = quick.editor.read(cx).text().to_string();
-        quick.results = shed_project::fuzzy::rank(&query, &self.files, 14);
+        if self.remote.is_some() {
+            return self.remote_quick(query, cx);
+        }
+        quick.results = shed_project::fuzzy::rank(&query, &self.files, 14).into_iter().map(|(i, m)| (self.files[i].clone(), m)).collect();
         quick.selected = 0;
         cx.notify();
     }
@@ -908,7 +998,7 @@ impl ProjectView {
             "down" => quick.selected = (quick.selected + 1).min(quick.results.len().saturating_sub(1)),
             "up" => quick.selected = quick.selected.saturating_sub(1),
             "enter" => {
-                let pick = quick.results.get(quick.selected).map(|(i, _)| self.root.join(&self.files[*i]));
+                let pick = quick.results.get(quick.selected).map(|(path, _)| self.root.join(path));
                 self.quick = None;
                 if let Some(path) = pick {
                     self.open_path(path, None, cx);
@@ -995,6 +1085,14 @@ impl ProjectView {
             cx.notify();
             return;
         }
+        if self.remote.is_some() {
+            let task = self.remote_search(q, cx);
+            if let Some(search) = &mut self.search {
+                search.task = task;
+            }
+            cx.notify();
+            return;
+        }
         search.task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(120)).await;
             let (tx, rx) = async_channel::unbounded::<FileHits>();
@@ -1052,6 +1150,13 @@ impl ProjectView {
         let Some(h) = found.hits.get(hit).cloned() else { return };
         let path = self.root.join(&found.path);
         self.open_path(path.clone(), None, cx);
+        if self.open.iter().any(|f| f.path == path && matches!(f.content, Content::Loading)) {
+            // Being read from another workspace: selected once it is there.
+            let at = |byte: usize| h.text[..byte.min(h.text.len())].chars().count();
+            let r = h.ranges.first().cloned().unwrap_or(0..0);
+            self.remote_pending(&path, remote::Pending { at: Some((h.line, at(r.start))), select: Some((at(r.start), at(r.end))), focus: true });
+            return;
+        }
         let Some(view) = self.open.iter().find(|f| f.path == path).and_then(OpenFile::view).cloned() else { return };
         view.update(cx, |v, cx| {
             let line = v.buffer.line(h.line);
@@ -1092,6 +1197,9 @@ impl ProjectView {
                 return;
             }
             this.update(cx, |this, cx| {
+                if this.remote.is_some() {
+                    return this.remote_replace_all(files, q, with, cx);
+                }
                 let mut skipped = Vec::new();
                 for path in &files {
                     if let Some(i) = this.open.iter().position(|f| &f.path == path)
@@ -1419,7 +1527,12 @@ impl ProjectView {
             MenuEntry::Separator,
             menu::item("Send to AI", move |this: &mut Self, _, cx| this.send_to_ai(Some(to_ai.clone()), cx)).icon("ai"),
             menu::item("Open Terminal Here", move |this: &mut Self, _, _| this.open_terminal(&folder)).icon("terminal"),
-            menu::item("Show in File Manager", move |_, _, cx| cx.reveal_path(&file)).icon("folder"),
+        ]);
+        // Another workspace's files are not in this machine's file manager.
+        if self.remote.is_none() {
+            entries.push(menu::item("Show in File Manager", move |_, _, cx| cx.reveal_path(&file)).icon("folder"));
+        }
+        entries.extend([
             MenuEntry::Separator,
             menu::item("Copy Path", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(full.clone()))),
             menu::item("Copy Relative Path", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(relative.clone()))),
@@ -1439,8 +1552,12 @@ impl ProjectView {
     /// The folder a new file goes in by default: the selected one, or the
     /// selected file's, else the project's.
     fn new_entry_folder(&self) -> PathBuf {
+        let is_dir = |p: &Path| match &self.remote {
+            None => p.is_dir(),
+            Some(r) => r.is_dir(p),
+        };
         match &self.selected {
-            Some(p) if p.is_dir() => p.clone(),
+            Some(p) if is_dir(p) => p.clone(),
             Some(p) => p.parent().filter(|d| d.starts_with(&self.root)).unwrap_or(&self.root).to_path_buf(),
             None => self.root.clone(),
         }
@@ -1472,6 +1589,9 @@ impl ProjectView {
         }
         let path = folder.join(name);
         let outside = Path::new(name).is_absolute() || Path::new(name).components().any(|c| matches!(c, std::path::Component::ParentDir));
+        if self.remote.is_some() && !outside {
+            return self.remote_create(path, name.to_string(), dir, cx);
+        }
         let made = if outside {
             Err(std::io::Error::other("the name must stay inside the project"))
         } else if path.exists() {
@@ -1630,7 +1750,11 @@ impl ProjectView {
             .child(svg().path(icon("project")).size(px(16.0)).flex_none().text_color(hsla(ui.ink(self.accent))))
             .child(div().flex_none().text_size(px(14.0 * self.z())).text_color(hsla(ui.text)).child(name))
             .children(self.render_branch_chip(ui, cx))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(12.0 * self.z())).text_color(hsla(ui.text_dim)).child(shed_save::home_relative(&self.root)))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(12.0 * self.z())).text_color(hsla(ui.text_dim)).child(match self.remote {
+                // This machine's home is not that workspace's.
+                Some(_) => self.root.display().to_string(),
+                None => shed_save::home_relative(&self.root),
+            }))
             .when_some(self.new_link.as_ref().map(|(e, _)| e.clone()), |d, e| {
                 d.child(div().flex_none().w(px(320.0)).text_size(px(12.0 * self.z())).child(e))
                     .child(div().flex_none().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child("name url"))
@@ -1643,7 +1767,7 @@ impl ProjectView {
                 }
             })))
             .child(button("project-terminal", "terminal", "Terminal").on_click(cx.listener(|this, _, _, _| this.open_terminal(&this.root.clone()))))
-            .child(button("project-files", "folder", "File Manager").on_click(move |_, _, cx| cx.open_with_system(&root)))
+            .when(self.remote.is_none(), |d| d.child(button("project-files", "folder", "File Manager").on_click(move |_, _, cx| cx.open_with_system(&root))))
             .child(button("project-refresh", "refresh", "Refresh").on_click(cx.listener(|this, _, _, cx| this.refresh(cx))))
             .child(
                 div()
@@ -1852,7 +1976,8 @@ impl ProjectView {
                         .on_click(cx.listener(move |this, _, _, cx| this.set_wrap(!on, cx)))
                         .child("Wrap")
                 })
-                .when(self.git.is_some(), |d| {
+                // Blame is not among another workspace's calls.
+                .when(self.git.is_some() && self.remote.is_none(), |d| {
                     let on = self.blame_on;
                     d.child(
                         div()
@@ -1984,14 +2109,16 @@ impl ProjectView {
             Content::Picture(None, _) => empty(format!("{} could not be read as a picture", file.name())),
             Content::Binary => empty(format!("{} is not text", file.name())),
             Content::TooLarge(size) => empty(format!("{} is too large to open here ({} MB)", file.name(), size / (1024 * 1024))),
+            Content::Loading => empty(format!("Reading {}…", file.name())),
+            Content::Unreadable(why) => empty(why.clone()),
         }
     }
 
     fn render_quick(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let quick = self.quick.as_ref()?;
         let accent = self.accent;
-        let rows = quick.results.iter().enumerate().map(|(n, (i, matched))| {
-            let path = self.files[*i].display().to_string();
+        let rows = quick.results.iter().enumerate().map(|(n, (rel, matched))| {
+            let path = rel.display().to_string();
             let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = path
                 .char_indices()
                 .enumerate()
@@ -1999,7 +2126,7 @@ impl ProjectView {
                 .map(|(_, (b, c))| (b..b + c.len_utf8(), HighlightStyle { color: Some(hsla(ui.ink(accent))), ..Default::default() }))
                 .collect();
             let selected = n == quick.selected;
-            let full = self.root.join(&self.files[*i]);
+            let full = self.root.join(rel);
             div()
                 .id(("quick", n))
                 .px_2()
@@ -2015,7 +2142,8 @@ impl ProjectView {
                 }))
                 .child(StyledText::new(path).with_highlights(highlights))
         });
-        let count = self.files.len();
+        // Another workspace's files are counted there.
+        let count = (self.remote.is_none()).then(|| format!("{} files", self.files.len()));
         Some(
             div()
                 .absolute()
@@ -2038,7 +2166,7 @@ impl ProjectView {
                         .text_size(px(13.0 * self.z()))
                         .occlude()
                         .capture_key_down(cx.listener(Self::quick_key))
-                        .child(div().flex().items_center().gap_2().child(div().flex_1().child(quick.editor.clone())).child(div().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(format!("{count} files"))))
+                        .child(div().flex().items_center().gap_2().child(div().flex_1().child(quick.editor.clone())).children(count.map(|c| div().text_size(px(11.0 * self.z())).text_color(hsla(ui.text_dim)).child(c))))
                         .children(rows),
                 ),
         )
@@ -2090,6 +2218,10 @@ impl MenuHost for ProjectView {
 
 impl Render for ProjectView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Another workspace's folders the tree wants, asked for.
+        if self.remote.is_some() {
+            self.list_missing(cx);
+        }
         if self.blame_on
             && let Some(path) = self.active.and_then(|i| self.open.get(i)).filter(|f| f.view().is_some()).map(|f| f.path.clone())
         {
@@ -2196,7 +2328,7 @@ mod tests {
             cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
         });
         let project = Project { root: root.clone(), ..Default::default() };
-        let (view, cx) = cx.add_window_view(|_, cx| ProjectView::new(BenchId::new(), TabId::new(), &project, Rgb::hex(0xFF8A57), KeeperConn::detached(), Settings::default(), cx));
+        let (view, cx) = cx.add_window_view(|_, cx| ProjectView::new(BenchId::new(), TabId::new(), &project, Rgb::hex(0xFF8A57), KeeperConn::detached(), Settings::default(), None, cx));
         view.update(cx, |v, cx| {
             // A name with slashes makes the folders on the way, and the file opens.
             v.create_entry(&root.join("src"), "ui/button.rs", false, cx);
@@ -2211,6 +2343,92 @@ mod tests {
             assert!(v.notice.as_deref().is_some_and(|n| n.contains("already exists")));
             v.create_entry(&root, "../outside.txt", false, cx);
             assert!(!root.parent().unwrap().join("outside.txt").exists());
+        });
+    }
+
+    /// Another workspace's project: its folders, files and Git come as
+    /// calls (here a fake workspace answering at once); nothing is read
+    /// from this disk.
+    #[gpui::test]
+    fn a_remote_project_reads_and_writes_through_its_workspace(cx: &mut gpui::TestAppContext) {
+        use shed_api::calls::{self as api, Call, Reply};
+        use std::sync::Mutex;
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let calls: Arc<Mutex<Vec<Call>>> = Arc::default();
+        let seen = calls.clone();
+        let entry = |name: &str, dir: bool| api::FolderEntry { name: name.into(), dir, ignored: false };
+        let api = shed_client::nexus_api::NexusApi::fake(Arc::new(move |ws, call| {
+            assert_eq!(ws, "w1");
+            seen.lock().unwrap().push(call.clone());
+            match call {
+                Call::ListFolder(p) if p.path.is_empty() => Ok(Reply::Folder(vec![entry("src", true), entry("README.md", false)])),
+                Call::ListFolder(p) if p.path == "src" => Ok(Reply::Folder(vec![entry("main.rs", false)])),
+                Call::ReadFile(p) => Ok(Reply::File(api::FileContent {
+                    path: p.path.clone(),
+                    kind: api::FileKind::Text,
+                    text: format!("text of {}\n", p.path),
+                    lang: None,
+                    highlights: Vec::new(),
+                    picture: None,
+                    size: 10.0,
+                })),
+                Call::GitStatus(_) => Ok(Reply::GitStatus(api::GitStatus {
+                    repo: true,
+                    branch: Some("main".into()),
+                    files: vec![api::GitFile { path: "README.md".into(), staged: String::new(), unstaged: "M".into(), conflict: false, from: None }],
+                    root: Some("/srv/app".into()),
+                    head: Some("abc12345".into()),
+                    ..Default::default()
+                })),
+                Call::GitBranches(_) => Ok(Reply::Branches(api::Branches { current: Some("main".into()), local: vec!["main".into(), "dev".into()], remote: vec![] })),
+                Call::QuickOpen(_) => Ok(Reply::Files(vec![api::FileMatch { path: "src/main.rs".into(), hits: vec![4, 5] }])),
+                _ => Ok(Reply::Done),
+            }
+        }));
+        let root = PathBuf::from("/srv/app");
+        let project = Project { root: root.clone(), open: vec![root.join("README.md")], ..Default::default() };
+        let ws = api.workspace("w1");
+        let (view, cx) = cx.add_window_view(|_, cx| ProjectView::new(BenchId::new(), TabId::new(), &project, Rgb::hex(0xFF8A57), KeeperConn::detached(), Settings::default(), Some(ws), cx));
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            let names: Vec<String> = v.rows.iter().map(|r| r.name.to_string()).collect();
+            assert_eq!(names, ["src", "README.md"]);
+            // The file it had open, read from there.
+            let text = v.open[0].view().expect("an editor").read(cx).buffer.text();
+            assert_eq!(text, "text of README.md\n");
+            // Its repository, from its status.
+            let git = v.git.as_ref().expect("the Git panel");
+            assert_eq!(git.session.repo.root, root);
+            assert_eq!(git.session.status.as_ref().unwrap().unstaged().count(), 1);
+            assert!(v.remote.as_ref().unwrap().branches.as_ref().is_some_and(|b| b.local.len() == 2));
+            // A folder opened in the tree is listed there.
+            v.toggle(&root.join("src"), cx);
+            v.list_missing(cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            let names: Vec<String> = v.rows.iter().map(|r| r.name.to_string()).collect();
+            assert_eq!(names, ["src", "main.rs", "README.md"]);
+            // Saving writes the file there, whole.
+            let editor = v.open[0].view().unwrap().clone();
+            editor.update(cx, |e, _| e.buffer.insert("more "));
+            v.save(0, cx);
+            // Staging is the workspace's call too.
+            v.git_op("Staging…", git::GitOp::Stage(vec!["README.md".into()]), cx);
+        });
+        cx.run_until_parked();
+        let calls = calls.lock().unwrap().clone();
+        assert!(calls.iter().any(|c| matches!(c, Call::WriteFile(w) if w.path == "README.md" && w.text == "more text of README.md\n")), "{calls:?}");
+        assert!(calls.iter().any(|c| matches!(c, Call::GitStage(g) if g.paths == ["README.md"])), "{calls:?}");
+        view.update(cx, |v, cx| {
+            assert!(!v.is_dirty(0, cx), "saved");
+            // Merging is not among the calls: said so, not done.
+            v.branch_op(shed_git::session::BranchOp::Merge("dev".into()), cx);
+            assert!(v.git.as_ref().unwrap().error.as_deref().is_some_and(|e| e.contains("remote workspace")));
         });
     }
 }

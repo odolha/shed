@@ -704,6 +704,20 @@ impl TerminalView {
             match links::link_at(&text, index)? {
                 Link::Url(url) => Some(url),
                 Link::Path(path) => {
+                    let state = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade());
+                    // Another workspace's paths are on that computer: one of
+                    // its bench's projects opens them, never this disk.
+                    if let Some(state) = state.as_ref().filter(|s| s.read(cx).is_remote()) {
+                        let bench = self.here.map(|h| h.bench)?;
+                        // (Its home folder is not known here.)
+                        if path.starts_with("~/") {
+                            return None;
+                        }
+                        let file = self.cwd.join(&path);
+                        let at = links::position_at(&text, index);
+                        state.update(cx, |state, cx| state.reveal_file(bench, file, at, false, cx));
+                        return None;
+                    }
                     let expanded = match path.strip_prefix("~/") {
                         Some(rest) => std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(rest))?,
                         None => self.cwd.join(&path),

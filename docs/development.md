@@ -297,7 +297,14 @@ link against a fake nexus on a real socket (`tests/common/mod.rs`), and
 `tests/desktop.rs` covers the desktop's tunnel: refused without
 `desktop_clients`, the keeper's own protocol through a fake nexus, and
 `connect_remote`'s tunnel through the real nexus (signing in, the workspace
-list, typing and output).
+list, typing and output). `tests/desktop_api.rs` drives
+`shed_client::nexus_api` the same way, as the desktop's views of another
+workspace use it: a folder, a file read and written (and the change as a
+`Project` event), Git status, stage and commit, the logbook and Claude Code's
+sessions (`CLAUDE_CONFIG_DIR` in a temp folder). The window's side is tested
+with `NexusApi::fake`, which answers calls at once (GPUI tests fail if woken
+from another thread): `project_view`'s
+`a_remote_project_reads_and_writes_through_its_workspace`.
 
 ### Showing a dev workspace in a dev window
 

@@ -15,7 +15,9 @@ use shed_git::session::{self as gs, BranchOp, DiffContent, GitSession, HunkActio
 use shed_git::{Commit, Entry as GitEntry, Hunk, Repo};
 use shed_model::Rgb;
 
-use super::{Content, OpenFile, Panel, ProjectView, ROW_HEIGHT};
+use super::{Content, OpenFile, Panel, ProjectView, ROW_HEIGHT, remote};
+use crate::workspace_api::says;
+use shed_api::calls::{self as api, Call, Reply};
 use crate::assets::icon;
 use crate::line_editor::{EditorEvent, LineEditor};
 use crate::menu::{self, MenuEntry, MenuHost};
@@ -30,6 +32,78 @@ use crate::picture::Picture;
 const MAX_ROWS: usize = 1000;
 
 pub(super) use shed_git::session::DiffSource;
+
+/// What the panel says of Git operations another workspace's calls do not
+/// offer.
+const NOT_REMOTE: &str = "Not available for a remote workspace: do this in a terminal tab there.";
+
+/// Something the panel asks of the repository: run here through `git`
+/// (`run`), or on another workspace as a call (`call`).
+pub(super) enum GitOp {
+    Stage(Vec<String>),
+    Unstage(Vec<String>),
+    Discard { tracked: Vec<String>, untracked: Vec<String> },
+    /// One hunk of a diff (its index and header, as shown).
+    Hunk { path: String, source: DiffSource, index: usize, header: String, hunk: Hunk, action: HunkAction, untracked: bool },
+    Commit { message: String, amend: bool },
+    Push(PushReview),
+    Pull,
+    Branch(BranchOp),
+    /// Continues or aborts a merge, rebase or the like.
+    Finish { operation: String, how: &'static str },
+    /// Takes one side of a conflicted file.
+    Resolve { path: String, ours: bool },
+}
+
+impl GitOp {
+    fn run(self, repo: &Repo) -> shed_git::Result<String> {
+        match self {
+            GitOp::Stage(paths) => repo.stage(&paths).map(|_| String::new()),
+            GitOp::Unstage(paths) => repo.unstage(&paths).map(|_| String::new()),
+            GitOp::Discard { tracked, untracked } => repo.discard(&tracked, &untracked).map(|_| String::new()),
+            GitOp::Hunk { path, hunk, action, untracked, .. } => gs::hunk_action(repo, &path, &hunk, action, untracked).map(|_| String::new()),
+            GitOp::Commit { message, amend } => gs::commit(repo, &message, amend),
+            GitOp::Push(review) => review.confirm(repo),
+            GitOp::Pull => repo.pull(),
+            GitOp::Branch(op) => op.run(repo),
+            GitOp::Finish { operation, how } => repo.finish_operation(&operation, how),
+            GitOp::Resolve { path, ours } => repo.resolve_with(&path, ours).map(|_| String::new()),
+        }
+    }
+
+    /// The call doing it on another workspace (tab `tab`); `None` where the
+    /// API has none.
+    pub(super) fn call(&self, tab: &str) -> Option<Call> {
+        let tab = tab.to_string();
+        let paths = |paths: &[String]| api::GitPaths { tab: tab.clone(), paths: paths.to_vec() };
+        Some(match self {
+            GitOp::Stage(p) => Call::GitStage(paths(p)),
+            GitOp::Unstage(p) => Call::GitUnstage(paths(p)),
+            GitOp::Discard { tracked, untracked } => Call::GitDiscard(paths(&[tracked.clone(), untracked.clone()].concat())),
+            // A new file is staged whole, as here.
+            GitOp::Hunk { path, untracked: true, .. } => Call::GitStage(paths(std::slice::from_ref(path))),
+            GitOp::Hunk { path, source, index, header, action, .. } => Call::GitHunk(api::GitHunk {
+                tab,
+                path: path.clone(),
+                source: remote::source_of(source),
+                hunk: *index as u32,
+                header: header.clone(),
+                action: match action {
+                    HunkAction::Stage => api::HunkAction::Stage,
+                    HunkAction::Unstage => api::HunkAction::Unstage,
+                    HunkAction::Discard => api::HunkAction::Discard,
+                },
+            }),
+            GitOp::Commit { message, amend } => Call::GitCommit(api::GitCommit { tab, message: message.clone(), amend: *amend }),
+            GitOp::Push(review) => Call::GitPush(api::GitPush { tab, force: review.force }),
+            GitOp::Pull => Call::GitPull(api::TabOnly { tab }),
+            GitOp::Branch(BranchOp::Fetch) => Call::GitFetch(api::TabOnly { tab }),
+            GitOp::Branch(BranchOp::Switch(b) | BranchOp::CheckOut(b)) => Call::GitSwitch(api::GitBranch { tab, branch: b.clone() }),
+            GitOp::Branch(BranchOp::Create(name)) => Call::GitCreateBranch(api::GitBranch { tab, branch: name.replace(' ', "-") }),
+            GitOp::Branch(_) | GitOp::Finish { .. } | GitOp::Resolve { .. } => return None,
+        })
+    }
+}
 
 /// A project tab's Git: the repository and what is known of it
 /// (`GitSession`), and what runs and is shown here.
@@ -63,6 +137,8 @@ pub(super) struct DiffView {
     untracked: bool,
     /// For a picture: its two versions, shown side by side in place of hunks.
     pictures: Option<(Option<Picture>, Option<Picture>)>,
+    /// Hunks' headers as another workspace sent them (naming a hunk to it).
+    headers: Vec<String>,
 }
 
 impl DiffView {
@@ -87,7 +163,12 @@ impl GitState {
     }
 
     pub fn new(root: &Path, settings: &Settings, cx: &mut Context<ProjectView>) -> Option<Self> {
-        let session = GitSession::open(root)?;
+        Some(Self::with(GitSession::open(root)?, settings, cx))
+    }
+
+    /// The panel for a repository: this machine's, or another workspace's
+    /// (its session filled from calls).
+    pub fn with(session: GitSession, settings: &Settings, cx: &mut Context<ProjectView>) -> Self {
         let options = TextOptions { wrap: true, auto_height: Some((3, 10)), placeholder: Some("Commit message".into()), ..Default::default() };
         let message = cx.new(|cx| TextView::new("", options, settings, cx));
         let sub = cx.subscribe(&message, |this, _, event: &TextEvent, cx| {
@@ -99,7 +180,7 @@ impl GitState {
                 this.commit(false, cx);
             }
         });
-        Some(Self {
+        Self {
             session,
             busy: None,
             error: None,
@@ -113,7 +194,7 @@ impl GitState {
             new_branch: None,
             collapsed: HashSet::new(),
             _message_sub: sub,
-        })
+        }
     }
 }
 
@@ -127,12 +208,18 @@ impl ProjectView {
             return;
         }
         let repo = git.session.repo.clone();
+        let remote = self.remote.as_ref().map(|r| (r.ws.clone(), r.tab.clone()));
         git._fetcher = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(minutes * 60)).await;
-                let repo = repo.clone();
                 // Quietly: a failed background fetch (offline) says nothing.
-                let fetched = cx.background_executor().spawn(async move { repo.fetch() }).await;
+                let fetched = match &remote {
+                    Some((ws, tab)) => ws.call(Call::GitFetch(api::TabOnly { tab: tab.clone() })).await.map(|_| String::new()).map_err(|e| shed_git::GitError(says(&e))),
+                    None => {
+                        let repo = repo.clone();
+                        cx.background_executor().spawn(async move { repo.fetch() }).await
+                    }
+                };
                 if this.update(cx, |this, cx| if fetched.is_ok() { this.git_refresh(cx) }).is_err() {
                     break;
                 }
@@ -142,6 +229,9 @@ impl ProjectView {
 
     /// Reads the status again, a moment after changes settle.
     pub(super) fn git_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            return self.remote_git_refresh(cx);
+        }
         let Some(git) = &mut self.git else { return };
         let repo = git.session.repo.clone();
         git.refresh = Some(cx.spawn(async move |this, cx| {
@@ -167,34 +257,99 @@ impl ProjectView {
         }));
     }
 
-    /// Runs a Git command away from the UI, showing it runs; then reads the
-    /// status again.
-    fn git_op(&mut self, label: &str, op: impl FnOnce(&Repo) -> shed_git::Result<String> + Send + 'static, cx: &mut Context<Self>) {
+    /// Reads another workspace's Git status (and its branches) again, a
+    /// moment after changes settle: the panel appears with its repository.
+    fn remote_git_refresh(&mut self, cx: &mut Context<Self>) {
+        let Some((ws, tab)) = self.remote_call() else { return };
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            let status = ws.call(Call::GitStatus(api::TabOnly { tab: tab.clone() })).await;
+            let branches = match &status {
+                Ok(Reply::GitStatus(s)) if s.repo => Some(ws.call(Call::GitBranches(api::TabOnly { tab })).await),
+                _ => None,
+            };
+            this.update(cx, |this, cx| {
+                let mut head_moved = false;
+                match status {
+                    Ok(Reply::GitStatus(s)) => match remote::refreshed(&s, &this.root) {
+                        Some((root, refreshed)) => {
+                            if this.git.as_ref().is_none_or(|g| g.session.repo.root != root) {
+                                let settings = this.settings.clone();
+                                this.git = Some(GitState::with(GitSession::new(Repo { root }), &settings, cx));
+                                this.start_fetching(cx);
+                            }
+                            if let Some(git) = &mut this.git {
+                                head_moved = git.session.apply_refresh(refreshed);
+                                git.error = None;
+                            }
+                        }
+                        None => this.git = None,
+                    },
+                    Ok(other) => {
+                        if let Some(git) = &mut this.git {
+                            git.error = Some(says(&shed_client::nexus_api::unexpected(&other)));
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(git) = &mut this.git {
+                            git.error = Some(says(&e));
+                        }
+                    }
+                }
+                if let (Some(r), Some(Ok(Reply::Branches(b)))) = (&mut this.remote, branches) {
+                    r.branches = Some(b);
+                }
+                if head_moved && this.panel == Panel::History {
+                    let path = this.git.as_ref().and_then(|g| g.session.log_for.clone());
+                    this.open_history(path, cx);
+                }
+                this.refresh_diffs(cx);
+                cx.notify();
+            })
+            .ok();
+        });
+        if let Some(r) = &mut self.remote {
+            r.git_task = Some(task);
+        }
+    }
+
+    /// Runs a Git operation away from the UI (here, or on another
+    /// workspace), showing it runs; then reads the status again.
+    pub(super) fn git_op(&mut self, label: &str, op: GitOp, cx: &mut Context<Self>) {
         self.git_op_then(label, op, |_, _| {}, cx);
     }
 
     /// `git_op`, then `then` if it worked.
-    fn git_op_then(
-        &mut self,
-        label: &str,
-        op: impl FnOnce(&Repo) -> shed_git::Result<String> + Send + 'static,
-        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
+    fn git_op_then(&mut self, label: &str, op: GitOp, then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static, cx: &mut Context<Self>) {
+        let remote = self.remote_call();
         let Some(git) = &mut self.git else { return };
         if git.busy.is_some() {
             return;
         }
+        let reply = match &remote {
+            None => None,
+            Some((ws, tab)) => match op.call(tab) {
+                Some(call) => Some(ws.call(call)),
+                None => {
+                    git.error = Some(NOT_REMOTE.into());
+                    cx.notify();
+                    return;
+                }
+            },
+        };
         git.busy = Some(label.to_string());
         git.error = None;
         let repo = git.session.repo.clone();
         git.op = Some(cx.spawn(async move |this, cx| {
-            let result = cx.background_executor().spawn(async move { op(&repo) }).await;
+            let result = match reply {
+                Some(reply) => reply.await.map(|r| if let Reply::Text(t) = r { t } else { String::new() }).map_err(|e| says(&e)),
+                None => cx.background_executor().spawn(async move { op.run(&repo) }).await.map_err(|e| e.0),
+            };
             this.update(cx, |this, cx| {
                 let ok = result.is_ok();
                 if let Some(git) = &mut this.git {
                     git.busy = None;
-                    git.error = result.err().map(|e| e.0);
+                    git.error = result.err();
                     git.session.log.clear();
                 }
                 this.git_refresh(cx);
@@ -215,13 +370,13 @@ impl ProjectView {
     fn stage_all(&mut self, cx: &mut Context<Self>) {
         let Some(s) = self.git.as_ref().and_then(|g| g.session.status.clone()) else { return };
         let paths = Self::entry_paths(&s.unstaged().collect::<Vec<_>>());
-        self.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
+        self.git_op("Staging…", GitOp::Stage(paths), cx);
     }
 
     fn unstage_all(&mut self, cx: &mut Context<Self>) {
         let Some(s) = self.git.as_ref().and_then(|g| g.session.status.clone()) else { return };
         let paths = Self::entry_paths(&s.staged().collect::<Vec<_>>());
-        self.git_op("Unstaging…", move |r| r.unstage(&paths).map(|_| String::new()), cx);
+        self.git_op("Unstaging…", GitOp::Unstage(paths), cx);
     }
 
     fn discard(&mut self, entries: Vec<GitEntry>, window: &mut Window, cx: &mut Context<Self>) {
@@ -244,7 +399,7 @@ impl ProjectView {
             this.update(cx, |this, cx| {
                 let tracked: Vec<String> = entries.iter().filter(|e| !e.untracked).map(|e| e.path.clone()).collect();
                 let untracked: Vec<String> = entries.iter().filter(|e| e.untracked).map(|e| e.path.clone()).collect();
-                this.git_op("Discarding…", move |r| r.discard(&tracked, &untracked).map(|_| String::new()), cx);
+                this.git_op("Discarding…", GitOp::Discard { tracked, untracked }, cx);
             })
             .ok();
         })
@@ -262,7 +417,7 @@ impl ProjectView {
         let amend = git.session.amend;
         let field = git.message.clone();
         // With Push, what would go is shown first, as for any push.
-        self.git_op_then("Committing…", move |r| gs::commit(r, &message, amend), move |this, cx| if push { this.push(false, cx) }, cx);
+        self.git_op_then("Committing…", GitOp::Commit { message, amend }, move |this, cx| if push { this.push(false, cx) }, cx);
         // Cleared now; the commit's own result shows any error.
         field.update(cx, |f, cx| {
             f.buffer.select_all();
@@ -277,7 +432,8 @@ impl ProjectView {
     fn toggle_amend(&mut self, cx: &mut Context<Self>) {
         let Some(git) = &mut self.git else { return };
         git.session.amend = !git.session.amend;
-        if git.session.amend && git.message.read(cx).buffer.len_chars() == 0 {
+        // (Another workspace's last message is not among its calls.)
+        if git.session.amend && git.message.read(cx).buffer.len_chars() == 0 && self.remote.is_none() {
             let last = git.session.repo.last_message();
             git.message.update(cx, |m, cx| m.paste_text(&last, cx));
         }
@@ -286,9 +442,24 @@ impl ProjectView {
 
     /// Shows what a push would send and where, to confirm (`confirm_push`).
     fn push(&mut self, force: bool, cx: &mut Context<Self>) {
-        let Some(git) = &self.git else { return };
-        let repo = git.session.repo.clone();
+        let Some(git) = &mut self.git else { return };
         self.panel = Panel::Changes;
+        if self.remote.is_some() {
+            // Another workspace pushes to its branch's upstream (else origin):
+            // what goes is what its status says is not pushed.
+            let Some(status) = &git.session.status else { return };
+            let branch = status.branch.clone();
+            let head = branch.head.clone().unwrap_or_default();
+            let (remote, remote_branch) = match branch.upstream.as_deref().and_then(|u| u.split_once('/')) {
+                Some((r, b)) => (r.to_string(), b.to_string()),
+                None => ("origin".to_string(), head.clone()),
+            };
+            let target = shed_git::PushTarget { branch: head, remote, remote_branch, url: String::new(), new: branch.upstream.is_none() };
+            git.session.push_review = Some(PushReview { force, branch, target, commits: git.session.outgoing.clone() });
+            cx.notify();
+            return;
+        }
+        let repo = git.session.repo.clone();
         cx.spawn(async move |this, cx| {
             // The status as it is now (a commit may just have been made).
             let read = cx.background_executor().spawn(async move { PushReview::read(&repo, force) }).await;
@@ -309,7 +480,8 @@ impl ProjectView {
 
     fn confirm_push(&mut self, cx: &mut Context<Self>) {
         let Some(review) = self.git.as_mut().and_then(|g| g.session.push_review.take()) else { return };
-        self.git_op(review.busy_label(), move |r| review.confirm(r), cx);
+        let label = review.busy_label();
+        self.git_op(label, GitOp::Push(review), cx);
     }
 
     fn cancel_push(&mut self, cx: &mut Context<Self>) {
@@ -326,7 +498,7 @@ impl ProjectView {
         let i = match existing {
             Some(i) => i,
             None => {
-                let view = DiffView { path, source, hunks: Vec::new(), rows: Vec::new(), side: false, scroll: UniformListScrollHandle::new(), untracked: false, pictures: None };
+                let view = DiffView { path, source, hunks: Vec::new(), rows: Vec::new(), side: false, scroll: UniformListScrollHandle::new(), untracked: false, pictures: None, headers: Vec::new() };
                 self.open.push(OpenFile {
                     path: full,
                     content: Content::Diff(Box::new(view)),
@@ -351,6 +523,33 @@ impl ProjectView {
         let Some(Content::Diff(d)) = self.open.get(i).map(|f| &f.content) else { return };
         let (repo, path, source) = (git.session.repo.clone(), d.path.clone(), d.source.clone());
         let untracked = git.session.is_untracked(&path);
+        if let Some((ws, tab)) = self.remote_call() {
+            let reply = ws.call(Call::GitDiff(api::GitDiff { tab, path: path.clone(), source: remote::source_of(&source) }));
+            cx.spawn(async move |this, cx| {
+                let reply = reply.await;
+                this.update(cx, |this, cx| {
+                    let diff = match reply {
+                        Ok(Reply::Diff(d)) => d,
+                        Ok(other) => return this.git_error(says(&shed_client::nexus_api::unexpected(&other)), cx),
+                        Err(e) => return this.git_error(says(&e), cx),
+                    };
+                    let Some(file) = this.open.get_mut(i) else { return };
+                    if let Content::Diff(d) = &mut file.content {
+                        let at = Path::new(&d.path).to_path_buf();
+                        d.hunks = remote::hunks_of(&diff.hunks);
+                        d.headers = diff.hunks.iter().map(|h| h.header.clone()).collect();
+                        let picture = |p: &Option<api::Picture>| p.as_ref().and_then(|p| remote::picture_of(&at, p));
+                        d.pictures = (diff.old_picture.is_some() || diff.new_picture.is_some()).then(|| (picture(&diff.old_picture), picture(&diff.new_picture)));
+                        d.untracked = untracked;
+                        d.layout();
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         cx.spawn(async move |this, cx| {
             let (hunks, pictures) = cx
                 .background_executor()
@@ -391,10 +590,10 @@ impl ProjectView {
     fn hunk_action(&mut self, i: usize, h: usize, action: HunkAction, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Content::Diff(d)) = self.open.get(i).map(|f| &f.content) else { return };
         let Some(hunk) = d.hunks.get(h) else { return };
-        let (path, hunk, untracked) = (d.path.clone(), hunk.clone(), d.untracked);
-        let run = move |r: &Repo| gs::hunk_action(r, &path, &hunk, action, untracked).map(|_| String::new());
+        let header = d.headers.get(h).cloned().unwrap_or_else(|| hunk.header());
+        let run = GitOp::Hunk { path: d.path.clone(), source: d.source.clone(), index: h, header, hunk: hunk.clone(), action, untracked: d.untracked };
         match action {
-            _ if untracked => self.git_op("Staging…", run, cx),
+            _ if d.untracked => self.git_op("Staging…", run, cx),
             HunkAction::Stage => self.git_op("Staging…", run, cx),
             HunkAction::Unstage => self.git_op("Unstaging…", run, cx),
             HunkAction::Discard => {
@@ -414,8 +613,17 @@ impl ProjectView {
         git.session.start_history(path.clone());
         git.expanded.clear();
         let repo = git.session.repo.clone();
+        let remote = self.remote.as_ref().map(|r| r.ws.call(Call::GitLog(api::GitLog { tab: r.tab.clone(), path: path.clone(), limit: 0 })));
+        let Some(git) = &mut self.git else { return };
         git.log_task = Some(cx.spawn(async move |this, cx| {
-            let log = cx.background_executor().spawn(async move { gs::history(&repo, path.as_deref()) }).await;
+            let log = match remote {
+                Some(reply) => match reply.await {
+                    Ok(Reply::Commits(commits)) => Ok(commits.iter().map(remote::commit_of).collect()),
+                    Ok(other) => Err(shed_git::GitError(says(&shed_client::nexus_api::unexpected(&other)))),
+                    Err(e) => Err(shed_git::GitError(says(&e))),
+                },
+                None => cx.background_executor().spawn(async move { gs::history(&repo, path.as_deref()) }).await,
+            };
             this.update(cx, |this, cx| {
                 if let Some(git) = &mut this.git {
                     match log {
@@ -432,7 +640,42 @@ impl ProjectView {
     }
 
     fn toggle_commit(&mut self, hash: String, cx: &mut Context<Self>) {
+        let remote = self.remote_call();
         let Some(git) = &mut self.git else { return };
+        if let Some((ws, tab)) = remote
+            && !git.expanded.remove(&hash)
+        {
+            // Another workspace's commit's files, read once.
+            if git.session.commit_files.contains_key(&hash) {
+                git.expanded.insert(hash);
+                return cx.notify();
+            }
+            let reply = ws.call(Call::GitCommitFiles(api::GitCommitRef { tab, hash: hash.clone() }));
+            cx.spawn(async move |this, cx| {
+                let reply = reply.await;
+                this.update(cx, |this, cx| {
+                    let Some(git) = &mut this.git else { return };
+                    let files = match reply {
+                        Ok(Reply::CommitFiles(files)) => files.into_iter().map(|f| (f.status.chars().next().unwrap_or('M'), f.path)).collect(),
+                        Err(e) => {
+                            git.error = Some(says(&e));
+                            Vec::new()
+                        }
+                        Ok(_) => Vec::new(),
+                    };
+                    git.session.commit_files.insert(hash.clone(), files);
+                    git.expanded.insert(hash);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
+        let Some(git) = &mut self.git else { return };
+        if self.remote.is_some() {
+            return cx.notify();
+        }
         if !git.expanded.remove(&hash) {
             git.session.commit_files(&hash);
             git.expanded.insert(hash);
@@ -441,24 +684,42 @@ impl ProjectView {
     }
 
     /// Runs a branch, stash or remote operation.
-    fn branch_op(&mut self, op: BranchOp, cx: &mut Context<Self>) {
-        self.git_op(op.label(), move |r| op.run(r), cx);
+    pub(super) fn branch_op(&mut self, op: BranchOp, cx: &mut Context<Self>) {
+        self.git_op(op.label(), GitOp::Branch(op), cx);
+    }
+
+    /// Shows what went wrong in the Git panel.
+    fn git_error(&mut self, error: String, cx: &mut Context<Self>) {
+        if let Some(git) = &mut self.git {
+            git.error = Some(error);
+        }
+        cx.notify();
     }
 
     fn branch_menu(&mut self, _: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
         let Some(git) = &self.git else { return Vec::new() };
-        let others = git.session.branches().others;
+        // Another workspace's branches as last read with its status.
+        let remote = self.remote.as_ref().map(|r| r.branches.clone().unwrap_or_default());
+        let others = match &remote {
+            Some(b) => b.local.iter().filter(|l| Some(*l) != b.current.as_ref()).cloned().collect(),
+            None => git.session.branches().others,
+        };
         let (behind, ahead) = git.session.behind_ahead();
         let count = |n: u32| if n > 0 { format!(" ({n})") } else { String::new() };
-        let mut entries = vec![
-            menu::item("Fetch", |this: &mut Self, _, cx| this.branch_op(BranchOp::Fetch, cx)).icon("refresh"),
-            menu::item(format!("Pull with Rebase{}", count(behind)), |this: &mut Self, _, cx| this.branch_op(BranchOp::PullRebase, cx)).icon("pull"),
-            menu::item(format!("Pull with Merge{}", count(behind)), |this: &mut Self, _, cx| this.branch_op(BranchOp::PullMerge, cx)).icon("pull"),
+        let mut entries = vec![menu::item("Fetch", |this: &mut Self, _, cx| this.branch_op(BranchOp::Fetch, cx)).icon("refresh")];
+        if remote.is_some() {
+            // Its calls pull as `git pull` does there.
+            entries.push(menu::item(format!("Pull{}", count(behind)), |this: &mut Self, _, cx| this.git_op("Pulling…", GitOp::Pull, cx)).icon("pull"));
+        } else {
+            entries.push(menu::item(format!("Pull with Rebase{}", count(behind)), |this: &mut Self, _, cx| this.branch_op(BranchOp::PullRebase, cx)).icon("pull"));
+            entries.push(menu::item(format!("Pull with Merge{}", count(behind)), |this: &mut Self, _, cx| this.branch_op(BranchOp::PullMerge, cx)).icon("pull"));
+        }
+        entries.extend([
             menu::item(format!("Push{}", count(ahead)), |this: &mut Self, _, cx| this.push(false, cx)).icon("push"),
             menu::danger("Force-Push…", |this: &mut Self, _, cx| this.push(true, cx)),
             MenuEntry::Separator,
             menu::item("New Branch…", |this: &mut Self, window, cx| this.start_new_branch(window, cx)).icon("plus"),
-        ];
+        ]);
         if !others.is_empty() {
             entries.push(MenuEntry::Separator);
         }
@@ -467,7 +728,10 @@ impl ProjectView {
             entries.push(menu::item(format!("Switch to {b}"), move |this: &mut Self, _, cx| this.branch_op(BranchOp::Switch(name.clone()), cx)).icon("branch"));
         }
         entries.push(menu::more("Remote Branches", |this: &mut Self, _| {
-            let remote = this.git.as_ref().map(|g| g.session.repo.remote_branches().unwrap_or_default()).unwrap_or_default();
+            let remote = match &this.remote {
+                Some(r) => r.branches.as_ref().map(|b| b.remote.clone()).unwrap_or_default(),
+                None => this.git.as_ref().map(|g| g.session.repo.remote_branches().unwrap_or_default()).unwrap_or_default(),
+            };
             remote
                 .into_iter()
                 .take(30)
@@ -477,6 +741,15 @@ impl ProjectView {
                 })
                 .collect()
         }));
+        if remote.is_some() {
+            // Not among another workspace's calls: said so, not hidden.
+            entries.push(MenuEntry::Separator);
+            for label in ["Merge into Current", "Rebase Current onto", "Delete Branch", "Stash Changes", "Pop Stash"] {
+                entries.push(menu::disabled(label, "not remotely"));
+            }
+            entries.push(menu::item("History", |this: &mut Self, _, cx| this.open_history(None, cx)).icon("history"));
+            return entries;
+        }
         if !others.is_empty() {
             let (m, r, d) = (others.clone(), others.clone(), others.clone());
             entries.push(MenuEntry::Separator);
@@ -621,8 +894,8 @@ impl ProjectView {
             .flex()
             .flex_wrap()
             .gap_1()
-            .child(button("git-fetch", "refresh", "Fetch".into()).on_click(cx.listener(|this, _, _, cx| this.git_op("Fetching…", |r| r.fetch(), cx))))
-            .child(button("git-pull", "pull", if s.branch.behind > 0 { format!("Pull {}", s.branch.behind) } else { "Pull".into() }).on_click(cx.listener(|this, _, _, cx| this.git_op("Pulling…", |r| r.pull(), cx))))
+            .child(button("git-fetch", "refresh", "Fetch".into()).on_click(cx.listener(|this, _, _, cx| this.git_op("Fetching…", GitOp::Branch(BranchOp::Fetch), cx))))
+            .child(button("git-pull", "pull", if s.branch.behind > 0 { format!("Pull {}", s.branch.behind) } else { "Pull".into() }).on_click(cx.listener(|this, _, _, cx| this.git_op("Pulling…", GitOp::Pull, cx))))
             .child(
                 button("git-push", "push", {
                     let ahead = s.branch.ahead.max(git.session.outgoing.len() as u32);
@@ -670,11 +943,11 @@ impl ProjectView {
                             .gap_1()
                             .child(button("op-continue", "go", "Continue".into()).on_click(cx.listener(move |this, _, _, cx| {
                                 let op = op2.clone();
-                                this.git_op("Continuing…", move |r| r.finish_operation(&op, "continue"), cx)
+                                this.git_op("Continuing…", GitOp::Finish { operation: op.clone(), how: "continue" }, cx)
                             })))
                             .child(button("op-abort", "close", "Abort".into()).on_click(cx.listener(move |this, _, _, cx| {
                                 let op = op3.clone();
-                                this.git_op("Aborting…", move |r| r.finish_operation(&op, "abort"), cx)
+                                this.git_op("Aborting…", GitOp::Finish { operation: op.clone(), how: "abort" }, cx)
                             }))),
                     ),
             );
@@ -986,9 +1259,9 @@ impl ProjectView {
                             cx.stop_propagation();
                             let paths = under.clone();
                             if staged {
-                                this.git_op("Unstaging…", move |r| r.unstage(&paths).map(|_| String::new()), cx);
+                                this.git_op("Unstaging…", GitOp::Unstage(paths.clone()), cx);
                             } else {
-                                this.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
+                                this.git_op("Staging…", GitOp::Stage(paths.clone()), cx);
                             }
                         }))
                         .child(if staged { "☑" } else { "☐" }),
@@ -1079,9 +1352,9 @@ impl ProjectView {
                             cx.stop_propagation();
                             let paths = vec![p.clone()];
                             if staged {
-                                this.git_op("Unstaging…", move |r| r.unstage(&paths).map(|_| String::new()), cx);
+                                this.git_op("Unstaging…", GitOp::Unstage(paths.clone()), cx);
                             } else {
-                                this.git_op("Staging…", move |r| r.stage(&paths).map(|_| String::new()), cx);
+                                this.git_op("Staging…", GitOp::Stage(paths.clone()), cx);
                             }
                         }))
                         .child(if staged { "☑" } else { "☐" }),
@@ -1106,24 +1379,24 @@ impl ProjectView {
                 .child(action(("stage", id), "plus", "Stage").on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     let p = vec![entry2.path.clone()];
-                    this.git_op("Staging…", move |r| r.stage(&p).map(|_| String::new()), cx);
+                    this.git_op("Staging…", GitOp::Stage(p), cx);
                 }))),
             Section::Staged => row.child(action(("unstage", id), "minus", "Unstage").on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 let p = vec![entry.path.clone()];
-                this.git_op("Unstaging…", move |r| r.unstage(&p).map(|_| String::new()), cx);
+                this.git_op("Unstaging…", GitOp::Unstage(p), cx);
             }))),
             Section::Conflict => {
                 let (a, b) = (entry.path.clone(), entry2.path.clone());
                 row.child(action(("ours", id), "minus", "Take ours, whole").on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     let p = a.clone();
-                    this.git_op("Resolving…", move |r| r.resolve_with(&p, true).map(|_| String::new()), cx);
+                    this.git_op("Resolving…", GitOp::Resolve { path: p, ours: true }, cx);
                 })))
                 .child(action(("theirs", id), "plus", "Take theirs, whole").on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     let p = b.clone();
-                    this.git_op("Resolving…", move |r| r.resolve_with(&p, false).map(|_| String::new()), cx);
+                    this.git_op("Resolving…", GitOp::Resolve { path: p, ours: false }, cx);
                 })))
             }
         };
@@ -1425,13 +1698,13 @@ impl ProjectView {
                         }
                     }
                 })))
-                .child(btn("three-ways", if self.merge_sides.as_ref().is_some_and(|(p, _, _)| *p == file.path) { "One Way" } else { "Three Ways" }).on_click(cx.listener(move |this, _, _, cx| this.toggle_three_ways(cx))))
+                .when(self.remote.is_none(), |d| d.child(btn("three-ways", if self.merge_sides.as_ref().is_some_and(|(p, _, _)| *p == file.path) { "One Way" } else { "Three Ways" }).on_click(cx.listener(move |this, _, _, cx| this.toggle_three_ways(cx)))))
                 .child(btn("mark-resolved", "Mark Resolved").text_color(hsla(ui.ink(accent))).on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(i) = this.active {
                         this.save(i, cx);
                     }
                     let p = vec![rel2.clone()];
-                    this.git_op("Marking resolved…", move |r| r.stage(&p).map(|_| String::new()), cx);
+                    this.git_op("Marking resolved…", GitOp::Stage(p), cx);
                 })))
                 .into_any_element(),
         )

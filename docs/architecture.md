@@ -1109,15 +1109,49 @@ and its `Show` switches back to this PC; it also counts this PC's benches for
 closing Shed, which closes them on this PC only.
 
 For another workspace, nothing is read from this machine's disk as if it
-were that workspace's: project tabs get no `ProjectView` (the bench window
-shows a note), the logbook search says it is not available
-(`LogbookSearch::unavailable`), an AI view marked remote (`AiView::set_remote`)
-lists no sessions and does no review, files are not opened from terminals or
-followed from Claude's edits, the folder picker is refused (folders are
-typed), and no desktop launchers or icons are written. Bench windows' titles
-end with the workspace's name and their app IDs include it; their places are
-not taken from, or sent to, that keeper (it keeps its own screens' places). These are the
-places later remote backends plug in behind `is_remote()`.
+were that workspace's. What the keeper's protocol does not carry (files, Git,
+the logbook, Claude Code's session files, the review, folders to choose from)
+comes as the nexus API's calls and topics, the ones the web and Android apps
+use: `shed_client::nexus_api` keeps one `/api` connection as this desktop
+(the `nexus-client.json` token), made when first needed and made again after
+a drop while subscriptions are open (each subscribed again); calls answer as
+futures any executor waits on (or blocking), subscriptions unsubscribe when
+dropped, and `NexusApi::fake` answers at once for tests. `AppState::remote()`
+gives the shown workspace's `RemoteWorkspace` (its calls) to the views made
+for it; `workspace_api.rs` has what they share (relative paths, UTF-16
+positions, Base64). Paths stay the workspace's own, absolute: views turn them
+into the API's relative ones.
+
+The backends are chosen where data is loaded, never on hot paths. A project
+tab's `ProjectView` has `remote: Option<Remote>` (`project_remote.rs`):
+`None` is the local code as it was (walk, watch, `std::fs`, `shed_git`);
+`Some` lists folders as the tree needs them (`Remote::rows` notes those not
+listed; the next render asks for them with `ListFolder`), reads files as they
+open (`Content::Loading` until `ReadFile` answers; the cursor or a search
+hit's selection waits in `Pending`), saves with `WriteFile` (marked saved if
+the text did not change meanwhile), asks `QuickOpen` for Ctrl+P, searches
+with the `Search` topic and follows the `Project` topic (`FilesChanged`:
+folders listed again and open files followed as from the disk; `GitChanged`:
+the status read again). Text is coloured here from the text (`shed-project`),
+as for local files, so the API's highlight spans are not used. Unsaved edits
+are kept aside under `remote-<workspace>/<path>` (relative, so never one of
+this machine's paths). The Git panel's operations are a `GitOp`: `run` with a
+local `Repo`, or `call` as the API's `Git…` call; those it has no call for
+(merge, rebase, delete branch, stash, finishing an operation, taking a side)
+say so in the panel, the menu shows them disabled, and blame and the
+three-way view are not offered. A remote panel's `GitSession` holds a `Repo`
+naming the workspace's repository (`GitStatus::root`) that nothing runs `git`
+in; branches come with each status (`GitBranches`) for the menu. Files
+opened from terminals or Claude's answers go to the bench's project tab
+holding them (by path, without this disk's links), else to a new project tab
+on the bench's folder or the file's.
+
+The logbook search says it is not available (`LogbookSearch::unavailable`),
+an AI view marked remote (`AiView::set_remote`) lists no sessions and does no
+review, the folder picker is refused (folders are typed), and no desktop
+launchers or icons are written. Bench windows' titles end with the
+workspace's name and their app IDs include it; their places are not taken
+from, or sent to, that keeper (it keeps its own screens' places).
 
 **The Android app** (`android/`, Kotlin and Jetpack Compose) is a connector:
 HTTP for sign-in, devices, pairing and push, and one WebSocket to `/api` with

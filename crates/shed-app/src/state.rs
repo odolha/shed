@@ -44,10 +44,8 @@ const KEPT_TABS: usize = 3;
 
 /// What views show in place of what is read from this machine's disk, for
 /// another workspace.
-pub const NOT_YET_REMOTE_PROJECT: &str = "Project tabs of a remote workspace come next. Its terminals and AI tabs work here; open this tab on that computer, or in the web app.";
 pub const NOT_YET_REMOTE_LOGBOOK: &str = "The command history is not yet searchable for remote workspaces.";
 pub const NOT_YET_REMOTE_AI: &str = "Not yet for remote workspaces: Claude Code's sessions are on that computer.";
-pub const NOT_YET_REMOTE_FILES: &str = "Opening files of a remote workspace comes next.";
 
 /// A keeper connection and the frames from it.
 type Connection = (KeeperConn, async_channel::Receiver<Frame>);
@@ -633,12 +631,6 @@ impl AppState {
     /// opened), made as the bench first opens and kept while the tab is in
     /// the tree, so unsaved edits survive hiding the bench.
     fn sync_projects(&mut self, cx: &mut Context<Self>) {
-        // Another workspace's files are not on this disk: its project tabs
-        // show a note instead (bench_window).
-        if self.is_remote() {
-            self.projects.clear();
-            return;
-        }
         let open: HashSet<BenchId> = self.windows.keys().chain(&self.opening).copied().collect();
         let all: Vec<(BenchId, TabId, shed_model::Project, shed_model::Rgb, f32)> = self
             .tree
@@ -655,9 +647,10 @@ impl AppState {
                     v.set_zoom(zoom, cx);
                 }),
                 None if open.contains(&bench) => {
-                    let (conn, settings) = (self.conn.clone(), self.settings.clone());
+                    // Another workspace's project is read through the nexus.
+                    let (conn, settings, remote) = (self.conn.clone(), self.settings.clone(), self.remote());
                     let view = cx.new(|cx| {
-                        let mut v = ProjectView::new(bench, tab, &project, accent, conn, settings, cx);
+                        let mut v = ProjectView::new(bench, tab, &project, accent, conn, settings, remote, cx);
                         v.set_zoom(zoom, cx);
                         v
                     });
@@ -722,9 +715,6 @@ impl AppState {
     /// Files an AI tab finished editing open in their project tab, when it
     /// follows edits.
     fn follow_edits(&mut self, view: &Entity<AiView>, cx: &mut Context<Self>) {
-        if self.is_remote() {
-            return;
-        }
         let (bench, follow) = { let v = view.read(cx); (v.bench, v.ai.follow) };
         let edits = view.read(cx).finished_edits();
         let new: Vec<(String, String)> = edits.into_iter().filter(|(id, _)| !view.read(cx).followed.contains(id)).collect();
@@ -814,7 +804,12 @@ impl AppState {
     pub fn open_in_project(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, files: bool, cx: &mut Context<Self>) -> bool {
         let Some(b) = self.tree.bench(bench) else { return false };
         let roots: Vec<(TabId, std::path::PathBuf)> = b.tabs.iter().filter_map(|t| Some((t.id, t.project_info()?.root.clone()))).collect();
-        let Some((tab, path)) = shed_project::project_holding(&path, &roots) else { return false };
+        let held = match self.is_remote() {
+            // Another workspace's paths, as they are (not this disk's links).
+            true => roots.iter().filter(|(_, r)| path.starts_with(r)).max_by_key(|(_, r)| r.as_os_str().len()).map(|(t, _)| (*t, path.clone())),
+            false => shed_project::project_holding(&path, &roots),
+        };
+        let Some((tab, path)) = held else { return false };
         let Some(view) = self.projects.get(&tab).cloned() else { return false };
         self.conn.send_msg(ClientMsg::FocusTab { tab });
         view.update(cx, |v, cx| v.show_path(path, at, files, cx));
@@ -825,15 +820,19 @@ impl AppState {
     /// project tab opens for its project (its Git root, else its folder) and
     /// shows the file once it is there.
     pub fn reveal_file(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, files: bool, cx: &mut Context<Self>) {
-        if self.is_remote() {
-            self.notice = Some(NOT_YET_REMOTE_FILES.into());
-            cx.notify();
-            return;
-        }
         if self.open_in_project(bench, path.clone(), at, files, cx) {
             return;
         }
-        let root = shed_project::project_root(path.parent().unwrap_or(&path));
+        let root = match self.is_remote() {
+            // Another workspace's folders are not on this disk to find its
+            // project in: the bench's folder when it holds the file, else
+            // the file's own.
+            true => match self.tree.bench(bench).map(|b| b.cwd.clone()) {
+                Some(cwd) if path.starts_with(&cwd) && cwd != std::path::Path::new("/") => cwd,
+                _ => path.parent().unwrap_or(&path).to_path_buf(),
+            },
+            false => shed_project::project_root(path.parent().unwrap_or(&path)),
+        };
         self.conn.send_msg(ClientMsg::NewProjectTab { bench, root });
         self.pending_reveal = Some((bench, path, at, files));
     }
