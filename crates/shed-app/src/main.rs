@@ -12,6 +12,8 @@ mod browser;
 #[cfg(feature = "gui")]
 mod gui;
 #[cfg(feature = "gui")]
+mod folder_browser;
+#[cfg(feature = "gui")]
 mod picture;
 #[cfg(feature = "gui")]
 mod bench_window;

@@ -1347,17 +1347,26 @@ pub enum Focus {
 
 /// The desktop's folder picker, for a project tab's folder: the folder
 /// chosen, `None` if cancelled, or why there is no picker.
-pub fn pick_folder(cx: &gpui::App) -> impl std::future::Future<Output = Result<Option<std::path::PathBuf>, String>> + use<> {
-    // This PC's picker shows this PC's folders, not another workspace's.
-    let remote = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()).is_some_and(|s| s.read(cx).is_remote());
+pub fn pick_folder(cx: &mut gpui::App) -> impl std::future::Future<Output = Result<Option<std::path::PathBuf>, String>> + use<> {
+    // This PC's picker shows this PC's folders: another workspace's are
+    // browsed there, in a window of Shed's own.
+    let remote = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()).and_then(|s| {
+        let s = s.read(cx);
+        Some((s.remote()?, s.workspace.label().to_string()))
+    });
     let options = gpui::PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Open Project".into()) };
-    let answer = (!remote).then(|| cx.prompt_for_paths(options));
+    let answer = match remote {
+        Some((workspace, name)) => Err(crate::folder_browser::open(workspace, name, cx)),
+        None => Ok(cx.prompt_for_paths(options)),
+    };
     async move {
-        let Some(answer) = answer else { return Err("a remote workspace's folders are typed, not picked".into()) };
-        match answer.await {
-            Ok(Ok(paths)) => Ok(paths.and_then(|p| p.into_iter().next())),
-            Ok(Err(e)) => Err(e.to_string()),
-            Err(_) => Ok(None),
+        match answer {
+            Err(browser) => Ok(browser?.recv().await.ok().flatten()),
+            Ok(answer) => match answer.await {
+                Ok(Ok(paths)) => Ok(paths.and_then(|p| p.into_iter().next())),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Ok(None),
+            },
         }
     }
 }
