@@ -20,6 +20,8 @@ pub struct LineEditor {
     focus: FocusHandle,
     /// Shown dimmed beside the field: how to finish.
     hint: Option<&'static str>,
+    /// Shown as dots (a password).
+    secret: bool,
     _blur: Option<Subscription>,
 }
 
@@ -34,7 +36,13 @@ impl Focusable for LineEditor {
 impl LineEditor {
     pub fn new(text: String, cx: &mut Context<Self>) -> Self {
         let cursor = text.chars().count();
-        Self { text, all_selected: false, cursor, focus: cx.focus_handle(), hint: None, _blur: None }
+        Self { text, all_selected: false, cursor, focus: cx.focus_handle(), hint: None, secret: false, _blur: None }
+    }
+
+    /// Shows the text as dots, as for a password.
+    pub fn secret(mut self) -> Self {
+        self.secret = true;
+        self
     }
 
     /// For renaming and the like: clicking or typing elsewhere keeps what was
@@ -131,8 +139,9 @@ impl Render for LineEditor {
         let focused = self.focus.is_focused(window);
         let at = self.byte(self.cursor);
         let (before, after) = self.text.split_at(at);
-        let selection = self.all_selected.then(|| div().rounded_sm().bg(crate::theme::hsla_alpha(ui.accent, 0.3)).child(self.text.clone()));
-        let (before, after) = if self.all_selected { (String::new(), String::new()) } else { (before.to_string(), after.to_string()) };
+        let dots = |s: &str| if self.secret { "•".repeat(s.chars().count()) } else { s.to_string() };
+        let selection = self.all_selected.then(|| div().rounded_sm().bg(crate::theme::hsla_alpha(ui.accent, 0.3)).child(dots(&self.text)));
+        let (before, after) = if self.all_selected { (String::new(), String::new()) } else { (dots(before), dots(after)) };
         let field = div()
             .flex()
             .flex_1()

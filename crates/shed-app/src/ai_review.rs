@@ -103,6 +103,14 @@ impl AiView {
     }
 
     fn reload_review(&mut self, cx: &mut Context<Self>) {
+        if self.remote {
+            if let Some(r) = &mut self.review {
+                r.error = Some(crate::state::NOT_YET_REMOTE_AI.into());
+                r.loading = None;
+            }
+            cx.notify();
+            return;
+        }
         let Some(review) = &self.review else { return };
         let since = self.review_since(review.scope);
         let dirs = shed_review::dirs(&self.ai);

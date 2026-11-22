@@ -40,6 +40,9 @@ pub struct LogbookSearch {
     /// over ssh), and the fetch while it runs.
     server: Option<String>,
     fetching: Option<Task<()>>,
+    /// Why there is nothing to search here (another workspace's history,
+    /// not reachable yet).
+    unavailable: Option<String>,
 }
 
 impl EventEmitter<SearchEvent> for LogbookSearch {}
@@ -68,8 +71,20 @@ impl LogbookSearch {
             pending: None,
             server: None,
             fetching: None,
+            unavailable: None,
         };
         this.refresh(cx);
+        this
+    }
+
+    /// Nothing to search, saying why: another workspace's history (this
+    /// PC's logbook is not that workspace's).
+    pub fn unavailable(note: String, ui: UiColors, accent: Rgb, mono: SharedString, cx: &mut Context<Self>) -> Self {
+        let here = Here { tab: shed_model::TabId::new(), bench: shed_model::BenchId::new() };
+        let mut this = Self::new(here, PathBuf::new(), ui, accent, mono, cx);
+        this.pending = None;
+        this.error = Some(note.clone());
+        this.unavailable = Some(note);
         this
     }
 
@@ -119,6 +134,9 @@ impl LogbookSearch {
 
     /// Runs the query off the UI thread; a newer query replaces an older one.
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.unavailable.is_some() {
+            return;
+        }
         let (path, scope, here, query) = (self.path.clone(), self.scope, self.here, self.query.clone());
         self.pending = Some(cx.spawn(async move |this, cx| {
             let found = cx

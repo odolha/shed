@@ -1118,6 +1118,7 @@ url = "https://nexus.example.com"   # set by `shed nexus join`; must stay the pa
 enabled = true                      # false keeps the pairing but does not link
 control = "full"                    # "view": the apps can look at tabs but change nothing
 # ca_file = "~/nexus-ca.pem"        # for a nexus with a certificate of your own making
+desktop_clients = false             # true: Shed on your other computers can show this one
 ```
 
 The pairing's token is not in `shed.toml` (which backups copy): it is in
@@ -1133,6 +1134,60 @@ apps, covers only that tab's folder, even when the repository is larger. A
 view-only workspace shows everything in the apps but offers no changes, and
 does not let them browse the machine's folders. Whoever runs the nexus can see
 and type into what it relays, so host it yourself.
+
+### Other workspaces in this window
+
+Shed's window can show another workspace linked to your nexus (a server, the
+computer at the office) instead of this PC's, one at a time. Its terminals and
+AI tabs work as they do here, because Shed speaks to that workspace's keeper
+itself, through the nexus.
+
+1. **Sign this desktop in** to the nexus: the switcher at the top of the Shed
+   window (**This PC ▾**) → **Sign In to Nexus…** (the nexus's address, your
+   user name, password and a code from the authenticator), or in a terminal:
+
+   ```sh
+   shed nexus signin https://nexus.example.com
+   ```
+
+   This desktop becomes a device of your account (**Shed desktop** in the apps'
+   Devices, where revoking it cuts it off). Its token is kept in
+   `~/.local/share/shed/nexus-client.json`, readable only by you. Signing in is
+   apart from linking this PC (`shed nexus join`), which never lets anyone
+   show other workspaces. `shed nexus signout` (or **Sign Out** in the
+   switcher) forgets it here.
+2. **Let desktops in** on the workspace to show, in its `shed.toml`:
+
+   ```toml
+   [nexus]
+   desktop_clients = true
+   ```
+
+   It needs `control = "full"`. Off by default: a desktop shown a workspace sees
+   all of it, **private tabs too** (they are your own signed-in computers),
+   and can do anything there that Shed's window can.
+3. **Switch**: the switcher lists **This PC** and the nexus's workspaces;
+   offline ones say so and cannot be chosen. Choosing one closes this
+   workspace's bench windows (its benches keep running, as when Shed's window
+   closes), connects, and shows the other's benches in the Shed window; the
+   benches you had open there come back. The switcher then shows its name, and
+   its bench windows' titles end with it (`Shed — api · office`). Choosing
+   **This PC** comes back, with the benches you had open here; so does opening
+   one of this PC's benches from its launcher. Shed starts on This PC each time.
+
+If the workspace cannot be reached, or does not let desktops in, or runs
+another version of Shed, a note above the benches says why and nothing
+changes. If the connection drops, Shed comes back to This PC and says so.
+Closing Shed's window closes this PC's benches as always; the other
+workspace's keep running there.
+
+Not yet for another workspace (they read this computer's disk; they come
+next): project tabs (file tree, editor, search, Git) show a note instead; the
+command history (Ctrl+R) says it is not searchable yet; an AI tab's sessions
+list and Review say so (the conversation, prompt, permissions, drafts, queue
+and settings all work); opening a file from a terminal or Claude's changes,
+picking folders (type them instead) and its benches' desktop launchers.
+Notifications from its AI tabs come here as usual.
 
 ## Shed in a browser
 
@@ -1199,7 +1254,7 @@ What the web app shows:
 - **Logbook** (on each workspace, and in a bench's menu): commands with their
   exit status, folder and time; search a tab, its bench, or everything, and
   `tag:label`.
-- **Devices**: browsers, phones and workspaces with when and where they were
+- **Devices**: browsers, phones, Shed desktops and workspaces with when and where they were
   last seen; rename or revoke them (revoking asks for a code); workspaces
   asking to pair, each with **Reject…** (asks first) and **Approve…**
   (approving needs the code the workspace printed; see

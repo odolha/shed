@@ -466,8 +466,11 @@ impl TerminalView {
             .try_global::<crate::state::AppHandle>()
             .and_then(|h| h.0.upgrade())
             .and_then(|state| state.read(cx).tree.tab(here.tab).and_then(|t| t.remote_info()).map(|r| (r.host.clone(), r.id.clone())));
+        // Another workspace's history is on that workspace, not here.
+        let other_workspace = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()).is_some_and(|state| state.read(cx).is_remote());
         let search = match remote {
             Some((host, shell)) => cx.new(|cx| LogbookSearch::remote(host, shell, ui, accent, mono, cx)),
+            None if other_workspace => cx.new(|cx| LogbookSearch::unavailable(crate::state::NOT_YET_REMOTE_LOGBOOK.into(), ui, accent, mono, cx)),
             None => cx.new(|cx| LogbookSearch::new(here, shed_logbook::path_from_env(), ui, accent, mono, cx)),
         };
         window.focus(&search.read(cx).focus_handle(cx), cx);

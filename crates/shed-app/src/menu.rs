@@ -20,6 +20,8 @@ pub enum MenuEntry<V> {
     Palette(Vec<Swatch<V>>),
     /// Opens another menu in its place.
     More { label: SharedString, icon: Option<&'static str>, entries: MenuEntries<V> },
+    /// Shown dimmed, not to be chosen, with why beside it ("offline").
+    Disabled { label: SharedString, icon: Option<&'static str>, note: SharedString },
     Separator,
 }
 
@@ -38,7 +40,7 @@ pub fn swatch_of<V>(color: Rgb, name: &'static str, current: bool, action: impl 
 impl<V> MenuEntry<V> {
     /// Shows a UI icon before the label.
     pub fn icon(mut self, name: &'static str) -> Self {
-        if let MenuEntry::Item { icon, .. } | MenuEntry::More { icon, .. } = &mut self {
+        if let MenuEntry::Item { icon, .. } | MenuEntry::More { icon, .. } | MenuEntry::Disabled { icon, .. } = &mut self {
             *icon = Some(name);
         }
         self
@@ -60,6 +62,11 @@ pub fn item<V>(label: impl Into<SharedString>, action: impl Fn(&mut V, &mut Wind
 /// An item that opens another menu, made when it is chosen.
 pub fn more<V>(label: impl Into<SharedString>, entries: impl Fn(&mut V, &mut Context<V>) -> Vec<MenuEntry<V>> + 'static) -> MenuEntry<V> {
     MenuEntry::More { label: label.into(), icon: None, entries: Rc::new(entries) }
+}
+
+/// An item that cannot be chosen now, dimmed, with why (`note`) beside it.
+pub fn disabled<V>(label: impl Into<SharedString>, note: impl Into<SharedString>) -> MenuEntry<V> {
+    MenuEntry::Disabled { label: label.into(), icon: None, note: note.into() }
 }
 
 /// An item in red, for what stops or removes things.
@@ -224,7 +231,9 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
         .text_size(crate::theme::us(13.0))
         .text_color(hsla(ui.text));
     // With icons on some items, every label starts at the same place.
-    let icons = entries.iter().any(|e| matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::Item { dot: Some(_), .. } | MenuEntry::More { icon: Some(_), .. }));
+    let icons = entries.iter().any(|e| {
+        matches!(e, MenuEntry::Item { icon: Some(_), .. } | MenuEntry::Item { dot: Some(_), .. } | MenuEntry::More { icon: Some(_), .. } | MenuEntry::Disabled { icon: Some(_), .. })
+    });
     let lead = |glyph: &Option<&'static str>, color: Rgb| match glyph {
         Some(name) => Some(svg().path(icon(name)).size(crate::theme::us(14.0)).text_color(hsla(color)).into_any_element()),
         None if icons => Some(div().size(px(14.0)).into_any_element()),
@@ -298,6 +307,18 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
                     }))
                     .into_any_element()
             }
+            MenuEntry::Disabled { label, icon: glyph, note } => div()
+                .id(("menu-item", base + i))
+                .h(crate::theme::us(ROW))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .text_color(hsla(ui.text_dim))
+                .children(lead(glyph, ui.text_dim))
+                .child(div().flex_1().child(label.clone()))
+                .child(div().text_size(crate::theme::us(11.0)).child(note.clone()))
+                .into_any_element(),
             MenuEntry::Item { label, icon: glyph, danger, action, dot } => {
                 let action = action.clone();
                 let color = if *danger { ui.danger } else { ui.text };

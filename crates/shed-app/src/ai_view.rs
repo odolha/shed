@@ -196,6 +196,9 @@ pub struct AiView {
     deleting: Option<(String, Task<()>)>,
     /// Why deleting a session did not work, above the sessions list.
     delete_problem: Option<String>,
+    /// Another workspace's tab: its sessions and changes are on that
+    /// computer, not readable here (yet).
+    remote: bool,
     filter: Entity<LineEditor>,
     sessions_scroll: UniformListScrollHandle,
     /// The conversation's and the sessions' scrollbars.
@@ -447,6 +450,7 @@ impl AiView {
             sessions_scroll: UniformListScrollHandle::new(),
             deleting: None,
             delete_problem: None,
+            remote: false,
             conversation_bar: Default::default(),
             sessions_bar: Default::default(),
             completion: None,
@@ -930,7 +934,19 @@ impl AiView {
         }));
     }
 
+    /// Marks the tab as another workspace's: no sessions list or review
+    /// from this PC's files.
+    pub fn set_remote(&mut self, cx: &mut Context<Self>) {
+        self.remote = true;
+        self.sessions_task = None;
+        self.sessions = Arc::new(Vec::new());
+        cx.notify();
+    }
+
     fn load_sessions(&mut self, cx: &mut Context<Self>) {
+        if self.remote {
+            return;
+        }
         let folder = self.ai.folder.clone();
         self.sessions_task = Some(cx.spawn(async move |this, cx| {
             let list = cx.background_executor().spawn(async move { shed_ai::list_sessions(&folder) }).await;
@@ -3992,6 +4008,14 @@ impl Render for AiView {
                 .flex_col()
                 .child(uniform_list("ai-prompts", shown, cx.processor(|this, range, _, cx| this.render_prompt_rows(range, cx))).track_scroll(&self.prompts_scroll).flex_1().min_h_0())
                 .child(crate::scrollbar::vertical(crate::scrollbar::Source::uniform(&self.prompts_scroll), &self.prompts_bar, &ui, false).absolute().top_0().right_0().bottom_0())
+        } else if self.remote {
+            div()
+                .flex_1()
+                .min_h_0()
+                .p_3()
+                .text_size(px(12.0 * self.z()))
+                .text_color(hsla(ui.text_dim))
+                .child(crate::state::NOT_YET_REMOTE_AI)
         } else {
             div()
                 .relative()

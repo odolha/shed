@@ -1361,6 +1361,26 @@ impl Render for BenchWindow {
         let content = match bench.active_tab() {
             Some(tab) if tab.project_info().is_some() => match self.state.read(cx).projects.get(&tab.id) {
                 Some(view) => div().size_full().child(view.clone()).into_any_element(),
+                // Another workspace's files are not on this disk (yet).
+                None if self.state.read(cx).is_remote() => div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(hsla(self.ui.background))
+                    .child(
+                        div()
+                            .max_w(px(460.0))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap_2()
+                            .text_color(hsla(self.ui.text_dim))
+                            .child(svg().path(icon("project")).size(crate::theme::us(28.0)).text_color(hsla(self.ui.text_dim)))
+                            .child(div().text_color(hsla(self.ui.text)).child(tab.display_title()))
+                            .child(div().text_size(crate::theme::us(12.0)).text_center().child(crate::state::NOT_YET_REMOTE_PROJECT)),
+                    )
+                    .into_any_element(),
                 None => div().into_any_element(),
             },
             Some(tab) if tab.ai_info().is_some() => match self.state.read(cx).ai_views.get(&tab.id) {

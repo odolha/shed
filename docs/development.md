@@ -299,6 +299,19 @@ link against a fake nexus on a real socket (`tests/common/mod.rs`), and
 `connect_remote`'s tunnel through the real nexus (signing in, the workspace
 list, typing and output).
 
+### Showing a dev workspace in a dev window
+
+Two dev keepers, one shown in the other's window through the dev nexus: the
+shown one in its own environment (say `/tmp/shed-dev2`) is paired
+(`shed nexus join`) and has `desktop_clients = true` under `[nexus]` in its
+`shed.toml`; in the other (`/tmp/shed-dev`), `shed nexus signin
+http://localhost:7870` signs the desktop in (a recovery code does for the
+code), and the Shed window's switcher (**This PC ▾**) lists the workspace.
+On a headless Xvfb display (as `tools/screenshots/take.sh` does) this touches
+nothing of your own; clicks do not reach windows there, so
+`SHED_DEBUG_WORKSPACE=NAME` (in the window process's environment) switches to
+that workspace once the nexus lists it.
+
 ### End to end
 
 `tools/e2e.sh` runs the whole way with real processes, apart from your own

@@ -1,12 +1,18 @@
 //! The Shed window: the pegboard, with the Shed icon. It lives as long as
-//! Shed does; closing it closes every bench and Shed with them.
+//! Shed does; closing it closes every bench and Shed with them. Its header
+//! switches between this PC's workspace and others reached through a nexus
+//! this desktop is signed in to (and signs in).
 
-use gpui::{Context, Entity, PromptLevel, SharedString, Subscription, Window, div, prelude::*, svg};
+use gpui::{Context, Entity, Focusable, PromptLevel, SharedString, Subscription, Window, div, prelude::*, px, svg};
+use shed_client::nexus_client::WorkspaceInfo;
 use shed_model::config::Appearance;
 use shed_proto::{ClientMsg, ShowTarget};
 
 use crate::actions::NewBench;
 use crate::assets::icon;
+use crate::line_editor::{EditorEvent, LineEditor};
+use crate::menu::{self, Menu, MenuEntry, MenuHost, item};
+use crate::state::Workspace;
 use crate::pegboard::Pegboard;
 use crate::state::AppState;
 use crate::theme::{hsla, hsla_alpha, is_dark};
@@ -23,7 +29,27 @@ pub struct ShedWindow {
     /// How the link to the nexus is doing, read every few seconds while a
     /// nexus is set (`None`: no link runs).
     link: Option<shed_client::link_status::LinkStatus>,
+    /// The workspace switcher's menu, while open.
+    menu: Option<Menu<Self>>,
+    /// The nexus's workspaces, as last listed (`None`: not yet), and the
+    /// listing while it runs.
+    workspaces: Option<Result<Vec<WorkspaceInfo>, String>>,
+    listing: Option<gpui::Task<()>>,
+    /// The sign-in dialog, while open.
+    sign_in: Option<SignInDialog>,
     _following: Subscription,
+}
+
+/// Signing this desktop in to a nexus: its address, user, password and a
+/// code from the authenticator.
+struct SignInDialog {
+    url: Entity<LineEditor>,
+    user: Entity<LineEditor>,
+    password: Entity<LineEditor>,
+    code: Entity<LineEditor>,
+    error: Option<String>,
+    busy: bool,
+    _subs: Vec<Subscription>,
 }
 
 impl Placed for ShedWindow {
@@ -80,7 +106,184 @@ impl ShedWindow {
             .detach();
         }
         let following = PlaceTracker::follow(window, cx);
-        Self { state, board, quitting: false, place, settings: None, link: None, _following: following }
+        Self {
+            state,
+            board,
+            quitting: false,
+            place,
+            settings: None,
+            link: None,
+            menu: None,
+            workspaces: None,
+            listing: None,
+            sign_in: None,
+            _following: following,
+        }
+    }
+
+    /// Lists the nexus's workspaces in the background; the switcher's menu,
+    /// if open, is made again with them.
+    fn list_workspaces(&mut self, cx: &mut Context<Self>) {
+        let Some(sign_in) = shed_client::nexus_client::SignIn::load() else {
+            self.workspaces = None;
+            return;
+        };
+        let ca = shed_client::nexus_client::configured_ca_file();
+        self.listing = Some(cx.spawn(async move |this, cx| {
+            let listed = cx
+                .background_executor()
+                .spawn(async move { shed_client::nexus_client::workspaces(&sign_in, ca.as_deref()).map_err(|e| format!("{e:#}")) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.listing = None;
+                this.workspaces = Some(listed);
+                if this.menu.is_some() {
+                    let entries = this.switcher_entries(cx);
+                    if let Some(menu) = &mut this.menu {
+                        menu.entries = entries;
+                        menu.sub = None;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// The switcher's menu: this PC, the nexus's workspaces (offline ones
+    /// not to be chosen), and signing in or out.
+    fn switcher_entries(&self, cx: &gpui::App) -> Vec<MenuEntry<Self>> {
+        let state = self.state.read(cx);
+        let current = state.workspace.clone();
+        let mark = |on: bool| if on { "check" } else { "bench" };
+        let mut entries = vec![item("This PC", |this: &mut Self, _, cx| this.switch(Workspace::Local, cx)).icon(mark(current == Workspace::Local))];
+        let sign_in = shed_client::nexus_client::SignIn::load();
+        // This PC, if paired, is in the nexus's list too: it is "This PC" here.
+        let me = shed_link::pairing::Secret::load().map(|s| s.workspace);
+        match (&sign_in, &self.workspaces) {
+            (None, _) => {}
+            (Some(_), None) => entries.push(menu::disabled("Workspaces", "listing…").icon("server")),
+            (Some(_), Some(Err(e))) => {
+                entries.push(menu::disabled("Workspaces", "cannot list").icon("alert"));
+                entries.push(menu::disabled(e.chars().take(60).collect::<String>(), ""));
+            }
+            (Some(_), Some(Ok(list))) => {
+                let mut list: Vec<&WorkspaceInfo> = list.iter().filter(|w| Some(&w.id) != me.as_ref()).collect();
+                list.sort_by_key(|w| w.name.to_lowercase());
+                if list.is_empty() {
+                    entries.push(menu::disabled("No other workspaces", ""));
+                }
+                for w in list {
+                    let target = Workspace::Remote { id: w.id.clone(), name: w.name.clone() };
+                    let on = current == target;
+                    if w.online || on {
+                        entries.push(item(w.name.clone(), move |this: &mut Self, _, cx| this.switch(target.clone(), cx)).icon(if on { "check" } else { "server" }));
+                    } else {
+                        entries.push(menu::disabled(w.name.clone(), "offline").icon("server"));
+                    }
+                }
+            }
+        }
+        entries.push(MenuEntry::Separator);
+        match sign_in {
+            Some(s) => {
+                entries.push(menu::disabled(format!("Signed in as {}", s.username), short_url(&s.url)));
+                entries.push(item("Sign Out", |this: &mut Self, _, cx| this.sign_out(cx)).icon("power"));
+            }
+            None => entries.push(item("Sign In to Nexus…", |this: &mut Self, window, cx| this.open_sign_in(window, cx)).icon("globe")),
+        }
+        entries
+    }
+
+    fn switch(&mut self, target: Workspace, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| state.switch_to(target, cx));
+    }
+
+    fn open_switcher(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        if self.listing.is_none() {
+            self.list_workspaces(cx);
+        }
+        let entries = self.switcher_entries(cx);
+        self.open_menu(position, entries, cx);
+    }
+
+    fn sign_out(&mut self, cx: &mut Context<Self>) {
+        // Showing another workspace through it: back to this PC first.
+        self.state.update(cx, |state, cx| state.switch_to(Workspace::Local, cx));
+        if let Err(e) = shed_client::nexus_client::SignIn::remove() {
+            self.state.update(cx, |state, cx| {
+                state.notice = Some(format!("Cannot sign out: {e}"));
+                cx.notify();
+            });
+        }
+        self.workspaces = None;
+        cx.notify();
+    }
+
+    fn open_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let url = shed_link::pairing::default_nexus().unwrap_or_default();
+        let url = cx.new(|cx| LineEditor::new(url, cx).without_hint());
+        let user = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint());
+        let password = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint().secret());
+        let code = cx.new(|cx| LineEditor::new(String::new(), cx).without_hint());
+        let first = if url.read(cx).text().is_empty() { &url } else { &user };
+        window.focus(&first.read(cx).focus_handle(cx), cx);
+        // Enter in any field signs in; Esc closes.
+        let subs = [&url, &user, &password, &code]
+            .into_iter()
+            .map(|field| {
+                cx.subscribe_in(field, window, |this, _, e: &EditorEvent, window, cx| match e {
+                    EditorEvent::Submit(_) => this.submit_sign_in(window, cx),
+                    EditorEvent::Cancel => {
+                        this.sign_in = None;
+                        cx.notify();
+                    }
+                })
+            })
+            .collect();
+        self.sign_in = Some(SignInDialog { url, user, password, code, error: None, busy: false, _subs: subs });
+        cx.notify();
+    }
+
+    fn submit_sign_in(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(d) = &mut self.sign_in else { return };
+        if d.busy {
+            return;
+        }
+        let (url, user, password, code) =
+            (d.url.read(cx).text().trim().to_string(), d.user.read(cx).text().trim().to_string(), d.password.read(cx).text().to_string(), d.code.read(cx).text().trim().to_string());
+        if url.is_empty() || user.is_empty() || password.is_empty() || code.is_empty() {
+            d.error = Some("Fill in every field.".into());
+            cx.notify();
+            return;
+        }
+        d.busy = true;
+        d.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let signed = cx
+                .background_executor()
+                .spawn(async move { shed_link::pairing::sign_in_blocking(&url, &user, &password, &code).map_err(|e| format!("{e:#}")) })
+                .await;
+            this.update(cx, |this, cx| {
+                match signed {
+                    Ok(_) => {
+                        this.sign_in = None;
+                        this.workspaces = None;
+                        this.list_workspaces(cx);
+                    }
+                    Err(e) => {
+                        if let Some(d) = &mut this.sign_in {
+                            d.busy = false;
+                            d.error = Some(e);
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
@@ -104,7 +307,7 @@ impl ShedWindow {
         // Every window's place, so all open the same next time.
         self.place.record(window);
         self.state.update(cx, |state, cx| state.record_places(cx));
-        let running = self.state.read(cx).tree.benches.len();
+        let running = self.state.read(cx).local_running();
         if running == 0 {
             self.quit(cx);
             return;
@@ -134,7 +337,7 @@ impl ShedWindow {
     fn quit(&mut self, cx: &mut Context<Self>) {
         self.quitting = true;
         // The keeper closes every bench and stops; losing it quits this process.
-        self.state.read(cx).conn.send_msg(ClientMsg::QuitShed);
+        self.state.update(cx, |state, cx| state.quit_shed(cx));
         cx.notify();
     }
 }
@@ -270,6 +473,7 @@ impl Render for ShedWindow {
                     .child(svg().path(icon("shed")).size(crate::theme::us(18.0)).text_color(hsla(ui.accent)))
                     .child(div().text_size(crate::theme::us(16.0)).child("Shed"))
                     .child(div().flex_1())
+                    .children(self.switcher(cx))
                     .children(self.link_chip(cx))
                     .child(
                         div()
@@ -300,12 +504,148 @@ impl Render for ShedWindow {
                     .flex_1()
                     .min_h_0()
                     .child(self.board.clone())
-                    .when_some(self.settings.as_ref().map(|(p, _)| p.clone()), |d, panel| d.child(div().absolute().top_0().right_0().h_full().child(panel))),
+                    .when_some(self.settings.as_ref().map(|(p, _)| p.clone()), |d, panel| d.child(div().absolute().top_0().right_0().h_full().child(panel)))
+                    .children(self.sign_in_dialog(cx)),
             )
+            .children(self.menu.as_ref().map(|m| menu::render(m, &ui, cx)))
     }
 }
 
+impl MenuHost for ShedWindow {
+    fn menu_slot(&mut self) -> &mut Option<Menu<Self>> {
+        &mut self.menu
+    }
+
+    fn menu_closed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+}
+
+/// `https://nexus.example.com/` as `nexus.example.com`.
+fn short_url(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    url.split_once("://").map_or(url, |(_, rest)| rest).to_string()
+}
+
 impl ShedWindow {
+    /// Which workspace the windows show: "This PC ▾", or another reached
+    /// through the nexus. Shown once this desktop is signed in to a nexus
+    /// (or showing another workspace); its menu also signs in.
+    fn switcher(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let state = self.state.read(cx);
+        let ui = state.settings.ui.clone();
+        let remote = state.is_remote();
+        let label = match &state.switching {
+            Some(name) => format!("Connecting to {name}…"),
+            None => format!("{} ▾", state.workspace.label()),
+        };
+        let tip = if remote {
+            format!("Showing {}'s benches through the nexus; its terminals and AI tabs work here. Click for other workspaces.", state.workspace.label())
+        } else {
+            "The benches of this PC. Click for other workspaces, through a nexus.".into()
+        };
+        let tint = if remote { ui.ink(ui.accent) } else { ui.text_dim };
+        Some(
+            div()
+                .id("workspace-switcher")
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .cursor_pointer()
+                .text_size(crate::theme::us(12.0))
+                .text_color(hsla(tint))
+                .when(remote, |d| d.bg(hsla_alpha(ui.accent, 0.15)))
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .tooltip(crate::menu::tooltip_text(tip))
+                .child(svg().path(icon(if remote { "server" } else { "bench" })).size(crate::theme::us(14.0)).text_color(hsla(tint)))
+                .child(label)
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| this.open_switcher(e.position, cx))),
+        )
+    }
+
+    /// The sign-in dialog, over the pegboard while open.
+    fn sign_in_dialog(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let d = self.sign_in.as_ref()?;
+        let ui = self.state.read(cx).settings.ui.clone();
+        let field = |label: &'static str, editor: &Entity<LineEditor>| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().w(px(110.0)).flex_none().text_color(hsla(ui.text_dim)).child(label))
+                .child(div().flex_1().child(editor.clone()))
+        };
+        let button = |id: &'static str, label: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .border_1()
+                .border_color(hsla(if primary { ui.accent } else { ui.divider }))
+                .when(primary, |b| b.bg(hsla_alpha(ui.accent, 0.2)).text_color(hsla(ui.ink(ui.accent))))
+                .hover(|s| s.bg(hsla(ui.tab_hover)))
+                .child(label)
+        };
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .items_start()
+                .justify_center()
+                .pt_16()
+                .bg(hsla_alpha(ui.background, 0.6))
+                .occlude()
+                .child(
+                    div()
+                        .id("sign-in")
+                        .w(px(460.0))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_4()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(hsla(ui.divider))
+                        .bg(hsla(ui.tab_active))
+                        .text_size(crate::theme::us(13.0))
+                        .child(div().text_size(crate::theme::us(15.0)).child("Sign in to a nexus"))
+                        .child(
+                            div()
+                                .text_size(crate::theme::us(12.0))
+                                .text_color(hsla(ui.text_dim))
+                                .child("To show other workspaces here: those whose shed.toml says desktop_clients = true under [nexus]. This desktop becomes a device of the account (revoke it in the web app's Devices)."),
+                        )
+                        .child(field("Nexus", &d.url))
+                        .child(field("User", &d.user))
+                        .child(field("Password", &d.password))
+                        .child(field("Code", &d.code))
+                        .children(d.error.clone().map(|e| div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.danger)).child(e)))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(button("sign-in-cancel", "Cancel", false).on_click(cx.listener(|this, _, _, cx| {
+                                    this.sign_in = None;
+                                    cx.notify();
+                                })))
+                                .child(
+                                    button("sign-in-go", if d.busy { "Signing In…" } else { "Sign In" }, true)
+                                        .on_click(cx.listener(|this, _, window, cx| this.submit_sign_in(window, cx))),
+                                ),
+                        ),
+                ),
+        )
+    }
+
     /// While a nexus is set: whether this machine is linked to it (reachable
     /// from the web and phone apps), switching the link on or off.
     fn link_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {

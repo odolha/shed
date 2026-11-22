@@ -867,7 +867,8 @@ sockets at once (with `Goodbye`). Sockets are pinged every 30 s and dropped
 after 90 s of silence; one that cannot keep up (4096 frames queued) is dropped.
 Frames may be up to 24 MB (pictures for AI prompts travel inside them).
 
-**Tunnels.** Shed's desktop app showing another workspace speaks that keeper's own protocol through the nexus. Only a
+**Tunnels.** Shed's desktop app showing another workspace (see "Other
+workspaces" below) speaks that keeper's own protocol through the nexus. Only a
 device of kind `desktop` (signed in with `device.kind = desktop`, which gets a
 bearer token like a phone) may open one; browsers and phones get `Forbidden`.
 `ClientFrame::TunnelOpen { id, workspace }` goes to the link as
@@ -1066,6 +1067,78 @@ a bounded channel (64 pieces of up to 64 KB), so a tunnel reads no more from
 the keeper while the nexus is behind; bytes for the keeper that do not fit in
 the tunnel's own queue (256 pieces) close it. Tunnels close with the nexus
 connection, on `TunnelClose`, and when the keeper ends the connection.
+
+## Other workspaces in the window
+
+Shed's window process shows one workspace at a time: this PC's keeper, or
+another workspace's through a nexus (`AppState::workspace`, a `Workspace`:
+`Local` or `Remote { id, name }`; `is_remote()`). The desktop signs in to the
+nexus as a connector of kind `desktop` (`shed nexus signin`, or the Shed
+window's switcher; `shed_link::pairing::sign_in`), apart from the workspace's
+pairing: the token is in `nexus-client.json` in Shed's data folder (0600,
+`shed_client::nexus_client::SignIn`), while `nexus.json` grants no connector
+access. `nexus_client::workspaces` lists the nexus's workspaces (a short `/api`
+connection: `Hello`, `Welcome`); the switcher leaves out this PC's own
+pairing.
+
+`keeper_conn::connect_remote` (`nexus_client::connect_tunnel`) dials `/api`
+with the bearer token (rustls, the web's roots plus `[nexus] ca_file`, as the
+link), opens a tunnel, sends the keeper's `Hello` and waits for its `Welcome`:
+a keeper of another protocol version, an offline workspace and one that does
+not let desktops in are refused there, in words, before anything changes. It
+runs on a thread with its own small tokio runtime; frames to send are encoded
+with shed-proto's framing and go in binary messages of at most 256 KB; bytes
+that come back go through a `FrameDecoder` to the same kind of channel a
+local socket gives, so the rest of the app cannot tell. `KeeperConn::close`
+ends a connection (a local one shuts its socket down; a tunnel says
+`TunnelClose`).
+
+Switching (`AppState::switch_to`) connects first, in the background, and only
+then leaves the shown workspace: its bench windows close without `Detach`
+(the connection is closed, as when the window process quits, so the keeper
+keeps them shown), the tree, views and the pegboard's data are dropped, and
+which benches had windows is remembered for coming back (this session only).
+Then the new connection says `Show(Shed)` and `Pegboard` and the remembered
+benches are shown again, as at startup. Frames carry the generation of the
+connection they came on; those of a connection let go of are dropped, and
+only the shown one's end matters (this PC's: Shed quits; another's: back to
+this PC, with a note). While another workspace is shown, a second connection
+to this PC's keeper (`standby`, a window client attached to nothing) keeps this
+process its window process: a second `shed` or a bench's launcher reaches it,
+and its `Show` switches back to this PC; it also counts this PC's benches for
+closing Shed, which closes them on this PC only.
+
+For another workspace, nothing is read from this machine's disk as if it
+were that workspace's: project tabs get no `ProjectView` (the bench window
+shows a note), the logbook search says it is not available
+(`LogbookSearch::unavailable`), an AI view marked remote (`AiView::set_remote`)
+lists no sessions and does no review, files are not opened from terminals or
+followed from Claude's edits, the folder picker is refused (folders are
+typed), and no desktop launchers or icons are written. Bench windows' titles
+end with the workspace's name and their app IDs include it; their places are
+not taken from, or sent to, that keeper (it keeps its own screens' places). These are the
+places later remote backends plug in behind `is_remote()`.
+
+**The Android app** (`android/`, Kotlin and Jetpack Compose) is a connector:
+HTTP for sign-in, devices, pairing and push, and one WebSocket to `/api` with
+the phone's device token as a bearer token. `NexusSocket` sends `Hello`, answers
+requests by id (with timeouts), turns subscriptions into flows, and on a lost
+connection dials again with a backoff and subscribes again under the same ids
+(the first event of each is the whole thing again); a subscription that
+`Ended` because its workspace went offline starts again when the workspace
+comes back; `Goodbye` with `Unauthorized` signs the phone out. The socket runs
+while the app is in the foreground and a minute after, and says `Visible`
+(true from `ON_START`, false from `ON_STOP`); live notifications become a
+snackbar in `Nav` whose Open follows the tab's `shed://` link, and otherwise
+notifications come by push. The device token is sealed with an AES-GCM key kept in the Android
+Keystore. Terminals arrive as `Screen` events: the app keeps the rows, joins
+those that wrap and cuts them again to the phone's width (the alternate screen
+is shown as a grid, fitted or panned). Push is the nexus's ntfy topic when it
+has one (`PushInfo::ntfy_topic`: Settings tells the user to subscribe to it in
+the ntfy app, and the app leaves UnifiedPush; ntfy's `Click` opens the
+`shed://` link through the activity's intent filter), else UnifiedPush: the
+connector library keeps the RFC 8291 keys and decrypts; the app hands the
+distributor's endpoint to `POST /api/v1/push/subscribe`.
 
 ## The code
 

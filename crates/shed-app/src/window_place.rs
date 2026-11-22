@@ -51,6 +51,12 @@ impl PlaceTracker {
         })
     }
 
+    /// Where places go from now on (the Shed window's, when Shed shows
+    /// another workspace and back).
+    pub fn set_conn(&mut self, conn: KeeperConn) {
+        self.conn = conn;
+    }
+
     /// Sends the window's place now if it changed: before the window goes.
     pub fn record(&mut self, window: &Window) {
         self.settling = None;

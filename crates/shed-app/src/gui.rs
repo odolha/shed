@@ -74,6 +74,25 @@ pub fn run_app(target: ShowTarget) -> anyhow::Result<()> {
         macos::install(state.clone(), cx);
         let receiving = state.clone();
         cx.spawn(async move |cx| AppState::receive(receiving, rx, cx).await).detach();
+        // A dev aid for headless checks, where clicks do not reach the
+        // window: SHED_DEBUG_WORKSPACE=NAME shows that workspace once listed.
+        if let Ok(name) = std::env::var("SHED_DEBUG_WORKSPACE") {
+            let switching = state.clone();
+            cx.spawn(async move |cx| {
+                let listed = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let sign_in = shed_client::nexus_client::SignIn::load()?;
+                        let ca = shed_client::nexus_client::configured_ca_file();
+                        shed_client::nexus_client::workspaces(&sign_in, ca.as_deref()).ok()?.into_iter().find(|w| w.name == name)
+                    })
+                    .await;
+                if let Some(w) = listed {
+                    switching.update(cx, |state, cx| state.switch_to(state::Workspace::Remote { id: w.id, name: w.name }, cx));
+                }
+            })
+            .detach();
+        }
         cx.spawn(async move |cx| AppState::watch_config(state, cx).await).detach();
         if terminal_view::perf::enabled() {
             cx.spawn(async move |cx| loop {

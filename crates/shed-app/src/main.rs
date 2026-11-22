@@ -306,6 +306,14 @@ enum NexusAction {
     Status,
     /// Forget the pairing and the nexus here; the link stops.
     Leave,
+    /// Sign this desktop in to a nexus (asks for user, password and code),
+    /// to show other workspaces in Shed's window. Apart from the pairing.
+    Signin {
+        /// The nexus (default: the one paired with, or signed in to before).
+        url: Option<String>,
+    },
+    /// Forget this desktop's sign-in to the nexus.
+    Signout,
 }
 
 #[derive(Subcommand)]
@@ -469,6 +477,8 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Nexus { action: NexusAction::Join { url, name } }) => shed_link::pairing::join(&url, name),
         Some(Command::Nexus { action: NexusAction::Status }) => shed_link::pairing::status(),
         Some(Command::Nexus { action: NexusAction::Leave }) => shed_link::pairing::leave(),
+        Some(Command::Nexus { action: NexusAction::Signin { url } }) => shed_link::pairing::signin(url),
+        Some(Command::Nexus { action: NexusAction::Signout }) => shed_link::pairing::signout(),
         Some(Command::Backup { action }) => backup(action),
         Some(Command::DebugType { text }) => cli::debug_type(&text),
         Some(Command::DebugAi { text, model, answer }) => debug_ai(text, model, answer),

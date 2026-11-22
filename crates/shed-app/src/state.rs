@@ -1,14 +1,26 @@
 //! The app's view of the keeper: the tree, one window per bench, and the
 //! terminal view of every pane those windows show.
+//!
+//! The keeper is this PC's, or another workspace's reached through a nexus
+//! this desktop is signed in to (`Workspace`): one is shown at a time.
+//! Switching closes the windows (leaving the benches as they are, as when
+//! the window process quits), connects to the other keeper and opens
+//! windows as at startup. While another workspace is shown, a quiet
+//! connection to this PC's keeper (`standby`) keeps this process its
+//! window process, so launching a bench here switches back.
+//!
+//! What windows read from this machine's disk (project tabs, the logbook,
+//! Claude Code's session files, desktop launchers) is not shown for another
+//! workspace: `is_remote` says so, and those views say it comes later.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use gpui::{AppContext, AsyncApp, Context, Entity, FocusHandle, TitlebarOptions, WindowHandle, WindowOptions, px, size};
+use gpui::{AppContext, AsyncApp, Context, Entity, FocusHandle, TitlebarOptions, WeakEntity, WindowHandle, WindowOptions, px, size};
 use shed_model::config::{Config, FileWatch};
 use shed_desktop::{BenchIdentity, Desktop};
 use shed_model::{Bench, BenchColor, BenchId, PaneId, Shed, Tab, TabId};
-use shed_proto::{BenchRef, ClientMsg, Frame, KeeperMsg};
+use shed_proto::{BenchRef, ClientKind, ClientMsg, Frame, KeeperMsg, ShowTarget};
 use tracing::{error, warn};
 
 use crate::ai_view::{AiLimits, AiView};
@@ -28,6 +40,40 @@ const FRAME_BUDGET: Duration = Duration::from_millis(8);
 /// process: the one shown and the last ones shown before it. Others get a
 /// view, filled by a replay from the keeper, when they are shown again.
 const KEPT_TABS: usize = 3;
+
+/// What views show in place of what is read from this machine's disk, for
+/// another workspace.
+pub const NOT_YET_REMOTE_PROJECT: &str = "Project tabs of a remote workspace come next. Its terminals and AI tabs work here; open this tab on that computer, or in the web app.";
+pub const NOT_YET_REMOTE_LOGBOOK: &str = "The command history is not yet searchable for remote workspaces.";
+pub const NOT_YET_REMOTE_AI: &str = "Not yet for remote workspaces: Claude Code's sessions are on that computer.";
+pub const NOT_YET_REMOTE_FILES: &str = "Opening files of a remote workspace comes next.";
+
+/// A keeper connection and the frames from it.
+type Connection = (KeeperConn, async_channel::Receiver<Frame>);
+
+/// Which workspace's keeper the windows show.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Workspace {
+    /// This PC's own keeper.
+    #[default]
+    Local,
+    /// Another workspace, through the nexus (`id` is the nexus's).
+    Remote { id: String, name: String },
+}
+
+impl Workspace {
+    pub fn is_remote(&self) -> bool {
+        matches!(self, Workspace::Remote { .. })
+    }
+
+    /// As the switcher names it.
+    pub fn label(&self) -> &str {
+        match self {
+            Workspace::Local => "This PC",
+            Workspace::Remote { name, .. } => name,
+        }
+    }
+}
 
 pub struct AppState {
     pub conn: KeeperConn,
@@ -56,6 +102,23 @@ pub struct AppState {
     desktop: Desktop,
     /// The identity last written for each bench, to rewrite only on change.
     identities: HashMap<BenchId, Identity>,
+    /// The workspace shown.
+    pub workspace: Workspace,
+    /// The workspace being connected to, while it is.
+    pub switching: Option<String>,
+    /// Which connection `conn` is: frames from older ones are dropped.
+    generation: u64,
+    last_generation: u64,
+    /// While another workspace is shown: this PC's keeper, as a window
+    /// process showing nothing (its generation too).
+    standby: Option<(KeeperConn, u64)>,
+    /// This PC's running benches, as the standby connection last heard.
+    local_benches: usize,
+    /// The benches each workspace had windows for when it was left, to
+    /// show them again on coming back (this session only).
+    shown_before: HashMap<Workspace, Vec<BenchId>>,
+    /// Shed is closing.
+    quitting: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -100,29 +163,301 @@ impl AppState {
             // to a folder of the test's, never to the user's desktop.
             desktop: Desktop::new(if cfg!(test) { std::env::temp_dir().join(format!("shed-test-desktop-{}", std::process::id())) } else { shed_model::paths::data_home() }),
             identities: HashMap::new(),
+            workspace: Workspace::Local,
+            switching: None,
+            generation: 0,
+            last_generation: 0,
+            standby: None,
+            local_benches: 0,
+            shown_before: HashMap::new(),
+            quitting: false,
         }
+    }
+
+    /// Whether the windows show another workspace than this PC's: what is
+    /// read from this machine's disk does not belong to it.
+    pub fn is_remote(&self) -> bool {
+        self.workspace.is_remote()
     }
 
     /// Reads frames from the keeper until it goes away.
     pub async fn receive(state: Entity<AppState>, rx: async_channel::Receiver<Frame>, cx: &mut AsyncApp) {
+        Self::receive_from(state.downgrade(), rx, 0, cx).await;
+    }
+
+    /// Reads frames from connection `generation` until it ends.
+    async fn receive_from(state: WeakEntity<AppState>, rx: async_channel::Receiver<Frame>, generation: u64, cx: &mut AsyncApp) {
         while let Ok(first) = rx.recv().await {
             let started = Instant::now();
-            state.update(cx, |state, cx| {
-                state.handle(first, cx);
+            let alive = state.update(cx, |state, cx| {
+                state.frame(generation, first, cx);
                 // Drain what is already queued, but not for so long that frames stall.
                 while started.elapsed() < FRAME_BUDGET {
                     match rx.try_recv() {
-                        Ok(frame) => state.handle(frame, cx),
+                        Ok(frame) => state.frame(generation, frame, cx),
                         Err(_) => break,
                     }
                 }
             });
+            if alive.is_err() {
+                return;
+            }
             if !rx.is_empty() {
                 cx.background_executor().timer(Duration::ZERO).await;
             }
         }
-        error!("lost the connection to the keeper");
-        cx.update(|cx| cx.quit());
+        state.update(cx, |state, cx| state.connection_ended(generation, cx)).ok();
+    }
+
+    /// A frame from connection `generation`: the shown workspace's, the
+    /// standby's, or one let go of.
+    fn frame(&mut self, generation: u64, frame: Frame, cx: &mut Context<Self>) {
+        if generation == self.generation {
+            self.handle(frame, cx);
+        } else if self.standby.as_ref().is_some_and(|(_, g)| *g == generation) {
+            self.standby_frame(frame, cx);
+        }
+    }
+
+    /// Connection `generation` ended.
+    fn connection_ended(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if self.standby.as_ref().is_some_and(|(_, g)| *g == generation) {
+            self.standby = None;
+            if self.quitting {
+                cx.quit();
+            } else {
+                warn!("this PC's keeper went away while another workspace is shown");
+            }
+            return;
+        }
+        if generation != self.generation {
+            return;
+        }
+        match self.workspace.clone() {
+            Workspace::Local => {
+                error!("lost the connection to the keeper");
+                cx.quit();
+            }
+            Workspace::Remote { name, .. } => {
+                warn!("lost the connection to {name}");
+                if self.notice.as_deref().is_none_or(|n| !n.starts_with(shed_client::nexus_client::LOST)) {
+                    self.notice = Some(format!("Lost the connection to {name}; back to This PC."));
+                }
+                self.switch_to_local(cx);
+            }
+        }
+    }
+
+    /// What this PC's keeper says while another workspace is shown: asked
+    /// to show one of its benches (a launcher, `shed BENCH`), Shed comes
+    /// back to it.
+    fn standby_frame(&mut self, frame: Frame, cx: &mut Context<Self>) {
+        match frame {
+            Frame::Keeper(KeeperMsg::TreeChanged(tree)) => self.local_benches = tree.benches.len(),
+            Frame::Keeper(KeeperMsg::Status(status)) => self.local_benches = status.tree.benches.len(),
+            Frame::Keeper(KeeperMsg::Show { bench }) => {
+                self.switch_to_local(cx);
+                self.show(bench, cx);
+            }
+            Frame::Keeper(KeeperMsg::ShowShed) => self.show_shed(cx),
+            _ => {}
+        }
+    }
+
+    fn next_generation(&mut self) -> u64 {
+        self.last_generation += 1;
+        self.last_generation
+    }
+
+    /// Running benches Shed closes when it closes: this PC's.
+    pub fn local_running(&self) -> usize {
+        if self.is_remote() { self.local_benches } else { self.tree.benches.len() }
+    }
+
+    /// Shows another workspace (or this PC's): connects first, and only
+    /// then closes this one's windows, so a workspace that cannot be
+    /// reached leaves everything as it was (and says why).
+    pub fn switch_to(&mut self, target: Workspace, cx: &mut Context<Self>) {
+        if target == self.workspace || self.switching.is_some() {
+            return;
+        }
+        let Workspace::Remote { id, name } = target.clone() else {
+            self.switch_to_local(cx);
+            return;
+        };
+        let Some(sign_in) = shed_client::nexus_client::SignIn::load() else {
+            self.notice = Some("Sign in to a nexus first (Sign In to Nexus…, or shed nexus signin).".into());
+            cx.notify();
+            return;
+        };
+        self.switching = Some(name.clone());
+        cx.notify();
+        let need_standby = !self.is_remote();
+        cx.spawn(async move |this, cx| {
+            let connected = cx
+                .background_executor()
+                .spawn(async move {
+                    let remote = shed_client::keeper_conn::connect_remote(&sign_in.url, &sign_in.token, &id, ClientKind::Window)?;
+                    let standby = if need_standby { Some(shed_client::keeper_conn::connect(ClientKind::Window, true)?) } else { None };
+                    anyhow::Ok((remote, standby))
+                })
+                .await;
+            this.update(cx, |state, cx| {
+                state.switching = None;
+                match connected {
+                    Ok((remote, standby)) => state.connected_to(target, remote, standby, cx),
+                    Err(e) => {
+                        state.notice = Some(format!("Cannot show {name}: {e:#}"));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Connected to another workspace (and, coming from this PC, to its
+    /// keeper as the standby): shows it.
+    fn connected_to(&mut self, target: Workspace, remote: Connection, standby: Option<Connection>, cx: &mut Context<Self>) {
+        self.leave_workspace(cx);
+        if let Some((standby, rx)) = standby {
+            let generation = self.next_generation();
+            standby.send_msg(ClientMsg::Status);
+            self.standby = Some((standby, generation));
+            cx.spawn(async move |this, cx| Self::receive_from(this, rx, generation, cx).await).detach();
+        }
+        let (conn, rx) = remote;
+        let generation = self.next_generation();
+        cx.spawn(async move |this, cx| Self::receive_from(this, rx, generation, cx).await).detach();
+        self.enter(target, conn, generation, cx);
+    }
+
+    /// Back to this PC's keeper: through the standby connection when there
+    /// is one (at once), else connecting again.
+    pub fn switch_to_local(&mut self, cx: &mut Context<Self>) {
+        if !self.is_remote() {
+            return;
+        }
+        self.leave_workspace(cx);
+        match self.standby.take() {
+            Some((conn, generation)) => self.enter(Workspace::Local, conn, generation, cx),
+            None => {
+                self.workspace = Workspace::Local;
+                self.switching = Some(Workspace::Local.label().into());
+                cx.notify();
+                cx.spawn(async move |this, cx| {
+                    let connected = cx.background_executor().spawn(async { shed_client::keeper_conn::connect(ClientKind::Window, true) }).await;
+                    this.update(cx, |state, cx| {
+                        state.switching = None;
+                        match connected {
+                            Ok((conn, rx)) => {
+                                let generation = state.next_generation();
+                                cx.spawn(async move |this, cx| Self::receive_from(this, rx, generation, cx).await).detach();
+                                state.enter(Workspace::Local, conn, generation, cx);
+                            }
+                            Err(e) => {
+                                error!("cannot reach this PC's keeper: {e:#}");
+                                cx.quit();
+                            }
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+        }
+    }
+
+    /// Closes the shown workspace's windows and forgets its tree and views;
+    /// its keeper keeps the benches as they are (the connection is closed,
+    /// as when the window process quits, so they stay shown there).
+    fn leave_workspace(&mut self, cx: &mut Context<Self>) {
+        let open: Vec<BenchId> = self.windows.keys().chain(&self.pending).copied().collect();
+        self.shown_before.insert(self.workspace.clone(), open);
+        for (_, handle) in self.windows.drain() {
+            handle
+                .update(cx, |bw, window, _| {
+                    bw.tracker().record(window);
+                    window.remove_window();
+                })
+                .ok();
+        }
+        let old = std::mem::replace(&mut self.conn, KeeperConn::detached());
+        old.close();
+        // Frames still on their way from it are dropped.
+        self.generation = u64::MAX;
+        self.panes.clear();
+        self.projects.clear();
+        self.ai_views.clear();
+        self.recent_tabs.clear();
+        self.pending.clear();
+        self.opening.clear();
+        self.identities.clear();
+        self.pending_reveal = None;
+        self.tree = Shed::default();
+        cx.set_global(PegboardData(Default::default()));
+        if cx.has_global::<AiLimits>() {
+            cx.remove_global::<AiLimits>();
+        }
+        release_freed_memory();
+    }
+
+    /// Shows `workspace` through `conn` (connection `generation`, whose
+    /// frames are being received): its tree, the Shed window's view of it,
+    /// and the benches it had windows for when last left.
+    fn enter(&mut self, workspace: Workspace, conn: KeeperConn, generation: u64, cx: &mut Context<Self>) {
+        self.conn = conn;
+        self.generation = generation;
+        self.workspace = workspace;
+        // As at startup: the tree, and the Shed window's (already open) place.
+        self.conn.send_msg(ClientMsg::Show(ShowTarget::Shed));
+        self.conn.send_msg(ClientMsg::Pegboard);
+        if !self.is_remote() {
+            self.conn.send_msg(ClientMsg::SetAppearance { dark: self.settings.dark });
+        }
+        for bench in self.shown_before.remove(&self.workspace).unwrap_or_default() {
+            self.show(bench, cx);
+        }
+        // The Shed window's place is this PC's, kept by its keeper only.
+        let place_conn = if self.is_remote() { KeeperConn::detached() } else { self.conn.clone() };
+        if let Some(handle) = self.shed_window {
+            handle.update(cx, |shed, _, _| shed.tracker().set_conn(place_conn)).ok();
+        }
+        cx.notify();
+    }
+
+    /// Closes Shed: this PC's benches close and its keeper stops (another
+    /// workspace's keeper is only let go of).
+    pub fn quit_shed(&mut self, cx: &mut Context<Self>) {
+        self.quitting = true;
+        if self.is_remote() {
+            if self.standby.is_none() {
+                cx.quit();
+                return;
+            }
+            // Its benches close: none to show again on the way.
+            self.shown_before.remove(&Workspace::Local);
+            self.switch_to_local(cx);
+        }
+        self.conn.send_msg(ClientMsg::QuitShed);
+    }
+
+    /// A window title for a bench: with the workspace's name when it is
+    /// not this PC's, so its windows are told apart.
+    pub fn bench_title(&self, bench: &str) -> String {
+        match &self.workspace {
+            Workspace::Local => window_title(bench),
+            Workspace::Remote { name, .. } => format!("{} · {name}", window_title(bench)),
+        }
+    }
+
+    /// A bench window's app ID (the dock groups windows by it).
+    fn app_id(&self, launcher: &str) -> String {
+        match &self.workspace {
+            Workspace::Local => shed_desktop::app_id(launcher),
+            Workspace::Remote { name, .. } => shed_desktop::app_id(&format!("{name}-{launcher}")),
+        }
     }
 
     fn handle(&mut self, frame: Frame, cx: &mut Context<Self>) {
@@ -161,7 +496,14 @@ impl AppState {
                     view.update(cx, |v, cx| v.keeper_error(&e, cx));
                 }
                 cx.notify();
-                if e.starts_with("protocol mismatch") {
+                if self.is_remote() {
+                    // Another workspace's keeper of another version: back to this PC.
+                    if shed_client::keeper_conn::is_other_version(&e) {
+                        let name = self.workspace.label().to_string();
+                        self.notice = Some(format!("{name} runs another version of Shed ({e}); update one of them."));
+                        self.switch_to_local(cx);
+                    }
+                } else if e.starts_with("protocol mismatch") {
                     eprintln!("shed: {e}. Run `shed stop` to restart the keeper.");
                     cx.quit();
                 }
@@ -276,6 +618,12 @@ impl AppState {
     /// opened), made as the bench first opens and kept while the tab is in
     /// the tree, so unsaved edits survive hiding the bench.
     fn sync_projects(&mut self, cx: &mut Context<Self>) {
+        // Another workspace's files are not on this disk: its project tabs
+        // show a note instead (bench_window).
+        if self.is_remote() {
+            self.projects.clear();
+            return;
+        }
         let open: HashSet<BenchId> = self.windows.keys().chain(&self.opening).copied().collect();
         let all: Vec<(BenchId, TabId, shed_model::Project, shed_model::Rgb, f32)> = self
             .tree
@@ -339,9 +687,12 @@ impl AppState {
                     v.set_ai(ai, cx);
                 }),
                 None if open.contains(&bench) => {
-                    let (conn, settings) = (self.conn.clone(), self.settings.clone());
+                    let (conn, settings, remote) = (self.conn.clone(), self.settings.clone(), self.is_remote());
                     let view = cx.new(|cx| {
                         let mut v = AiView::new(bench, tab, ai, accent, conn, settings, cx);
+                        if remote {
+                            v.set_remote(cx);
+                        }
                         v.projects = projects;
                         v.set_zoom(zoom, cx);
                         v
@@ -356,6 +707,9 @@ impl AppState {
     /// Files an AI tab finished editing open in their project tab, when it
     /// follows edits.
     fn follow_edits(&mut self, view: &Entity<AiView>, cx: &mut Context<Self>) {
+        if self.is_remote() {
+            return;
+        }
         let (bench, follow) = { let v = view.read(cx); (v.bench, v.ai.follow) };
         let edits = view.read(cx).finished_edits();
         let new: Vec<(String, String)> = edits.into_iter().filter(|(id, _)| !view.read(cx).followed.contains(id)).collect();
@@ -456,6 +810,11 @@ impl AppState {
     /// project tab opens for its project (its Git root, else its folder) and
     /// shows the file once it is there.
     pub fn reveal_file(&mut self, bench: BenchId, path: std::path::PathBuf, at: Option<(usize, Option<usize>)>, files: bool, cx: &mut Context<Self>) {
+        if self.is_remote() {
+            self.notice = Some(NOT_YET_REMOTE_FILES.into());
+            cx.notify();
+            return;
+        }
         if self.open_in_project(bench, path.clone(), at, files, cx) {
             return;
         }
@@ -482,6 +841,10 @@ impl AppState {
 
     /// Keeps every bench's desktop entry, icon and window app ID current.
     fn sync_identities(&mut self, cx: &mut Context<Self>) {
+        // Launchers start this PC's benches: none for another workspace's.
+        if self.is_remote() {
+            return;
+        }
         let shed = std::env::current_exe().unwrap_or_else(|_| "shed".into());
         let badges = self.settings.icon_badges;
         for bench in &self.tree.benches {
@@ -525,7 +888,7 @@ impl AppState {
     fn sync_window(&mut self, bench: BenchId, cx: &mut Context<Self>) {
         let Some(handle) = self.windows.get(&bench).copied() else { return };
         let Some(b) = self.tree.bench(bench) else { return };
-        let title = window_title(&b.name);
+        let title = self.bench_title(&b.name);
         let active = self.active_focus(bench, cx);
         handle.update(cx, |bw, window, cx| bw.sync(title, active, window, cx)).ok();
     }
@@ -662,17 +1025,21 @@ impl AppState {
         }
         self.sync_projects(cx);
         let bench = self.tree.bench(bench_id).unwrap();
-        let bounds = open_bounds(bench.window, size(px(960.0), px(640.0)), cx);
-        let tracker = PlaceTracker::new(Some(bench_id), self.conn.clone(), bounds, bench.window);
+        // Another workspace's windows are placed on its own screens: these
+        // open and stay where this PC puts them.
+        let (place, place_conn) = if self.is_remote() { (None, KeeperConn::detached()) } else { (bench.window, self.conn.clone()) };
+        let bounds = open_bounds(place, size(px(960.0), px(640.0)), cx);
+        let tracker = PlaceTracker::new(Some(bench_id), place_conn, bounds, place);
         let options = WindowOptions {
-            titlebar: Some(TitlebarOptions { title: Some(window_title(&bench.name).into()), ..Default::default() }),
+            titlebar: Some(TitlebarOptions { title: Some(self.bench_title(&bench.name).into()), ..Default::default() }),
             window_bounds: Some(bounds),
-            app_id: Some(shed_desktop::app_id(&bench.launcher)),
+            app_id: Some(self.app_id(&bench.launcher)),
             icon: window_icon(&Identity::of(bench, self.settings.icon_badges)),
             ..Default::default()
         };
         // Opening a window renders it at once, and its render reads this
         // state, so open it after this update ends.
+        let generation = self.generation;
         cx.spawn(async move |this, cx| {
             let Some(state) = this.upgrade() else { return };
             let opened = cx.update(|cx| {
@@ -681,6 +1048,11 @@ impl AppState {
             match opened {
                 Ok(handle) => {
                     this.update(cx, |this, cx| {
+                        // Another workspace is shown since: not this one's window.
+                        if this.generation != generation {
+                            handle.update(cx, |_, window, _| window.remove_window()).ok();
+                            return;
+                        }
                         this.pending.remove(&bench_id);
                         this.opening.remove(&bench_id);
                         this.windows.insert(bench_id, handle);
@@ -708,7 +1080,7 @@ impl AppState {
             Some(handle) => {
                 handle.update(cx, |shed, window, cx| shed.request_quit(window, cx)).ok();
             }
-            None => self.conn.send_msg(ClientMsg::QuitShed),
+            None => self.quit_shed(cx),
         }
     }
 
@@ -721,7 +1093,9 @@ impl AppState {
             return;
         }
         let shed = std::env::current_exe().unwrap_or_else(|_| "shed".into());
-        if let Err(e) = self.desktop.install_shed(&shed) {
+        if !self.is_remote()
+            && let Err(e) = self.desktop.install_shed(&shed)
+        {
             warn!("cannot write Shed's desktop entry: {e}");
         }
         let bounds = open_bounds(self.tree.window, size(px(1120.0), px(740.0)), cx);
@@ -965,9 +1339,12 @@ pub enum Focus {
 /// The desktop's folder picker, for a project tab's folder: the folder
 /// chosen, `None` if cancelled, or why there is no picker.
 pub fn pick_folder(cx: &gpui::App) -> impl std::future::Future<Output = Result<Option<std::path::PathBuf>, String>> + use<> {
+    // This PC's picker shows this PC's folders, not another workspace's.
+    let remote = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()).is_some_and(|s| s.read(cx).is_remote());
     let options = gpui::PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Open Project".into()) };
-    let answer = cx.prompt_for_paths(options);
+    let answer = (!remote).then(|| cx.prompt_for_paths(options));
     async move {
+        let Some(answer) = answer else { return Err("a remote workspace's folders are typed, not picked".into()) };
         match answer.await {
             Ok(Ok(paths)) => Ok(paths.and_then(|p| p.into_iter().next())),
             Ok(Err(e)) => Err(e.to_string()),
@@ -1039,6 +1416,129 @@ fn release_freed_memory() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bench(name: &str) -> shed_model::Bench {
+        let tab = shed_model::Tab::ai("/tmp".into());
+        shed_model::Bench {
+            id: BenchId::new(),
+            name: name.into(),
+            color: shed_model::BenchColor::Blue,
+            badge: None,
+            cwd: "/".into(),
+            active_tab: tab.id,
+            tabs: vec![tab],
+            aliases: Default::default(),
+            closing: false,
+            started: false,
+            launcher: name.into(),
+            window: None,
+            links: Vec::new(),
+        }
+    }
+
+    /// A connection whose frames the test sends, and whose messages it reads.
+    struct Fake {
+        conn: KeeperConn,
+        sent: std::sync::mpsc::Receiver<Frame>,
+        frames: async_channel::Sender<Frame>,
+        rx: Option<async_channel::Receiver<Frame>>,
+        closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Fake {
+        fn new() -> Fake {
+            let (tx, sent) = std::sync::mpsc::channel();
+            let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = closed.clone();
+            let conn = KeeperConn::with_closer(tx, None, std::sync::Arc::new(move || flag.store(true, std::sync::atomic::Ordering::SeqCst)));
+            let (frames, rx) = async_channel::unbounded();
+            Fake { conn, sent, frames, rx: Some(rx), closed }
+        }
+
+        fn connection(&mut self) -> Connection {
+            (self.conn.clone(), self.rx.take().unwrap())
+        }
+
+        fn keeper(&self, msg: KeeperMsg) {
+            self.frames.send_blocking(Frame::Keeper(msg)).unwrap();
+        }
+
+        fn messages(&self) -> Vec<ClientMsg> {
+            self.sent.try_iter().filter_map(|f| if let Frame::Client(m) = f { Some(m) } else { None }).collect()
+        }
+    }
+
+    #[gpui::test]
+    fn switching_workspaces_replaces_the_tree_and_the_windows(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::prompt::CurrentUi(crate::theme::UiColors::default()));
+            crate::theme::set_ui_scale(1.0);
+        });
+        // This PC, with a bench shown.
+        let mut local = Fake::new();
+        let state = cx.new(|_| AppState::new(local.conn.clone(), Settings::default()));
+        cx.update(|cx| cx.set_global(AppHandle(state.downgrade())));
+        let (conn, rx) = local.connection();
+        let _ = conn;
+        state.update(cx, |_, cx| cx.spawn(async move |this, cx| AppState::receive_from(this, rx, 0, cx).await).detach());
+        let here = bench("here");
+        let here_id = here.id;
+        local.keeper(KeeperMsg::TreeChanged(Shed { benches: vec![here], ..Default::default() }));
+        local.keeper(KeeperMsg::Attached { bench: here_id });
+        cx.run_until_parked();
+        assert!(state.read_with(cx, |s, _| s.has_window(here_id)));
+        assert_eq!(cx.windows().len(), 1);
+
+        // Another workspace, connected (with this PC's keeper as the standby).
+        let mut remote = Fake::new();
+        let mut standby = Fake::new();
+        let target = Workspace::Remote { id: "w2".into(), name: "tower".into() };
+        state.update(cx, |s, cx| s.connected_to(target.clone(), remote.connection(), Some(standby.connection()), cx));
+        cx.run_until_parked();
+        state.read_with(cx, |s, _| {
+            assert!(s.is_remote() && s.tree.benches.is_empty() && !s.has_window(here_id));
+            assert_eq!(s.bench_title("far"), "Shed — far · tower");
+        });
+        assert!(local.closed.load(std::sync::atomic::Ordering::SeqCst), "this PC's connection was let go of");
+        assert_eq!(cx.windows().len(), 0, "this PC's bench window closed");
+        let asked = remote.messages();
+        assert!(asked.contains(&ClientMsg::Show(ShowTarget::Shed)) && asked.contains(&ClientMsg::Pegboard), "{asked:?}");
+        assert!(standby.messages().contains(&ClientMsg::Status));
+
+        // Its tree and windows.
+        let far = bench("far");
+        let far_id = far.id;
+        remote.keeper(KeeperMsg::TreeChanged(Shed { benches: vec![far], ..Default::default() }));
+        remote.keeper(KeeperMsg::Attached { bench: far_id });
+        // This PC's tree changing does not show.
+        standby.keeper(KeeperMsg::TreeChanged(Shed { benches: vec![bench("other")], ..Default::default() }));
+        cx.run_until_parked();
+        state.read_with(cx, |s, _| {
+            assert_eq!(s.tree.benches.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["far"]);
+            assert!(s.has_window(far_id));
+            assert_eq!(s.local_running(), 1);
+        });
+
+        // A launcher of this PC's bench, while there: back to this PC, and
+        // the bench shown there before comes back.
+        standby.keeper(KeeperMsg::Show { bench: here_id });
+        cx.run_until_parked();
+        state.read_with(cx, |s, _| assert!(!s.is_remote() && !s.has_window(far_id)));
+        assert!(remote.closed.load(std::sync::atomic::Ordering::SeqCst), "the tunnel was closed");
+        let asked = standby.messages();
+        assert!(asked.contains(&ClientMsg::Attach { bench: Some(here_id) }), "{asked:?}");
+        let here = bench("here");
+        standby.keeper(KeeperMsg::TreeChanged(Shed { benches: vec![shed_model::Bench { id: here_id, ..here }], ..Default::default() }));
+        standby.keeper(KeeperMsg::Attached { bench: here_id });
+        cx.run_until_parked();
+        assert!(state.read_with(cx, |s, _| s.has_window(here_id)));
+
+        // Frames from the closed tunnel are dropped; its end does not quit.
+        remote.keeper(KeeperMsg::TreeChanged(Shed::default()));
+        drop(remote);
+        cx.run_until_parked();
+        assert!(state.read_with(cx, |s, _| s.tree.bench(here_id).is_some()));
+    }
 
     #[gpui::test]
     fn usage_limits_show_on_a_bench_with_an_ai_tab(cx: &mut gpui::TestAppContext) {
