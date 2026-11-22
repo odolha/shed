@@ -67,7 +67,7 @@ typeshare = "1"
 
 # The nexus (shed-nexus).
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["fs", "set-header", "limit"] }
+tower-http = { version = "0.6", features = ["set-header", "limit"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
 tower-service = "0.3"

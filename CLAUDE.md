@@ -27,6 +27,7 @@ cargo clippy -p shed-app --no-default-features --features tui --all-targets   # 
 cd web && npm run build && npm test  # the web app (Angular, Node 24.15+); npm run mock + npm start to try it
 . tools/android-env.sh; cd android; ./gradlew assembleDebug testDebugUnitTest lintDebug   # the Android app
 tools/e2e.sh                         # end to end, isolated in /tmp/shed-e2e: nexus, keeper, link, web app in headless Chrome
+PATH=~/.nvm/versions/node/v24.15.0/bin:$PATH CARGO_TARGET_DIR=target/agent cargo build --release -p shed-nexus   # the nexus with the web app built in (release builds need Node 24.15+; never into target/release)
 ```
 
 Integration tests live in `crates/shed-keeper/tests/` (protocol, logout) and
@@ -120,8 +121,10 @@ Crates (`crates/`), lowest first:
   it (`link_loop` in `server.rs`). Tests: `crates/shed-link/tests/` (fake nexus;
   one with the real one).
 - `shed-nexus`: `shed-nexus` binary, the server workspaces link to (axum,
-  SQLite); reads only the API's envelope (`src/raw.rs`). See `docs/nexus-plan.md`,
-  `docs/nexus-deploy.md`.
+  SQLite); reads only the API's envelope (`src/raw.rs`). Release builds carry
+  the web app (`build.rs` builds `web/` with npm into `OUT_DIR`, `src/web.rs`
+  serves it; debug builds skip it unless `SHED_NEXUS_WEB=1`,
+  `SHED_NEXUS_NO_WEB=1` skips it always). See `docs/nexus-plan.md`, `docs/nexus-deploy.md`.
 
 Outside `crates/`: `web/` is the web app the nexus serves (Angular, signals,
 zoneless; `web/README.md`, `web/mock/` a pretend nexus); `android/` the Android

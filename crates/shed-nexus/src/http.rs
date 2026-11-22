@@ -17,7 +17,6 @@ use axum::routing::{get, post};
 use serde::de::DeserializeOwned;
 use shed_api::http::*;
 use shed_api::{API_VERSION, ApiError, ErrorCode};
-use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::store::AuditInfo;
@@ -55,13 +54,8 @@ pub fn router(app: Arc<App>) -> Router {
     let mut router = Router::new()
         .nest("/api/v1", api)
         .route("/link", get(relay::link))
-        .route("/api", get(relay::api));
-    router = match &app.config.web_dir {
-        Some(dir) => router.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html")))),
-        None => router.fallback(|| async { Failure::new(ErrorCode::NotFound, "no web app here") }),
-    };
-
-    let mut router = router
+        .route("/api", get(relay::api))
+        .fallback(web_app)
         .layer(middleware::from_fn_with_state(app.clone(), gate))
         .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
@@ -75,6 +69,11 @@ pub fn router(app: Arc<App>) -> Router {
         router = router.layer(header_layer(header::STRICT_TRANSPORT_SECURITY, "max-age=31536000"));
     }
     router.with_state(app)
+}
+
+/// Everything else: the web app's files (`web.rs`).
+async fn web_app(State(app): State<Arc<App>>, request: Request) -> Response {
+    app.web.serve(request).await
 }
 
 fn header_layer(name: HeaderName, value: &'static str) -> SetResponseHeaderLayer<HeaderValue> {

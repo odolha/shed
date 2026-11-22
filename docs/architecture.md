@@ -913,9 +913,20 @@ view still get notifications live.
 The modules: `config.rs` (`nexus.toml`), `store.rs` (the database and its
 numbered migrations), `auth.rs` (tokens, passwords, TOTP, recovery codes,
 lockouts), `http.rs` (routes, errors as `ApiError` with a matching status, who
-is calling, headers, the web app's files with `index.html` for any other path),
-`pair.rs`, `relay.rs`, `raw.rs`, `push.rs`, `ntfy.rs`, `geo.rs`. Deploying it is
-described in [Deploying a nexus](nexus-deploy.md).
+is calling, headers), `web.rs` (the web app's files), `pair.rs`, `relay.rs`,
+`raw.rs`, `push.rs`, `ntfy.rs`, `geo.rs`. Deploying it is described in
+[Deploying a nexus](nexus-deploy.md).
+
+The web app is built into the binary: `build.rs` builds `web/` (in `OUT_DIR`,
+for release builds, or with `SHED_NEXUS_WEB=1`; `SHED_NEXUS_NO_WEB=1` leaves it
+out) and `web.rs` embeds the files with an ETag each. `web_dir` in
+`nexus.toml` serves a folder from disk instead. Every path the API does not
+take is the web app's: a file if one has that name (only plain names: letters,
+digits, `.`, `_`, `-`; nothing hidden), else `index.html`, for the app's
+routes (`/w/…`, `/setup`). Hashed bundles (`main-….js`, `chunk-….js`,
+`styles-….css`) are `immutable` for a year; `index.html`, `sw.js`, the manifest
+and icons are `no-cache`, revalidated by ETag. Without either, those paths
+answer `404` and the log says the nexus serves only the API.
 
 ## The link
 

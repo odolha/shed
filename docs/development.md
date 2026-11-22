@@ -120,7 +120,7 @@ cd web
 npm install
 npm run mock         # a pretend nexus on 127.0.0.1:8787 (web/mock), sign in as you / shed
 npm start            # http://localhost:4200, /api proxied to the mock (proxy.conf.json)
-npm run build        # production build into web/dist/shed-web, which the nexus serves
+npm run build        # production build into web/dist/shed-web (web_dir can serve it)
 npm test             # unit tests (Vitest through ng test)
 npm run check:mock   # type-checks the mock against the API types
 ```
@@ -133,6 +133,30 @@ switches (`MOCK_FRESH`, `MOCK_VIEW`, `MOCK_LATENCY`, `MOCK_NO_REVIEW`,
 `MOCK_NTFY_TOPIC`) and its `notify` command are in
 `web/README.md`. Like the screenshots, it uses `you`, `devbox` and other
 made-up names only.
+
+### The web app in the nexus
+
+Release builds of `shed-nexus` carry the web app: `crates/shed-nexus/build.rs`
+copies `web/`'s sources into cargo's `OUT_DIR`, runs `npm ci` there (again only
+when `package-lock.json` changes) and `npm run build`, and lists the files for
+`src/web.rs` to embed (`include_bytes!`, with an ETag each). Nothing is
+written to the source tree. It needs Node 24.15+ (or 22.22.3+) and npm on
+`PATH`, and fails with how to get them otherwise. Debug builds (`cargo build`,
+`cargo test`, clippy) skip it, so the workspace builds without Node;
+`SHED_NEXUS_WEB=1` builds it in a debug build too, and `SHED_NEXUS_NO_WEB=1`
+leaves it out of any build (the nexus then serves only the API and says so in
+its log). `web_dir` in `nexus.toml` serves a folder from disk instead, read at
+each request (handy with `npm run watch`). Either way the same rules: any path
+that is not a file gets `index.html`, hashed bundles (`main-….js`) are cached
+for a year, everything else is `no-cache` with an ETag.
+
+On this machine the system Node may be older than the build needs; put a newer
+one first on `PATH` for release builds of the nexus:
+
+```sh
+PATH=~/.nvm/versions/node/v24.15.0/bin:$PATH CARGO_TARGET_DIR=target/agent cargo build --release -p shed-nexus
+SHED_NEXUS_WEB=1 cargo test -p shed-nexus --test account web   # the built-in app, in a debug build
+```
 
 ## Debugging
 
@@ -225,7 +249,7 @@ cat > /tmp/nexus-dev/nexus.toml <<'EOF'
 listen = "127.0.0.1:7870"
 public_url = "http://localhost:7870"
 data_dir = "/tmp/nexus-dev/data"
-# web_dir = "web/dist/browser"   # a built web app, when there is one
+# web_dir = "web/dist/shed-web"   # the web app from npm run build (a debug build has none built in)
 EOF
 cargo run -p shed-nexus -- --config /tmp/nexus-dev/nexus.toml
 ```
@@ -276,7 +300,7 @@ link against a fake nexus on a real socket (`tests/common/mod.rs`), and
 Shed: it builds `shed`, `shedd` and `shed-nexus` (release; `E2E_PROFILE=debug`
 for a debug build) into a target dir of its own, `target/e2e` (`E2E_TARGET`),
 so it never replaces the `target/release` binaries a running Shed may use,
-and the web app (`E2E_WEB_BUILD=0` keeps the one built),
+the nexus with the web app built in (`SHED_NEXUS_WEB=1`, for debug builds too),
 makes a world in `/tmp/shed-e2e` (`E2E_DIR`; a home with a neutral prompt, a
 Git project with a change, a stand-in `claude` playing a recorded turn, a
 keeper that stays without windows), starts a nexus on `127.0.0.1:7871`

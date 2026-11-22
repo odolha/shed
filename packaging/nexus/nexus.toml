@@ -12,7 +12,8 @@ public_url = "https://nexus.example.com"
 # The database and the push key. Default: $XDG_DATA_HOME/shed-nexus.
 data_dir = "/var/lib/shed-nexus"
 
-# The built web app, served at / (example). Leave out for the API only.
+# Serve the web app from this folder (a build of web/) instead of the one
+# built into shed-nexus (example).
 # web_dir = "/usr/local/share/shed-nexus/web"
 
 # How long a browser stays signed in.

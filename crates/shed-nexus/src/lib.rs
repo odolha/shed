@@ -15,6 +15,7 @@ pub mod push;
 pub mod raw;
 mod relay;
 pub mod store;
+pub mod web;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -46,6 +47,8 @@ pub struct App {
     proxies: Vec<ipnet::IpNet>,
     /// Turns at argon2 (each run takes ~19 MiB and a core).
     argon: Arc<tokio::sync::Semaphore>,
+    /// The web app's files.
+    web: web::WebSource,
 }
 
 /// Argon2 runs at once, at most.
@@ -258,6 +261,8 @@ pub async fn start(config: Config) -> anyhow::Result<Server> {
         _ => None,
     };
     let filter = geo::Filter::new(&config)?;
+    let web = web::WebSource::new(config.web_dir.as_deref());
+    tracing::info!("{}", web.describe());
 
     // The setup link goes to a file only its owner reads, not to the log
     // (journals are read by more people, and kept); the code is in the
@@ -295,6 +300,7 @@ pub async fn start(config: Config) -> anyhow::Result<Server> {
         hub,
         store,
         setup: Mutex::new(setup),
+        web,
         config,
     });
 

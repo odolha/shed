@@ -19,8 +19,9 @@ pub struct Config {
     pub public_url: String,
     /// The database and the push keys. Default: `$XDG_DATA_HOME/shed-nexus`.
     pub data_dir: Option<PathBuf>,
-    /// The built web app, served at `/` (any path that is not a file gets
-    /// `index.html`). None: no web app, only the API.
+    /// Serve the web app from this folder (a build of `web/`) instead of
+    /// the one built into the binary. Any path that is not a file gets
+    /// `index.html`.
     pub web_dir: Option<PathBuf>,
     /// How long a browser stays signed in.
     pub session_days: u32,

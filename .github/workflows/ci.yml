@@ -29,6 +29,29 @@ jobs:
             echo "the build without windows pulls in display libraries"; exit 1
           fi
 
+  # The web app, and the nexus built with it (the Rust jobs above build in
+  # debug, which leaves the web app out of shed-nexus).
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build and test the web app
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm test
+          npm run check:mock
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: The nexus with the web app built in
+        run: SHED_NEXUS_WEB=1 cargo test --locked -p shed-nexus
+
   macos:
     runs-on: macos-14
     steps:

@@ -166,18 +166,57 @@ async fn the_web_app_falls_back_to_its_index() {
     let web = tempfile::tempdir().unwrap();
     std::fs::write(web.path().join("index.html"), "<html>shed</html>").unwrap();
     std::fs::write(web.path().join("app.js"), "1").unwrap();
+    std::fs::write(web.path().join("main-JLFEZLOM.js"), "2").unwrap();
     let dir = web.path().to_path_buf();
     let nexus = start_with(|c| c.web_dir = Some(dir)).await;
     let page = nexus.get_raw("/setup?code=x", &Auth::None).await;
     assert_eq!(page.status(), StatusCode::OK);
     assert!(page.headers().contains_key("content-security-policy"));
+    assert_eq!(page.headers()["cache-control"], "no-cache");
+    assert_eq!(page.headers()["content-type"], "text/html; charset=utf-8");
     assert_eq!(page.text().await.unwrap(), "<html>shed</html>");
-    assert_eq!(nexus.get_raw("/app.js", &Auth::None).await.text().await.unwrap(), "1");
+    let script = nexus.get_raw("/app.js", &Auth::None).await;
+    assert_eq!(script.headers()["cache-control"], "no-cache");
+    assert_eq!(script.text().await.unwrap(), "1");
+    // Hashed bundles are kept for good, and not sent again while unchanged.
+    let bundle = nexus.get_raw("/main-JLFEZLOM.js", &Auth::None).await;
+    assert_eq!(bundle.headers()["cache-control"], "public, max-age=31536000, immutable");
+    assert_eq!(bundle.headers()["content-type"], "text/javascript; charset=utf-8");
+    let etag = bundle.headers()["etag"].to_str().unwrap().to_string();
+    let again = nexus.http.get(format!("{}/main-JLFEZLOM.js", nexus.base)).header("if-none-match", etag).send().await.unwrap();
+    assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+    // Nothing outside the folder.
+    let outside = nexus.http.get(format!("{}/%2e%2e/account.rs", nexus.base)).send().await.unwrap();
+    assert_eq!(outside.text().await.unwrap(), "<html>shed</html>");
     // A deep link gets the page too, and its `<base href="/">` counts.
     let deep = nexus.get_raw("/w/abc/b/def/t/ghi", &Auth::None).await;
     let csp = deep.headers()["content-security-policy"].to_str().unwrap().to_string();
     assert!(csp.contains("base-uri 'self'"), "{csp}");
     assert_eq!(deep.text().await.unwrap(), "<html>shed</html>");
+}
+
+/// Release builds (and `SHED_NEXUS_WEB=1`) carry the web app; debug builds
+/// have none, and this test has nothing to check.
+#[tokio::test]
+async fn the_built_in_web_app_is_served() {
+    if shed_nexus::web::EMBEDDED.is_empty() {
+        let nexus = start().await;
+        let page = nexus.get_raw("/", &Auth::None).await;
+        assert_eq!(page.status(), StatusCode::NOT_FOUND);
+        return;
+    }
+    let nexus = start().await;
+    let page = nexus.get_raw("/w/abc/b/def/t/ghi", &Auth::None).await;
+    assert_eq!(page.status(), StatusCode::OK);
+    assert_eq!(page.headers()["cache-control"], "no-cache");
+    assert!(page.headers()["content-security-policy"].to_str().unwrap().contains("base-uri 'self'"));
+    let html = page.text().await.unwrap();
+    assert!(html.contains("<base href=\"/\">") || html.contains("<base href=\"/\"/>"), "{html}");
+    let bundle = shed_nexus::web::EMBEDDED.iter().find(|f| f.path.starts_with("main-")).expect("a main bundle");
+    let script = nexus.get_raw(&format!("/{}", bundle.path), &Auth::None).await;
+    assert_eq!(script.headers()["cache-control"], "public, max-age=31536000, immutable");
+    assert_eq!(script.headers()["content-type"], "text/javascript; charset=utf-8");
+    assert_eq!(script.bytes().await.unwrap().as_ref(), bundle.bytes);
 }
 
 #[tokio::test]

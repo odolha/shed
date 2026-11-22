@@ -43,15 +43,20 @@ To use a real nexus instead, point `proxy.conf.json` at it (HTTPS: `"secure": tr
 ## Build and test
 
 ```sh
-npm run build        # production build into web/dist/shed-web (the files the nexus serves)
+npm run build        # production build into web/dist/shed-web
 npm test             # unit tests (Vitest, through `ng test`)
 npm run check:mock   # type-checks the mock against the generated API types
 npm run icons        # after changing assets/icons/ui/*.svg: remakes src/ui/icons.ts
 ```
 
 `dist/shed-web` holds `index.html`, the hashed bundles, `sw.js`, the manifest
-and icons; the nexus serves it as is, falling back to `index.html` for the
-app's routes (`/w/…`, `/devices`, `/settings`, `/login`, `/setup`).
+and icons. Release builds of `shed-nexus` build the app themselves (in cargo's
+build folder, with the Node on `PATH`) and carry these files in the binary;
+`web_dir` in `nexus.toml` serves a `dist/shed-web` from disk instead. Either
+way the nexus falls back to `index.html` for the app's routes (`/w/…`,
+`/devices`, `/settings`, `/login`, `/setup`), caches the hashed bundles for a
+year and revalidates the rest. See
+[The web app in the nexus](../docs/development.md#the-web-app-in-the-nexus).
 
 ## Layout
 

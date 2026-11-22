@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shed end to end, with real processes, apart from your own Shed: builds the
-# binaries and the web app, starts a nexus on 127.0.0.1 serving the web app,
+# binaries (the nexus with the web app built in), starts a nexus on 127.0.0.1,
 # a keeper of its own (with a stand-in claude) and its link, pairs them with
 # `shed nexus join`, then drives the web app in a headless Chrome: signing in
 # with TOTP, the overview, a terminal, the logbook, a project's diff and file,
@@ -32,13 +32,9 @@ node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.ex
 
 # ---- build
 if [[ "$E2E_PROFILE" == release ]]; then flag=--release; else flag=; fi
-log "building shed, shedd and shed-nexus ($E2E_PROFILE)"
-CARGO_TARGET_DIR=$E2E_TARGET cargo build -q $flag -p shed-app -p shed-keeper -p shed-nexus
+log "building shed, shedd and shed-nexus with the web app ($E2E_PROFILE)"
+SHED_NEXUS_WEB=1 CARGO_TARGET_DIR=$E2E_TARGET cargo build -q $flag -p shed-app -p shed-keeper -p shed-nexus
 bin=$E2E_TARGET/$E2E_PROFILE
-if [[ "${E2E_WEB_BUILD:-1}" == 1 || ! -f web/dist/shed-web/index.html ]]; then
-  log "building the web app"
-  (cd web && { [[ -d node_modules ]] || npm ci --no-audit --no-fund; } && npm run -s build >/dev/null)
-fi
 
 # ---- a world of its own
 rm -rf "$E2E_DIR"
@@ -86,7 +82,6 @@ cat > "$E2E_DIR/nexus/nexus.toml" <<TOML
 listen = "127.0.0.1:$E2E_PORT"
 public_url = "http://localhost:$E2E_PORT"
 data_dir = "$E2E_DIR/nexus/data"
-web_dir = "$repo/web/dist/shed-web"
 trusted_proxy = false
 TOML
 
