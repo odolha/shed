@@ -169,7 +169,7 @@
   "settings.webVersion": "Web app",
   "settings.nexusVersion": "Nexus",
   "push.title": "Notifications",
-  "push.intro": "This browser can tell you when Claude needs you or is done, even with Shed closed.",
+  "push.intro": "This browser can tell you when Claude needs you or is done, even with Shed closed. While Shed is open in front of you, here or on another device, notifications show inside it instead.",
   "push.support.insecure": "Notifications need the nexus over HTTPS.",
   "push.support.unsupported": "This browser cannot receive push notifications.",
   "push.support.ios-install": "On iPhone and iPad, add Shed to the Home Screen (Share, Add to Home Screen) and open it from there to get notifications.",

@@ -7,6 +7,9 @@
  *   their workspace is offline and sent again when it is back.
  * - A dropped connection is retried with a growing delay; `Goodbye` is final
  *   (signed out, revoked, an API version the nexus does not take).
+ * - Whether the page is in view (`Visible`) is sent after `Welcome` and on
+ *   every change: while some app is, the nexus sends notifications live
+ *   (`Notification`) instead of pushing them.
  */
 
 import { Injectable, signal } from '@angular/core';
@@ -105,8 +108,16 @@ export class SocketClient {
   private readonly subs = new Map<number, SubRecord>();
   private readonly listeners = new Set<(frame: ServerFrame) => void>();
   private readonly online = new Map<string, boolean>();
+  private inView = false;
 
   constructor(private readonly opts: SocketOptions) {}
+
+  /** Tells the nexus whether the app is in view (now and after reconnecting). */
+  setVisible(visible: boolean): void {
+    if (visible === this.inView) return;
+    this.inView = visible;
+    if (this.state() === 'open') this.transmit({ type: 'Visible', content: visible });
+  }
 
   /** Opens the connection (again), if it is not open or opening. */
   connect(): void {
@@ -257,6 +268,7 @@ export class SocketClient {
         this.noteWorkspaces(frame.content.workspaces);
         this.welcome.set(frame.content);
         this.state.set('open');
+        this.transmit({ type: 'Visible', content: this.inView });
         for (const [id, s] of this.subs) {
           s.dormant = this.online.get(s.workspace) === false;
           if (!s.dormant) this.sendSubscribe(id);
@@ -303,6 +315,9 @@ export class SocketClient {
       case 'State':
         // A state can only come from a workspace that is there.
         this.resume(frame.content.workspace);
+        break;
+      case 'Notification':
+        // For the listeners (`LiveNotifications`).
         break;
       case 'Goodbye': {
         this.goodbye.set(frame.content);
@@ -365,16 +380,26 @@ export function apiUrl(loc: Location = location): string {
   return `${loc.protocol === 'https:' ? 'wss' : 'ws'}://${loc.host}/api`;
 }
 
+/** Whether the page is in front of the user: shown and focused. */
+export function pageInView(doc: Document = document): boolean {
+  return doc.visibilityState === 'visible' && doc.hasFocus();
+}
+
 /** The app's connection, retried when the page comes back into view. */
 @Injectable({ providedIn: 'root' })
 export class NexusSocket extends SocketClient {
   constructor() {
     super({ url: () => apiUrl(), client: 'web 0.1.0' });
     if (typeof document !== 'undefined') {
+      const note = () => this.setVisible(pageInView());
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') this.wake();
+        note();
       });
+      window.addEventListener('focus', note);
+      window.addEventListener('blur', note);
       window.addEventListener('online', () => this.wake());
+      note();
     }
   }
 }

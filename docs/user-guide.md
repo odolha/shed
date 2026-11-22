@@ -1210,6 +1210,12 @@ What the web app shows:
   off); clicking one opens its tab. **Turn On** subscribes this browser,
   **Turn Off** stops them here (your choices are kept for turning them on
   again). Change the password, sign out.
+- **Notifications while Shed is open**: while the page is in front of you
+  (shown and focused), or the Shed app on your phone is, nothing is pushed to
+  any of your devices; the open app shows the notification itself, here as a
+  toast at the bottom (**Open** goes to its tab; none for the tab you are
+  already on). Only when no Shed app is in view does it come as a browser or
+  phone notification.
 
 On a phone, **Add to Home Screen** installs it as an app (on iPhone, needed for
 notifications). Private tabs are listed, never shown: what is in them stays on

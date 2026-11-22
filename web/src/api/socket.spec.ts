@@ -93,6 +93,26 @@ describe('SocketClient', () => {
     expect(client.welcome()?.nexus).toBe('test');
   });
 
+  it('tells the nexus whether it is in view, after the welcome and on change', () => {
+    client.setVisible(true);
+    client.connect();
+    const s = sockets[0]!;
+    s.open();
+    expect(s.all('Visible')).toEqual([]);
+    welcome(s);
+    expect(s.all('Visible')).toEqual([{ type: 'Visible', content: true }]);
+    client.setVisible(true);
+    client.setVisible(false);
+    expect(s.all('Visible').map((f) => f.content)).toEqual([true, false]);
+    // Again on a new connection, as it is now.
+    s.drop();
+    vi.advanceTimersByTime(100);
+    const again = sockets[1]!;
+    again.open();
+    welcome(again);
+    expect(again.all('Visible')).toEqual([{ type: 'Visible', content: false }]);
+  });
+
   it('answers requests by id', async () => {
     const s = connected();
     const a = client.request('devbox', { type: 'Previews' });

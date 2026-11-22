@@ -1074,8 +1074,11 @@ text, a project's changes, a search), which the client sends again after a
 reconnect and pauses while their workspace is offline; the workspaces and
 their last states come with the welcome and with every change. Terminals are
 drawn from that text, re-wrapped to the browser's width on the normal screen,
-so the app has no terminal emulator. `web/mock/` is a pretend nexus to develop
-against.
+so the app has no terminal emulator. The socket sends `Visible` (the page
+shown and focused) after the welcome and on every change; live notifications
+(`LiveNotifications`, `src/api/notifications.ts`) become toasts that open
+their tab, and pushes when no app is in view are the service worker's
+(`public/sw.js`). `web/mock/` is a pretend nexus to develop against.
 
 `browser/chrome/` is the browser extension (built into `shed`, written out by
 `shed browser setup`). `vendor/` holds the patched copies of `alacritty_terminal`, `gpui_ce_wgpu`,
