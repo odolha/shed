@@ -11,7 +11,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use shed_api::ApiError;
-use shed_api::wire::{ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationFrame, Unsubscribe, WorkspaceInfo};
+use shed_api::wire::{
+    ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationFrame, TunnelClosed, TunnelId, TunnelOpen, Unsubscribe,
+    WorkspaceInfo,
+};
 
 pub type Raw = Box<RawValue>;
 
@@ -24,6 +27,8 @@ pub enum RawClientFrame {
     Subscribe(RawSubscribe),
     Unsubscribe(Unsubscribe),
     Visible(bool),
+    TunnelOpen(TunnelOpen),
+    TunnelClose(TunnelId),
 }
 
 /// `ServerFrame`.
@@ -38,6 +43,8 @@ pub enum RawServerFrame {
     State(RawStateFrame),
     Goodbye(ApiError),
     Notification(NotificationFrame),
+    TunnelOpened(TunnelId),
+    TunnelClosed(TunnelClosed),
 }
 
 /// `LinkFrame`.
@@ -50,6 +57,8 @@ pub enum RawLinkFrame {
     Event(RawEventFrame),
     Ended(Ended),
     Notify(Notification),
+    TunnelOpened(TunnelId),
+    TunnelClosed(TunnelClosed),
 }
 
 /// `NexusFrame`.
@@ -61,6 +70,8 @@ pub enum RawNexusFrame {
     Subscribe(RawSubscribe),
     Unsubscribe(Unsubscribe),
     Goodbye(ApiError),
+    TunnelOpen(TunnelId),
+    TunnelClose(TunnelId),
 }
 
 /// `Request`.
@@ -149,6 +160,8 @@ impl RawClientFrame {
             "Subscribe" => Self::Subscribe(content(env.content)?),
             "Unsubscribe" => Self::Unsubscribe(content(env.content)?),
             "Visible" => Self::Visible(content(env.content)?),
+            "TunnelOpen" => Self::TunnelOpen(content(env.content)?),
+            "TunnelClose" => Self::TunnelClose(content(env.content)?),
             other => return unknown(other),
         })
     }
@@ -166,6 +179,8 @@ impl RawServerFrame {
             "State" => Self::State(content(env.content)?),
             "Goodbye" => Self::Goodbye(content(env.content)?),
             "Notification" => Self::Notification(content(env.content)?),
+            "TunnelOpened" => Self::TunnelOpened(content(env.content)?),
+            "TunnelClosed" => Self::TunnelClosed(content(env.content)?),
             other => return unknown(other),
         })
     }
@@ -185,6 +200,8 @@ impl RawLinkFrame {
             "Event" => Self::Event(content(env.content)?),
             "Ended" => Self::Ended(content(env.content)?),
             "Notify" => Self::Notify(content(env.content)?),
+            "TunnelOpened" => Self::TunnelOpened(content(env.content)?),
+            "TunnelClosed" => Self::TunnelClosed(content(env.content)?),
             other => return unknown(other),
         })
     }
@@ -199,6 +216,8 @@ impl RawNexusFrame {
             "Subscribe" => Self::Subscribe(content(env.content)?),
             "Unsubscribe" => Self::Unsubscribe(content(env.content)?),
             "Goodbye" => Self::Goodbye(content(env.content)?),
+            "TunnelOpen" => Self::TunnelOpen(content(env.content)?),
+            "TunnelClose" => Self::TunnelClose(content(env.content)?),
             other => return unknown(other),
         })
     }
@@ -259,6 +278,8 @@ mod tests {
             ClientFrame::Subscribe(Subscribe { id: 9, workspace: "w".into(), topic: Topic::Screen(ScreenTopic { pane: "p".into() }) }),
             ClientFrame::Unsubscribe(Unsubscribe { id: 9 }),
             ClientFrame::Visible(true),
+            ClientFrame::TunnelOpen(TunnelOpen { id: 3, workspace: "w".into() }),
+            ClientFrame::TunnelClose(TunnelId { id: 3 }),
         ];
         for frame in &clients {
             same(frame, |t| RawClientFrame::parse(t).map(|f| serde_json::to_string(&f).unwrap()));
@@ -289,6 +310,8 @@ mod tests {
                     tab: Some("t".into()),
                 },
             }),
+            ServerFrame::TunnelOpened(TunnelId { id: 3 }),
+            ServerFrame::TunnelClosed(TunnelClosed { id: 3, error: Some(ApiError::new(ErrorCode::Forbidden, "no")) }),
         ];
         for frame in &servers {
             same(frame, |t| RawServerFrame::parse(t).map(|f| f.to_text()));
@@ -307,6 +330,8 @@ mod tests {
                 bench: Some("b".into()),
                 tab: None,
             }),
+            LinkFrame::TunnelOpened(TunnelId { id: 4 }),
+            LinkFrame::TunnelClosed(TunnelClosed { id: 4, error: None }),
         ];
         for frame in &links {
             same(frame, |t| RawLinkFrame::parse(t).map(|f| serde_json::to_string(&f).unwrap()));
@@ -318,6 +343,8 @@ mod tests {
             NexusFrame::Subscribe(Subscribe { id: 2, workspace: String::new(), topic: Topic::Screen(ScreenTopic { pane: "p".into() }) }),
             NexusFrame::Unsubscribe(Unsubscribe { id: 2 }),
             NexusFrame::Goodbye(ApiError::new(ErrorCode::Unsupported, "old")),
+            NexusFrame::TunnelOpen(TunnelId { id: 5 }),
+            NexusFrame::TunnelClose(TunnelId { id: 5 }),
         ];
         for frame in &nexus {
             same(frame, |t| RawNexusFrame::parse(t).map(|f| f.to_text()));

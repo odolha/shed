@@ -72,6 +72,11 @@ pub fn keeper(dir: &Path) -> Env {
 
 /// Starts a link to the keeper of `env`, dialling `url`.
 pub fn link(env: &Env, url: String, token: &str, policy: Policy) -> tokio::task::JoinHandle<anyhow::Result<shed_link::Exit>> {
+    link_with(env, url, token, policy, false)
+}
+
+/// A link that may let Shed's desktop app in (`desktop_clients`).
+pub fn link_with(env: &Env, url: String, token: &str, policy: Policy, desktop_clients: bool) -> tokio::task::JoinHandle<anyhow::Result<shed_link::Exit>> {
     let opts = shed_link::Options {
         socket: env.socket.clone(),
         url,
@@ -83,6 +88,7 @@ pub fn link(env: &Env, url: String, token: &str, policy: Policy) -> tokio::task:
         uploads: env.dir.join("state/ai-files"),
         status_file: Some(env.dir.join("link.json")),
         config_file: None,
+        desktop_clients,
     };
     tokio::spawn(shed_link::run(opts))
 }

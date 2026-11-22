@@ -17,21 +17,29 @@
 //! are unsubscribed at the links. A request not answered within the timeout
 //! is answered `Timeout`. A workspace's `State` is kept as its last snapshot
 //! (written to the database every few seconds) and sent to every connector.
+//!
+//! Tunnels (desktop connectors only) are routed the same way: the connector's
+//! tunnel id maps to one the nexus picks for the link, and binary messages
+//! (`[u32 id][bytes]`) are passed on with the id swapped. A tunnel whose far
+//! side cannot keep up is closed rather than buffered: each connection may
+//! have at most `TUNNEL_BACKLOG` bytes of tunnel data waiting.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
+use axum::body::Bytes;
 use axum::http::HeaderMap;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use serde_json::value::RawValue;
 use shed_api::http::DeviceKind;
 use shed_api::wire::{
-    ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationFrame, NotificationKind, Policy, Unsubscribe,
-    WorkspaceInfo,
+    ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationFrame, NotificationKind, Policy, TunnelClosed, TunnelId,
+    TunnelOpen, Unsubscribe, WorkspaceInfo, split_tunnel_data, tunnel_data,
 };
 use shed_api::{API_VERSION, ApiError, ErrorCode, MIN_API_VERSION};
 use tokio::sync::{Notify, mpsc};
@@ -39,7 +47,7 @@ use tokio::task::JoinHandle;
 
 use crate::http::{Client, Failure, bearer, cookie};
 use crate::raw::*;
-use crate::store::{DeviceRow, Store};
+use crate::store::{AuditInfo, DeviceRow, Store};
 use crate::{App, auth, now};
 
 /// Frames up to this size: pictures for AI prompts travel inside them.
@@ -55,6 +63,11 @@ const IDLE: Duration = Duration::from_secs(90);
 /// Notifications a workspace may send: this many a minute, this many at once.
 const NOTIFY_PER_MINUTE: u32 = 30;
 const NOTIFY_BURST: u32 = 10;
+/// Tunnel data waiting for one connection, at most; past it the tunnel
+/// that would add more is closed.
+const TUNNEL_BACKLOG: usize = 8 * 1024 * 1024;
+/// Tunnels a connector may have open at once.
+const MAX_TUNNELS: usize = 8;
 
 // --------------------------------------------------------------- the hub
 
@@ -89,6 +102,8 @@ struct Link {
     requests: HashMap<u32, Pending>,
     /// Nexus id → (connector, its subscription id).
     subs: HashMap<u32, (u64, u32)>,
+    /// Nexus id → (connector, its tunnel id).
+    tunnels: HashMap<u32, (u64, u32)>,
 }
 
 struct Pending {
@@ -104,14 +119,18 @@ struct Connector {
     visible: bool,
     /// Its subscription id → (workspace, nexus id).
     subs: HashMap<u32, (String, u32)>,
+    /// Its tunnel id → (workspace, nexus id).
+    tunnels: HashMap<u32, (String, u32)>,
 }
 
 /// The way to a connection's socket: frames to send, and a way to close it.
 #[derive(Clone)]
 pub struct Outbox {
     device: String,
-    tx: mpsc::Sender<Utf8Bytes>,
+    tx: mpsc::Sender<Message>,
     closer: Arc<Closer>,
+    /// Bytes of tunnel data queued and not yet written.
+    backlog: Arc<AtomicUsize>,
 }
 
 #[derive(Default)]
@@ -133,17 +152,40 @@ impl Closer {
 }
 
 impl Outbox {
-    fn new(device: &str) -> (Outbox, mpsc::Receiver<Utf8Bytes>) {
+    fn new(device: &str) -> (Outbox, mpsc::Receiver<Message>) {
         let (tx, rx) = mpsc::channel(QUEUE);
-        (Outbox { device: device.to_string(), tx, closer: Arc::default() }, rx)
+        (Outbox { device: device.to_string(), tx, closer: Arc::default(), backlog: Arc::default() }, rx)
     }
 
     /// Queues a frame; a connection that cannot keep up is closed.
     fn send(&self, text: impl Into<Utf8Bytes>) {
-        if self.tx.try_send(text.into()).is_err() {
+        if self.tx.try_send(Message::Text(text.into())).is_err() {
             self.closer.close(None);
         }
     }
+
+    /// Queues a tunnel's data; false (nothing queued) when the connection
+    /// is too far behind, so the tunnel is closed instead of buffered.
+    fn send_data(&self, id: u32, bytes: &[u8]) -> bool {
+        let len = bytes.len() + 4;
+        if self.backlog.load(Ordering::Relaxed) + len > TUNNEL_BACKLOG || self.tx.capacity() < QUEUE / 8 {
+            return false;
+        }
+        self.backlog.fetch_add(len, Ordering::Relaxed);
+        if self.tx.try_send(Message::Binary(Bytes::from(tunnel_data(id, bytes)))).is_err() {
+            self.backlog.fetch_sub(len, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+}
+
+fn tunnel_closed(id: u32, error: Option<ApiError>) -> String {
+    RawServerFrame::TunnelClosed(TunnelClosed { id, error }).to_text()
+}
+
+fn too_slow() -> ApiError {
+    ApiError::new(ErrorCode::Failed, "the tunnel could not keep up and was closed")
 }
 
 fn goodbye(error: ApiError) -> String {
@@ -186,6 +228,7 @@ impl Hub {
             next_id: 0,
             requests: HashMap::new(),
             subs: HashMap::new(),
+            tunnels: HashMap::new(),
         };
         inner.links.insert(workspace.to_string(), link);
         conn
@@ -245,8 +288,35 @@ impl Hub {
                 connector.out.send(RawServerFrame::Ended(Ended { sub, error: ended.error }).to_text());
             }
             RawLinkFrame::Notify(notification) => return Some(notification),
+            RawLinkFrame::TunnelOpened(TunnelId { id }) => {
+                let (conn, cid) = *link.tunnels.get(&id)?;
+                let connector = inner.connectors.get(&conn)?;
+                connector.out.send(RawServerFrame::TunnelOpened(TunnelId { id: cid }).to_text());
+            }
+            RawLinkFrame::TunnelClosed(closed) => {
+                let (conn, cid) = link.tunnels.remove(&closed.id)?;
+                let connector = inner.connectors.get_mut(&conn)?;
+                connector.tunnels.remove(&cid);
+                connector.out.send(tunnel_closed(cid, closed.error));
+            }
         }
         None
+    }
+
+    /// A link's tunnel data, on to its connector.
+    fn link_data(&self, workspace: &str, conn: u64, message: &[u8]) {
+        let Some((nid, bytes)) = split_tunnel_data(message) else { return };
+        let mut inner = self.lock();
+        let inner = &mut *inner;
+        let Some(link) = inner.links.get_mut(workspace).filter(|l| l.conn == conn) else { return };
+        let Some(&(cconn, cid)) = link.tunnels.get(&nid) else { return };
+        let Some(connector) = inner.connectors.get_mut(&cconn) else { return };
+        if !connector.out.send_data(cid, bytes) {
+            link.tunnels.remove(&nid);
+            connector.tunnels.remove(&cid);
+            link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
+            connector.out.send(tunnel_closed(cid, Some(too_slow())));
+        }
     }
 
     // ---- connectors
@@ -255,7 +325,9 @@ impl Hub {
         let mut inner = self.lock();
         inner.next_conn += 1;
         let conn = inner.next_conn;
-        inner.connectors.insert(conn, Connector { device: out.device.clone(), out, visible: false, subs: HashMap::new() });
+        inner
+            .connectors
+            .insert(conn, Connector { device: out.device.clone(), out, visible: false, subs: HashMap::new(), tunnels: HashMap::new() });
         conn
     }
 
@@ -268,8 +340,66 @@ impl Hub {
                 link.out.send(RawNexusFrame::Unsubscribe(Unsubscribe { id: *nid }).to_text());
             }
         }
+        for (workspace, nid) in connector.tunnels.values() {
+            if let Some(link) = inner.links.get_mut(workspace) {
+                link.tunnels.remove(nid);
+                link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: *nid }).to_text());
+            }
+        }
         for link in inner.links.values_mut() {
             link.requests.retain(|_, p| p.conn != conn);
+        }
+    }
+
+    /// Opens a tunnel to a workspace's link (the caller checked the device
+    /// may); `Err` says why not.
+    fn tunnel_open(&self, conn: u64, open: &TunnelOpen) -> Result<(), Option<ApiError>> {
+        let mut inner = self.lock();
+        let inner = &mut *inner;
+        let Some(connector) = inner.connectors.get_mut(&conn) else { return Ok(()) };
+        // The same id again replaces the tunnel.
+        if let Some((workspace, nid)) = connector.tunnels.remove(&open.id)
+            && let Some(link) = inner.links.get_mut(&workspace)
+        {
+            link.tunnels.remove(&nid);
+            link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
+        }
+        if connector.tunnels.len() >= MAX_TUNNELS {
+            return Err(Some(ApiError::new(ErrorCode::RateLimited, format!("at most {MAX_TUNNELS} tunnels at once"))));
+        }
+        let Some(link) = inner.links.get_mut(&open.workspace) else { return Err(None) };
+        let nid = link.next_id();
+        link.tunnels.insert(nid, (conn, open.id));
+        connector.tunnels.insert(open.id, (open.workspace.clone(), nid));
+        link.out.send(RawNexusFrame::TunnelOpen(TunnelId { id: nid }).to_text());
+        Ok(())
+    }
+
+    fn tunnel_close(&self, conn: u64, id: u32) {
+        let mut inner = self.lock();
+        let inner = &mut *inner;
+        let Some(connector) = inner.connectors.get_mut(&conn) else { return };
+        let Some((workspace, nid)) = connector.tunnels.remove(&id) else { return };
+        connector.out.send(tunnel_closed(id, None));
+        if let Some(link) = inner.links.get_mut(&workspace) {
+            link.tunnels.remove(&nid);
+            link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
+        }
+    }
+
+    /// A connector's tunnel data, on to the link.
+    fn connector_data(&self, conn: u64, message: &[u8]) {
+        let Some((cid, bytes)) = split_tunnel_data(message) else { return };
+        let mut inner = self.lock();
+        let inner = &mut *inner;
+        let Some(connector) = inner.connectors.get_mut(&conn) else { return };
+        let Some((workspace, nid)) = connector.tunnels.get(&cid).cloned() else { return };
+        let Some(link) = inner.links.get_mut(&workspace) else { return };
+        if !link.out.send_data(nid, bytes) {
+            link.tunnels.remove(&nid);
+            connector.tunnels.remove(&cid);
+            link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
+            connector.out.send(tunnel_closed(cid, Some(too_slow())));
         }
     }
 
@@ -429,6 +559,12 @@ impl Inner {
                 connector.out.send(RawServerFrame::Ended(Ended { sub, error: Some(offline()) }).to_text());
             }
         }
+        for (conn, id) in link.tunnels.into_values() {
+            if let Some(connector) = self.connectors.get_mut(&conn) {
+                connector.tunnels.remove(&id);
+                connector.out.send(tunnel_closed(id, Some(offline())));
+            }
+        }
     }
 }
 
@@ -437,7 +573,7 @@ impl Link {
         loop {
             self.next_id = self.next_id.wrapping_add(1);
             let id = self.next_id;
-            if !self.requests.contains_key(&id) && !self.subs.contains_key(&id) {
+            if !self.requests.contains_key(&id) && !self.subs.contains_key(&id) && !self.tunnels.contains_key(&id) {
                 return id;
             }
         }
@@ -615,13 +751,16 @@ fn unsupported(api: u32) -> ApiError {
     )
 }
 
+/// What came in on a socket.
+enum Incoming<'a> {
+    Text(&'a str),
+    /// A tunnel's data.
+    Binary(&'a [u8]),
+}
+
 /// Moves frames both ways until the socket ends or is closed.
-async fn pump(
-    socket: &mut WebSocket,
-    rx: &mut mpsc::Receiver<Utf8Bytes>,
-    closer: &Closer,
-    mut on_text: impl FnMut(&str),
-) {
+async fn pump(socket: &mut WebSocket, out: &Outbox, rx: &mut mpsc::Receiver<Message>, mut on_frame: impl FnMut(Incoming<'_>)) {
+    let closer = &out.closer;
     let mut ping = tokio::time::interval(PING);
     ping.tick().await;
     let mut heard = Instant::now();
@@ -630,14 +769,21 @@ async fn pump(
             msg = socket.recv() => {
                 heard = Instant::now();
                 match msg {
-                    Some(Ok(Message::Text(text))) => on_text(&text),
-                    Some(Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_))) => {}
+                    Some(Ok(Message::Text(text))) => on_frame(Incoming::Text(&text)),
+                    Some(Ok(Message::Binary(data))) => on_frame(Incoming::Binary(&data)),
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
                     Some(Ok(Message::Close(_)) | Err(_)) | None => break,
                 }
             }
-            out = rx.recv() => {
-                let Some(text) = out else { break };
-                if socket.send(Message::Text(text)).await.is_err() {
+            next = rx.recv() => {
+                let Some(message) = next else { break };
+                let data = match &message {
+                    Message::Binary(b) => b.len(),
+                    _ => 0,
+                };
+                let sent = socket.send(message).await;
+                out.backlog.fetch_sub(data, Ordering::Relaxed);
+                if sent.is_err() {
                     break;
                 }
             }
@@ -672,24 +818,26 @@ async fn run_link(app: Arc<App>, mut socket: WebSocket, device: DeviceRow) {
         tracing::error!("{e:#}");
     }
     let (out, mut rx) = Outbox::new(&device.id);
-    let closer = out.closer.clone();
-    let conn = app.hub.link_join(&workspace, &hello, out);
+    let conn = app.hub.link_join(&workspace, &hello, out.clone());
     let welcome =
         LinkWelcome { api: API_VERSION, nexus: crate::VERSION.into(), workspace: workspace.clone(), name: device.name.clone() };
     if socket.send(Message::Text(RawNexusFrame::Welcome(welcome).to_text().into())).await.is_ok() {
         tracing::info!("workspace {:?} connected (Shed {})", device.name, hello.version);
         announce(&app);
-        pump(&mut socket, &mut rx, &closer, |text| match RawLinkFrame::parse(text) {
-            Ok(frame) => {
-                if let Some(notification) = app.hub.link_frame(&workspace, conn, frame) {
-                    if app.guard.take_for("notify", &workspace, NOTIFY_PER_MINUTE, NOTIFY_BURST) {
-                        crate::push::notify(&app, &workspace, notification);
-                    } else {
-                        tracing::debug!("workspace {:?} sends too many notifications; one dropped", device.name);
+        pump(&mut socket, &out, &mut rx, |incoming| match incoming {
+            Incoming::Binary(data) => app.hub.link_data(&workspace, conn, data),
+            Incoming::Text(text) => match RawLinkFrame::parse(text) {
+                Ok(frame) => {
+                    if let Some(notification) = app.hub.link_frame(&workspace, conn, frame) {
+                        if app.guard.take_for("notify", &workspace, NOTIFY_PER_MINUTE, NOTIFY_BURST) {
+                            crate::push::notify(&app, &workspace, notification);
+                        } else {
+                            tracing::debug!("workspace {:?} sends too many notifications; one dropped", device.name);
+                        }
                     }
                 }
-            }
-            Err(e) => tracing::debug!("a link sent a frame that does not read ({} bytes): {e}", text.len()),
+                Err(e) => tracing::debug!("a link sent a frame that does not read ({} bytes): {e}", text.len()),
+            },
         })
         .await;
     }
@@ -730,8 +878,7 @@ async fn run_connector(app: Arc<App>, mut socket: WebSocket, device: DeviceRow) 
         return say_goodbye(socket, unsupported(hello.api)).await;
     }
     let (out, mut rx) = Outbox::new(&device.id);
-    let closer = out.closer.clone();
-    let conn = app.hub.connector_join(out);
+    let conn = app.hub.connector_join(out.clone());
     let welcome = match welcome(&app) {
         Ok(welcome) => welcome,
         Err(e) => {
@@ -742,9 +889,12 @@ async fn run_connector(app: Arc<App>, mut socket: WebSocket, device: DeviceRow) 
     };
     tracing::debug!("{} connected ({})", device.name, hello.client);
     if socket.send(Message::Text(RawServerFrame::Welcome(welcome).to_text().into())).await.is_ok() {
-        pump(&mut socket, &mut rx, &closer, |text| match RawClientFrame::parse(text) {
-            Ok(frame) => connector_frame(&app, conn, frame),
-            Err(e) => tracing::debug!("a connector sent a frame that does not read: {e}"),
+        pump(&mut socket, &out, &mut rx, |incoming| match incoming {
+            Incoming::Binary(data) => app.hub.connector_data(conn, data),
+            Incoming::Text(text) => match RawClientFrame::parse(text) {
+                Ok(frame) => connector_frame(&app, conn, &device, frame),
+                Err(e) => tracing::debug!("a connector sent a frame that does not read: {e}"),
+            },
         })
         .await;
     }
@@ -774,7 +924,7 @@ fn unreachable(app: &App, workspace: &str) -> ApiError {
     }
 }
 
-fn connector_frame(app: &App, conn: u64, frame: RawClientFrame) {
+fn connector_frame(app: &App, conn: u64, device: &DeviceRow, frame: RawClientFrame) {
     match frame {
         RawClientFrame::Hello(_) => {}
         RawClientFrame::Request(request) => {
@@ -792,5 +942,29 @@ fn connector_frame(app: &App, conn: u64, frame: RawClientFrame) {
         }
         RawClientFrame::Unsubscribe(Unsubscribe { id }) => app.hub.unsubscribe(conn, id),
         RawClientFrame::Visible(visible) => app.hub.set_visible(conn, visible),
+        RawClientFrame::TunnelOpen(open) => {
+            // A tunnel speaks the keeper's own protocol: only Shed's desktop
+            // app, signed in as such, may open one.
+            if device.kind != DeviceKind::Desktop {
+                let error = ApiError::new(ErrorCode::Forbidden, "only Shed's desktop app opens tunnels");
+                return app.hub.reply(conn, RawServerFrame::TunnelClosed(TunnelClosed { id: open.id, error: Some(error) }));
+            }
+            match app.hub.tunnel_open(conn, &open) {
+                Ok(()) => {
+                    let name = app.store.workspaces().ok().and_then(|ws| ws.into_iter().find(|w| w.id == open.workspace)).map(|w| w.name);
+                    let detail = name.unwrap_or_else(|| open.workspace.clone());
+                    let info = AuditInfo { device: Some(&device.id), address: &device.address, country: device.country.as_deref(), detail: &detail };
+                    if let Err(e) = app.store.audit("tunnel-open", info, now()) {
+                        tracing::error!("{e:#}");
+                    }
+                    tracing::info!("{} opened a tunnel to {detail:?}", device.name);
+                }
+                Err(error) => {
+                    let error = error.unwrap_or_else(|| unreachable(app, &open.workspace));
+                    app.hub.reply(conn, RawServerFrame::TunnelClosed(TunnelClosed { id: open.id, error: Some(error) }));
+                }
+            }
+        }
+        RawClientFrame::TunnelClose(TunnelId { id }) => app.hub.tunnel_close(conn, id),
     }
 }

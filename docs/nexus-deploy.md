@@ -201,6 +201,15 @@ Revoke the workspace under Devices to cut it off at once; `shed nexus leave`
 unlinks it from its side. The [user guide](user-guide.md#linking-a-workspace)
 has the rest (view-only workspaces, private tabs).
 
+Shed's desktop app can also show other linked workspaces in its own windows
+(`shed nexus signin` on that desktop, and `[nexus] desktop_clients = true` in
+the shown workspace's `shed.toml`; see the [user
+guide](user-guide.md#other-workspaces-in-this-window)). Nothing is needed on the
+nexus for it beyond running a version that has it: the desktop shows in
+Devices as a **Shed desktop**, and each time it opens a workspace the audit log
+says so. A reverse proxy in front must pass WebSocket binary messages through
+(the usual WebSocket proxying does).
+
 ## 7. The phone
 
 In a browser, `https://nexus.example.com` is the web app; it can be added to

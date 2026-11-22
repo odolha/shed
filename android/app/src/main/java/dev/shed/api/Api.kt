@@ -573,7 +573,7 @@ data class ApiError (
 @Serializable
 data class AuditEntry (
 	val at: UInt,
-	/// `login`, `login-failed`, `pair`, `revoke`, `password`…
+	/// `login`, `login-failed`, `pair`, `revoke`, `password`, `tunnel-open`…
 	val what: String,
 	val device: String? = null,
 	val address: String? = null,
@@ -802,6 +802,11 @@ enum class DeviceKind(val string: String) {
 	/// A Shed workspace (paired, not signed in).
 	@SerialName("workspace")
 	Workspace("workspace"),
+	/// Shed's desktop app signed in to show other workspaces (`shed nexus
+	/// signin`): gets a device token, like a phone, and may open tunnels
+	/// to workspaces that allow desktop clients.
+	@SerialName("desktop")
+	Desktop("desktop"),
 }
 
 @Serializable
@@ -2130,7 +2135,8 @@ data class SignedIn (
 	val username: String,
 	/// This device's id.
 	val device: String,
-	/// For a phone: its device token, to keep and send as a bearer token.
+	/// For a phone or a desktop: its device token, to keep and send as a
+	/// bearer token.
 	val token: String? = null,
 	/// For a browser: the token to send in `X-Shed-Csrf` with changes.
 	val csrf: String? = null,
@@ -2229,6 +2235,26 @@ data class TakeSize (
 	val rows: UInt
 )
 
+/// A tunnel ended (or never opened): `error` says why, if it was not asked for.
+@Serializable
+data class TunnelClosed (
+	val id: UInt,
+	val error: ApiError? = null
+)
+
+@Serializable
+data class TunnelId (
+	val id: UInt
+)
+
+/// Opens a tunnel to `workspace`'s keeper under `id`.
+@Serializable
+data class TunnelOpen (
+	/// Chosen by the sender, unique among its open tunnels.
+	val id: UInt,
+	val workspace: String
+)
+
 @Serializable
 data class Unsubscribe (
 	val id: UInt
@@ -2290,6 +2316,14 @@ sealed class ClientFrame {
 	@Serializable
 	@SerialName("Visible")
 	data class Visible(val content: Boolean): ClientFrame()
+	/// Opens a tunnel to a workspace's keeper (desktop connectors only).
+	@Serializable
+	@SerialName("TunnelOpen")
+	data class TunnelOpen(val content: dev.shed.api.TunnelOpen): ClientFrame()
+	/// Closes one of this connector's tunnels.
+	@Serializable
+	@SerialName("TunnelClose")
+	data class TunnelClose(val content: TunnelId): ClientFrame()
 }
 
 /// From a workspace's link to the nexus.
@@ -2317,6 +2351,15 @@ sealed class LinkFrame {
 	@Serializable
 	@SerialName("Notify")
 	data class Notify(val content: Notification): LinkFrame()
+	/// A tunnel the nexus asked for is open (connected to the keeper).
+	@Serializable
+	@SerialName("TunnelOpened")
+	data class TunnelOpened(val content: TunnelId): LinkFrame()
+	/// A tunnel ended, or was refused (`Forbidden` when the workspace does
+	/// not allow desktop clients).
+	@Serializable
+	@SerialName("TunnelClosed")
+	data class TunnelClosed(val content: dev.shed.api.TunnelClosed): LinkFrame()
 }
 
 /// From the nexus to a link. Ids are the nexus's own.
@@ -2338,6 +2381,14 @@ sealed class NexusFrame {
 	@Serializable
 	@SerialName("Goodbye")
 	data class Goodbye(val content: ApiError): NexusFrame()
+	/// A desktop connector wants a tunnel to the keeper, under this id.
+	@Serializable
+	@SerialName("TunnelOpen")
+	data class TunnelOpen(val content: TunnelId): NexusFrame()
+	/// The tunnel's connector went, or closed it.
+	@Serializable
+	@SerialName("TunnelClose")
+	data class TunnelClose(val content: TunnelId): NexusFrame()
 }
 
 @Serializable
@@ -2393,6 +2444,14 @@ sealed class ServerFrame {
 	@Serializable
 	@SerialName("Notification")
 	data class Notification(val content: NotificationFrame): ServerFrame()
+	/// A tunnel this connector asked for is open: data may flow.
+	@Serializable
+	@SerialName("TunnelOpened")
+	data class TunnelOpened(val content: TunnelId): ServerFrame()
+	/// A tunnel ended, or was refused.
+	@Serializable
+	@SerialName("TunnelClosed")
+	data class TunnelClosed(val content: dev.shed.api.TunnelClosed): ServerFrame()
 }
 
 const val MAX_UPLOAD: UInt = 16777216u

@@ -1,5 +1,7 @@
 //! Pairing a workspace with a nexus (`shed nexus join`, `status`, `leave`),
-//! the pairing kept on disk, and what the running link says about itself.
+//! the pairing kept on disk, and what the running link says about itself;
+//! and signing this desktop in to a nexus to show other workspaces
+//! (`shed nexus signin`, `signout`), which is apart from the pairing.
 
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -9,7 +11,8 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use shed_api::ApiError;
-use shed_api::http::{PairApproved, PairPoll, PairStart, PairStarted, PairState};
+use shed_api::http::{DeviceHello, DeviceKind, Login, PairApproved, PairPoll, PairStart, PairStarted, PairState, SignedIn};
+use shed_client::nexus_client::SignIn;
 use shed_model::config::Config;
 use shed_model::paths;
 
@@ -176,6 +179,10 @@ pub fn status() -> anyhow::Result<()> {
         }
         None => println!("paired: no"),
     }
+    match SignIn::load() {
+        Some(s) => println!("this desktop: signed in to {} as {}", s.url, s.username),
+        None => println!("this desktop: not signed in (shed nexus signin)"),
+    }
     match LinkStatus::read(&paths::link_status_path()) {
         Some(s) => {
             let detail = s.error.map(|e| format!(": {e}")).unwrap_or_default();
@@ -202,6 +209,101 @@ pub fn leave() -> anyhow::Result<()> {
         println!("Unlinked: the pairing is forgotten here. Remove the workspace in the web app (Devices) too.");
     } else {
         println!("Not paired with a nexus.");
+    }
+    Ok(())
+}
+
+/// Signs this desktop in to the nexus at `url` (a device of its own, with
+/// a token), to show other workspaces through it. The caller keeps it
+/// (`SignIn::save`, in `nexus-client.json`).
+pub async fn sign_in(url: &str, username: &str, password: &str, totp: &str, ca_file: Option<&Path>) -> anyhow::Result<SignIn> {
+    let url = url.trim().trim_end_matches('/').to_string();
+    let client = http(ca_file)?;
+    let device = DeviceHello { kind: DeviceKind::Desktop, name: format!("Shed on {}", host_name()) };
+    let login = Login { username: username.trim().into(), password: password.into(), totp: totp.trim().into(), device };
+    let signed: SignedIn = post(&client, &crate::tls::api_url(&url, "api/v1/login")?, &login).await?;
+    let token = signed.token.context("the nexus gave no token (is it older than this Shed?)")?;
+    Ok(SignIn { url, username: signed.username, device: signed.device, token })
+}
+
+/// `sign_in`, blocking, and kept (for the windows, on a thread of their own).
+pub fn sign_in_blocking(url: &str, username: &str, password: &str, totp: &str) -> anyhow::Result<SignIn> {
+    let ca = shed_client::nexus_client::configured_ca_file();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let signed = rt.block_on(sign_in(url, username, password, totp, ca.as_deref()))?;
+    signed.save().context("keeping the sign-in")?;
+    Ok(signed)
+}
+
+/// The nexus to sign in to when none is given: the one signed in to
+/// before, the one this workspace is paired with, or `shed.toml`'s.
+pub fn default_nexus() -> Option<String> {
+    SignIn::load()
+        .map(|s| s.url)
+        .or_else(|| Secret::load().map(|s| s.url))
+        .or_else(|| Config::load_from(&Config::path()).ok().map(|c| c.nexus.url).filter(|u| !u.trim().is_empty()))
+}
+
+/// Reads a line from the terminal; without echo for secrets.
+fn ask(prompt: &str, secret: bool) -> anyhow::Result<String> {
+    use std::io::{BufRead, IsTerminal};
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    let stdin = std::io::stdin();
+    let fd = libc::STDIN_FILENO;
+    let mut saved: Option<libc::termios> = None;
+    if secret && stdin.is_terminal() {
+        // SAFETY: termios is plain data, filled by tcgetattr before use.
+        unsafe {
+            let mut t: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(fd, &mut t) == 0 {
+                saved = Some(t);
+                t.c_lflag &= !libc::ECHO;
+                libc::tcsetattr(fd, libc::TCSANOW, &t);
+            }
+        }
+    }
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+    if let Some(t) = saved {
+        // SAFETY: restores the settings read above.
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &t) };
+        eprintln!();
+    }
+    read?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
+/// `shed nexus signin [URL]`: signs this desktop in, asking for the user,
+/// password and a code on the terminal.
+pub fn signin(url: Option<String>) -> anyhow::Result<()> {
+    let url = match url.or_else(default_nexus) {
+        Some(u) => u,
+        None => bail!("which nexus? shed nexus signin https://nexus.example.com"),
+    };
+    let url = url.trim().trim_end_matches('/').to_string();
+    crate::tls::api_ws_url(&url)?;
+    println!("Signing this desktop in to {url}, to show other workspaces.");
+    let username = ask("User: ", false)?;
+    let password = ask("Password: ", true)?;
+    let totp = ask("Code from the authenticator (or a recovery code): ", false)?;
+    let ca = shed_client::nexus_client::configured_ca_file();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let signed = rt.block_on(sign_in(&url, &username, &password, &totp, ca.as_deref()))?;
+    signed.save().context("keeping the sign-in")?;
+    println!(
+        "Signed in as {}. Shed's window lists the nexus's workspaces in its switcher (This PC ▾); a workspace shows there once its shed.toml says desktop_clients = true under [nexus].",
+        signed.username
+    );
+    Ok(())
+}
+
+/// `shed nexus signout`: forgets this desktop's sign-in here.
+pub fn signout() -> anyhow::Result<()> {
+    if SignIn::remove().context("removing the sign-in")? {
+        println!("Signed out here. Revoke the device in the web app (Devices) too, to end its token there.");
+    } else {
+        println!("Not signed in to a nexus.");
     }
     Ok(())
 }

@@ -728,6 +728,7 @@ pub fn kind_str(kind: DeviceKind) -> &'static str {
         DeviceKind::Browser => "browser",
         DeviceKind::Phone => "phone",
         DeviceKind::Workspace => "workspace",
+        DeviceKind::Desktop => "desktop",
     }
 }
 
@@ -735,6 +736,7 @@ fn kind_from(s: &str) -> DeviceKind {
     match s {
         "browser" => DeviceKind::Browser,
         "workspace" => DeviceKind::Workspace,
+        "desktop" => DeviceKind::Desktop,
         _ => DeviceKind::Phone,
     }
 }

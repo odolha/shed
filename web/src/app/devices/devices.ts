@@ -24,7 +24,16 @@ const AUDIT_PAGE = 50;
 const POLL_MS = 5000;
 
 export function deviceIcon(kind: DeviceKind): string {
-  return kind === 'phone' ? 'device' : kind === 'workspace' ? 'server' : 'globe';
+  switch (kind) {
+    case 'phone':
+      return 'device';
+    case 'workspace':
+      return 'server';
+    case 'desktop':
+      return 'shed';
+    default:
+      return 'globe';
+  }
 }
 
 /** What an audit entry's `what` means, or the word itself when unknown. */

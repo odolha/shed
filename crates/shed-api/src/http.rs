@@ -116,6 +116,10 @@ pub enum DeviceKind {
     Phone,
     /// A Shed workspace (paired, not signed in).
     Workspace,
+    /// Shed's desktop app signed in to show other workspaces (`shed nexus
+    /// signin`): gets a device token, like a phone, and may open tunnels
+    /// to workspaces that allow desktop clients.
+    Desktop,
 }
 
 #[typeshare]
@@ -125,7 +129,8 @@ pub struct SignedIn {
     pub username: String,
     /// This device's id.
     pub device: String,
-    /// For a phone: its device token, to keep and send as a bearer token.
+    /// For a phone or a desktop: its device token, to keep and send as a
+    /// bearer token.
     #[serde(default)]
     pub token: Option<String>,
     /// For a browser: the token to send in `X-Shed-Csrf` with changes.
@@ -350,7 +355,7 @@ pub struct PushPrefs {
 #[serde(rename_all = "camelCase")]
 pub struct AuditEntry {
     pub at: u32,
-    /// `login`, `login-failed`, `pair`, `revoke`, `password`…
+    /// `login`, `login-failed`, `pair`, `revoke`, `password`, `tunnel-open`…
     pub what: String,
     #[serde(default)]
     pub device: Option<String>,

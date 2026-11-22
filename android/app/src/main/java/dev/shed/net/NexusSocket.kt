@@ -317,6 +317,8 @@ class NexusSocket(
             }
             is ServerFrame.State -> _states.value = _states.value + (frame.content.workspace to frame.content.state)
             is ServerFrame.Notification -> _notifications.tryEmit(frame.content)
+            // Tunnels are for Shed's desktop app; the nexus never sends these here.
+            is ServerFrame.TunnelOpened, is ServerFrame.TunnelClosed -> {}
             is ServerFrame.Goodbye -> {
                 socket = null
                 webSocket.close(1000, null)

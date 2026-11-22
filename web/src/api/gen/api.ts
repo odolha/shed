@@ -469,7 +469,7 @@ export interface ApiError {
 
 export interface AuditEntry {
 	at: number;
-	/** `login`, `login-failed`, `pair`, `revoke`, `password`… */
+	/** `login`, `login-failed`, `pair`, `revoke`, `password`, `tunnel-open`… */
 	what: string;
 	device?: string | null;
 	address?: string;
@@ -658,7 +658,13 @@ export type DeviceKind =
 	/** The Android app: gets a device token. */
 	| "phone"
 	/** A Shed workspace (paired, not signed in). */
-	| "workspace";
+	| "workspace"
+	/**
+	 * Shed's desktop app signed in to show other workspaces (`shed nexus
+	 * signin`): gets a device token, like a phone, and may open tunnels
+	 * to workspaces that allow desktop clients.
+	 */
+	| "desktop";
 
 export interface Device {
 	id: string;
@@ -1669,7 +1675,10 @@ export interface SignedIn {
 	username: string;
 	/** This device's id. */
 	device: string;
-	/** For a phone: its device token, to keep and send as a bearer token. */
+	/**
+	 * For a phone or a desktop: its device token, to keep and send as a
+	 * bearer token.
+	 */
 	token?: string | null;
 	/** For a browser: the token to send in `X-Shed-Csrf` with changes. */
 	csrf?: string | null;
@@ -1755,6 +1764,23 @@ export interface TakeSize {
 	rows: number;
 }
 
+/** A tunnel ended (or never opened): `error` says why, if it was not asked for. */
+export interface TunnelClosed {
+	id: number;
+	error?: ApiError | null;
+}
+
+export interface TunnelId {
+	id: number;
+}
+
+/** Opens a tunnel to `workspace`'s keeper under `id`. */
+export interface TunnelOpen {
+	/** Chosen by the sender, unique among its open tunnels. */
+	id: number;
+	workspace: string;
+}
+
 export interface Unsubscribe {
 	id: number;
 }
@@ -1802,7 +1828,11 @@ export type ClientFrame =
 	 * any connector is in view, notifications come to all of them live
 	 * (`ServerFrame::Notification`) and nothing is pushed.
 	 */
-	| { type: "Visible", content: boolean };
+	| { type: "Visible", content: boolean }
+	/** Opens a tunnel to a workspace's keeper (desktop connectors only). */
+	| { type: "TunnelOpen", content: TunnelOpen }
+	/** Closes one of this connector's tunnels. */
+	| { type: "TunnelClose", content: TunnelId };
 
 /** From a workspace's link to the nexus. */
 export type LinkFrame =
@@ -1817,7 +1847,14 @@ export type LinkFrame =
 	| { type: "Event", content: EventFrame }
 	| { type: "Ended", content: Ended }
 	/** Something worth a notification. */
-	| { type: "Notify", content: Notification };
+	| { type: "Notify", content: Notification }
+	/** A tunnel the nexus asked for is open (connected to the keeper). */
+	| { type: "TunnelOpened", content: TunnelId }
+	/**
+	 * A tunnel ended, or was refused (`Forbidden` when the workspace does
+	 * not allow desktop clients).
+	 */
+	| { type: "TunnelClosed", content: TunnelClosed };
 
 /** From the nexus to a link. Ids are the nexus's own. */
 export type NexusFrame =
@@ -1826,7 +1863,11 @@ export type NexusFrame =
 	| { type: "Subscribe", content: Subscribe }
 	| { type: "Unsubscribe", content: Unsubscribe }
 	/** Closing: the workspace was removed, or its API version is not accepted. */
-	| { type: "Goodbye", content: ApiError };
+	| { type: "Goodbye", content: ApiError }
+	/** A desktop connector wants a tunnel to the keeper, under this id. */
+	| { type: "TunnelOpen", content: TunnelId }
+	/** The tunnel's connector went, or closed it. */
+	| { type: "TunnelClose", content: TunnelId };
 
 export type PairState =
 	| { type: "Pending", content?: undefined }
@@ -1859,6 +1900,10 @@ export type ServerFrame =
 	 * A notification, live: sent to every connector while one is in view
 	 * (`ClientFrame::Visible`), instead of a push. The app shows it itself.
 	 */
-	| { type: "Notification", content: NotificationFrame };
+	| { type: "Notification", content: NotificationFrame }
+	/** A tunnel this connector asked for is open: data may flow. */
+	| { type: "TunnelOpened", content: TunnelId }
+	/** A tunnel ended, or was refused. */
+	| { type: "TunnelClosed", content: TunnelClosed };
 
 export const MAX_UPLOAD: number = 16777216;

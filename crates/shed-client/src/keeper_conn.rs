@@ -28,9 +28,24 @@ pub struct KeeperConn {
     tx: mpsc::Sender<Frame>,
     /// The keeper's process, read from the socket, so known whatever its version.
     pub keeper_pid: Option<u32>,
+    /// Ends the connection (whatever clones are still held).
+    closer: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl KeeperConn {
+    /// A connection whose frames go to `tx`, ended by `closer`.
+    pub fn with_closer(tx: mpsc::Sender<Frame>, keeper_pid: Option<u32>, closer: std::sync::Arc<dyn Fn() + Send + Sync>) -> KeeperConn {
+        KeeperConn { tx, keeper_pid, closer: Some(closer) }
+    }
+
+    /// Ends the connection: the keeper sees this client go, as when its
+    /// process quits, and the frames channel closes.
+    pub fn close(&self) {
+        if let Some(close) = &self.closer {
+            close();
+        }
+    }
+
     pub fn send(&self, frame: Frame) {
         let _ = self.tx.send(frame);
     }
@@ -42,7 +57,7 @@ impl KeeperConn {
     /// A connection to nothing: what is sent goes nowhere (for tests).
     pub fn detached() -> KeeperConn {
         let (tx, _rx) = mpsc::channel();
-        KeeperConn { tx, keeper_pid: None }
+        KeeperConn { tx, keeper_pid: None, closer: None }
     }
 }
 
@@ -68,6 +83,20 @@ pub fn connect_at(socket: &std::path::Path, kind: ClientKind) -> anyhow::Result<
     connected(stream, kind)
 }
 
+/// Connects to another workspace's keeper through a nexus this desktop is
+/// signed in to (`nexus_client`): `url` and `token` from the sign-in,
+/// `workspace` the nexus's id for it. Errors say why in words (offline, not
+/// letting desktops in, another version of Shed).
+pub fn connect_remote(
+    url: &str,
+    token: &str,
+    workspace: &str,
+    kind: ClientKind,
+) -> anyhow::Result<(KeeperConn, async_channel::Receiver<Frame>)> {
+    let ca = crate::nexus_client::configured_ca_file();
+    crate::nexus_client::connect_tunnel(url, token, workspace, ca.as_deref(), kind)
+}
+
 fn connected(stream: UnixStream, kind: ClientKind) -> anyhow::Result<(KeeperConn, async_channel::Receiver<Frame>)> {
 
     let (out_tx, out_rx) = mpsc::channel::<Frame>();
@@ -88,6 +117,7 @@ fn connected(stream: UnixStream, kind: ClientKind) -> anyhow::Result<(KeeperConn
     })?;
 
     let keeper_pid = peer_pid(&stream);
+    let shutdown = stream.try_clone()?;
     let (in_tx, in_rx) = async_channel::unbounded();
     let mut reader = BufReader::with_capacity(256 * 1024, stream);
     std::thread::Builder::new().name("keeper-read".into()).spawn(move || {
@@ -112,7 +142,13 @@ fn connected(stream: UnixStream, kind: ClientKind) -> anyhow::Result<(KeeperConn
         }
     })?;
 
-    let conn = KeeperConn { tx: out_tx, keeper_pid };
+    let closing = std::sync::Mutex::new(shutdown);
+    let closer = move || {
+        if let Ok(s) = closing.lock() {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+    };
+    let conn = KeeperConn { tx: out_tx, keeper_pid, closer: Some(std::sync::Arc::new(closer)) };
     conn.send_msg(ClientMsg::Hello { version: PROTOCOL_VERSION, kind });
     Ok((conn, in_rx))
 }

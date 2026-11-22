@@ -324,6 +324,22 @@ ssh) leaves everything running. It covers:
 
 It is more limited than the GUI where a terminal cannot do better.
 
+### Other workspaces in the desktop app
+
+Shed's desktop app, signed in to the nexus as a device of its own (kind
+`desktop`, `shed nexus signin`), shows another workspace in its windows,
+switching between "This PC" and the others. Rather than rebuild the window
+on the API, it speaks the other workspace's keeper protocol, byte for byte,
+through a **tunnel**: `ClientFrame::TunnelOpen` → `NexusFrame::TunnelOpen` →
+the link connects to its keeper's socket, and binary WebSocket messages
+(`[u32 id][bytes]`) carry the data, the nexus swapping ids as for requests.
+Only desktops may open tunnels, only to workspaces whose `shed.toml` says
+`[nexus] desktop_clients = true` with full control (they see everything,
+private tabs too: they are the user's own signed-in computers). Terminals and
+AI conversations work fully this way; what the window reads from the local
+disk (project tabs, the logbook, Claude Code's session files) comes next,
+through the API's calls. See [the architecture](architecture.md#other-workspaces-in-the-window).
+
 ## Phases
 
 Each phase leaves Shed working and documented, with every test passing.

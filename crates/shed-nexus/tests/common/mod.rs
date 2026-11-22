@@ -184,6 +184,15 @@ pub async fn phone_token(nexus: &Nexus, account: &mut Account) -> String {
     signed.token.unwrap()
 }
 
+/// Shed's desktop app signed in: its device token.
+pub async fn desktop_token(nexus: &Nexus, account: &mut Account) -> String {
+    let code = account.recovery.pop().expect("a recovery code left");
+    let device = DeviceHello { kind: DeviceKind::Desktop, name: "Shed on laptop".into() };
+    let login = Login { username: "me".into(), password: PASSWORD.into(), totp: code, device };
+    let signed: SignedIn = nexus.post("/api/v1/login", &login, &Auth::None).await;
+    signed.token.unwrap()
+}
+
 /// Pairs a workspace; its id and token.
 pub async fn pair(nexus: &Nexus, account: &mut Account, name: &str) -> (String, String) {
     let started: PairStarted =
@@ -246,6 +255,24 @@ pub async fn until<T: DeserializeOwned, R>(socket: &mut Socket, mut pick: impl F
             return found;
         }
     }
+}
+
+pub async fn send_binary(socket: &mut Socket, data: Vec<u8>) {
+    socket.send(Message::Binary(data.into())).await.unwrap();
+}
+
+/// The next binary message (text frames are skipped), or `None` at the end.
+pub async fn next_binary(socket: &mut Socket) -> Option<Vec<u8>> {
+    let wait = async {
+        loop {
+            match socket.next().await? {
+                Ok(Message::Binary(data)) => return Some(data.to_vec()),
+                Ok(Message::Close(_)) | Err(_) => return None,
+                Ok(_) => continue,
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), wait).await.expect("a message within 10 s")
 }
 
 /// Whether the socket ends (after any frames) within a few seconds.

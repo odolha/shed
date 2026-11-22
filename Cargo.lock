@@ -7584,12 +7584,21 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "futures-util",
  "libc",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
+ "shed-api",
  "shed-model",
  "shed-proto",
  "shed-save",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "webpki-roots",
 ]
 
 [[package]]

@@ -75,6 +75,13 @@ pub fn nexus_secret_path() -> PathBuf {
     data_dir().join("nexus.json")
 }
 
+/// The desktop's sign-in to a nexus (`shed nexus signin`), to show other
+/// workspaces: the nexus, the user and the device token (0600, not a
+/// `.toml`). Separate from the pairing, which grants no connector access.
+pub fn nexus_client_path() -> PathBuf {
+    data_dir().join("nexus-client.json")
+}
+
 /// What the running link says about itself, for `shed nexus status`.
 pub fn link_status_path() -> PathBuf {
     runtime_dir().join("link.json")

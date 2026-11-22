@@ -237,7 +237,7 @@ pub fn authenticate(app: &App, headers: &HeaderMap, method: &Method) -> Result<C
     let unauthorized = || Failure::new(ErrorCode::Unauthorized, "not signed in");
     if let Some(token) = bearer(headers) {
         let device = app.store.device_by_token(&auth::hash_token(token))?.ok_or_else(unauthorized)?;
-        if device.kind != DeviceKind::Phone {
+        if !matches!(device.kind, DeviceKind::Phone | DeviceKind::Desktop) {
             return Err(unauthorized());
         }
         return Ok(Caller { device: device.id, session: None });
@@ -362,8 +362,8 @@ impl IntoResponse for SignedInAnswer {
     }
 }
 
-/// Signs `device` in: a browser gets a session (and the cookie), a phone a
-/// device token.
+/// Signs `device` in: a browser gets a session (and the cookie), a phone or
+/// a desktop a device token.
 fn sign_in(app: &App, client: &Client, username: &str, device: &DeviceHello) -> Result<SignedInAnswer, Failure> {
     let name = valid_name(&device.name).unwrap_or_else(|_| "unnamed".to_string());
     let address = client.address();
@@ -380,10 +380,10 @@ fn sign_in(app: &App, client: &Client, username: &str, device: &DeviceHello) -> 
             body.csrf = Some(csrf);
             Ok(SignedInAnswer { body, cookie: Some(session_cookie(app, &token, lifetime)) })
         }
-        DeviceKind::Phone => {
+        kind @ (DeviceKind::Phone | DeviceKind::Desktop) => {
             let token = auth::random_token();
             let hash = auth::hash_token(&token);
-            body.device = app.store.add_device(DeviceKind::Phone, &name, Some(&hash), &address, country, now())?;
+            body.device = app.store.add_device(kind, &name, Some(&hash), &address, country, now())?;
             body.token = Some(token);
             Ok(SignedInAnswer { body, cookie: None })
         }

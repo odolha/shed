@@ -1,5 +1,6 @@
-//! TLS for talking to a nexus: the usual web roots, plus a CA file of
-//! one's own for a nexus whose certificate one made.
+//! TLS and addresses for talking to a nexus (the link, and the desktop
+//! signed in to it): the usual web roots, plus a CA file of one's own for a
+//! nexus whose certificate one made.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -8,7 +9,7 @@ use anyhow::Context;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-pub(crate) fn client_config(ca_file: Option<&Path>) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+pub fn client_config(ca_file: Option<&Path>) -> anyhow::Result<Arc<rustls::ClientConfig>> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(file) = ca_file {
@@ -32,7 +33,7 @@ pub(crate) fn client_config(ca_file: Option<&Path>) -> anyhow::Result<Arc<rustls
 
 /// Whether an address's host (`host[:port]/…`) is this machine: plain
 /// `http`/`ws` is only for a nexus here (tests, a nexus on the same host),
-/// since the workspace's token would travel in the clear.
+/// since the token would travel in the clear.
 fn loopback(rest: &str) -> bool {
     let authority = rest.split('/').next().unwrap_or_default();
     let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
@@ -45,13 +46,13 @@ fn loopback(rest: &str) -> bool {
 }
 
 fn plain_refused(scheme: &str) -> anyhow::Error {
-    anyhow::anyhow!("{scheme}:// would send the workspace's token unencrypted; use https:// (plain {scheme}:// only to this machine)")
+    anyhow::anyhow!("{scheme}:// would send the token unencrypted; use https:// (plain {scheme}:// only to this machine)")
 }
 
 /// The link's WebSocket address for a nexus's address: `https://n.example`
 /// → `wss://n.example/link` (`http` → `ws`, to this machine only); a
 /// `ws(s)://` address is taken as it is, `/link` added if missing.
-pub(crate) fn link_url(base: &str) -> anyhow::Result<String> {
+pub fn link_url(base: &str) -> anyhow::Result<String> {
     let base = base.trim().trim_end_matches('/');
     let (scheme, rest) = base.split_once("://").with_context(|| format!("{base:?} is not an address (https://…)"))?;
     let scheme = match scheme.to_ascii_lowercase().as_str() {
@@ -64,9 +65,17 @@ pub(crate) fn link_url(base: &str) -> anyhow::Result<String> {
     Ok(format!("{scheme}://{rest}{path}"))
 }
 
+/// A connector's WebSocket address (`/api`) for a nexus's address:
+/// `https://n.example` → `wss://n.example/api`.
+pub fn api_ws_url(base: &str) -> anyhow::Result<String> {
+    let link = link_url(base)?;
+    let base = link.strip_suffix("/link").unwrap_or(&link);
+    Ok(format!("{base}/api"))
+}
+
 /// An HTTP API address under a nexus's address: `https://n.example` and
 /// `api/v1/pair/start` → `https://n.example/api/v1/pair/start`.
-pub(crate) fn api_url(base: &str, route: &str) -> anyhow::Result<String> {
+pub fn api_url(base: &str, route: &str) -> anyhow::Result<String> {
     let base = base.trim().trim_end_matches('/');
     let (scheme, rest) = base.split_once("://").with_context(|| format!("{base:?} is not an address (https://…)"))?;
     let base = match scheme.to_ascii_lowercase().as_str() {
@@ -100,6 +109,9 @@ mod tests {
         assert!(link_url("ftp://n").is_err());
         assert_eq!(api_url("https://n.example.com", "api/v1/pair/start").unwrap(), "https://n.example.com/api/v1/pair/start");
         assert_eq!(api_url("ws://127.0.0.1:9/link", "/api/v1/pair/poll").unwrap(), "http://127.0.0.1:9/api/v1/pair/poll");
+        assert_eq!(api_ws_url("https://n.example.com/").unwrap(), "wss://n.example.com/api");
+        assert_eq!(api_ws_url("http://127.0.0.1:9").unwrap(), "ws://127.0.0.1:9/api");
+        assert!(api_ws_url("http://n.example.com").is_err());
     }
 
     #[test]

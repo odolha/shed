@@ -17,9 +17,12 @@ use tracing::{debug, info, warn};
 /// What the connection tells the link.
 #[derive(Debug)]
 pub(crate) enum NexusEvent {
-    /// Welcomed: frames for the nexus go to `out` until `Disconnected`.
-    Connected { out: mpsc::UnboundedSender<LinkFrame>, welcome: LinkWelcome },
+    /// Welcomed: frames for the nexus go to `out`, tunnels' data (binary
+    /// messages, `[id][bytes]`) to `data`, until `Disconnected`.
+    Connected { out: mpsc::UnboundedSender<LinkFrame>, data: mpsc::Sender<Vec<u8>>, welcome: LinkWelcome },
     Frame(NexusFrame),
+    /// A tunnel's data from the nexus.
+    Data(u32, Vec<u8>),
     /// A request or subscription this link does not understand (from a
     /// newer API): answered `Unsupported`.
     Unknown { request: Option<u32>, sub: Option<u32> },
@@ -74,6 +77,10 @@ fn lost(why: impl Into<String>) -> Ended {
     Ended::Lost { why: why.into(), welcomed: false }
 }
 
+/// Tunnel data waiting for the nexus, at most (pieces of up to 64 KB):
+/// past it, tunnels wait before reading more from the keeper.
+const DATA_QUEUE: usize = 64;
+
 /// The largest frame the link reads: the nexus's limit (24 MB), and more.
 const MAX_MESSAGE: usize = 32 * 1024 * 1024;
 
@@ -114,7 +121,8 @@ async fn session(dial: &Dial, events: &mpsc::UnboundedSender<NexusEvent>) -> Res
     };
     info!(workspace = %welcome.name, nexus = %welcome.nexus, "linked");
     let (out, mut out_rx) = mpsc::unbounded_channel::<LinkFrame>();
-    if events.send(NexusEvent::Connected { out, welcome }).is_err() {
+    let (data, mut data_rx) = mpsc::channel::<Vec<u8>>(DATA_QUEUE);
+    if events.send(NexusEvent::Connected { out, data, welcome }).is_err() {
         return Ok(());
     }
     let mut ping = tokio::time::interval(PING_EVERY);
@@ -126,6 +134,12 @@ async fn session(dial: &Dial, events: &mpsc::UnboundedSender<NexusEvent>) -> Res
                 None => return Err(gone("closed by the nexus".into())),
                 Some(Err(e)) => return Err(gone(e.to_string())),
                 Some(Ok(Message::Close(frame))) => return Err(gone(format!("closed by the nexus{}", frame.map(|f| format!(": {}", f.reason)).unwrap_or_default()))),
+                Some(Ok(Message::Binary(b))) => {
+                    let Some((id, bytes)) = shed_api::wire::split_tunnel_data(&b) else { continue };
+                    if events.send(NexusEvent::Data(id, bytes.to_vec())).is_err() {
+                        return Ok(());
+                    }
+                }
                 Some(Ok(m)) => {
                     let event = match parse(m) {
                         Some(Ok(NexusFrame::Goodbye(e))) => return Err(Ended::Refused(e)),
@@ -146,6 +160,11 @@ async fn session(dial: &Dial, events: &mpsc::UnboundedSender<NexusEvent>) -> Res
                 };
                 let text = serde_json::to_string(&frame).expect("frames serialize");
                 if let Err(e) = sink.send(Message::text(text)).await {
+                    return Err(gone(e.to_string()));
+                }
+            }
+            Some(bytes) = data_rx.recv() => {
+                if let Err(e) = sink.send(Message::binary(bytes)).await {
                     return Err(gone(e.to_string()));
                 }
             }

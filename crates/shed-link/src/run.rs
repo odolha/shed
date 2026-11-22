@@ -23,6 +23,7 @@ use crate::notify::Notifier;
 use crate::pairing::{LinkStatus, now};
 use crate::screen::{self, Term};
 use crate::topics::{self, Out, ProjectWatch};
+use crate::tunnel::Tunnels;
 use crate::{Exit, Options};
 
 /// The state goes out at most this often.
@@ -51,7 +52,8 @@ pub async fn run(opts: Options) -> anyhow::Result<Exit> {
     let nexus_task = tokio::spawn(nexus::run(dial, nexus_tx));
     info!(nexus = %url, policy = ?opts.policy, "link starting");
 
-    let mut link = Link::new(ctx, tree_tx, opts);
+    let (tunnels, mut tunnel_ended) = Tunnels::new(&opts.socket);
+    let mut link = Link::new(ctx, tree_tx, opts, tunnels);
     link.status("connecting", None);
     keeper.send_msg(ClientMsg::Status);
     link.ask_pegboard();
@@ -69,6 +71,7 @@ pub async fn run(opts: Options) -> anyhow::Result<Exit> {
                 }
             }
             Some(ask) = ask_rx.recv() => link.ask(ask),
+            Some(id) = tunnel_ended.recv() => link.tunnels.ended(id),
             _ = tick.tick() => {
                 if let Some(exit) = link.tick() {
                     break exit;
@@ -147,6 +150,9 @@ struct Link {
     home: String,
     /// To the nexus, while connected.
     out: Option<Out>,
+    /// Tunnels' data to the nexus, while connected.
+    data: Option<mpsc::Sender<Vec<u8>>>,
+    tunnels: Tunnels,
     sent_state: Option<WorkspaceState>,
     state_at: Instant,
     state_dirty: bool,
@@ -162,7 +168,7 @@ struct Link {
 }
 
 impl Link {
-    fn new(ctx: Arc<Ctx>, tree_tx: watch::Sender<Arc<Shed>>, opts: Options) -> Link {
+    fn new(ctx: Arc<Ctx>, tree_tx: watch::Sender<Arc<Shed>>, opts: Options, tunnels: Tunnels) -> Link {
         let nexus_config = opts
             .config_file
             .as_ref()
@@ -190,6 +196,8 @@ impl Link {
             host,
             home: std::env::var("HOME").unwrap_or_default(),
             out: None,
+            data: None,
+            tunnels,
             sent_state: None,
             state_at: Instant::now() - STATE_EVERY,
             state_dirty: true,
@@ -444,12 +452,13 @@ impl Link {
 
     fn nexus(&mut self, event: NexusEvent) -> Option<Exit> {
         match event {
-            NexusEvent::Connected { out, welcome } => {
+            NexusEvent::Connected { out, data, welcome } => {
                 info!(workspace = %welcome.workspace, name = %welcome.name, "connected to the nexus");
                 if let Some(path) = &self.opts.status_file {
                     LinkStatus { pid: std::process::id(), state: "connected".into(), name: Some(welcome.name.clone()), error: None, since: now() }.write(path);
                 }
                 self.out = Some(out);
+                self.data = Some(data);
                 // Everything again: the nexus keeps only the last state.
                 self.sent_state = None;
                 self.state_dirty = true;
@@ -473,15 +482,37 @@ impl Link {
                 NexusFrame::Request(r) => self.request(r.id, r.call),
                 NexusFrame::Subscribe(s) => self.subscribe(s.id, s.topic),
                 NexusFrame::Unsubscribe(u) => self.unsubscribe(u.id),
+                NexusFrame::TunnelOpen(t) => self.tunnel_open(t.id),
+                NexusFrame::TunnelClose(t) => self.tunnels.close(t.id),
                 NexusFrame::Welcome(_) | NexusFrame::Goodbye(_) => {}
             },
+            NexusEvent::Data(id, bytes) => self.tunnels.data(id, bytes, self.out.as_ref()),
         }
         None
     }
 
-    /// The nexus is gone: every subscription with it.
+    /// A desktop asks for a tunnel to the keeper: only if this workspace
+    /// lets desktops in, with full control.
+    fn tunnel_open(&mut self, id: u32) {
+        let (Some(out), Some(data)) = (self.out.clone(), self.data.clone()) else { return };
+        let refuse = |why: &str| {
+            info!("a desktop's tunnel refused: {why}");
+            let _ = out.send(LinkFrame::TunnelClosed(shed_api::wire::TunnelClosed { id, error: Some(ApiError::new(ErrorCode::Forbidden, why)) }));
+        };
+        if !self.opts.desktop_clients {
+            return refuse("this workspace does not let Shed's desktop app in ([nexus] desktop_clients = true in its shed.toml)");
+        }
+        if self.opts.policy != Policy::Full {
+            return refuse("this workspace lets connectors look only ([nexus] control = \"view\"); desktops need full control");
+        }
+        self.tunnels.open(id, out, data);
+    }
+
+    /// The nexus is gone: every subscription with it, and every tunnel.
     fn disconnected(&mut self) {
         self.out = None;
+        self.data = None;
+        self.tunnels.close_all();
         let ids: Vec<u32> = self.subs.keys().copied().collect();
         for id in ids {
             self.unsubscribe(id);

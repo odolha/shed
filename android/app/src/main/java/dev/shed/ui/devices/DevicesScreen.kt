@@ -18,6 +18,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -146,6 +147,7 @@ fun DevicesScreen(nav: NavController) {
             for ((kind, title) in listOf(
                 DeviceKind.Workspace to R.string.devices_workspaces,
                 DeviceKind.Phone to R.string.devices_phones,
+                DeviceKind.Desktop to R.string.devices_desktops,
                 DeviceKind.Browser to R.string.devices_browsers,
             )) {
                 val ofKind = list.filter { it.kind == kind }
@@ -161,6 +163,7 @@ fun DevicesScreen(nav: NavController) {
                                 DeviceKind.Workspace -> Icons.Default.Computer
                                 DeviceKind.Phone -> Icons.Default.PhoneAndroid
                                 DeviceKind.Browser -> Icons.Default.Language
+                                DeviceKind.Desktop -> Icons.Default.DesktopWindows
                             },
                             null,
                             tint = shed.textDim,

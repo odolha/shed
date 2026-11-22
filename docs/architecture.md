@@ -867,6 +867,24 @@ sockets at once (with `Goodbye`). Sockets are pinged every 30 s and dropped
 after 90 s of silence; one that cannot keep up (4096 frames queued) is dropped.
 Frames may be up to 24 MB (pictures for AI prompts travel inside them).
 
+**Tunnels.** Shed's desktop app showing another workspace speaks that keeper's own protocol through the nexus. Only a
+device of kind `desktop` (signed in with `device.kind = desktop`, which gets a
+bearer token like a phone) may open one; browsers and phones get `Forbidden`.
+`ClientFrame::TunnelOpen { id, workspace }` goes to the link as
+`NexusFrame::TunnelOpen` under an id the nexus picks (from the same space as
+requests and subscriptions); the link answers `LinkFrame::TunnelOpened` or
+`TunnelClosed` (with why), passed on as `ServerFrame::TunnelOpened`/`TunnelClosed`
+under the connector's id. Data goes both ways as binary WebSocket messages, a
+big-endian `u32` tunnel id and the bytes (`wire::tunnel_data`), with the id
+swapped on the way. Opening is written to the audit log (`tunnel-open`, the
+device and the workspace's name). A connector has at most 8 tunnels. A tunnel
+closes when either end asks (`TunnelClose`), when its connector goes (the link
+hears `TunnelClose`), when the device is revoked (its socket closes), and when
+the workspace goes offline (`TunnelClosed`, `Offline`). Each connection may
+have at most 8 MB of tunnel data queued (`Outbox::backlog`, counted as it is
+written to the socket): data that would go past it closes that tunnel at both
+ends instead of buffering, and the rest of the connection carries on.
+
 **State.** A link sends its workspace's whole state when it changes; the nexus
 passes it to every connector and keeps it (written to the database every few
 seconds), so an offline workspace still shows as it was. `Welcome` carries the
@@ -1037,26 +1055,17 @@ or renamed from them.
 `shed nexus status` reads `link.json` in the runtime folder, which the link
 keeps current (connecting, connected, offline, refused).
 
-**The Android app** (`android/`, Kotlin and Jetpack Compose) is a connector:
-HTTP for sign-in, devices, pairing and push, and one WebSocket to `/api` with
-the phone's device token as a bearer token. `NexusSocket` sends `Hello`, answers
-requests by id (with timeouts), turns subscriptions into flows, and on a lost
-connection dials again with a backoff and subscribes again under the same ids
-(the first event of each is the whole thing again); a subscription that
-`Ended` because its workspace went offline starts again when the workspace
-comes back; `Goodbye` with `Unauthorized` signs the phone out. The socket runs
-while the app is in the foreground and a minute after, and says `Visible`
-(true from `ON_START`, false from `ON_STOP`); live notifications become a
-snackbar in `Nav` whose Open follows the tab's `shed://` link, and otherwise
-notifications come by push. The device token is sealed with an AES-GCM key kept in the Android
-Keystore. Terminals arrive as `Screen` events: the app keeps the rows, joins
-those that wrap and cuts them again to the phone's width (the alternate screen
-is shown as a grid, fitted or panned). Push is the nexus's ntfy topic when it
-has one (`PushInfo::ntfy_topic`: Settings tells the user to subscribe to it in
-the ntfy app, and the app leaves UnifiedPush; ntfy's `Click` opens the
-`shed://` link through the activity's intent filter), else UnifiedPush: the
-connector library keeps the RFC 8291 keys and decrypts; the app hands the
-distributor's endpoint to `POST /api/v1/push/subscribe`.
+**Tunnels** (`tunnel.rs`). On `NexusFrame::TunnelOpen` the link refuses
+(`TunnelClosed`, `Forbidden`, saying which setting) unless `shed.toml` has
+`[nexus] desktop_clients = true` and control is `full`. Otherwise it opens a
+connection of its own to the keeper's socket, says `TunnelOpened`, and pipes
+bytes as they are: the desktop says `Hello` and is the keeper's client like
+any window, so none of the link's policy applies (private tabs included; the
+user's own signed-in desktops). Bytes from the keeper go to the nexus through
+a bounded channel (64 pieces of up to 64 KB), so a tunnel reads no more from
+the keeper while the nexus is behind; bytes for the keeper that do not fit in
+the tunnel's own queue (256 pieces) close it. Tunnels close with the nexus
+connection, on `TunnelClose`, and when the keeper ends the connection.
 
 ## The code
 

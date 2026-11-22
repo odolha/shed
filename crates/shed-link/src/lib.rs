@@ -5,7 +5,9 @@
 //! workspace's token. It publishes the workspace's state (`state`), serves
 //! the calls connectors make (`calls`), streams what they watch (`topics`,
 //! `screen`), raises notifications (`notify`) and keeps the workspace's
-//! policy: view only or full control, and private tabs never leave.
+//! policy: view only or full control, and private tabs never leave. With
+//! `[nexus] desktop_clients`, Shed's desktop app on other computers may
+//! also speak to the keeper itself through it (`tunnel`).
 //!
 //! One task (`run`) owns what changes: the tree, subscriptions, the
 //! terminals watched. Calls that read files, Git or the logbook run on
@@ -19,9 +21,10 @@ mod paths;
 mod run;
 mod screen;
 mod state;
-mod tls;
+use shed_client::nexus_tls as tls;
 mod topics;
 mod notify;
+mod tunnel;
 
 use std::path::PathBuf;
 
@@ -51,6 +54,9 @@ pub struct Options {
     /// `shed.toml`: the link stops when its `[nexus]` table changes, so the
     /// keeper starts it again with the new settings.
     pub config_file: Option<PathBuf>,
+    /// Shed's desktop app on other computers may open tunnels to the keeper
+    /// (`[nexus] desktop_clients`; with full control only).
+    pub desktop_clients: bool,
 }
 
 /// Why the link stopped.
@@ -102,6 +108,7 @@ pub fn main() -> i32 {
         uploads: shed_model::paths::state_dir().join("ai-files"),
         status_file: Some(shed_model::paths::link_status_path()),
         config_file: Some(shed_model::config::Config::path()),
+        desktop_clients: config.nexus.desktop_clients,
     };
     let rt = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
         Ok(rt) => rt,

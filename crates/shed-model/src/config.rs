@@ -75,6 +75,11 @@ pub struct NexusConfig {
     /// A PEM file of certificates to trust besides the usual ones, for a
     /// nexus with a certificate of its own making.
     pub ca_file: Option<PathBuf>,
+    /// Let Shed's desktop app on your other computers, signed in to the
+    /// nexus, show this workspace (its benches and terminals, private tabs
+    /// too) by speaking to the keeper through the nexus. Off by default;
+    /// needs `control = "full"`.
+    pub desktop_clients: bool,
 }
 
 impl NexusConfig {

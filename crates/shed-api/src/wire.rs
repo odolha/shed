@@ -11,7 +11,20 @@
 //! pass through it untouched (see `RawCall` and friends on the nexus side).
 //! Account, device and pairing work is plain HTTP (`http`), not frames.
 //!
-//! Every frame is one JSON text message.
+//! Every frame is one JSON text message, except a tunnel's data.
+//!
+//! **Tunnels** (desktop connectors only): Shed's desktop app showing another
+//! workspace speaks that workspace's keeper protocol, byte for byte, through
+//! the nexus. It opens a tunnel (`ClientFrame::TunnelOpen`, answered
+//! `TunnelOpened` or `TunnelClosed`); the nexus asks the link
+//! (`NexusFrame::TunnelOpen`, under an id of its own) and the link connects
+//! to its keeper's socket. Data goes both ways as WebSocket **binary**
+//! messages: a big-endian `u32` tunnel id, then the bytes (`tunnel_data`,
+//! `split_tunnel_data`). Either side ends it with `TunnelClose`/`TunnelClosed`;
+//! the nexus closes a tunnel when either connection goes, when the device is
+//! revoked, and when the workspace goes offline. Browsers and phones may not
+//! open tunnels (`Forbidden`); a link refuses them unless its `shed.toml` says
+//! `[nexus] desktop_clients = true` (and control is `full`).
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -39,6 +52,52 @@ pub enum ClientFrame {
     /// any connector is in view, notifications come to all of them live
     /// (`ServerFrame::Notification`) and nothing is pushed.
     Visible(bool),
+    /// Opens a tunnel to a workspace's keeper (desktop connectors only).
+    TunnelOpen(TunnelOpen),
+    /// Closes one of this connector's tunnels.
+    TunnelClose(TunnelId),
+}
+
+/// Opens a tunnel to `workspace`'s keeper under `id`.
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelOpen {
+    /// Chosen by the sender, unique among its open tunnels.
+    pub id: u32,
+    pub workspace: String,
+}
+
+#[typeshare]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelId {
+    pub id: u32,
+}
+
+/// A tunnel ended (or never opened): `error` says why, if it was not asked for.
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelClosed {
+    pub id: u32,
+    #[serde(default)]
+    pub error: Option<ApiError>,
+}
+
+/// A tunnel's data as a binary WebSocket message: the id (big-endian), then
+/// the bytes.
+pub fn tunnel_data(id: u32, bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + bytes.len());
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(bytes);
+    out
+}
+
+/// The tunnel id and bytes of a binary message; `None` if it is too short.
+pub fn split_tunnel_data(message: &[u8]) -> Option<(u32, &[u8])> {
+    let (id, bytes) = message.split_first_chunk::<4>()?;
+    Some((u32::from_be_bytes(*id), bytes))
 }
 
 #[typeshare]
@@ -106,6 +165,10 @@ pub enum ServerFrame {
     /// A notification, live: sent to every connector while one is in view
     /// (`ClientFrame::Visible`), instead of a push. The app shows it itself.
     Notification(NotificationFrame),
+    /// A tunnel this connector asked for is open: data may flow.
+    TunnelOpened(TunnelId),
+    /// A tunnel ended, or was refused.
+    TunnelClosed(TunnelClosed),
 }
 
 #[typeshare]
@@ -225,6 +288,11 @@ pub enum LinkFrame {
     Ended(Ended),
     /// Something worth a notification.
     Notify(Notification),
+    /// A tunnel the nexus asked for is open (connected to the keeper).
+    TunnelOpened(TunnelId),
+    /// A tunnel ended, or was refused (`Forbidden` when the workspace does
+    /// not allow desktop clients).
+    TunnelClosed(TunnelClosed),
 }
 
 #[typeshare]
@@ -248,6 +316,10 @@ pub enum NexusFrame {
     Unsubscribe(Unsubscribe),
     /// Closing: the workspace was removed, or its API version is not accepted.
     Goodbye(ApiError),
+    /// A desktop connector wants a tunnel to the keeper, under this id.
+    TunnelOpen(TunnelId),
+    /// The tunnel's connector went, or closed it.
+    TunnelClose(TunnelId),
 }
 
 #[typeshare]
@@ -296,4 +368,18 @@ pub enum NotificationKind {
     CommandDone,
     /// A workspace went offline (sent by the nexus itself).
     WorkspaceOffline,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tunnel_data_round_trips() {
+        let message = tunnel_data(0x0102_0304, b"hello");
+        assert_eq!(&message[..4], &[1, 2, 3, 4]);
+        assert_eq!(split_tunnel_data(&message), Some((0x0102_0304, &b"hello"[..])));
+        assert_eq!(split_tunnel_data(&tunnel_data(7, b"")), Some((7, &b""[..])));
+        assert_eq!(split_tunnel_data(b"abc"), None);
+    }
 }

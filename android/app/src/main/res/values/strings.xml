@@ -297,6 +297,7 @@
     <string name="devices_workspaces">Workspaces</string>
     <string name="devices_phones">Phones</string>
     <string name="devices_browsers">Browsers</string>
+    <string name="devices_desktops">Shed desktops</string>
     <string name="devices_this">This phone</string>
     <string name="devices_seen">seen %1$s</string>
     <string name="devices_rename">Rename Device</string>

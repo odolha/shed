@@ -264,8 +264,9 @@ level. Deleting the data folder starts over.
 
 `crates/shed-nexus/tests/` run a nexus in process on a real socket, with a
 temporary data folder: the account (setup, sign-in, lockout, cookies and CSRF),
-pairing, relaying, where a fake link and connectors speak over
-`tokio-tungstenite`, and notifications (`notify.rs`, `ntfy_env.rs`), where a
+pairing, relaying and tunnels (`tunnel.rs`: desktop-only, ids swapped,
+closing on revocation and offline, a slow side dropped), where a fake link
+and connectors speak over `tokio-tungstenite`, and notifications (`notify.rs`, `ntfy_env.rs`), where a
 fake push service and ntfy on loopback count what reaches them. TOTP codes come from the account's secret; each time step
 is taken once, so a test that needs more than three codes waits for the next
 step. Recovery codes stand in where a test only needs to sign in.
@@ -293,6 +294,10 @@ code, a name and a TOTP code) and speak to `/api` with a WebSocket client.
 `crates/shed-link/tests/link.rs` runs an in-process keeper (real bash) and a
 link against a fake nexus on a real socket (`tests/common/mod.rs`), and
 `tests/nexus.rs` the whole way through the real nexus, pairing included.
+`tests/desktop.rs` covers the desktop's tunnel: refused without
+`desktop_clients`, the keeper's own protocol through a fake nexus, and
+`connect_remote`'s tunnel through the real nexus (signing in, the workspace
+list, typing and output).
 
 ### End to end
 
