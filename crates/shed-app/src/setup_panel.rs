@@ -299,6 +299,7 @@ impl SetupPanel {
             .rounded_sm()
             .cursor_pointer()
             .hover(|s| s.bg(hsla(ui.divider)))
+            .tooltip(crate::menu::tooltip("Remove"))
             .on_click(cx.listener(move |this, _, _, cx| on(this, cx)))
             .child(svg().path(icon("close")).size(crate::theme::us(11.0)).text_color(hsla(ui.text_dim)))
             .into_any_element()
@@ -545,6 +546,12 @@ impl SetupPanel {
                 .cursor_pointer()
                 .when(on, |d| d.bg(hsla_alpha(accent, 0.25)).text_color(hsla(ui.ink(accent))))
                 .when(!on, |d| d.text_color(hsla(ui.text_dim)))
+                .tooltip(crate::menu::tooltip(match level {
+                    AliasLevel::Tab => "A new alias is this tab's only",
+                    AliasLevel::Bench => "A new alias is for every tab of this bench",
+                    AliasLevel::Global => "A new alias is for every bench (shed.toml)",
+                    AliasLevel::Shell => "A new alias is the shell's own, for every shell (kept in ~/.config/shed/shell-aliases.sh)",
+                }))
                 .child(level.name())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.new_alias_level = level;
@@ -604,6 +611,7 @@ impl Render for SetupPanel {
                     .rounded_sm()
                     .cursor_pointer()
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .tooltip(crate::menu::tooltip(if cfg!(target_os = "macos") { "Close the setup (Cmd+Shift+S)" } else { "Close the setup (Ctrl+Shift+S)" }))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(PanelEvent::Close)))
                     .child(svg().path(icon("close")).size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim))),
             );

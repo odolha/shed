@@ -1268,7 +1268,7 @@ impl TabBar {
                         .text_size(px(10.5 * s))
                         .bg(hsla_alpha(ui.text_dim, 0.18))
                         .hover(|st| st.bg(hsla_alpha(ui.text_dim, 0.3)))
-                        .tooltip(menu::tooltip("Zoom: click for the usual size"))
+                        .tooltip(menu::tooltip(if cfg!(target_os = "macos") { "Zoom: click for the usual size (Cmd+0)" } else { "Zoom: click for the usual size (Ctrl+0)" }))
                         .child(format!("{pct}%"))
                         .on_click(self.on(move |this, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
@@ -1305,7 +1305,11 @@ impl TabBar {
                 .px_2()
                 .cursor_pointer()
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
-                .tooltip(menu::tooltip("New tab (right-click for a project tab)"))
+                .tooltip(menu::tooltip(if cfg!(target_os = "macos") {
+                    "New terminal tab (Cmd+T); right-click for a project, AI or remote tab"
+                } else {
+                    "New terminal tab (Ctrl+Shift+T); right-click for a project, AI or remote tab"
+                }))
                 .on_click(self.on(|this, _: &ClickEvent, _, cx| this.new_tab(cx)))
                 .on_mouse_down(MouseButton::Right, self.on(|this, e: &MouseDownEvent, _, cx| {
                     let entries = vec![
@@ -1396,7 +1400,7 @@ impl TabBar {
                 .cursor_pointer()
                 .when(setup_open, |d| d.bg(hsla(ui.tab_active)))
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
-                .tooltip(menu::tooltip("Setup: startup, teardown, aliases"))
+                .tooltip(menu::tooltip(if cfg!(target_os = "macos") { "Setup: startup, teardown, aliases (Cmd+Shift+S)" } else { "Setup: startup, teardown, aliases (Ctrl+Shift+S)" }))
                 .on_click(self.on(|this, _: &ClickEvent, window, cx| this.toggle_setup(window, cx)))
                 .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if setup_open { accent } else { ui.text_dim }))),
         ))
@@ -1462,6 +1466,7 @@ impl TabBar {
             .cursor_pointer()
             .text_color(hsla(b.ui.ink(accent)))
             .hover(|s| s.bg(hsla(b.ui.tab_hover)))
+            .tooltip(menu::tooltip("The bench's menu: rename, colour, links, hide, close…"))
             .on_mouse_down(MouseButton::Left, self.on(|this, e: &MouseDownEvent, _, cx| {
                 let entries = this.bench_menu(cx);
                 this.open_menu(e.position, entries, cx);

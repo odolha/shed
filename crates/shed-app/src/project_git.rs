@@ -854,6 +854,7 @@ impl ProjectView {
                 .text_size(px(12.0 * self.z()))
                 .text_color(hsla(color))
                 .hover(|st| st.bg(hsla(ui.tab_hover)))
+                .tooltip(menu::tooltip("The branch: click to switch, make a new one, fetch, pull or push"))
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                     let entries = this.branch_menu(cx);
                     this.open_menu(e.position, entries, cx);
@@ -894,13 +895,14 @@ impl ProjectView {
             .flex()
             .flex_wrap()
             .gap_1()
-            .child(button("git-fetch", "refresh", "Fetch".into()).on_click(cx.listener(|this, _, _, cx| this.git_op("Fetching…", GitOp::Branch(BranchOp::Fetch), cx))))
-            .child(button("git-pull", "pull", if s.branch.behind > 0 { format!("Pull {}", s.branch.behind) } else { "Pull".into() }).on_click(cx.listener(|this, _, _, cx| this.git_op("Pulling…", GitOp::Pull, cx))))
+            .child(button("git-fetch", "refresh", "Fetch".into()).tooltip(menu::tooltip("Fetch: learn what the remote has, changing nothing here")).on_click(cx.listener(|this, _, _, cx| this.git_op("Fetching…", GitOp::Branch(BranchOp::Fetch), cx))))
+            .child(button("git-pull", "pull", if s.branch.behind > 0 { format!("Pull {}", s.branch.behind) } else { "Pull".into() }).tooltip(menu::tooltip("Pull: bring the remote's new commits into this branch")).on_click(cx.listener(|this, _, _, cx| this.git_op("Pulling…", GitOp::Pull, cx))))
             .child(
                 button("git-push", "push", {
                     let ahead = s.branch.ahead.max(git.session.outgoing.len() as u32);
                     if ahead > 0 { format!("Push {ahead}") } else { "Push".into() }
                 })
+                    .tooltip(menu::tooltip("Push: send this branch's new commits to the remote, after showing them (right-click to force-push)"))
                     .on_click(cx.listener(|this, _, _, cx| this.push(false, cx)))
                     .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                         let entries = vec![menu::danger("Force-Push…", |this: &mut Self, _, cx| this.push(true, cx))];
@@ -990,6 +992,7 @@ impl ProjectView {
                 .text_color(hsla(if can_commit { ui.ink(accent) } else { ui.text_dim }))
                 .cursor_pointer()
                 .hover(|st| st.bg(hsla_alpha(accent, 0.2)))
+                .tooltip(menu::tooltip(if push { "Commit the staged files, then push (after showing what goes)" } else { "Commit the staged files" }))
                 .on_click(cx.listener(move |this, _, _, cx| this.commit(push, cx)))
                 .child(label)
         };
@@ -1027,6 +1030,7 @@ impl ProjectView {
                             .gap_1()
                             .cursor_pointer()
                             .text_color(hsla(if git.session.amend { ui.text } else { ui.text_dim }))
+                            .tooltip(menu::tooltip("Amend: change the last commit (its message and files) instead of making a new one"))
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_amend(cx)))
                             .child(if git.session.amend { "☑" } else { "☐" })
                             .child("Amend"),
@@ -1430,7 +1434,7 @@ impl ProjectView {
                     .items_center()
                     .child(div().flex_1().text_color(hsla(ui.text_dim)).child(title))
                     .when(git.session.log_for.is_some(), |d| {
-                        d.child(div().id("history-all").cursor_pointer().text_color(hsla(ui.ink(self.accent))).on_click(cx.listener(|this, _, _, cx| this.open_history(None, cx))).child("All"))
+                        d.child(div().id("history-all").cursor_pointer().text_color(hsla(ui.ink(self.accent))).tooltip(menu::tooltip("The whole project's history, not this file's")).on_click(cx.listener(|this, _, _, cx| this.open_history(None, cx))).child("All"))
                     }),
             )
             .child(list)
@@ -1675,10 +1679,10 @@ impl ProjectView {
                 .text_color(hsla(ui.text))
                 .child(div().flex_1().child(if blocks.is_empty() { "No conflict markers left.".to_string() } else { format!("{} conflict(s). At the cursor, take:", blocks.len()) }))
                 .when(!blocks.is_empty(), |d| {
-                    d.child(btn("take-ours", "Ours").on_click(cx.listener(move |this, _, _, cx| t0(this, 0, cx))))
-                        .child(btn("take-theirs", "Theirs").on_click(cx.listener(move |this, _, _, cx| t1(this, 1, cx))))
-                        .child(btn("take-both", "Both").on_click(cx.listener(move |this, _, _, cx| t2(this, 2, cx))))
-                        .child(btn("next-conflict", "Next").on_click(cx.listener(move |this, _, _, cx| {
+                    d.child(btn("take-ours", "Ours").tooltip(menu::tooltip("Keep your side of the conflict at the cursor")).on_click(cx.listener(move |this, _, _, cx| t0(this, 0, cx))))
+                        .child(btn("take-theirs", "Theirs").tooltip(menu::tooltip("Keep their side of the conflict at the cursor")).on_click(cx.listener(move |this, _, _, cx| t1(this, 1, cx))))
+                        .child(btn("take-both", "Both").tooltip(menu::tooltip("Keep both sides, yours first")).on_click(cx.listener(move |this, _, _, cx| t2(this, 2, cx))))
+                        .child(btn("next-conflict", "Next").tooltip(menu::tooltip("Go to the next conflict")).on_click(cx.listener(move |this, _, _, cx| {
                             let blocks = this.conflicts_in(&next_view, cx);
                             next_view.update(cx, |v, cx| {
                                 let line = v.buffer.line_of(v.buffer.selection().head);
@@ -1688,7 +1692,7 @@ impl ProjectView {
                             });
                         })))
                 })
-                .child(btn("ask-ai-conflict", "Ask AI").on_click(cx.listener(move |this, _, _, cx| {
+                .child(btn("ask-ai-conflict", "Ask AI").tooltip(menu::tooltip("Ask this bench's AI tab to resolve the file's conflicts")).on_click(cx.listener(move |this, _, _, cx| {
                     let text = format!("Resolve the merge conflicts in {rel}: keep what both sides meant, remove the conflict markers, and tell me what you chose.");
                     let bench = this.bench;
                     if let Some(state) = cx.try_global::<crate::state::AppHandle>().and_then(|h| h.0.upgrade()) {
@@ -1698,8 +1702,8 @@ impl ProjectView {
                         }
                     }
                 })))
-                .when(self.remote.is_none(), |d| d.child(btn("three-ways", if self.merge_sides.as_ref().is_some_and(|(p, _, _)| *p == file.path) { "One Way" } else { "Three Ways" }).on_click(cx.listener(move |this, _, _, cx| this.toggle_three_ways(cx)))))
-                .child(btn("mark-resolved", "Mark Resolved").text_color(hsla(ui.ink(accent))).on_click(cx.listener(move |this, _, _, cx| {
+                .when(self.remote.is_none(), |d| d.child(btn("three-ways", if self.merge_sides.as_ref().is_some_and(|(p, _, _)| *p == file.path) { "One Way" } else { "Three Ways" }).tooltip(menu::tooltip("Show your version and theirs beside the file, or only the file")).on_click(cx.listener(move |this, _, _, cx| this.toggle_three_ways(cx)))))
+                .child(btn("mark-resolved", "Mark Resolved").tooltip(menu::tooltip("Save the file and stage it as resolved")).text_color(hsla(ui.ink(accent))).on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(i) = this.active {
                         this.save(i, cx);
                     }

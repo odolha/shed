@@ -3729,17 +3729,17 @@ impl AiView {
             .text_size(px(12.0 * self.z()))
             .children(loader)
             .child(div().flex_1().min_w_0().truncate().text_color(hsla(if self.status.state == AiState::Idle { ui.text_dim } else { ui.ink(accent) })).child(status))
-            .child(chip("ai-model", model).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+            .child(chip("ai-model", model).tooltip(menu::tooltip("The model Claude uses in this tab, and its effort: click to choose")).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 this.warm_up();
                 let entries = this.model_menu();
                 this.open_menu(e.position, entries, cx);
             })))
-            .child(chip("ai-effort", format!("{} effort", self.ai.effort.as_deref().unwrap_or("default"))).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+            .child(chip("ai-effort", format!("{} effort", self.ai.effort.as_deref().unwrap_or("default"))).tooltip(menu::tooltip("How hard Claude thinks before answering: click to choose")).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 this.warm_up();
                 let entries = this.model_menu();
                 this.open_menu(e.position, entries, cx);
             })))
-            .child(chip("ai-mode", mode.into()).when(self.ai.mode == "bypassPermissions", |d| d.text_color(hsla(ui.danger))).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+            .child(chip("ai-mode", mode.into()).tooltip(menu::tooltip("What Claude may do without asking first (edits, commands): click to choose")).when(self.ai.mode == "bypassPermissions", |d| d.text_color(hsla(ui.danger))).on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 let entries = this.mode_menu();
                 this.open_menu(e.position, entries, cx);
             })))
@@ -3749,6 +3749,7 @@ impl AiView {
                     .p_1()
                     .rounded_sm()
                     .cursor_pointer()
+                    .tooltip(menu::tooltip("More: review changes, find in the conversation, attach a folder, insert a file, save the prompt or the conversation"))
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                         let entries = this.more_menu(cx);
@@ -3793,7 +3794,7 @@ impl AiView {
                 d.child(
                     chip("ai-drafts", format!("Drafts ({n})"))
                         .when(self.drafts_open, |d| d.bg(hsla_alpha(accent, 0.2)))
-                        .tooltip(menu::tooltip("Messages kept to send later"))
+                        .tooltip(menu::tooltip("This session's drafts: messages kept to send later, only when you choose, in any order. Click to show or hide them."))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.drafts_open = !this.drafts_open;
                             cx.notify();
@@ -3852,6 +3853,7 @@ impl AiView {
                     .text_color(hsla(ui.ink(color)))
                     .cursor_pointer()
                     .hover(|s| s.bg(hsla_alpha(color, 0.2)))
+                    .tooltip(menu::tooltip(if working { "Stop Claude's turn (Esc)" } else { "Send the message (Ctrl+Enter); while Claude works, it waits its turn" }))
                     .on_click(cx.listener(move |this, _, _, cx| if working { this.stop() } else { this.send(cx) }))
                     .child(svg().path(icon(glyph)).size(px(13.0)).text_color(hsla(ui.ink(color))))
                     .child(label),
@@ -3960,7 +3962,6 @@ impl AiView {
         let mut any = false;
         if self.drafts_open && self.ai.shown_drafts().next().is_some() {
             any = true;
-            out = out.child(div().text_color(hsla(ui.text_dim)).child("This session's drafts: sent only when you choose, in any order"));
             let open = self.editing_draft.as_ref().map(|d| d.index);
             for (n, text) in self.ai.shown_drafts().map(|(n, d)| (n, &d.text)) {
                 let editing = open == Some(n);
@@ -4161,6 +4162,7 @@ impl AiView {
             out = out.child(
                 div()
                     .id("ai-tasks")
+                    .tooltip(menu::tooltip("Claude's task list for this turn: click to show or hide it"))
                     .flex()
                     .flex_col()
                     .px_2()
@@ -4272,6 +4274,7 @@ impl Render for AiView {
                 .cursor_pointer()
                 .when(on, |d| d.bg(hsla_alpha(self.accent, 0.22)).text_color(hsla(ui.text)))
                 .when(!on, |d| d.text_color(hsla(ui.text_dim)).hover(|s| s.bg(hsla(ui.tab_hover))))
+                .tooltip(menu::tooltip(if prompts { "Your messages in this conversation: click one to go to it" } else { "Claude Code's sessions in this tab's folder: click one to open it" }))
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.show_prompts = prompts;

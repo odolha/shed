@@ -185,6 +185,7 @@ fn stepper(id: &str, ui: &UiColors, shown: String, cx: &mut Context<SettingsPane
             .cursor_pointer()
             .bg(hsla(ui.tab_active))
             .hover(|s| s.bg(hsla(ui.tab_hover)))
+            .tooltip(crate::menu::tooltip(if sign < 0.0 { "Smaller" } else { "Larger" }))
             .child(svg().path(icon(glyph)).size(crate::theme::us(12.0)).text_color(hsla(ui.text)))
             .on_click(cx.listener(move |this, _, _, cx| step(this, sign, cx)))
     };
@@ -276,6 +277,7 @@ impl Render for SettingsPanel {
             .border_1()
             .border_color(hsla(ui.divider))
             .hover(|s| s.bg(hsla(ui.tab_hover)))
+            .tooltip(crate::menu::tooltip("Every setting, keys and the nexus too, in the file Shed reads (changes apply as you save)"))
             .child(svg().path(icon("file")).size(crate::theme::us(13.0)).text_color(hsla(ui.text_dim)))
             .child(div().text_color(hsla(ui.text)).child("Open shed.toml"))
             .on_click(move |_, _, cx| cx.open_url(&format!("file://{}", path.display())));
@@ -307,6 +309,7 @@ impl Render for SettingsPanel {
                             .rounded_sm()
                             .cursor_pointer()
                             .hover(|s| s.bg(hsla(ui.tab_hover)))
+                            .tooltip(crate::menu::tooltip("Close the settings"))
                             .child(svg().path(icon("close")).size(crate::theme::us(14.0)).text_color(hsla(ui.text_dim)))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close))),
                     ),
@@ -330,6 +333,7 @@ impl Render for SettingsPanel {
                     .border_1()
                     .border_color(hsla(ui.divider))
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .tooltip(crate::menu::tooltip("Every tab back to the usual size"))
                     .child(svg().path(icon("refresh")).size(crate::theme::us(12.0)).text_color(hsla(ui.text_dim)))
                     .child(div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.text)).child("Reset Everywhere"))
                     .on_click(cx.listener(|this, _, _, cx| this.state.read(cx).conn.send_msg(shed_proto::ClientMsg::ResetZoom))),

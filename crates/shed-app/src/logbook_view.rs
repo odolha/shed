@@ -283,9 +283,15 @@ impl Render for LogbookSearch {
         let scopes = div().flex().gap_1().children([Scope::Local, Scope::Bench, Scope::Global].map(|s| {
             let on = s == self.scope;
             div()
+                .id(SharedString::from(format!("logbook-scope-{}", s.name())))
                 .px_1p5()
                 .rounded_sm()
                 .when(on, |d| d.bg(hsla_alpha(self.accent, 0.25)).text_color(hsla(self.ui.ink(self.accent))))
+                .tooltip(crate::menu::tooltip(match s {
+                    Scope::Local => "Commands run in this tab (Tab goes to the next scope)",
+                    Scope::Bench => "Commands run in any tab of this bench (Tab goes to the next scope)",
+                    Scope::Global => "Commands run anywhere (Tab goes to the next scope)",
+                }))
                 .child(s.name())
         }));
         let header = div()

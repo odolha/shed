@@ -1769,9 +1769,9 @@ impl ProjectView {
                     state.update(cx, |s, _| s.open_ai_for(bench, root));
                 }
             })))
-            .child(button("project-terminal", "terminal", "Terminal").on_click(cx.listener(|this, _, _, _| this.open_terminal(&this.root.clone()))))
-            .when(self.remote.is_none(), |d| d.child(button("project-files", "folder", "File Manager").on_click(move |_, _, cx| cx.open_with_system(&root))))
-            .child(button("project-refresh", "refresh", "Refresh").on_click(cx.listener(|this, _, _, cx| this.refresh(cx))))
+            .child(button("project-terminal", "terminal", "Terminal").tooltip(menu::tooltip("A terminal tab in the project's folder")).on_click(cx.listener(|this, _, _, _| this.open_terminal(&this.root.clone()))))
+            .when(self.remote.is_none(), |d| d.child(button("project-files", "folder", "File Manager").tooltip(menu::tooltip("Open the project's folder in your file manager")).on_click(move |_, _, cx| cx.open_with_system(&root))))
+            .child(button("project-refresh", "refresh", "Refresh").tooltip(menu::tooltip("Read the project's files and Git state again")).on_click(cx.listener(|this, _, _, cx| this.refresh(cx))))
             .child(
                 div()
                     .id("project-more")
@@ -1779,6 +1779,7 @@ impl ProjectView {
                     .rounded_md()
                     .cursor_pointer()
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
+                    .tooltip(menu::tooltip("More: new file or folder, add a link, open a file by name, refresh"))
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                         let entries = this.header_menu();
                         this.open_menu(e.position, entries, cx);
@@ -1829,6 +1830,7 @@ impl ProjectView {
                     .rounded_sm()
                     .cursor_pointer()
                     .hover(|s| s.bg(hsla(ui.divider)))
+                    .tooltip(menu::tooltip(if dirty { "Close the file (it has unsaved changes: asks first); middle-click closes too" } else { "Close the file (middle-click closes too)" }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.close_file(i, window, cx);
@@ -2065,10 +2067,10 @@ impl ProjectView {
             .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text_dim)).child(crate::picture::describe(p)))
             .when(has_size, |d| {
                 d.child(div().text_color(hsla(ui.text_dim)).child(scale))
-                    .child(button("picture-out", "−", false).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, None, false, window, cx))))
-                    .child(button("picture-in", "+", false).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, None, true, window, cx))))
-                    .child(button("picture-fit", "Fit", zoom == Zoom::Fit).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, Some(Zoom::Fit), false, window, cx))))
-                    .child(button("picture-actual", "100%", zoom == Zoom::Scale(1.0)).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, Some(Zoom::Scale(1.0)), false, window, cx))))
+                    .child(button("picture-out", "−", false).tooltip(menu::tooltip("Zoom out")).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, None, false, window, cx))))
+                    .child(button("picture-in", "+", false).tooltip(menu::tooltip("Zoom in")).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, None, true, window, cx))))
+                    .child(button("picture-fit", "Fit", zoom == Zoom::Fit).tooltip(menu::tooltip("Fit the picture to the view")).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, Some(Zoom::Fit), false, window, cx))))
+                    .child(button("picture-actual", "100%", zoom == Zoom::Scale(1.0)).tooltip(menu::tooltip("The picture at its own size")).on_click(cx.listener(move |this, _, window, cx| this.zoom_picture(i, Some(Zoom::Scale(1.0)), false, window, cx))))
             });
         div()
             .size_full()

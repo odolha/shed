@@ -72,6 +72,9 @@ Closing **Shed** closes everything. Starting Shed again shows every bench closed
 and nothing starts on its own: you open the benches you want. (To have Shed reopen
 what was running instead, see [`auto_restore`](#settings-shedtoml).)
 
+Hovering a control that is only an icon, or one whose name does not say it all,
+shows a short tooltip with what it does, and its shortcut when it has one.
+
 ## The Shed window
 
 Run `shed`, or pick Shed from your application menu.
@@ -402,7 +405,7 @@ terminal of the bench.
   again, **Send Now** sends one. What you have written in the prompt is kept too,
   and is there when the tab opens again. **Draft** (or Ctrl+S) keeps the message for
   later instead, with its files and pictures. Drafts belong to their session:
-  **Drafts (N)** opens this session's, and each has **Send** (queued if Claude
+  **Drafts (N)** opens this session's (its tooltip says what they are), and each has **Send** (queued if Claude
   is busy), **Edit**, **Merge into Prompt** and **Delete…**. **Edit** opens the draft in the prompt
   (what you were writing is set aside) and marks it in the list: **Save Draft**
   (the ✓, or Ctrl+S) keeps the change in place, **Cancel** (or Esc) leaves it as

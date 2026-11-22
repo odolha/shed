@@ -924,9 +924,10 @@ impl BenchCard {
         label: &str,
         color: Rgb,
         filled: bool,
+        tip: &'static str,
         on: impl Fn(&mut Pegboard, &mut Window, &mut Context<Pegboard>) + 'static,
     ) -> AnyElement {
-        button(id, glyph, label, color, filled, &self.model.ui).on_click(self.on(move |this, _, window, cx| on(this, window, cx))).into_any_element()
+        button(id, glyph, label, color, filled, &self.model.ui).tooltip(menu::tooltip(tip)).on_click(self.on(move |this, _, window, cx| on(this, window, cx))).into_any_element()
     }
 
     /// A pencil shown while the pointer is over `group`: names can be edited.
@@ -990,6 +991,7 @@ impl BenchCard {
             .cursor_pointer()
             .bg(hsla(accent))
             .hover(|s| s.border_2().border_color(hsla(ui.text_dim)))
+            .tooltip(menu::tooltip("The bench's colour: click to choose"))
             .on_mouse_down(MouseButton::Left, self.on(move |this, e: &MouseDownEvent, _, cx| {
                 let entries = this.color_entries(&k, current);
                 this.open_menu(e.position, entries, cx);
@@ -1059,15 +1061,20 @@ impl BenchCard {
             header = header.child(div().text_size(crate::theme::us(12.0)).text_color(hsla(ui.ink(accent))).child("closing…"));
         } else {
             let (open_icon, open_label) = if entry.status == Status::Open { ("go", "Go to") } else { ("bench-load", "Open") };
-            header = header.child(self.button(format!("open-{id}"), open_icon, open_label, accent, true, move |this, _, cx| this.open_bench(id, None, cx)));
+            let open_tip = match entry.status {
+                Status::Open => "Bring the bench's window to the front",
+                Status::Hidden => "Show the bench's window again (it kept running)",
+                Status::Closed => "Open the bench: its window, tabs and startup",
+            };
+            header = header.child(self.button(format!("open-{id}"), open_icon, open_label, accent, true, open_tip, move |this, _, cx| this.open_bench(id, None, cx)));
             if entry.status == Status::Open {
-                header = header.child(self.button(format!("hide-{id}"), "detach", "Hide", ui.text_dim, false, move |this, _, cx| this.hide(id, cx)));
+                header = header.child(self.button(format!("hide-{id}"), "detach", "Hide", ui.text_dim, false, "Hide the window: the bench keeps running, and comes back from here", move |this, _, cx| this.hide(id, cx)));
             }
             if entry.status != Status::Closed {
-                header = header.child(self.button(format!("close-{id}"), "power", "Close…", ui.text_dim, false, move |this, window, cx| this.close(id, window, cx)));
+                header = header.child(self.button(format!("close-{id}"), "power", "Close…", ui.text_dim, false, "Close the bench: its programs stop and it is saved, to open again later (asks first)", move |this, window, cx| this.close(id, window, cx)));
             }
             let name = bench.name.clone();
-            header = header.child(self.button(format!("delete-{id}"), "trash", "Delete…", ui.danger, false, move |this, window, cx| {
+            header = header.child(self.button(format!("delete-{id}"), "trash", "Delete…", ui.danger, false, "Delete the bench: it stops, and its saved file, scrollback and launcher go (asks first)", move |this, window, cx| {
                 this.delete(name.clone(), window, cx)
             }));
                 header = header.child(
@@ -1179,6 +1186,7 @@ impl BenchCard {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(hsla(if closed { ui.text_dim } else { ui.text }))
                     .cursor_pointer()
+                    .tooltip(menu::tooltip("Click to open the bench, double-click to rename it"))
                     .child(bench.name.clone())
                     .on_click(self.on(move |this, ev: &ClickEvent, window, cx| {
                         if ev.click_count() >= 2 {

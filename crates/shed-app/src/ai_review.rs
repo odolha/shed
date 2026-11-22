@@ -993,6 +993,7 @@ impl AiView {
                 .text_size(px(11.0 * z))
                 .text_color(hsla(ui.text_dim))
                 .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                .tooltip(menu::tooltip(if side { "Show the change as one column (S)" } else { "Show the old and new text side by side (S)" }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(r) = &mut this.review {
                         r.side = !side;

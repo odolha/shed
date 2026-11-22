@@ -538,6 +538,7 @@ impl Render for ShedWindow {
                         .rounded_sm()
                         .cursor_pointer()
                         .hover(|s| s.bg(hsla(ui.tab_hover)))
+                        .tooltip(crate::menu::tooltip("Dismiss"))
                         .child("×")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.state.update(cx, |state, cx| {
@@ -585,6 +586,7 @@ impl Render for ShedWindow {
                             .text_color(hsla(ui.text_dim))
                             .when(self.settings.is_some(), |d| d.bg(hsla_alpha(ui.accent, 0.2)))
                             .hover(|s| s.bg(hsla(ui.tab_hover)))
+                            .tooltip(crate::menu::tooltip("Shed's settings: theme, font, keys, nexus… (shed.toml)"))
                             .child(svg().path(icon("settings")).size(crate::theme::us(14.0)).text_color(hsla(ui.text_dim)))
                             .child("Settings")
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_settings(cx))),
