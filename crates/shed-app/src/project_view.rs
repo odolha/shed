@@ -568,9 +568,12 @@ impl ProjectView {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         match &mut self.remote {
             None => self.expanded.retain(|dir| dir.is_dir()),
-            Some(r) => r.forget_folders(),
+            Some(r) => {
+                r.forget_folders();
+                // Following the workspace again, past any note about it.
+                self.notice = None;
+            }
         }
-        self.notice = None;
         self.rebuild();
         self.start_walk(cx);
         for i in 0..self.open.len() {
