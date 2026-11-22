@@ -884,8 +884,14 @@ requests and subscriptions); the link answers `LinkFrame::TunnelOpened` or
 `TunnelClosed` (with why), passed on as `ServerFrame::TunnelOpened`/`TunnelClosed`
 under the connector's id. Data goes both ways as binary WebSocket messages, a
 big-endian `u32` tunnel id and the bytes (`wire::tunnel_data`), with the id
-swapped on the way. Opening is written to the audit log (`tunnel-open`, the
-device and the workspace's name). A connector has at most 8 tunnels. A tunnel
+swapped on the way. The link is told which device opened a tunnel
+(`LinkTunnelOpen::device`, its id and name). Opening is written to the audit
+log (`tunnel-open`, the device and the workspace's name), and so is every
+end (`tunnel-close`: by the desktop, by the workspace, the desktop's
+connection or the workspace gone, too slow) and refusal (`tunnel-refused`:
+not a desktop, offline, too many, or the link said `Forbidden`); the hub
+queues those (`TunnelAudit`) for a task of `relay::background` to write, out
+of its lock. A connector has at most 8 tunnels. A tunnel
 closes when either end asks (`TunnelClose`), when its connector goes (the link
 hears `TunnelClose`), when the device is revoked (its socket closes), and when
 the workspace goes offline (`TunnelClosed`, `Offline`). Each connection may
@@ -1065,7 +1071,10 @@ keeps current (connecting, connected, offline, refused).
 
 **Tunnels** (`tunnel.rs`). On `NexusFrame::TunnelOpen` the link refuses
 (`TunnelClosed`, `Forbidden`, saying which setting) unless `shed.toml` has
-`[nexus] desktop_clients = true` and control is `full`. Otherwise it opens a
+`[nexus] desktop_clients = true` and control is `full`. Both, and the
+`[nexus]` table it compares every 2 s to stop when the settings change, come
+from one read of `shed.toml` (`Options::settings`); while the file does not
+read, new tunnels are refused until it does (it logs the device either way). Otherwise it opens a
 connection of its own to the keeper's socket, says `TunnelOpened`, and pipes
 bytes as they are, after its own first frame, `ClientMsg::Tunnelled` (the
 device the nexus says opened it): the desktop says `Hello` as
@@ -1074,7 +1083,10 @@ this machine's window process, so none of the link's policy applies (private tab
 user's own signed-in desktops). Bytes from the keeper go to the nexus through
 a bounded channel (64 pieces of up to 64 KB), so a tunnel reads no more from
 the keeper while the nexus is behind; bytes for the keeper that do not fit in
-the tunnel's own queue (256 pieces) close it. Tunnels close with the nexus
+the tunnel's own queue (256 pieces) close it. Between the nexus connection's
+task and the link's loop, tunnel data is counted in bytes (`nexus::Backlog`,
+at most 8 MB not yet taken): data that would go past it drops its tunnel
+(`TunnelClosed`), and that tunnel's later data, instead of growing the queue. Tunnels close with the nexus
 connection, on `TunnelClose`, and when the keeper ends the connection.
 
 ## Other workspaces in the window

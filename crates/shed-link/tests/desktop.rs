@@ -16,7 +16,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// Opens tunnel `id` at the fake nexus; what the link answered.
 async fn open(nexus: &mut common::FakeNexus, id: u32) -> LinkFrame {
-    let open = serde_json::to_string(&NexusFrame::TunnelOpen(TunnelId { id })).unwrap();
+    let device = Some(TunnelDevice { id: "d1".into(), name: "Shed on laptop".into() });
+    let open = serde_json::to_string(&NexusFrame::TunnelOpen(LinkTunnelOpen { id, device })).unwrap();
     nexus.socket.send(Message::text(open)).await.unwrap();
     nexus
         .until("the tunnel's answer", |f, _| match f {
@@ -242,4 +243,66 @@ async fn signing_out_revokes_the_desktop_at_the_nexus() {
     assert!(matches!(&out, shed_link::pairing::SignedOut::HereOnly(_)), "{out:?}");
     assert!(out.message().contains("web app"), "{}", out.message());
     assert!(!path.exists());
+}
+
+/// The link's settings and the snapshot it tells changes by come from one
+/// read; a `shed.toml` that stops reading refuses new tunnels until it reads.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tunnels_follow_the_settings_the_link_runs_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = common::keeper(dir.path());
+    let config = dir.path().join("link-shed.toml");
+    let on = "[nexus]\nurl = \"https://n.example.com\"\ndesktop_clients = true\n";
+    let read = |text: &str| toml_settings(text);
+
+    // Started with desktops let in, while the file already says otherwise
+    // (changed between the read and the start): it starts again.
+    std::fs::write(&config, "[nexus]\nurl = \"https://n.example.com\"\n").unwrap();
+    let (listener, url) = common::listen().await;
+    let mut opts = common::options(&env, url, "t0k", Policy::Full, true);
+    opts.config_file = Some(config.clone());
+    opts.settings = Some(read(on));
+    let link = tokio::spawn(shed_link::run(opts));
+    let (_fake, _) = common::accept(&listener).await;
+    let exit = tokio::time::timeout(Duration::from_secs(10), link).await.expect("the link stops").unwrap().unwrap();
+    assert_eq!(exit, shed_link::Exit::Restart);
+
+    // Running with them: a file that does not read refuses new tunnels
+    // until it reads again.
+    std::fs::write(&config, on).unwrap();
+    let (listener, url) = common::listen().await;
+    let mut opts = common::options(&env, url, "t0k", Policy::Full, true);
+    opts.config_file = Some(config.clone());
+    opts.settings = Some(read(on));
+    let _link = tokio::spawn(shed_link::run(opts));
+    let (mut fake, _) = common::accept(&listener).await;
+    assert_eq!(open(&mut fake, 1).await, LinkFrame::TunnelOpened(TunnelId { id: 1 }));
+    std::fs::write(&config, "[nexus\nnot toml").unwrap();
+    let mut refused = None;
+    for id in 2..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if let LinkFrame::TunnelClosed(closed) = open(&mut fake, id).await {
+            refused = closed.error;
+            break;
+        }
+    }
+    let refused = refused.expect("refused while shed.toml does not read");
+    assert_eq!(refused.code, ErrorCode::Forbidden);
+    assert!(refused.message.contains("does not read"), "{}", refused.message);
+    std::fs::write(&config, on).unwrap();
+    let mut opened = false;
+    for id in 40..80 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if matches!(open(&mut fake, id).await, LinkFrame::TunnelOpened(_)) {
+            opened = true;
+            break;
+        }
+    }
+    assert!(opened, "let in again once it reads");
+}
+
+fn toml_settings(text: &str) -> shed_model::config::NexusConfig {
+    let path = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(path.path(), text).unwrap();
+    shed_model::config::Config::load_from(path.path()).unwrap().nexus
 }

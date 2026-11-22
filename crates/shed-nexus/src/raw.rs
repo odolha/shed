@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use shed_api::ApiError;
 use shed_api::wire::{
+    LinkTunnelOpen,
     ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationFrame, TunnelClosed, TunnelId, TunnelOpen, Unsubscribe,
     WorkspaceInfo,
 };
@@ -70,7 +71,7 @@ pub enum RawNexusFrame {
     Subscribe(RawSubscribe),
     Unsubscribe(Unsubscribe),
     Goodbye(ApiError),
-    TunnelOpen(TunnelId),
+    TunnelOpen(LinkTunnelOpen),
     TunnelClose(TunnelId),
 }
 
@@ -343,7 +344,8 @@ mod tests {
             NexusFrame::Subscribe(Subscribe { id: 2, workspace: String::new(), topic: Topic::Screen(ScreenTopic { pane: "p".into() }) }),
             NexusFrame::Unsubscribe(Unsubscribe { id: 2 }),
             NexusFrame::Goodbye(ApiError::new(ErrorCode::Unsupported, "old")),
-            NexusFrame::TunnelOpen(TunnelId { id: 5 }),
+            NexusFrame::TunnelOpen(LinkTunnelOpen { id: 5, device: Some(TunnelDevice { id: "d".into(), name: "Shed on laptop".into() }) }),
+            NexusFrame::TunnelOpen(LinkTunnelOpen { id: 6, device: None }),
             NexusFrame::TunnelClose(TunnelId { id: 5 }),
         ];
         for frame in &nexus {

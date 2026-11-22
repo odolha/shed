@@ -22,7 +22,9 @@
 //! tunnel id maps to one the nexus picks for the link, and binary messages
 //! (`[u32 id][bytes]`) are passed on with the id swapped. A tunnel whose far
 //! side cannot keep up is closed rather than buffered: each connection may
-//! have at most `TUNNEL_BACKLOG` bytes of tunnel data waiting.
+//! have at most `TUNNEL_BACKLOG` bytes of tunnel data waiting. The link is
+//! told which device opened a tunnel; every tunnel's end, and every refusal,
+//! goes into the audit log (`TunnelAudit`, written by a task of its own).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -39,7 +41,7 @@ use serde_json::value::RawValue;
 use shed_api::http::DeviceKind;
 use shed_api::wire::{
     ClientHello, Ended, LinkHello, LinkWelcome, Notification, NotificationFrame, NotificationKind, Policy, TunnelClosed, TunnelId,
-    TunnelOpen, Unsubscribe, WorkspaceInfo, split_tunnel_data, tunnel_data,
+    LinkTunnelOpen, TunnelDevice, TunnelOpen, Unsubscribe, WorkspaceInfo, split_tunnel_data, tunnel_data,
 };
 use shed_api::{API_VERSION, ApiError, ErrorCode, MIN_API_VERSION};
 use tokio::sync::{Notify, mpsc};
@@ -74,6 +76,19 @@ const MAX_TUNNELS: usize = 8;
 pub struct Hub {
     inner: Mutex<Inner>,
     timeout: Duration,
+    /// Tunnels' ends, for `background` to write to the audit log.
+    audits: Mutex<Option<mpsc::UnboundedReceiver<TunnelAudit>>>,
+}
+
+/// A tunnel that ended or was refused, for the audit log.
+#[derive(Debug)]
+pub struct TunnelAudit {
+    /// `tunnel-close` or `tunnel-refused`.
+    pub what: &'static str,
+    /// The desktop's device id.
+    pub device: String,
+    pub workspace: String,
+    pub why: String,
 }
 
 #[derive(Default)]
@@ -89,6 +104,7 @@ struct Inner {
     /// The connection each workspace last left with, to tell whether it came
     /// back since.
     left: HashMap<String, u64>,
+    audit: Option<mpsc::UnboundedSender<TunnelAudit>>,
 }
 
 struct Link {
@@ -201,7 +217,9 @@ impl Hub {
                 inner.states.insert(row.id, state);
             }
         }
-        Ok(Hub { inner: Mutex::new(inner), timeout })
+        let (audit, audits) = mpsc::unbounded_channel();
+        inner.audit = Some(audit);
+        Ok(Hub { inner: Mutex::new(inner), timeout, audits: Mutex::new(Some(audits)) })
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -217,7 +235,7 @@ impl Hub {
         let conn = inner.next_conn;
         if let Some(old) = inner.links.remove(workspace) {
             old.out.closer.close(Some(goodbye(ApiError::new(ErrorCode::Failed, "another link took over"))));
-            inner.drop_link(old);
+            inner.drop_link(workspace, old);
         }
         let link = Link {
             conn,
@@ -241,7 +259,7 @@ impl Hub {
             return false;
         }
         if let Some(link) = inner.links.remove(workspace) {
-            inner.drop_link(link);
+            inner.drop_link(workspace, link);
         }
         inner.left.insert(workspace.to_string(), conn);
         true
@@ -297,7 +315,14 @@ impl Hub {
                 let (conn, cid) = link.tunnels.remove(&closed.id)?;
                 let connector = inner.connectors.get_mut(&conn)?;
                 connector.tunnels.remove(&cid);
+                let (what, why) = match &closed.error {
+                    Some(e) if e.code == ErrorCode::Forbidden => ("tunnel-refused", format!("by the workspace: {}", e.message)),
+                    Some(e) => ("tunnel-close", format!("by the workspace: {}", e.message)),
+                    None => ("tunnel-close", "by the workspace".to_string()),
+                };
+                let device = connector.device.clone();
                 connector.out.send(tunnel_closed(cid, closed.error));
+                audit_tunnel(&inner.audit, what, &device, workspace, why);
             }
         }
         None
@@ -316,6 +341,7 @@ impl Hub {
             connector.tunnels.remove(&cid);
             link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
             connector.out.send(tunnel_closed(cid, Some(too_slow())));
+            audit_tunnel(&inner.audit, "tunnel-close", &connector.device, workspace, "the desktop could not keep up".into());
         }
     }
 
@@ -345,24 +371,26 @@ impl Hub {
                 link.tunnels.remove(nid);
                 link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: *nid }).to_text());
             }
+            audit_tunnel(&inner.audit, "tunnel-close", &connector.device, workspace, "the desktop's connection ended".into());
         }
         for link in inner.links.values_mut() {
             link.requests.retain(|_, p| p.conn != conn);
         }
     }
 
-    /// Opens a tunnel to a workspace's link (the caller checked the device
-    /// may); `Err` says why not.
-    fn tunnel_open(&self, conn: u64, open: &TunnelOpen) -> Result<(), Option<ApiError>> {
+    /// Opens a tunnel to a workspace's link for `device` (the caller
+    /// checked it may); `Err` says why not.
+    fn tunnel_open(&self, conn: u64, open: &TunnelOpen, device: TunnelDevice) -> Result<(), Option<ApiError>> {
         let mut inner = self.lock();
         let inner = &mut *inner;
         let Some(connector) = inner.connectors.get_mut(&conn) else { return Ok(()) };
         // The same id again replaces the tunnel.
-        if let Some((workspace, nid)) = connector.tunnels.remove(&open.id)
-            && let Some(link) = inner.links.get_mut(&workspace)
-        {
-            link.tunnels.remove(&nid);
-            link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
+        if let Some((workspace, nid)) = connector.tunnels.remove(&open.id) {
+            if let Some(link) = inner.links.get_mut(&workspace) {
+                link.tunnels.remove(&nid);
+                link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
+            }
+            audit_tunnel(&inner.audit, "tunnel-close", &connector.device, &workspace, "replaced by the desktop".into());
         }
         if connector.tunnels.len() >= MAX_TUNNELS {
             return Err(Some(ApiError::new(ErrorCode::RateLimited, format!("at most {MAX_TUNNELS} tunnels at once"))));
@@ -371,7 +399,7 @@ impl Hub {
         let nid = link.next_id();
         link.tunnels.insert(nid, (conn, open.id));
         connector.tunnels.insert(open.id, (open.workspace.clone(), nid));
-        link.out.send(RawNexusFrame::TunnelOpen(TunnelId { id: nid }).to_text());
+        link.out.send(RawNexusFrame::TunnelOpen(LinkTunnelOpen { id: nid, device: Some(device) }).to_text());
         Ok(())
     }
 
@@ -385,6 +413,7 @@ impl Hub {
             link.tunnels.remove(&nid);
             link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
         }
+        audit_tunnel(&inner.audit, "tunnel-close", &connector.device, &workspace, "by the desktop".into());
     }
 
     /// A connector's tunnel data, on to the link.
@@ -400,6 +429,7 @@ impl Hub {
             connector.tunnels.remove(&cid);
             link.out.send(RawNexusFrame::TunnelClose(TunnelId { id: nid }).to_text());
             connector.out.send(tunnel_closed(cid, Some(too_slow())));
+            audit_tunnel(&inner.audit, "tunnel-close", &connector.device, &workspace, "the workspace could not keep up".into());
         }
     }
 
@@ -545,7 +575,7 @@ impl Hub {
 impl Inner {
     /// What is left of a link that went: its subscriptions end and its
     /// requests are answered `Offline`.
-    fn drop_link(&mut self, link: Link) {
+    fn drop_link(&mut self, workspace: &str, link: Link) {
         let offline = || ApiError::new(ErrorCode::Offline, "the workspace went offline");
         for pending in link.requests.into_values() {
             if let Some(connector) = self.connectors.get(&pending.conn) {
@@ -563,6 +593,7 @@ impl Inner {
             if let Some(connector) = self.connectors.get_mut(&conn) {
                 connector.tunnels.remove(&id);
                 connector.out.send(tunnel_closed(id, Some(offline())));
+                audit_tunnel(&self.audit, "tunnel-close", &connector.device, workspace, "the workspace went offline".into());
             }
         }
     }
@@ -667,7 +698,43 @@ pub fn background(app: &Arc<App>) -> Vec<JoinHandle<()>> {
             }
         })
     };
-    vec![timeouts, states, cleanup]
+    let audits = app.hub.audits.lock().unwrap_or_else(|e| e.into_inner()).take().map(|mut rx| {
+        let app = app.clone();
+        tokio::spawn(async move {
+            while let Some(audit) = rx.recv().await {
+                write_tunnel_audit(&app, audit);
+            }
+        })
+    });
+    let mut tasks = vec![timeouts, states, cleanup];
+    tasks.extend(audits);
+    tasks
+}
+
+/// Queues a tunnel's end for the audit log (written by `background`'s task,
+/// outside the hub's lock).
+fn audit_tunnel(sink: &Option<mpsc::UnboundedSender<TunnelAudit>>, what: &'static str, device: &str, workspace: &str, why: String) {
+    if let Some(sink) = sink {
+        let _ = sink.send(TunnelAudit { what, device: device.to_string(), workspace: workspace.to_string(), why });
+    }
+}
+
+/// Writes a tunnel's end or refusal to the audit log: the device (where it
+/// was last seen from), the workspace's name and why.
+fn write_tunnel_audit(app: &App, audit: TunnelAudit) {
+    let device = app.store.device(&audit.device).ok().flatten();
+    let name = app.store.workspaces().ok().and_then(|ws| ws.into_iter().find(|w| w.id == audit.workspace)).map(|w| w.name);
+    let detail = format!("{}: {}", name.as_deref().unwrap_or(&audit.workspace), audit.why);
+    let info = AuditInfo {
+        device: Some(&audit.device),
+        address: device.as_ref().map_or("", |d| d.address.as_str()),
+        country: device.as_ref().and_then(|d| d.country.as_deref()),
+        detail: &detail,
+    };
+    if let Err(e) = app.store.audit(audit.what, info, now()) {
+        tracing::error!("{e:#}");
+    }
+    tracing::info!("tunnel {} ({}): {detail}", audit.what.trim_start_matches("tunnel-"), device.as_ref().map_or(audit.device.as_str(), |d| d.name.as_str()));
 }
 
 // ------------------------------------------------------------ sockets
@@ -947,9 +1014,11 @@ fn connector_frame(app: &App, conn: u64, device: &DeviceRow, frame: RawClientFra
             // app, signed in as such, may open one.
             if device.kind != DeviceKind::Desktop {
                 let error = ApiError::new(ErrorCode::Forbidden, "only Shed's desktop app opens tunnels");
-                return app.hub.reply(conn, RawServerFrame::TunnelClosed(TunnelClosed { id: open.id, error: Some(error) }));
+                app.hub.reply(conn, RawServerFrame::TunnelClosed(TunnelClosed { id: open.id, error: Some(error) }));
+                let why = format!("by the nexus: a {} may not open tunnels", crate::store::kind_str(device.kind));
+                return write_tunnel_audit(app, TunnelAudit { what: "tunnel-refused", device: device.id.clone(), workspace: open.workspace.clone(), why });
             }
-            match app.hub.tunnel_open(conn, &open) {
+            match app.hub.tunnel_open(conn, &open, TunnelDevice { id: device.id.clone(), name: device.name.clone() }) {
                 Ok(()) => {
                     let name = app.store.workspaces().ok().and_then(|ws| ws.into_iter().find(|w| w.id == open.workspace)).map(|w| w.name);
                     let detail = name.unwrap_or_else(|| open.workspace.clone());
@@ -961,7 +1030,9 @@ fn connector_frame(app: &App, conn: u64, device: &DeviceRow, frame: RawClientFra
                 }
                 Err(error) => {
                     let error = error.unwrap_or_else(|| unreachable(app, &open.workspace));
+                    let why = format!("by the nexus: {}", error.message);
                     app.hub.reply(conn, RawServerFrame::TunnelClosed(TunnelClosed { id: open.id, error: Some(error) }));
+                    write_tunnel_audit(app, TunnelAudit { what: "tunnel-refused", device: device.id.clone(), workspace: open.workspace.clone(), why });
                 }
             }
         }

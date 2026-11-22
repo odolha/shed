@@ -54,6 +54,10 @@ pub struct Options {
     /// `shed.toml`: the link stops when its `[nexus]` table changes, so the
     /// keeper starts it again with the new settings.
     pub config_file: Option<PathBuf>,
+    /// The `[nexus]` table `policy` and `desktop_clients` were read from,
+    /// in the same read: what changes are told by (read again, it could
+    /// already differ from what the link runs with).
+    pub settings: Option<shed_model::config::NexusConfig>,
     /// Shed's desktop app on other computers may open tunnels to the keeper
     /// (`[nexus] desktop_clients`; with full control only).
     pub desktop_clients: bool,
@@ -109,6 +113,7 @@ pub fn main() -> i32 {
         status_file: Some(shed_model::paths::link_status_path()),
         config_file: Some(shed_model::config::Config::path()),
         desktop_clients: config.nexus.desktop_clients,
+        settings: Some(config.nexus.clone()),
     };
     let rt = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
         Ok(rt) => rt,

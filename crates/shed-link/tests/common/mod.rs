@@ -77,7 +77,12 @@ pub fn link(env: &Env, url: String, token: &str, policy: Policy) -> tokio::task:
 
 /// A link that may let Shed's desktop app in (`desktop_clients`).
 pub fn link_with(env: &Env, url: String, token: &str, policy: Policy, desktop_clients: bool) -> tokio::task::JoinHandle<anyhow::Result<shed_link::Exit>> {
-    let opts = shed_link::Options {
+    tokio::spawn(shed_link::run(options(env, url, token, policy, desktop_clients)))
+}
+
+/// A link's options, to change before running it.
+pub fn options(env: &Env, url: String, token: &str, policy: Policy, desktop_clients: bool) -> shed_link::Options {
+    shed_link::Options {
         socket: env.socket.clone(),
         url,
         token: token.into(),
@@ -89,8 +94,8 @@ pub fn link_with(env: &Env, url: String, token: &str, policy: Policy, desktop_cl
         status_file: Some(env.dir.join("link.json")),
         config_file: None,
         desktop_clients,
-    };
-    tokio::spawn(shed_link::run(opts))
+        settings: None,
+    }
 }
 
 pub type Socket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;

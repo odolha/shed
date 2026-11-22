@@ -15,7 +15,7 @@ use shed_api::{ApiError, ErrorCode};
 use shed_model::{BenchId, PaneId, Shed, TabId};
 use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, PegboardInfo};
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::calls::{self, Ask, Ctx, forbidden_private, not_found};
 use crate::nexus::{self, Dial, NexusEvent};
@@ -46,14 +46,16 @@ pub async fn run(opts: Options) -> anyhow::Result<Exit> {
     let (tree_tx, tree_rx) = watch::channel(Arc::new(Shed::default()));
     let (ask_tx, mut ask_rx) = mpsc::unbounded_channel();
     let ctx = Arc::new(Ctx::new(keeper.clone(), opts.socket.clone(), tree_rx, ask_tx, opts.logbook.clone(), opts.pictures.clone(), opts.uploads.clone()));
+    // Unbounded in frames; tunnels' data in it is bounded in bytes (`Backlog`).
     let (nexus_tx, mut nexus_rx) = mpsc::unbounded_channel();
+    let backlog = crate::nexus::Backlog::default();
     let hello = LinkHello { api: shed_api::API_VERSION, version: env!("CARGO_PKG_VERSION").into(), policy: opts.policy };
-    let dial = Dial { url: url.clone(), token: opts.token.clone(), hello, tls };
+    let dial = Dial { url: url.clone(), token: opts.token.clone(), hello, tls, backlog: backlog.clone() };
     let nexus_task = tokio::spawn(nexus::run(dial, nexus_tx));
     info!(nexus = %url, policy = ?opts.policy, "link starting");
 
     let (tunnels, mut tunnel_ended) = Tunnels::new(&opts.socket);
-    let mut link = Link::new(ctx, tree_tx, opts, tunnels);
+    let mut link = Link::new(ctx, tree_tx, opts, tunnels, backlog);
     link.status("connecting", None);
     keeper.send_msg(ClientMsg::Status);
     link.ask_pegboard();
@@ -163,18 +165,22 @@ struct Link {
     held: HashMap<PaneId, (u16, u16)>,
     conversations: HashMap<TabId, Conversation>,
     notifier: Notifier,
+    /// The `[nexus]` settings the link runs with; another in `shed.toml`
+    /// stops it, to start again with them.
     nexus_config: shed_model::config::NexusConfig,
     config_checked: Instant,
+    /// `shed.toml` read when last checked: while it does not, new tunnels
+    /// are refused (whether desktops may come in is not known).
+    config_reads: bool,
+    /// Tunnel data from the nexus not taken yet.
+    backlog: crate::nexus::Backlog,
 }
 
 impl Link {
-    fn new(ctx: Arc<Ctx>, tree_tx: watch::Sender<Arc<Shed>>, opts: Options, tunnels: Tunnels) -> Link {
-        let nexus_config = opts
-            .config_file
-            .as_ref()
-            .and_then(|p| shed_model::config::Config::load_from(p).ok())
-            .map(|c| c.nexus)
-            .unwrap_or_default();
+    fn new(ctx: Arc<Ctx>, tree_tx: watch::Sender<Arc<Shed>>, opts: Options, tunnels: Tunnels, backlog: crate::nexus::Backlog) -> Link {
+        // From the same read as the policy: reading again here could see a
+        // newer file and miss that the link runs with older settings.
+        let nexus_config = opts.settings.clone().unwrap_or_default();
         let mut host = [0u8; 256];
         // SAFETY: the buffer is writable for its whole length.
         let host = if unsafe { libc::gethostname(host.as_mut_ptr().cast(), host.len()) } == 0 {
@@ -209,6 +215,8 @@ impl Link {
             notifier: Notifier::default(),
             nexus_config,
             config_checked: Instant::now(),
+            config_reads: true,
+            backlog,
             opts,
         }
     }
@@ -482,30 +490,43 @@ impl Link {
                 NexusFrame::Request(r) => self.request(r.id, r.call),
                 NexusFrame::Subscribe(s) => self.subscribe(s.id, s.topic),
                 NexusFrame::Unsubscribe(u) => self.unsubscribe(u.id),
-                NexusFrame::TunnelOpen(t) => self.tunnel_open(t.id),
+                NexusFrame::TunnelOpen(t) => self.tunnel_open(t.id, t.device.map(|d| shed_proto::TunnelDevice { id: d.id, name: d.name })),
                 NexusFrame::TunnelClose(t) => self.tunnels.close(t.id),
                 NexusFrame::Welcome(_) | NexusFrame::Goodbye(_) => {}
             },
-            NexusEvent::Data(id, bytes) => self.tunnels.data(id, bytes, self.out.as_ref()),
+            NexusEvent::Data(id, bytes) => {
+                self.backlog.taken(bytes.len());
+                self.tunnels.data(id, bytes, self.out.as_ref());
+            }
+            NexusEvent::Overflow(id) => {
+                warn!(id, "a tunnel sent more than the link keeps waiting; it was closed");
+                self.tunnels.close(id);
+                let error = ApiError::new(ErrorCode::Failed, "the workspace's link could not keep up; the tunnel was closed");
+                self.send(LinkFrame::TunnelClosed(shed_api::wire::TunnelClosed { id, error: Some(error) }));
+            }
         }
         None
     }
 
     /// A desktop asks for a tunnel to the keeper: only if this workspace
     /// lets desktops in, with full control.
-    fn tunnel_open(&mut self, id: u32) {
+    fn tunnel_open(&mut self, id: u32, device: Option<shed_proto::TunnelDevice>) {
         let (Some(out), Some(data)) = (self.out.clone(), self.data.clone()) else { return };
+        let who = device.as_ref().map_or_else(|| "a desktop".to_string(), |d| format!("{} ({})", d.name, d.id));
         let refuse = |why: &str| {
-            info!("a desktop's tunnel refused: {why}");
+            info!("{who}'s tunnel refused: {why}");
             let _ = out.send(LinkFrame::TunnelClosed(shed_api::wire::TunnelClosed { id, error: Some(ApiError::new(ErrorCode::Forbidden, why)) }));
         };
+        if !self.config_reads {
+            return refuse("this workspace's shed.toml does not read; desktops are let in again once it does");
+        }
         if !self.opts.desktop_clients {
             return refuse("this workspace does not let Shed's desktop app in ([nexus] desktop_clients = true in its shed.toml)");
         }
         if self.opts.policy != Policy::Full {
             return refuse("this workspace lets connectors look only ([nexus] control = \"view\"); desktops need full control");
         }
-        self.tunnels.open(id, None, out, data);
+        self.tunnels.open(id, device, out, data);
     }
 
     /// The nexus is gone: every subscription with it, and every tunnel.
@@ -770,11 +791,25 @@ impl Link {
         // The settings changed: start again with them (the keeper does).
         if now.duration_since(self.config_checked) > Duration::from_secs(2) {
             self.config_checked = now;
-            if let Some(path) = &self.opts.config_file
-                && let Ok(config) = shed_model::config::Config::load_from(path)
-                && config.nexus != self.nexus_config
-            {
-                return Some(Exit::Restart);
+            if let Some(path) = &self.opts.config_file {
+                match shed_model::config::Config::load_from(path) {
+                    Ok(config) => {
+                        if !self.config_reads {
+                            info!("shed.toml reads again");
+                            self.config_reads = true;
+                        }
+                        if config.nexus != self.nexus_config {
+                            return Some(Exit::Restart);
+                        }
+                    }
+                    // Fail closed: no new tunnels while it does not read.
+                    Err(e) => {
+                        if self.config_reads {
+                            warn!("shed.toml does not read ({e}); desktops' new tunnels are refused until it does");
+                            self.config_reads = false;
+                        }
+                    }
+                }
             }
         }
         None

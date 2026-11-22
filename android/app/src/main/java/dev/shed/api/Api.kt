@@ -1190,6 +1190,21 @@ data class LinkHello (
 	val policy: Policy
 )
 
+/// A device that opened a tunnel, as the nexus knows it.
+@Serializable
+data class TunnelDevice (
+	val id: String,
+	val name: String
+)
+
+/// The nexus asks a link for a tunnel under `id`, for `device`.
+@Serializable
+data class LinkTunnelOpen (
+	val id: UInt,
+	/// The desktop that opened it (from older nexuses: not said).
+	val device: TunnelDevice? = null
+)
+
 @Serializable
 data class LinkWelcome (
 	val api: UInt,
@@ -2416,7 +2431,7 @@ sealed class NexusFrame {
 	/// A desktop connector wants a tunnel to the keeper, under this id.
 	@Serializable
 	@SerialName("TunnelOpen")
-	data class TunnelOpen(val content: TunnelId): NexusFrame()
+	data class TunnelOpen(val content: LinkTunnelOpen): NexusFrame()
 	/// The tunnel's connector went, or closed it.
 	@Serializable
 	@SerialName("TunnelClose")

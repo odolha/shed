@@ -75,6 +75,26 @@ pub struct TunnelId {
     pub id: u32,
 }
 
+/// The nexus asks a link for a tunnel under `id`, for `device`.
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkTunnelOpen {
+    pub id: u32,
+    /// The desktop that opened it (from older nexuses: not said).
+    #[serde(default)]
+    pub device: Option<TunnelDevice>,
+}
+
+/// A device that opened a tunnel, as the nexus knows it.
+#[typeshare]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelDevice {
+    pub id: String,
+    pub name: String,
+}
+
 /// A tunnel ended (or never opened): `error` says why, if it was not asked for.
 #[typeshare]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -317,7 +337,7 @@ pub enum NexusFrame {
     /// Closing: the workspace was removed, or its API version is not accepted.
     Goodbye(ApiError),
     /// A desktop connector wants a tunnel to the keeper, under this id.
-    TunnelOpen(TunnelId),
+    TunnelOpen(LinkTunnelOpen),
     /// The tunnel's connector went, or closed it.
     TunnelClose(TunnelId),
 }

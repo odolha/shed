@@ -8,6 +8,20 @@ use shed_api::ErrorCode;
 use shed_api::http::{AuditEntry, Device, DeviceKind, Revoke};
 use shed_api::wire::*;
 
+/// Waits for the audit log to have an entry `pick` takes (tunnels' ends are
+/// written by a task of their own).
+async fn audited(nexus: &Nexus, account: &Account, what: &str, detail: &str) {
+    let mut audit: Vec<AuditEntry> = Vec::new();
+    for _ in 0..100 {
+        audit = nexus.get("/api/v1/audit", &account.browser).await;
+        if audit.iter().any(|e| e.what == what && e.detail.contains(detail)) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("no {what} with {detail:?} in {audit:?}");
+}
+
 fn tunnel_closed(frame: ServerFrame) -> Option<TunnelClosed> {
     match frame {
         ServerFrame::TunnelClosed(c) => Some(c),
@@ -25,7 +39,11 @@ async fn a_desktop_tunnel_carries_bytes_both_ways() {
     let (mut app, _) = connector(&nexus, &desktop).await;
 
     send(&mut app, &ClientFrame::TunnelOpen(TunnelOpen { id: 9, workspace: workspace.clone() })).await;
-    let NexusFrame::TunnelOpen(TunnelId { id: nid }) = next(&mut link).await else { panic!("no tunnel asked for") };
+    let NexusFrame::TunnelOpen(LinkTunnelOpen { id: nid, device }) = next(&mut link).await else { panic!("no tunnel asked for") };
+    // The link is told which desktop it is.
+    let devices: Vec<Device> = nexus.get("/api/v1/devices", &account.browser).await;
+    let me = devices.iter().find(|d| d.kind == DeviceKind::Desktop).unwrap();
+    assert_eq!(device, Some(TunnelDevice { id: me.id.clone(), name: "Shed on laptop".into() }));
     send(&mut link, &LinkFrame::TunnelOpened(TunnelId { id: nid })).await;
     let opened = until(&mut app, |f| match f {
         ServerFrame::TunnelOpened(t) => Some(t),
@@ -52,19 +70,22 @@ async fn a_desktop_tunnel_carries_bytes_both_ways() {
     send(&mut app, &ClientFrame::TunnelClose(TunnelId { id: 9 })).await;
     assert_eq!(next::<NexusFrame>(&mut link).await, NexusFrame::TunnelClose(TunnelId { id: nid }));
     assert_eq!(until(&mut app, tunnel_closed).await, TunnelClosed { id: 9, error: None });
+    audited(&nexus, &account, "tunnel-close", "desk: by the desktop").await;
 
     // The link closes one: the connector hears, with why.
     send(&mut app, &ClientFrame::TunnelOpen(TunnelOpen { id: 11, workspace: workspace.clone() })).await;
-    let NexusFrame::TunnelOpen(TunnelId { id: nid }) = next(&mut link).await else { panic!() };
+    let NexusFrame::TunnelOpen(LinkTunnelOpen { id: nid, .. }) = next(&mut link).await else { panic!() };
     let refused = shed_api::ApiError::new(ErrorCode::Forbidden, "desktop clients are off");
     send(&mut link, &LinkFrame::TunnelClosed(TunnelClosed { id: nid, error: Some(refused.clone()) })).await;
     assert_eq!(until(&mut app, tunnel_closed).await, TunnelClosed { id: 11, error: Some(refused) });
+    audited(&nexus, &account, "tunnel-refused", "desktop clients are off").await;
 
     // The connector goes: its tunnels close at the link.
     send(&mut app, &ClientFrame::TunnelOpen(TunnelOpen { id: 12, workspace: workspace.clone() })).await;
-    let NexusFrame::TunnelOpen(TunnelId { id: nid }) = next(&mut link).await else { panic!() };
+    let NexusFrame::TunnelOpen(LinkTunnelOpen { id: nid, .. }) = next(&mut link).await else { panic!() };
     drop(app);
     assert_eq!(next::<NexusFrame>(&mut link).await, NexusFrame::TunnelClose(TunnelId { id: nid }));
+    audited(&nexus, &account, "tunnel-close", "the desktop's connection ended").await;
 }
 
 #[tokio::test]
@@ -79,6 +100,7 @@ async fn only_desktops_open_tunnels() {
     send(&mut app, &ClientFrame::TunnelOpen(TunnelOpen { id: 1, workspace: workspace.clone() })).await;
     let closed = until(&mut app, tunnel_closed).await;
     assert_eq!((closed.id, closed.error.unwrap().code), (1, ErrorCode::Forbidden));
+    audited(&nexus, &account, "tunnel-refused", "a phone may not").await;
     // Nothing reached the link: the next frame it gets is the request after.
     send(&mut app, &ClientFrame::Request(Request { id: 2, workspace, call: shed_api::calls::Call::Previews })).await;
     assert!(matches!(next::<NexusFrame>(&mut link).await, NexusFrame::Request(_)));
@@ -101,20 +123,22 @@ async fn tunnels_close_when_the_workspace_goes_or_the_desktop_is_revoked() {
     send(&mut app, &ClientFrame::TunnelOpen(TunnelOpen { id: 1, workspace: workspace.clone() })).await;
     let closed = until(&mut app, tunnel_closed).await;
     assert_eq!((closed.id, closed.error.unwrap().code), (1, ErrorCode::Offline));
+    audited(&nexus, &account, "tunnel-refused", "offline").await;
 
     // The workspace goes while a tunnel is open.
     let mut ws = link(&nexus, &token).await;
     send(&mut app, &ClientFrame::TunnelOpen(TunnelOpen { id: 2, workspace: workspace.clone() })).await;
-    let NexusFrame::TunnelOpen(TunnelId { id: nid }) = next(&mut ws).await else { panic!() };
+    let NexusFrame::TunnelOpen(LinkTunnelOpen { id: nid, .. }) = next(&mut ws).await else { panic!() };
     send(&mut ws, &LinkFrame::TunnelOpened(TunnelId { id: nid })).await;
     drop(ws);
     let closed = until(&mut app, tunnel_closed).await;
     assert_eq!((closed.id, closed.error.unwrap().code), (2, ErrorCode::Offline));
+    audited(&nexus, &account, "tunnel-close", "the workspace went offline").await;
 
     // Revoking the desktop ends its connection, and the tunnel with it.
     let mut ws = link(&nexus, &token).await;
     send(&mut app, &ClientFrame::TunnelOpen(TunnelOpen { id: 3, workspace: workspace.clone() })).await;
-    let NexusFrame::TunnelOpen(TunnelId { id: nid }) = next(&mut ws).await else { panic!() };
+    let NexusFrame::TunnelOpen(LinkTunnelOpen { id: nid, .. }) = next(&mut ws).await else { panic!() };
     let devices: Vec<Device> = nexus.get("/api/v1/devices", &account.browser).await;
     let id = devices.iter().find(|d| d.kind == DeviceKind::Desktop).unwrap().id.clone();
     let revoke = Revoke { device: id, totp: account.auth.code().await };
@@ -132,7 +156,7 @@ async fn a_tunnel_that_cannot_keep_up_is_closed() {
     let desktop = desktop_token(&nexus, &mut account).await;
     let (mut app, _) = connector(&nexus, &desktop).await;
     send(&mut app, &ClientFrame::TunnelOpen(TunnelOpen { id: 1, workspace })).await;
-    let NexusFrame::TunnelOpen(TunnelId { id: nid }) = next(&mut ws).await else { panic!() };
+    let NexusFrame::TunnelOpen(LinkTunnelOpen { id: nid, .. }) = next(&mut ws).await else { panic!() };
     send(&mut ws, &LinkFrame::TunnelOpened(TunnelId { id: nid })).await;
     // The desktop reads nothing while the workspace sends far more than the
     // nexus keeps waiting for it.

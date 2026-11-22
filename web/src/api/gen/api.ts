@@ -975,6 +975,19 @@ export interface LinkHello {
 	policy: Policy;
 }
 
+/** A device that opened a tunnel, as the nexus knows it. */
+export interface TunnelDevice {
+	id: string;
+	name: string;
+}
+
+/** The nexus asks a link for a tunnel under `id`, for `device`. */
+export interface LinkTunnelOpen {
+	id: number;
+	/** The desktop that opened it (from older nexuses: not said). */
+	device?: TunnelDevice | null;
+}
+
 export interface LinkWelcome {
 	api: number;
 	nexus: string;
@@ -1895,7 +1908,7 @@ export type NexusFrame =
 	/** Closing: the workspace was removed, or its API version is not accepted. */
 	| { type: "Goodbye", content: ApiError }
 	/** A desktop connector wants a tunnel to the keeper, under this id. */
-	| { type: "TunnelOpen", content: TunnelId }
+	| { type: "TunnelOpen", content: LinkTunnelOpen }
 	/** The tunnel's connector went, or closed it. */
 	| { type: "TunnelClose", content: TunnelId };
 

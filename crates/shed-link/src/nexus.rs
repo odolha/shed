@@ -2,7 +2,9 @@
 //! dialled again after a drop, waiting longer each time (1 s up to a
 //! minute). Frames are JSON text, one message each.
 
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -21,8 +23,12 @@ pub(crate) enum NexusEvent {
     /// messages, `[id][bytes]`) to `data`, until `Disconnected`.
     Connected { out: mpsc::UnboundedSender<LinkFrame>, data: mpsc::Sender<Vec<u8>>, welcome: LinkWelcome },
     Frame(NexusFrame),
-    /// A tunnel's data from the nexus.
+    /// A tunnel's data from the nexus (counted in the `Backlog` until the
+    /// link takes it).
     Data(u32, Vec<u8>),
+    /// A tunnel's data would have gone past `DATA_BACKLOG`: dropped, and
+    /// the tunnel with it (its later data is dropped too).
+    Overflow(u32),
     /// A request or subscription this link does not understand (from a
     /// newer API): answered `Unsupported`.
     Unknown { request: Option<u32>, sub: Option<u32> },
@@ -41,6 +47,64 @@ pub(crate) struct Dial {
     pub token: String,
     pub hello: LinkHello,
     pub tls: Arc<rustls::ClientConfig>,
+    pub backlog: Backlog,
+}
+
+/// Tunnel data from the nexus waiting for the link to take it, at most, in
+/// bytes: past it, the tunnel that would add more is dropped rather than
+/// buffered without end (the nexus allows each connection as much).
+pub(crate) const DATA_BACKLOG: usize = 8 * 1024 * 1024;
+
+/// Bytes of tunnel data sent to the link and not taken yet.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Backlog(Arc<AtomicUsize>);
+
+impl Backlog {
+    /// The link took `n` bytes.
+    pub(crate) fn taken(&self, n: usize) {
+        self.0.fetch_sub(n, Ordering::AcqRel);
+    }
+}
+
+/// Lets tunnel data through while the backlog has room.
+struct Gate {
+    backlog: Backlog,
+    limit: usize,
+    /// Tunnels dropped for going past it.
+    dropped: HashSet<u32>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Admit {
+    Pass,
+    /// Past the limit: the tunnel is dropped (said once).
+    Overflow,
+    /// A dropped tunnel's data.
+    Drop,
+}
+
+impl Gate {
+    fn new(backlog: Backlog, limit: usize) -> Gate {
+        Gate { backlog, limit, dropped: HashSet::new() }
+    }
+
+    fn admit(&mut self, id: u32, len: usize) -> Admit {
+        if self.dropped.contains(&id) {
+            return Admit::Drop;
+        }
+        // Only this task adds, so the room seen is there.
+        if self.backlog.0.load(Ordering::Acquire) + len > self.limit {
+            self.dropped.insert(id);
+            return Admit::Overflow;
+        }
+        self.backlog.0.fetch_add(len, Ordering::AcqRel);
+        Admit::Pass
+    }
+
+    /// The nexus opened tunnel `id` (again): its data counts anew.
+    fn opened(&mut self, id: u32) {
+        self.dropped.remove(&id);
+    }
 }
 
 /// Connects, and connects again, until refused or until `events` closes.
@@ -128,6 +192,7 @@ async fn session(dial: &Dial, events: &mpsc::UnboundedSender<NexusEvent>) -> Res
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.tick().await;
     let gone = |why: String| Ended::Lost { why, welcomed: true };
+    let mut gate = Gate::new(dial.backlog.clone(), DATA_BACKLOG);
     loop {
         tokio::select! {
             msg = stream.next() => match msg {
@@ -136,13 +201,22 @@ async fn session(dial: &Dial, events: &mpsc::UnboundedSender<NexusEvent>) -> Res
                 Some(Ok(Message::Close(frame))) => return Err(gone(format!("closed by the nexus{}", frame.map(|f| format!(": {}", f.reason)).unwrap_or_default()))),
                 Some(Ok(Message::Binary(b))) => {
                     let Some((id, bytes)) = shed_api::wire::split_tunnel_data(&b) else { continue };
-                    if events.send(NexusEvent::Data(id, bytes.to_vec())).is_err() {
+                    let event = match gate.admit(id, bytes.len()) {
+                        Admit::Pass => NexusEvent::Data(id, bytes.to_vec()),
+                        Admit::Overflow => NexusEvent::Overflow(id),
+                        Admit::Drop => continue,
+                    };
+                    if events.send(event).is_err() {
                         return Ok(());
                     }
                 }
                 Some(Ok(m)) => {
                     let event = match parse(m) {
                         Some(Ok(NexusFrame::Goodbye(e))) => return Err(Ended::Refused(e)),
+                        Some(Ok(NexusFrame::TunnelOpen(open))) => {
+                            gate.opened(open.id);
+                            NexusEvent::Frame(NexusFrame::TunnelOpen(open))
+                        }
                         Some(Ok(frame)) => NexusEvent::Frame(frame),
                         Some(Err((request, sub))) => NexusEvent::Unknown { request, sub },
                         None => continue,
@@ -204,5 +278,32 @@ fn parse(msg: Message) -> Option<Result<NexusFrame, Unknown>> {
                 _ => None,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tunnel_data_past_the_backlog_drops_its_tunnel() {
+        let backlog = Backlog::default();
+        let mut gate = Gate::new(backlog.clone(), 100);
+        assert_eq!(gate.admit(1, 60), Admit::Pass);
+        assert_eq!(gate.admit(2, 30), Admit::Pass);
+        // Tunnel 1 would go past it: dropped, and its data after.
+        assert_eq!(gate.admit(1, 20), Admit::Overflow);
+        assert_eq!(gate.admit(1, 1), Admit::Drop);
+        // Others carry on while there is room.
+        assert_eq!(gate.admit(2, 10), Admit::Pass);
+        assert_eq!(gate.admit(2, 1), Admit::Overflow);
+        // The link takes what came; a tunnel opened again counts anew.
+        backlog.taken(100);
+        assert_eq!(gate.admit(1, 50), Admit::Drop);
+        gate.opened(1);
+        assert_eq!(gate.admit(1, 50), Admit::Pass);
+        // A single piece larger than the whole backlog never passes.
+        gate.opened(3);
+        assert_eq!(gate.admit(3, 101), Admit::Overflow);
     }
 }
