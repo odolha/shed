@@ -142,7 +142,10 @@ Going to one of its tabs opens the bench.
 
 Type in the field at the top to filter: by bench, tab, tag, folder or the program
 running. Up and Down move through the tabs shown; Enter goes to the selected one;
-Escape clears the filter.
+Escape clears the filter. The toggle beside the field, **Open benches only**,
+leaves closed benches out of the list (hidden ones, still running, stay); the
+filter and the keys then work on what is left. Shed remembers it (`open_only`
+under `[pegboard]` in `shed.toml`).
 
 **Order**: drag a bench by its grip (the dots left of its colour) onto another
 bench to put it there, or use **Move Up** and **Move Down** in its menu. The order
@@ -1485,6 +1488,9 @@ integration = true             # load Shed's bash or zsh integration into its sh
 
 [macos]
 option_as_alt = false          # Option sends Alt to the shell instead of typing é, @, …
+
+[pegboard]
+open_only = false              # the Shed window lists open benches only (the toggle beside its filter)
 
 [desktop]
 taskbar_follows_workspace = false  # Cinnamon, GNOME: each workspace keeps its own pinned benches

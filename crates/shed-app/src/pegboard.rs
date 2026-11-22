@@ -109,6 +109,8 @@ pub struct Pegboard {
     /// keeps, never from `AppState`, so that changes it does not show (a
     /// title it does not draw, a terminal's size) draw nothing.
     ui: UiColors,
+    /// Only open benches are listed ("Open benches only"), as of the last `sync`.
+    open_only: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -274,6 +276,7 @@ impl Pegboard {
             cards: HashMap::new(),
             shown: Vec::new(),
             ui,
+            open_only: false,
             _subscriptions: subscriptions,
         };
         board.sync(cx);
@@ -346,10 +349,14 @@ impl Pegboard {
             }
         }
         self.cards.retain(|id, _| ids.contains(id));
-        let ui = self.state.read(cx).settings.ui.clone();
-        if ids != self.shown || ui != self.ui {
+        let (ui, open_only) = {
+            let settings = &self.state.read(cx).settings;
+            (settings.ui.clone(), settings.config.pegboard.open_only)
+        };
+        if ids != self.shown || ui != self.ui || open_only != self.open_only {
             self.shown = ids;
             self.ui = ui;
+            self.open_only = open_only;
             cx.notify();
         }
     }
@@ -458,9 +465,7 @@ impl Pegboard {
         if id == to {
             return;
         }
-        let query = std::mem::take(&mut self.query);
-        let mut order: Vec<BenchId> = self.entries(cx).iter().map(|e| e.bench.id).collect();
-        self.query = query;
+        let mut order = self.order(cx);
         let (Some(from), Some(target)) = (order.iter().position(|b| *b == id), order.iter().position(|b| *b == to)) else { return };
         order.remove(from);
         order.insert(target, id);
@@ -473,13 +478,35 @@ impl Pegboard {
         cx.notify();
     }
 
-    /// Every bench in order, each with the tabs the filter matches.
+    /// Every bench in order, each with the tabs the filter matches; only
+    /// open ones while "Open benches only" is on.
     fn entries(&self, cx: &Context<Self>) -> Vec<Entry> {
+        let open_only = self.state.read(cx).settings.config.pegboard.open_only;
+        let mut entries = self.list(&self.query, cx);
+        if open_only {
+            entries.retain(|e| e.status != Status::Closed);
+        }
+        entries
+    }
+
+    /// Every bench in order, each with the tabs `query` matches.
+    fn list(&self, query: &str, cx: &Context<Self>) -> Vec<Entry> {
         let state = self.state.read(cx);
         let data = cx.try_global::<PegboardData>().map(|d| &d.0);
         let stored = data.map(|d| d.stored.as_slice()).unwrap_or_default();
         let order = data.map(|d| d.order.as_slice()).unwrap_or_default();
-        shed_client::pegboard::list(&state.tree, |b| state.has_window(b), stored, order, &self.query)
+        shed_client::pegboard::list(&state.tree, |b| state.has_window(b), stored, order, query)
+    }
+
+    /// Every bench's id in order, shown or not (moving one keeps the others' places).
+    fn order(&self, cx: &Context<Self>) -> Vec<BenchId> {
+        self.list("", cx).iter().map(|e| e.bench.id).collect()
+    }
+
+    /// Lists only open benches, or every one.
+    fn set_open_only(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.selected = 0;
+        self.state.update(cx, |state, cx| state.set_config_value(Some("pegboard"), "open_only", toml_edit::Value::from(on), cx));
     }
 
     /// Opens a bench, at `tab` if given: raises its window, gives a hidden
@@ -499,9 +526,7 @@ impl Pegboard {
 
     /// A bench as listed now (whatever the filter), by id.
     fn listed(&self, bench: BenchId, cx: &Context<Self>) -> Option<Entry> {
-        let state = self.state.read(cx);
-        let stored = cx.try_global::<PegboardData>().map(|d| d.0.stored.as_slice()).unwrap_or_default();
-        shed_client::pegboard::list(&state.tree, |b| state.has_window(b), stored, &[], "").into_iter().find(|e| e.bench.id == bench)
+        self.list("", cx).into_iter().find(|e| e.bench.id == bench)
     }
 
     /// Opens bench `bench` (see `open`).
@@ -732,9 +757,7 @@ impl Pegboard {
 
     /// Moves a bench one place up (-1) or down (1).
     fn move_bench_by(&mut self, id: BenchId, step: isize, cx: &mut Context<Self>) {
-        let query = std::mem::take(&mut self.query);
-        let order: Vec<BenchId> = self.entries(cx).iter().map(|e| e.bench.id).collect();
-        self.query = query;
+        let order = self.order(cx);
         let Some(at) = order.iter().position(|b| *b == id) else { return };
         let Some(to) = at.checked_add_signed(step).and_then(|i| order.get(i)) else { return };
         self.move_bench(id, *to, cx);
@@ -1693,13 +1716,37 @@ impl Render for Pegboard {
 }
 
 impl Pegboard {
+    /// "Open benches only": a mode toggle beside the filter.
+    fn open_only_toggle(&self, ui: &UiColors, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let on = self.open_only;
+        let tint = if on { ui.accent } else { ui.text_dim };
+        div()
+            .id("open-only")
+            .flex_none()
+            .px_1p5()
+            .py_0p5()
+            .rounded_md()
+            .border_1()
+            .border_color(hsla(if on { ui.accent } else { ui.divider }))
+            .cursor_pointer()
+            .when(on, |d| d.bg(hsla_alpha(ui.accent, 0.2)))
+            .when(!on, |d| d.hover(|s| s.bg(hsla(ui.tab_hover))))
+            .tooltip(menu::tooltip(if on { "Open benches only (on): closed benches are not listed" } else { "Open benches only: leave closed benches out of the list" }))
+            .child(svg().path(icon("open-only")).size(crate::theme::us(15.0)).text_color(hsla(tint)))
+            .on_click(cx.listener(move |this, _, _, cx| this.set_open_only(!on, cx)))
+    }
+
     fn render_board(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // From what `sync` kept: reading `AppState` here would draw the
         // window again at every change to it.
         let ui = self.ui.clone();
         let mut list = div().flex().flex_col().gap_3().children(self.shown.iter().filter_map(|id| self.cards.get(id).cloned()));
         if self.shown.is_empty() {
-            let empty = if self.query.is_empty() { "No benches yet. Make one with “New bench”." } else { "Nothing matches." };
+            let empty = match (self.query.is_empty(), self.open_only) {
+                (false, _) => "Nothing matches.",
+                (true, true) => "No open benches. Closed ones are listed with “Open benches only” off.",
+                (true, false) => "No benches yet. Make one with “New bench”.",
+            };
             list = list.child(div().text_color(hsla(ui.text_dim)).child(empty));
         }
 
@@ -1712,6 +1759,7 @@ impl Pegboard {
             .gap_2()
             .child(svg().path(icon("pegboard")).size(crate::theme::us(18.0)).text_color(hsla(ui.text_dim)))
             .child(div().flex_1().max_w(px(480.0)).text_size(crate::theme::us(14.0)).child(self.filter.clone()))
+            .child(self.open_only_toggle(&ui, cx))
             .child(
                 div()
                     .flex_1()
@@ -1827,6 +1875,61 @@ mod tests {
         assert_eq!(drawn(cx), [a + 1, w]);
         change(cx, &|tree| tree.benches[1].name = "website".into());
         assert_eq!(drawn(cx), [a + 1, w + 1]);
+    }
+
+    /// "Open benches only" leaves closed benches out, filter and keys
+    /// working on what is left.
+    #[gpui::test]
+    fn open_benches_only(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let state = cx.new(|_| AppState::new(shed_client::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default()));
+        let (api, old) = (bench("api", &[("~/api", None), ("~/api/db", None)]), bench("old", &[("~/old", None)]));
+        let (api_id, old_id) = (api.id, old.id);
+        state.update(cx, |s, cx| {
+            s.tree = shed_model::Shed { benches: vec![api], ..Default::default() };
+            cx.notify();
+        });
+        cx.update(|cx| {
+            let stored = vec![shed_proto::StoredBench { bench: old, saved: "2026-11-01T12:00:00Z".into() }];
+            cx.set_global(PegboardData(PegboardInfo { stored, previews: Vec::new(), order: Vec::new() }))
+        });
+        let st = state.clone();
+        let (board, cx) = cx.add_window_view(|window, cx| Pegboard::new(st, window, cx));
+        cx.run_until_parked();
+        let shown = |cx: &mut gpui::VisualTestContext| board.update(cx, |b, _| b.shown.clone());
+        assert_eq!(shown(cx), [api_id, old_id]);
+        let open_only = |cx: &mut gpui::VisualTestContext, on: bool| {
+            state.update(cx, |s, cx| {
+                s.settings.config.pegboard.open_only = on;
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+        open_only(cx, true);
+        assert_eq!(shown(cx), [api_id]);
+        // Keys move through the open benches' tabs only.
+        let flat_len = |cx: &mut gpui::VisualTestContext| board.update(cx, |b, cx| flat(&b.entries(cx)).len());
+        assert_eq!(flat_len(cx), 2);
+        // The filter applies to what is left.
+        let query = |cx: &mut gpui::VisualTestContext, text: &str| {
+            board.update(cx, |b, cx| {
+                b.query = text.into();
+                b.sync(cx);
+            })
+        };
+        query(cx, "old");
+        assert!(shown(cx).is_empty());
+        query(cx, "db");
+        assert_eq!(shown(cx), [api_id]);
+        query(cx, "");
+        open_only(cx, false);
+        assert_eq!(shown(cx), [api_id, old_id]);
+        // Moving a bench keeps the closed ones' places.
+        open_only(cx, true);
+        assert_eq!(board.update(cx, |b, cx| b.order(cx)), [api_id, old_id]);
     }
 
     #[test]

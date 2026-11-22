@@ -49,6 +49,17 @@ pub struct Config {
     pub keeper: KeeperSettings,
     /// How Shed fits the desktop (Linux).
     pub desktop: DesktopConfig,
+    /// The Shed window's list of benches.
+    pub pegboard: PegboardConfig,
+}
+
+/// The Shed window's list of benches (its toolbar switches these).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PegboardConfig {
+    /// Only open benches (with a window or hidden) are listed: closed
+    /// ones are left out.
+    pub open_only: bool,
 }
 
 /// How Shed fits the desktop's panel (Linux: Cinnamon and GNOME).
@@ -893,6 +904,17 @@ mod tests {
         assert!(text.contains("padding = 9 # mine"), "{text}");
         let config = Config::load_from(&path).unwrap();
         assert!(config.window.compact_pegboard && config.window.padding == 9.0);
+    }
+
+    #[test]
+    fn open_benches_only_is_remembered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shed.toml");
+        assert!(!Config::load_from(&path).unwrap_or_default().pegboard.open_only);
+        std::fs::write(&path, "theme = \"shed-dark\"\n").unwrap();
+        Config::set_value(&path, Some("pegboard"), "open_only", true.into()).unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert!(config.pegboard.open_only && config.theme.as_deref() == Some("shed-dark"));
     }
 
     #[test]
