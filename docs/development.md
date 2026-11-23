@@ -13,6 +13,17 @@ cargo build
 Release builds carry no debug info; `cargo build --profile profiling` keeps line
 tables, for profilers.
 
+**Install your build for daily use** (Linux): `tools/reinstall.sh` compiles
+Shed's own crates (and the vendored ones) again from scratch, whatever changed,
+builds `shed` and `shedd` together in release (in `target/install`, apart from
+dev builds), puts them in `~/.cargo/bin`, then offers to restart Shed so the
+keeper runs the new build too (`-y` restarts without asking, `--no-restart`
+does not, `--quick` keeps what cargo already compiled). The restart is `shed
+stop` (benches saved first; programs in Shed's terminals and Claude Code
+sessions stop) and a new `shed`, from a process of its own, so running it in a
+Shed terminal is fine; its output goes to `~/.local/state/shed/reinstall.log`.
+Bench launchers point at the new binaries once Shed starts.
+
 **Run a separate Shed beside your own**: everything Shed uses can be pointed
 elsewhere, so a development build never touches your real benches, settings or
 launchers.
