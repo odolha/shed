@@ -1152,8 +1152,15 @@ impl App {
     fn render_sessions(&mut self, f: &mut Frame, area: Rect, tab: TabId) {
         let c = self.colors.clone();
         let rows = self.session_rows(tab);
-        let current = self.ai_tab(tab).and_then(|a| a.session_key().map(String::from));
+        let ai = self.ai_tab(tab);
+        let current = ai.as_ref().and_then(|a| a.session_key().map(String::from));
+        let running: Vec<(String, shed_model::AiActivity)> = ai.iter().flat_map(|a| a.running()).map(|(s, a)| (s.to_string(), a)).collect();
         let Some(AiView { panel: Panel::Sessions(s), .. }) = self.ais.get_mut(&tab) else { return };
+        // Sessions Claude is at, here or in the background (a
+        // conversation's row stands for all its files).
+        let away_in = |id: &str, root: Option<&str>| {
+            running.iter().find(|(w, _)| w == id || root.is_some_and(|r| shed_ai::family_of(&s.list, w) == Some(r))).map(|(_, a)| *a)
+        };
         let head = Line::from(vec![
             Span::styled(" Sessions ", c.chip(c.accent)),
             Span::styled("  Enter open · n new · → its parts · r rename · D delete · / filter · Esc back", c.dim()),
@@ -1188,11 +1195,12 @@ impl App {
                         meta.push_str(&format!(" · {b}"));
                     }
                     let mine = current.as_deref().is_some_and(|c| c == tip.id || c == root.as_str());
-                    (fold.to_string(), tip.title.clone(), meta, mine)
+                    (fold.to_string(), tip.title.clone(), with_away(meta, away_in(&tip.id, Some(root))), mine)
                 }
                 SessionRow::Part(p) => {
                     let how = if p.parent.is_none() { "first".to_string() } else if p.branched { format!("↳ branched after #{}", p.from) } else { "↳ continued".to_string() };
-                    (format!("{}  ", "  ".repeat(p.depth + 1)), p.title.clone(), format!("{how} · {} · {} prompts", ago(p.modified), p.prompts), current.as_deref() == Some(p.id.as_str()))
+                    let meta = with_away(format!("{how} · {} · {} prompts", ago(p.modified), p.prompts), away_in(&p.id, None));
+                    (format!("{}  ", "  ".repeat(p.depth + 1)), p.title.clone(), meta, current.as_deref() == Some(p.id.as_str()))
                 }
                 SessionRow::Draft(d) => ("✎ ".to_string(), d.title.clone(), format!("draft · {} draft{}", d.drafts, if d.drafts == 1 { "" } else { "s" }), current.as_deref() == Some(d.key.as_str())),
             };
@@ -1206,6 +1214,16 @@ impl App {
             lines.push(line);
         }
         f.render_widget(Paragraph::new(lines), list);
+    }
+}
+
+/// A session row's details, saying first that Claude works on it (or
+/// waits for you there).
+fn with_away(meta: String, away: Option<shed_model::AiActivity>) -> String {
+    match away {
+        Some(shed_model::AiActivity::Waiting) => format!("waiting for you · {meta}"),
+        Some(_) => format!("working · {meta}"),
+        None => meta,
     }
 }
 

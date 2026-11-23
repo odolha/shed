@@ -12,4 +12,4 @@ mod tree;
 
 pub use color::{BenchColor, Rgb, TAG_COLORS, default_tag_color, tag_color};
 pub use ids::{BenchId, PaneId, TabId};
-pub use tree::{AiActivity, AiState, AiTab, Aliases, Draft, DraftSession, Bench, Held, Direction, Pane, PaneNode, PaneSetup, Project, ProjectLink, Queued, Rect, RemoteTab, Shed, SplitDir, Tab, TabDivider, TabKind, Tag, Tool, WindowPlace, WindowState, slug, split_rect};
+pub use tree::{AiActivity, AiAway, AiState, AiTab, Aliases, Draft, DraftSession, Bench, Held, Direction, Pane, PaneNode, PaneSetup, Project, ProjectLink, Queued, Rect, RemoteTab, Shed, SplitDir, Tab, TabDivider, TabKind, Tag, Tool, WindowPlace, WindowState, slug, split_rect};

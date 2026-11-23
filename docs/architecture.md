@@ -413,6 +413,19 @@ Claude Code's suggested rules for "for this session"); Stop is a `control_reques
 effort start a new one at the next prompt. `rate_limit_event`s carry the usage
 limits (`AiLimits`).
 
+Opening another session in the tab (`AiOpenSession`) stops the process unless
+Claude has something going on (`AiRt::has_work`: a turn, a sub-agent or
+background command running, a wake-up waiting). Then the conversation, process
+and all, moves to `State.ai_away` and goes on in the background; the tree lists
+those as `AiTab.away` (session id and activity, not saved). The sessions list
+marks every session Claude is at (`AiTab::running`: the shown one unless idle,
+and those away), and the tab's icon, the TUI and the link's notifications go by
+`AiTab::overall_activity`. Its events find it by the process's generation
+(`State::ai_of_process`); only the shown one sends queued messages or reaches
+windows. The flush loop stops one once it has nothing left to do (its session
+file has it all). Opening its session again moves it back as it is, without
+reading the file.
+
 The browser (Claude in Chrome) belongs to at most one AI tab (`AiTab.browser`;
 `ai_settings` clears it on every other tab, `load_bench` on a bench loaded
 while another tab has it). Claude Code runs with `--no-chrome`, and the

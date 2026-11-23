@@ -386,7 +386,11 @@ terminal of the bench.
   names it: Enter keeps the name, Escape leaves it, and an empty name gives
   Claude Code's own title back. The name is Claude Code's too (its `/rename`):
   it shows in `claude --resume`. Type to filter. Click one to show it and carry on with it; **New
-  Session** starts afresh. Right-click a session to continue it in a terminal
+  Session** starts afresh. A session Claude is at shows it in the list: the AI
+  mark and **working** (or **waiting for you**, when it asks something). One
+  still working when you open another goes on in the background until it is
+  done: its row keeps the mark, the tab's icon counts it too, and opening it
+  again shows it as it goes. Right-click a session to continue it in a terminal
   (`claude --resume`), in Claude Code's own interface. **Delete Session…** (in red,
   in the same menu) gets rid of a session you do not want: it asks first, saying
   its title, date and prompts, and the later sessions that continue it, which go

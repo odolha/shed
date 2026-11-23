@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use shed_ai::{State as AiState, Transcript};
-use shed_model::{AiActivity, AiTab, TabId, TabKind};
+use shed_model::{AiActivity, AiAway, AiTab, TabId, TabKind};
 use shed_proto::{AiChange, AiImage, Frame, KeeperMsg};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -112,6 +112,12 @@ impl AiRt {
         self.write(json!({"type": "control_request", "request_id": id, "request": request})).then_some(id)
     }
 
+    /// Its process runs and has something going on: it is kept running
+    /// when the tab shows another session.
+    pub(super) fn has_work(&self) -> bool {
+        self.input.is_some() && self.transcript.has_work()
+    }
+
     /// Stops the process (if any); events still on their way are ignored.
     fn stop(&mut self) {
         self._kill = None;
@@ -178,7 +184,50 @@ fn ai_tab(st: &State, tab: TabId) -> Option<AiTab> {
     st.tree.tab(tab).and_then(|t| t.ai_info()).cloned()
 }
 
+fn activity_of(state: AiState) -> AiActivity {
+    match state {
+        AiState::Idle => AiActivity::Idle,
+        AiState::Working => AiActivity::Working,
+        AiState::Waiting => AiActivity::Waiting,
+    }
+}
+
+/// Puts the sessions a tab's Claude Code goes on with in the background in
+/// the tree (the windows list them as working); whether that changed it.
+fn ai_away_to_tree(st: &mut State, tab: TabId) -> bool {
+    let away: Vec<AiAway> = st
+        .ai_away
+        .get(&tab)
+        .into_iter()
+        .flatten()
+        .filter_map(|rt| {
+            // Busy in the background between turns (an agent, a wake-up) counts as working.
+            let activity = match activity_of(rt.transcript.status.state) {
+                AiActivity::Idle => AiActivity::Working,
+                a => a,
+            };
+            Some(AiAway { session: rt.transcript.status.session.clone()?, activity })
+        })
+        .collect();
+    match st.tree.tab_mut(tab).map(|t| &mut t.kind) {
+        Some(TabKind::Ai(ai)) if ai.away != away => {
+            ai.away = away;
+            true
+        }
+        _ => false,
+    }
+}
+
 impl State {
+    /// The conversation process `generation` belongs to: the tab's shown
+    /// one, or one it moved away from (`true` when shown).
+    fn ai_of_process(&mut self, tab: TabId, generation: u64) -> Option<(&mut AiRt, bool)> {
+        if self.ai.get(&tab).is_some_and(|rt| rt.generation == generation) {
+            return self.ai.get_mut(&tab).map(|rt| (rt, true));
+        }
+        self.ai_away.get_mut(&tab)?.iter_mut().find(|rt| rt.generation == generation).map(|rt| (rt, false))
+    }
+
     /// Every window (and link) client, which shows any bench's AI tab.
     fn send_windows(&self, msg: KeeperMsg) {
         let frame: Arc<[u8]> = Frame::Keeper(msg).encode().into();
@@ -593,7 +642,7 @@ impl Keeper {
     fn ai_event(self: &Arc<Self>, tab: TabId, generation: u64, line: &str) {
         let Ok(v) = serde_json::from_str::<Value>(line) else { return };
         let mut st = self.lock();
-        let Some(rt) = st.ai.get_mut(&tab).filter(|rt| rt.generation == generation) else { return };
+        let Some((rt, shown)) = st.ai_of_process(tab, generation) else { return };
         let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
         if kind == "control_response" {
             let response = &v["response"];
@@ -619,7 +668,9 @@ impl Keeper {
                 let (commands, models) = shed_ai::parse_initialize(reply);
                 rt.commands = commands.clone();
                 rt.models = models.clone();
-                st.send_windows(KeeperMsg::AiInfo { tab, commands, models });
+                if shown {
+                    st.send_windows(KeeperMsg::AiInfo { tab, commands, models });
+                }
             }
             return;
         }
@@ -633,7 +684,8 @@ impl Keeper {
         let was_busy = rt.transcript.status.state != AiState::Idle;
         let limits = rt.transcript.apply(&v);
         let turn_ended = was_busy && rt.transcript.status.state == AiState::Idle && kind == "result";
-        if turn_ended {
+        // (The queue is the shown session's.)
+        if turn_ended && shown {
             self.send_next_queued(&mut st, tab);
         }
         if let Some(mut limits) = limits {
@@ -652,7 +704,16 @@ impl Keeper {
 
     fn ai_exited(&self, tab: TabId, generation: u64, status: Option<std::process::ExitStatus>) {
         let mut st = self.lock();
-        let Some(rt) = st.ai.get_mut(&tab).filter(|rt| rt.generation == generation) else { return };
+        let Some((rt, shown)) = st.ai_of_process(tab, generation) else { return };
+        if !shown {
+            // Gone in the background: its session file has what it did.
+            warn!(?tab, session = ?rt.transcript.status.session, "Claude Code stopped in the background");
+            if let Some(away) = st.ai_away.get_mut(&tab) {
+                away.retain(|rt| rt.generation != generation);
+            }
+            drop(st);
+            return self.ai_dirty.notify_one();
+        }
         let busy = rt.transcript.status.state != AiState::Idle;
         rt.input = None;
         rt._kill = None;
@@ -719,10 +780,18 @@ impl Keeper {
         self.ai_dirty.notify_one();
     }
 
-    /// Shows another session (or a new one) in the tab; the process stops
-    /// and starts again for it with the next prompt.
+    /// Shows another session (or a new one) in the tab. The one shown
+    /// before goes on in the background while Claude is at it (its process
+    /// kept, shown again when it is opened again); otherwise its process
+    /// stops, and one starts for the new session with the next prompt.
     pub(super) fn ai_open_session(self: &Arc<Self>, tab: TabId, session: Option<String>) {
         let mut st = self.lock();
+        let Some(TabKind::Ai(ai)) = st.tree.tab(tab).map(|t| &t.kind) else { return };
+        // The same session again, Claude at it: it stays as it is (else it
+        // is read again, as the files have it now).
+        if session.is_some() && session == ai.session && st.ai.get(&tab).is_some_and(AiRt::has_work) {
+            return;
+        }
         let Some(t) = st.tree.tab_mut(tab) else { return };
         let TabKind::Ai(ai) = &mut t.kind else { return };
         // A draft session has no Claude Code session yet: a new one starts
@@ -734,13 +803,43 @@ impl Keeper {
         ai.activity = AiActivity::Idle;
         let ai = ai.clone();
         if let Some(mut rt) = st.ai.remove(&tab) {
-            rt.stop();
+            if rt.has_work() {
+                info!(?tab, session = ?rt.transcript.status.session, "Claude Code goes on in the background");
+                st.ai_away.entry(tab).or_default().push(rt);
+            } else {
+                rt.stop();
+            }
         }
+        // Going on in the background: shown again as it is, process and all.
+        let back = ai.session.as_ref().and_then(|id| {
+            let away = st.ai_away.get_mut(&tab)?;
+            let i = away.iter().position(|rt| rt.transcript.status.session.as_ref() == Some(id))?;
+            Some(away.remove(i))
+        });
+        if let Some(mut rt) = back {
+            rt.transcript.touch_all();
+            let info = (!rt.commands.is_empty()).then(|| KeeperMsg::AiInfo { tab, commands: rt.commands.clone(), models: rt.models.clone() });
+            let activity = activity_of(rt.transcript.status.state);
+            st.ai.insert(tab, rt);
+            if let Some(TabKind::Ai(ai)) = st.tree.tab_mut(tab).map(|t| &mut t.kind) {
+                ai.activity = activity;
+            }
+            if let Some(info) = info {
+                st.send_windows(info);
+            }
+            ai_away_to_tree(&mut st, tab);
+            st.broadcast_tree();
+            drop(st);
+            self.save_soon.notify_one();
+            self.ai_dirty.notify_one();
+            return;
+        }
+        ai_away_to_tree(&mut st, tab);
         st.broadcast_tree();
         drop(st);
         self.save_soon.notify_one();
         // Read off the lock; windows get it whole once it is.
-        self.ai_load(tab, ai, move |keeper, st, transcript| {
+        self.ai_load(tab, *ai, move |keeper, st, transcript| {
             let Some(transcript) = transcript else { return };
             let mut rt = AiRt::new(transcript);
             rt.transcript.touch_all();
@@ -782,9 +881,12 @@ impl Keeper {
                 return keeper.lock().send(client, KeeperMsg::Error(format!("no session {session:?} in {}", ai.folder.display())));
             };
             let dir = shed_ai::sessions::sessions_dir(&ai.folder);
-            let shown_here = {
+            let (shown_here, stopped_away) = {
                 let mut st = keeper.lock();
-                let shows = |a: &AiTab| a.session.as_ref().is_some_and(|s| ids.contains(s)) && shed_ai::sessions::sessions_dir(&a.folder) == dir;
+                let shows = |a: &AiTab| {
+                    (a.session.as_ref().is_some_and(|s| ids.contains(s)) || a.away.iter().any(|w| ids.contains(&w.session)))
+                        && shed_ai::sessions::sessions_dir(&a.folder) == dir
+                };
                 let elsewhere = st.tree.benches.iter().flat_map(|b| &b.tabs).filter(|t| t.id != tab).filter_map(|t| t.ai_info()).any(shows);
                 if elsewhere {
                     return st.send(client, KeeperMsg::Error("That session is open in another tab; close it there first.".into()));
@@ -792,16 +894,26 @@ impl Keeper {
                 let Some(TabKind::Ai(here)) = st.tree.tab_mut(tab).map(|t| &mut t.kind) else {
                     return st.send(client, KeeperMsg::Error("no such AI tab".into()));
                 };
-                let shown = shows(here);
+                let shown = here.session.as_ref().is_some_and(|s| ids.contains(s));
                 // Their drafts have nothing to go with any more.
                 here.drafts.retain(|d| !ids.contains(&d.session));
+                // Going on in the background: they stop.
+                let mut stopped = false;
+                if let Some(away) = st.ai_away.get_mut(&tab) {
+                    let before = away.len();
+                    away.retain(|rt| rt.transcript.status.session.as_ref().is_none_or(|s| !ids.contains(s)));
+                    stopped = away.len() != before;
+                }
+                ai_away_to_tree(&mut st, tab);
                 if !shown {
                     st.broadcast_tree();
                 }
-                shown
+                (shown, stopped)
             };
             if shown_here {
                 keeper.ai_open_session(tab, None);
+            }
+            if shown_here || stopped_away {
                 // Its Claude Code, stopped, writes no more to the files.
                 tokio::time::sleep(Duration::from_millis(300)).await;
             }
@@ -985,6 +1097,26 @@ impl Keeper {
             let mut st = self.lock();
             let mut updates = Vec::new();
             let mut tree_changed = false;
+            // Those going on in the background that are done stop (their
+            // session files have it all; opening one again reads it).
+            let away_tabs: Vec<TabId> = st.ai_away.keys().copied().collect();
+            for tab in away_tabs {
+                let away = st.ai_away.get_mut(&tab).unwrap();
+                away.retain_mut(|rt| {
+                    // (Nobody sees its changes until it is shown again, whole.)
+                    rt.transcript.take_update();
+                    let keep = rt.has_work();
+                    if !keep {
+                        info!(?tab, session = ?rt.transcript.status.session, "Claude Code done in the background");
+                        rt.stop();
+                    }
+                    keep
+                });
+                if away.is_empty() {
+                    st.ai_away.remove(&tab);
+                }
+                tree_changed |= ai_away_to_tree(&mut st, tab);
+            }
             let tabs: Vec<TabId> = st.ai.keys().copied().collect();
             for tab in tabs {
                 let rt = st.ai.get_mut(&tab).unwrap();
@@ -999,11 +1131,7 @@ impl Keeper {
                     let entries = rt.transcript.entries[from.min(rt.transcript.entries.len())..].to_vec();
                     updates.push(KeeperMsg::AiUpdate { tab, from: from as u32, entries, status: rt.transcript.status.clone() });
                 }
-                let activity = match rt.transcript.status.state {
-                    AiState::Idle => AiActivity::Idle,
-                    AiState::Working => AiActivity::Working,
-                    AiState::Waiting => AiActivity::Waiting,
-                };
+                let activity = activity_of(rt.transcript.status.state);
                 let session = rt.transcript.status.session.clone();
                 if let Some(t) = st.tree.tab_mut(tab)
                     && let TabKind::Ai(ai) = &mut t.kind

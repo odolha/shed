@@ -38,9 +38,9 @@ impl Notifier {
                 };
                 if let Some(ai) = tab.ai_info() {
                     let before = self.activity.get(&tab.id).copied();
-                    activity.insert(tab.id, ai.activity);
+                    activity.insert(tab.id, ai.overall_activity());
                     if self.seen && !tab.private {
-                        match (before, ai.activity) {
+                        match (before, ai.overall_activity()) {
                             (Some(b), AiActivity::Waiting) if b != AiActivity::Waiting => out.push(at(NotificationKind::AiWaiting, "Claude waits for an answer")),
                             (Some(AiActivity::Working), AiActivity::Idle) => out.push(at(NotificationKind::AiDone, "Claude is done")),
                             _ => {}

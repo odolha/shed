@@ -984,7 +984,7 @@ impl App {
 
 /// A tab's state at a glance: an AI tab working (●) or waiting for you (!).
 fn tab_mark(tab: &Tab, state: Option<shed_ai::State>) -> &'static str {
-    let ai = tab.ai_info().map(|a| a.activity);
+    let ai = tab.ai_info().map(|a| a.overall_activity());
     match (state, ai) {
         (Some(shed_ai::State::Waiting), _) | (_, Some(shed_model::AiActivity::Waiting)) => "! ",
         (Some(shed_ai::State::Working), _) | (_, Some(shed_model::AiActivity::Working)) => "● ",

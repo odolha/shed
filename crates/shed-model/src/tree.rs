@@ -291,7 +291,8 @@ pub enum TabKind {
     #[default]
     Terminal,
     Project(Project),
-    Ai(AiTab),
+    // (Boxed: an AI tab carries much more than the others.)
+    Ai(Box<AiTab>),
     /// A shell on a server: a terminal tab whose pane joins the shell the
     /// server's keeper holds for `id`, over ssh, and joins it again when the
     /// bench opens.
@@ -342,6 +343,17 @@ pub struct AiTab {
     /// The draft session shown (one with drafts and no Claude Code session
     /// yet), when `session` is `None`: its key.
     pub draft_session: Option<String>,
+    /// Sessions the tab moved away from while Claude was still at them:
+    /// their Claude Code goes on in the background until done (not saved).
+    pub away: Vec<AiAway>,
+}
+
+/// A session Claude goes on with while the tab shows another.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiAway {
+    /// Claude Code's session id.
+    pub session: String,
+    pub activity: AiActivity,
 }
 
 /// A message kept to send later, and the session it belongs to: Claude
@@ -402,6 +414,24 @@ impl AiTab {
         for d in self.drafts.iter_mut().filter(|d| d.session == from) {
             d.session = to.to_string();
         }
+    }
+
+    /// Where the tab's conversations are, all told: waiting for the user
+    /// if any is, else working if any is (the one shown or one in the
+    /// background).
+    pub fn overall_activity(&self) -> AiActivity {
+        std::iter::once(self.activity).chain(self.away.iter().map(|a| a.activity)).max_by_key(|a| match a {
+            AiActivity::Idle => 0,
+            AiActivity::Working => 1,
+            AiActivity::Waiting => 2,
+        }).unwrap_or_default()
+    }
+
+    /// The sessions Claude is at, with where each is: the one shown (when
+    /// not idle) and those going on in the background.
+    pub fn running(&self) -> impl Iterator<Item = (&str, AiActivity)> {
+        let shown = self.session.as_deref().filter(|_| self.activity != AiActivity::Idle).map(|s| (s, self.activity));
+        shown.into_iter().chain(self.away.iter().map(|a| (a.session.as_str(), a.activity)))
     }
 
     /// The draft sessions, newest first (the order their first drafts were kept, reversed).
@@ -508,7 +538,7 @@ impl Tab {
     pub fn ai(folder: PathBuf) -> Self {
         let mut tab = Self::project(folder.clone());
         // Auto: Claude Code's safety check decides, so routine work does not wait.
-        tab.kind = TabKind::Ai(AiTab { folder, mode: "auto".into(), ..Default::default() });
+        tab.kind = TabKind::Ai(Box::new(AiTab { folder, mode: "auto".into(), ..Default::default() }));
         tab
     }
 
@@ -1049,6 +1079,21 @@ mod tests {
         assert_eq!(node.neighbor(c, Direction::Up), Some(b));
         assert_eq!(node.neighbor(c, Direction::Left), Some(a));
         assert_eq!(node.neighbor(a, Direction::Left), None);
+    }
+
+    #[test]
+    fn ai_sessions_running_here_and_in_the_background() {
+        let mut ai = AiTab { session: Some("a".into()), ..Default::default() };
+        assert_eq!(ai.running().count(), 0);
+        assert_eq!(ai.overall_activity(), AiActivity::Idle);
+        ai.away.push(AiAway { session: "b".into(), activity: AiActivity::Waiting });
+        assert_eq!(ai.running().collect::<Vec<_>>(), [("b", AiActivity::Waiting)]);
+        ai.activity = AiActivity::Working;
+        assert_eq!(ai.running().collect::<Vec<_>>(), [("a", AiActivity::Working), ("b", AiActivity::Waiting)]);
+        // Waiting for you anywhere is what the tab says.
+        assert_eq!(ai.overall_activity(), AiActivity::Waiting);
+        ai.away.clear();
+        assert_eq!(ai.overall_activity(), AiActivity::Working);
     }
 
     #[test]

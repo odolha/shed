@@ -359,6 +359,15 @@ impl Transcript {
         self.suggestions.remove(request);
     }
 
+    /// Claude has something going on: a turn, a run in the background (an
+    /// agent, a command) or a wake-up to come. Its process must live on
+    /// for it.
+    pub fn has_work(&self) -> bool {
+        self.status.state != State::Idle
+            || !self.status.timers.is_empty()
+            || self.entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.run.as_ref().is_some_and(|r| r.running())))
+    }
+
     /// The turn ended without a result (the process stopped). What it ran
     /// in the background stopped with it, and its timers will not fire.
     pub fn stopped(&mut self) {

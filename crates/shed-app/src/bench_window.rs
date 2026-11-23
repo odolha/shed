@@ -79,7 +79,8 @@ pub fn tab_icon(tab: &Tab, accent: Rgb, ui: &UiColors) -> (&'static str, Rgb) {
         ("tool-waiting", ui.ink(accent))
     } else if let Some(ai) = tab.ai_info() {
         let glyph = if ai.browser { "globe" } else { "ai" };
-        match ai.activity {
+        // (Sessions going on in the background count too.)
+        match ai.overall_activity() {
             shed_model::AiActivity::Waiting => ("tool-waiting", ui.ink(accent)),
             shed_model::AiActivity::Working => (glyph, ui.ink(accent)),
             shed_model::AiActivity::Idle => (glyph, if ai.browser { ui.text } else { ui.text_dim }),

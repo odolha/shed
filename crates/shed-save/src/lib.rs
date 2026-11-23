@@ -197,6 +197,7 @@ impl SavedAi {
             effort: self.effort.clone(),
             follow: self.follow,
             activity: Default::default(),
+            away: Vec::new(),
             drafts,
             draft_session,
             queued: self.queued.clone(),
@@ -408,7 +409,7 @@ impl SavedBench {
                 let mut tab = Tab::project(PathBuf::new());
                 tab.kind = match (&st.project, &st.ai) {
                     (Some(project), _) => TabKind::Project(project.to_project()),
-                    (None, Some(ai)) => TabKind::Ai(ai.to_ai()),
+                    (None, Some(ai)) => TabKind::Ai(Box::new(ai.to_ai())),
                     (None, None) => unreachable!(),
                 };
                 tab.id = st.id;

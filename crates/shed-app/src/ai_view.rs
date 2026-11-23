@@ -3363,6 +3363,21 @@ impl AiView {
                 if let Some((_, parts, _)) = &toggle {
                     meta.push(format!("{parts} parts"));
                 }
+                // Claude is at it, here or in the background (a
+                // conversation's row stands for all its files).
+                let away = self
+                    .ai
+                    .running()
+                    .find(|(id, _)| match row {
+                        SessionRow::Conversation { root, .. } => *id == s.id || self.family_of(id) == Some(root.as_str()),
+                        _ => *id == s.id,
+                    })
+                    .map(|(_, a)| a);
+                match away {
+                    Some(shed_model::AiActivity::Waiting) => meta.insert(0, "waiting for you".to_string()),
+                    Some(_) => meta.insert(0, "working".to_string()),
+                    None => {}
+                }
                 let drafts = self.ai.drafts.iter().filter(|d| d.session == s.id).count();
                 if drafts > 0 {
                     meta.push(format!("{drafts} draft{}", if drafts == 1 { "" } else { "s" }));
@@ -3394,6 +3409,11 @@ impl AiView {
                             let entries = this.session_menu(menu_id.clone(), delete.clone());
                             this.open_menu(e.position, entries, cx);
                         }))
+                        // Working in the background, or waiting for you there.
+                        .when_some(away, |d, a| {
+                            let glyph = if a == shed_model::AiActivity::Waiting { "tool-waiting" } else { "ai" };
+                            d.child(svg().flex_none().path(icon(glyph)).size(px(13.0 * z)).text_color(hsla(ui.ink(accent))))
+                        })
                         .child(
                             div()
                                 .flex_1()

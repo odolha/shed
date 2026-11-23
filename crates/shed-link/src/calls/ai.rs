@@ -16,7 +16,7 @@ use crate::keeper;
 fn ai_tab(tree: &Shed, tab: &str) -> Result<(TabId, shed_model::AiTab), ApiError> {
     let (id, t) = open_tab(tree, tab)?;
     match t.kind {
-        shed_model::TabKind::Ai(a) => Ok((id, a)),
+        shed_model::TabKind::Ai(a) => Ok((id, *a)),
         _ => Err(invalid("not an AI tab")),
     }
 }

@@ -124,7 +124,7 @@ pub(crate) fn tab(t: &Tab, held: &HashSet<PaneId>) -> api::Tab {
             model: a.model.clone(),
             mode: a.mode.clone(),
             effort: a.effort.clone(),
-            activity: activity(a.activity),
+            activity: activity(a.overall_activity()),
             drafts: a.drafts.iter().map(|d| api::AiDraft { session: d.session.clone(), text: d.text.clone() }).collect(),
             queued: a.queued.iter().map(|q| q.text.clone()).collect(),
             unsent: a.unsent.clone(),

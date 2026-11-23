@@ -158,6 +158,9 @@ struct State {
     dark: bool,
     /// Each AI tab's conversation and Claude Code process.
     ai: HashMap<TabId, ai::AiRt>,
+    /// Conversations a tab moved away from while Claude was at them: their
+    /// processes go on until done (`ai::AiRt::has_work`).
+    ai_away: HashMap<TabId, Vec<ai::AiRt>>,
     /// The account's usage limits, as Claude Code last reported them.
     ai_limits: Option<shed_ai::Limits>,
 }
@@ -375,6 +378,7 @@ impl Keeper {
                 shown: HashSet::new(),
                 dark: true,
                 ai: HashMap::new(),
+                ai_away: HashMap::new(),
                 // The last ones Claude Code reported, while still current.
                 ai_limits: std::fs::read_to_string(&limits_file)
                     .ok()
@@ -430,7 +434,11 @@ impl Keeper {
         autosave.abort();
         ai_flush.abort();
         link.abort();
-        self.lock().ai.clear();
+        {
+            let mut st = self.lock();
+            st.ai.clear();
+            st.ai_away.clear();
+        }
         self.finish();
         Ok(())
     }
@@ -1260,6 +1268,7 @@ impl Keeper {
         let tabs: Vec<TabId> = st.tree.bench(bench).map(|b| b.tabs.iter().map(|t| t.id).collect()).unwrap_or_default();
         for tab in tabs {
             st.ai.remove(&tab);
+            st.ai_away.remove(&tab);
         }
         // Its panes' exits will find no bench to report to: other programs
         // showing them (remote tabs' `shedd attach`, from other PCs) hear now.
@@ -2941,6 +2950,7 @@ fn apply_theme(st: &mut State) {
 fn close_paneless_tab(st: &mut State, tab: TabId) {
     let Some(bench) = st.tree.bench_of_tab(tab) else { return };
     st.ai.remove(&tab);
+    st.ai_away.remove(&tab);
     if st.tree.close_paneless_tab(tab).is_some() {
         if st.tree.bench(bench).is_none() {
             st.shown.remove(&bench);
