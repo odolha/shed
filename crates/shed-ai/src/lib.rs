@@ -22,11 +22,25 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Entry {
     /// What the user asked; `images` pictures came with it; when (Unix
-    /// seconds, 0 if not known).
-    User { text: String, images: u32, at: u64, pictures: Vec<String> },
+    /// seconds, 0 if not known). `uuid`: Claude Code's id for the message
+    /// (empty when not known), for bookmarks to find it by.
+    User {
+        text: String,
+        images: u32,
+        at: u64,
+        pictures: Vec<String>,
+        #[serde(default)]
+        uuid: String,
+    },
     /// Claude's answer, in Markdown; grows while it streams. `at`: when it
-    /// started.
-    Assistant { text: String, at: u64 },
+    /// started; `uuid`: the id of Claude Code's record it came in (empty
+    /// while it streams in, or when not known).
+    Assistant {
+        text: String,
+        at: u64,
+        #[serde(default)]
+        uuid: String,
+    },
     Thinking { text: String },
     Tool(Tool),
     /// Claude asks to use a tool; `answer` is the user's, once given.
@@ -358,4 +372,52 @@ pub fn parse_limits(event: &serde_json::Value) -> Option<Limits> {
         Some(Window { used: w.get("utilization")?.as_f64()? as f32, resets: w.get("resetsAt").and_then(|r| r.as_u64()).unwrap_or(0) })
     };
     Some(Limits { five_hour: window("five_hour"), week: window("seven_day"), seen: 0 })
+}
+
+impl Entry {
+    /// A prompt's or an answer's text, its role and its id (empty when not
+    /// known): what a bookmark to a message keeps.
+    pub fn message(&self) -> Option<(&str, shed_model::MessageRole, &str)> {
+        match self {
+            Entry::User { text, uuid, .. } => Some((text, shed_model::MessageRole::User, uuid)),
+            Entry::Assistant { text, uuid, .. } => Some((text, shed_model::MessageRole::Assistant, uuid)),
+            _ => None,
+        }
+    }
+}
+
+/// Where a bookmarked message is in a conversation: the entry with its id,
+/// else the first of its role whose text the excerpt was taken from.
+pub fn find_message(entries: &[Entry], uuid: Option<&str>, role: shed_model::MessageRole, excerpt: &str) -> Option<usize> {
+    let messages = || entries.iter().enumerate().filter_map(|(i, e)| e.message().map(|m| (i, m)));
+    if let Some(uuid) = uuid.filter(|u| !u.is_empty())
+        && let Some((i, _)) = messages().find(|(_, (_, _, id))| *id == uuid)
+    {
+        return Some(i);
+    }
+    messages().find(|(_, (text, r, _))| *r == role && shed_model::bookmarks::matches_excerpt(text, excerpt)).map(|(i, _)| i)
+}
+
+#[cfg(test)]
+mod bookmark_tests {
+    use super::*;
+    use shed_model::MessageRole;
+
+    #[test]
+    fn messages_are_found_by_id_then_by_their_words() {
+        let user = |t: &str, id: &str| Entry::User { text: t.into(), images: 0, at: 0, pictures: Vec::new(), uuid: id.into() };
+        let said = |t: &str, id: &str| Entry::Assistant { text: t.into(), at: 0, uuid: id.into() };
+        let entries = vec![
+            user("Fix the login", "u1"),
+            said("Looking at it.", ""),
+            Entry::Thinking { text: "Fix the login".into() },
+            user("Fix the login", "u2"),
+            said("Fixed:\n\nthe cookie   is renewed.", "a2"),
+        ];
+        assert_eq!(find_message(&entries, Some("u2"), MessageRole::User, "Fix the login"), Some(3), "by id first");
+        assert_eq!(find_message(&entries, Some("gone"), MessageRole::User, "Fix the login"), Some(0), "else by words");
+        assert_eq!(find_message(&entries, None, MessageRole::Assistant, &shed_model::bookmarks::excerpt("Fixed: the cookie is renewed.")), Some(4));
+        assert_eq!(find_message(&entries, None, MessageRole::Assistant, "Fix the login"), None, "of its role only");
+        assert_eq!(find_message(&entries, None, MessageRole::User, ""), None);
+    }
 }

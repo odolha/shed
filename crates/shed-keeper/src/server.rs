@@ -1078,6 +1078,31 @@ impl Keeper {
             ClientMsg::SetBenchColor { bench, color } => self.edit_bench(bench, |b| b.color = color),
             ClientMsg::SetBadge { bench, badge } => self.edit_bench(bench, |b| b.badge = badge),
             ClientMsg::SetBenchLinks { bench, links } => self.edit_bench(bench, |b| b.links = links),
+            // Bookmarks are saved within a second, as the user means them to stay.
+            ClientMsg::AddBookmark { bench, bookmark } => {
+                self.edit_bench(bench, |b| {
+                    if !b.bookmarks.iter().any(|k| k.id == bookmark.id || k.same_place(&bookmark)) {
+                        b.bookmarks.push(bookmark);
+                    }
+                });
+                self.save_soon.notify_one();
+            }
+            ClientMsg::RemoveBookmark { bench, id } => {
+                self.edit_bench(bench, |b| b.bookmarks.retain(|k| k.id != id));
+                self.save_soon.notify_one();
+            }
+            ClientMsg::RenameBookmark { bench, id, label } => {
+                let label = label.trim().to_string();
+                if label.is_empty() {
+                    return;
+                }
+                self.edit_bench(bench, |b| {
+                    if let Some(k) = b.bookmarks.iter_mut().find(|k| k.id == id) {
+                        k.label = label;
+                    }
+                });
+                self.save_soon.notify_one();
+            }
             ClientMsg::MoveTab { .. } | ClientMsg::MoveTabNextTo { .. } => {
                 let mut st = self.lock();
                 let tab = match &msg {
@@ -2497,6 +2522,7 @@ impl Keeper {
             started: false,
             window: None,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         });
         self.sync_alias_files(st);
         Ok(id)

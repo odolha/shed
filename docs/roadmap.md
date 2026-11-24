@@ -30,6 +30,9 @@ them). Still open:
   sessions included; still to come for it, as API calls: merging, rebasing,
   deleting branches, the stash and finishing a merge in the Git panel, the
   three-way conflict view, the review's Git actions and its turn scope.
+- **Bookmarks in the web and Android apps**: a bench's bookmarks (files,
+  folders, AI messages) are in the desktop app and `shed tui` only; the nexus
+  API's state does not carry them yet.
 - **Settings and themes from the apps**, **more than one user** on a nexus, and
   **Claude in Chrome** controlled from them (now: shown, not controlled).
 

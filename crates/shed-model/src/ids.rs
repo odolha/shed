@@ -56,3 +56,7 @@ id_type!(
     /// Stable identity of a pane. Also names the pane's shell history file.
     PaneId
 );
+id_type!(
+    /// Stable identity of a bookmark.
+    BookmarkId
+);

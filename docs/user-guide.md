@@ -179,7 +179,7 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   menu has **New Tab to the Left** and **New Tab to the Right**: a terminal
   just before or after that tab, in its group. When the tabs do not fit on one
   row they wrap onto more, the bar growing to hold them. The controls on the
-  right (New Tab, Run Startup, Setup and the bench's name; the usage limits;
+  right (New Tab, Bookmarks, Run Startup, Setup and the bench's name; the usage limits;
   the links, in that order) sit on a panel of their own as tall as the tab
   rows, centred in it: beside one row of tabs on one row; beside two, on two
   (the actions over the usage limits and links); otherwise on three (the
@@ -209,13 +209,45 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   badge, colours, **Appearance** (Auto, Light or Dark, for all of Shed), Show Shed
   and Close Bench.
 - On the right of the tab bar: the new-tab button (right-click it for a
-  project, AI or remote tab); for a terminal tab the **rack**, which opens the
+  project, AI or remote tab); the [bookmarks](#bookmarks) button; for a terminal tab the **rack**, which opens the
   Setup panel (or Ctrl+Shift+S); the bench's name with its menu; on a bench
   with an AI tab, Claude's usage limits (see [AI tabs](#ai-tabs)); and the
   bench's [links](#links). Super+Space brings Shed forward.
 
 A new tab or pane opens in the folder of the one you were in. (Set
 `new_pane_dir = "bench"` to use the bench's folder instead.)
+
+### Bookmarks
+
+A bench keeps **bookmarks**: files (at a line), folders, and messages of its AI
+tabs' conversations, to come back to. Add them where they are:
+
+- In a project tab, right-click a file or folder in Files and choose
+  **Bookmark**.
+- In a file, **Bookmark Line** in the editor's right-click menu, or
+  Ctrl+Shift+B (Cmd+Shift+B on macOS), keeps the line the cursor is on.
+- In an AI tab, hover one of your prompts or one of Claude's answers and click
+  **Bookmark** beside Copy (or right-click it).
+
+The bookmark button on the tab bar (after New Tab), or Ctrl+Shift+M
+(Cmd+Shift+M), lists them under it, by kind (files, folders, messages), each
+with its name and, dimmed, where it is: a path under the bench's folder, or
+the first words of the message. A file is named by its name (and line), a folder
+by its name, a message by its first words. Click one to go to it:
+
+- a **file** opens in the project tab whose folder holds it, at its line (with
+  none, a project tab opens for its project: its Git repository, else its
+  folder);
+- a **folder** shows in that project tab's Files, opened and selected;
+- a **message** shows in its AI tab: the session it is in opens if another is
+  shown, and the conversation scrolls to it, marked for a moment. It is found
+  by Claude Code's id for it, or else by its words.
+
+Hover a bookmark for an **×** that removes it; right-click it for **Open**,
+**Rename…** and **Remove**. Bookmarks are saved with the bench (a closed bench
+keeps them in its file). A file or folder that is gone, or a message whose AI
+tab was closed, says so in the list. In another workspace's bench (through the
+nexus) they work the same, the files read from that workspace.
 
 ## Project tabs
 
@@ -959,6 +991,8 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | Alt+arrows | Move between panes |
 | F2 / Shift+F2 | Rename tab / bench |
 | Ctrl+Shift+S | Setup panel |
+| Ctrl+Shift+M | The bench's [bookmarks](#bookmarks) |
+| Ctrl+Shift+B (in a file) | Bookmark the cursor's line |
 | Ctrl+Shift+Q | Close bench |
 | Ctrl+Shift+H | Hide bench (it keeps running) |
 | Super+Space, Ctrl+Shift+Space | Bring Shed forward |
@@ -989,6 +1023,7 @@ place in these.
 | Cmd+D / Cmd+Shift+D | Split right / split down |
 | Cmd+Option+arrows | Move between panes |
 | Cmd+Shift+S / Cmd+Shift+W | Setup panel / close bench |
+| Cmd+Shift+M, Cmd+Shift+B (in a file) | Bookmarks / bookmark the cursor's line |
 | Cmd+Shift+H | Hide bench |
 | Cmd+Shift+Space, Cmd+Option+1 … 9 | Bring Shed forward / raise bench window 1 … 9 |
 | Cmd+N (in Shed) | New bench |
@@ -1057,6 +1092,11 @@ sends Ctrl+B itself. `Ctrl+B ?` lists all keys.
 | `C-b [` | Scroll back: arrows, PgUp/PgDn, `g`/`G`, `[`/`]` from prompt to prompt, `/` search, `n`/`N`, `q` leaves |
 | `C-b r` | Search history (the logbook): Tab cycles this tab, bench, everything; Enter types the command into the pane, without running it |
 | `C-b e` | Edit a file in `$EDITOR`, in a new terminal tab |
+| `C-b b` | The bench's [bookmarks](#bookmarks): choose one to go to it; **Rename a Bookmark…**, **Remove a Bookmark…** at the end |
+
+**Bookmarks** are added with `m` in a project tab (the file or folder chosen
+in the list; in a file, the line at the top of the view, or the line a search
+marked) and `Alt+B` in an AI tab (the last prompt or answer in view).
 
 **Terminal panes** are drawn as the keeper sees them, splits with a line
 between them (the lines around the focused pane in the bench's colour). Each

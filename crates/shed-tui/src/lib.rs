@@ -10,6 +10,7 @@
 mod ai;
 mod app;
 mod benches;
+mod bookmarks;
 mod git;
 mod keys;
 mod layout;
@@ -36,6 +37,7 @@ pub const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("C-b ?", "these keys"),
             ("C-b s", "the benches"),
             ("C-b r", "search history (the logbook)"),
+            ("C-b b", "the bench's bookmarks: go to, rename, remove"),
             ("C-b C-b", "Ctrl+B for the program in the pane"),
         ],
     ),
@@ -96,6 +98,7 @@ pub const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("Alt+I / Alt+X", "attach a picture by path / remove them"),
             ("Alt+R", "review changes: v viewed, e explain, t turn/session"),
             ("Alt+T", "unfold tools and thinking (or click one)"),
+            ("Alt+B", "bookmark the last message in view"),
         ],
     ),
     (
@@ -106,6 +109,7 @@ pub const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("o / Ctrl+P", "open by name"),
             ("/ / Ctrl+F", "search in files (Alt+R regex, Alt+C case, Alt+W word)"),
             ("e", "edit in $EDITOR"),
+            ("m", "bookmark the file or folder chosen, or the file shown at its top line"),
             ("g", "Git: s/u/d file, S stage all, c commit, C amend, l log, b branches, f fetch, F pull, p push, P force-push"),
             ("in a diff", "[ ] hunks, s stage, u unstage, d discard"),
         ],

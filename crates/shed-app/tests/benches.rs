@@ -314,6 +314,47 @@ fn bench_links_are_kept_open_or_closed() {
 }
 
 #[test]
+fn bookmarks_are_added_renamed_removed_and_kept() {
+    use shed_model::{Bookmark, MessageRole};
+    let dir = tempfile::tempdir().unwrap();
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut c = Client::connect(&env.socket);
+    let bench = show_and_attach(&mut c, ShowTarget::NewBench { name: Some("marks".into()), cwd: None });
+    let tree = tree_until(&mut c, "marks", |t| t.bench(bench).is_some());
+    let tab = tree.bench(bench).unwrap().tabs[0].id;
+
+    let file = Bookmark::file(dir.path().join("src/main.rs"), Some(42));
+    let folder = Bookmark::folder(dir.path().join("docs"));
+    let message = Bookmark::message(tab, Some("s1".into()), Some("u1".into()), MessageRole::Assistant, "The fix is in login.rs.");
+    for mark in [&file, &folder, &message] {
+        c.msg(ClientMsg::AddBookmark { bench, bookmark: mark.clone() });
+    }
+    // The same place again is not a second bookmark.
+    c.msg(ClientMsg::AddBookmark { bench, bookmark: Bookmark::file(dir.path().join("src/main.rs"), Some(42)) });
+    c.msg(ClientMsg::RenameBookmark { bench, id: folder.id, label: "  Docs  ".into() });
+    c.msg(ClientMsg::RenameBookmark { bench, id: file.id, label: " ".into() });
+    c.msg(ClientMsg::RemoveBookmark { bench, id: message.id });
+    let tree = tree_until(&mut c, "marked", |t| t.bench(bench).is_some_and(|b| b.bookmarks.len() == 2 && b.bookmarks[1].label == "Docs"));
+    let marks = tree.bench(bench).unwrap().bookmarks.clone();
+    assert_eq!((marks[0].id, marks[0].label.as_str()), (file.id, "main.rs:42"), "an empty name is not taken");
+
+    // Saved soon, without waiting for the autosave.
+    let path = dir.path().join("benches/marks.toml");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !std::fs::read_to_string(&path).is_ok_and(|s| s.contains("label = \"Docs\"")) {
+        assert!(std::time::Instant::now() < deadline, "not saved: {:?}", std::fs::read_to_string(&path));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Closed and loaded again, they are there.
+    c.msg(ClientMsg::CloseBench { bench });
+    tree_until(&mut c, "closed", |t| t.bench(bench).is_none());
+    show_and_attach(&mut c, ShowTarget::Load { name: "marks".into() });
+    let tree = tree_until(&mut c, "loaded", |t| t.bench(bench).is_some());
+    assert_eq!(tree.bench(bench).unwrap().bookmarks, marks);
+}
+
+#[test]
 fn zoom_resets_everywhere() {
     let dir = tempfile::tempdir().unwrap();
     let env = start_in(dir.path(), "shedd.sock");

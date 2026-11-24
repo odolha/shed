@@ -80,6 +80,8 @@ pub struct AppState {
     /// A file to show in the project tab being opened for it.
     /// (With `true`: shown in its Files too.)
     pending_reveal: Option<(BenchId, std::path::PathBuf, crate::ai_text::Place, bool)>,
+    /// A folder to show in the project tab being opened for it (a bookmark's).
+    pending_folder: Option<(BenchId, std::path::PathBuf)>,
     /// The view of every AI tab of an open bench.
     pub ai_views: HashMap<TabId, Entity<AiView>>,
     /// Per open bench, the tabs shown most recently, newest first.
@@ -154,6 +156,7 @@ impl AppState {
             panes: HashMap::new(),
             projects: HashMap::new(),
             pending_reveal: None,
+            pending_folder: None,
             ai_views: HashMap::new(),
             recent_tabs: HashMap::new(),
             windows: HashMap::new(),
@@ -416,6 +419,7 @@ impl AppState {
         self.opening.clear();
         self.identities.clear();
         self.pending_reveal = None;
+        self.pending_folder = None;
         self.tree = Shed::default();
         self.remote_api = None;
         cx.set_global(PegboardData(Default::default()));
@@ -769,6 +773,13 @@ impl AppState {
                             self.pending_reveal = Some((b, path, at, files));
                         }
                     }
+                    if let Some((b, path)) = self.pending_folder.take() {
+                        if b == bench && path.starts_with(&project.root) {
+                            view.update(cx, |v, cx| v.reveal_folder(path, cx));
+                        } else {
+                            self.pending_folder = Some((b, path));
+                        }
+                    }
                     self.projects.insert(tab, view);
                 }
                 None => {}
@@ -946,6 +957,65 @@ impl AppState {
         };
         self.conn.send_msg(ClientMsg::NewProjectTab { bench, root });
         self.pending_reveal = Some((bench, path, at, files));
+    }
+
+    /// The project tab of `bench` whose folder holds `path`, and the path
+    /// as under that folder.
+    fn project_holding(&self, bench: BenchId, path: &std::path::Path) -> Option<(TabId, std::path::PathBuf)> {
+        let b = self.tree.bench(bench)?;
+        let roots: Vec<(TabId, std::path::PathBuf)> = b.tabs.iter().filter_map(|t| Some((t.id, t.project_info()?.root.clone()))).collect();
+        match self.is_remote() {
+            true => roots.iter().filter(|(_, r)| path.starts_with(r)).max_by_key(|(_, r)| r.as_os_str().len()).map(|(t, _)| (*t, path.to_path_buf())),
+            false => shed_project::project_holding(path, &roots),
+        }
+    }
+
+    /// Shows a folder in the Files of the bench's project tab that holds
+    /// it, opened and selected; with none, a project tab opens for its
+    /// project (its Git root, else the folder) and shows it once there.
+    pub fn reveal_folder(&mut self, bench: BenchId, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        if let Some((tab, path)) = self.project_holding(bench, &path)
+            && let Some(view) = self.projects.get(&tab).cloned()
+        {
+            self.conn.send_msg(ClientMsg::FocusTab { tab });
+            view.update(cx, |v, cx| v.reveal_folder(path, cx));
+            return;
+        }
+        let root = if self.is_remote() { path.clone() } else { shed_project::project_root(&path) };
+        self.conn.send_msg(ClientMsg::NewProjectTab { bench, root });
+        self.pending_folder = Some((bench, path));
+    }
+
+    /// Goes to one of a bench's bookmarks: a file in the project tab that
+    /// holds it (one opens for its project when none does), at its line; a
+    /// folder in a project tab's Files; a message in its AI tab's
+    /// conversation (its session opened, the message scrolled to). Says
+    /// why not when it cannot.
+    pub fn open_bookmark(&mut self, bench: BenchId, bookmark: &shed_model::Bookmark, cx: &mut Context<Self>) -> Result<(), String> {
+        use shed_model::BookmarkKind;
+        // This disk's paths can be checked; another workspace's are not here.
+        let gone = |p: &std::path::Path| !self.is_remote() && !p.exists();
+        match &bookmark.kind {
+            BookmarkKind::File { path, .. } | BookmarkKind::Folder { path } if gone(path) => Err(format!("{} is not there any more", path.display())),
+            BookmarkKind::File { path, line } => {
+                self.reveal_file(bench, path.clone(), line.map(|l| (l as usize, None)), true, cx);
+                Ok(())
+            }
+            BookmarkKind::Folder { path } => {
+                self.reveal_folder(bench, path.clone(), cx);
+                Ok(())
+            }
+            BookmarkKind::AiMessage { tab, session, uuid, role, excerpt } => {
+                let Some(view) = self.ai_views.get(tab).cloned() else { return Err("Its AI tab is closed".into()) };
+                let holder = self.tree.bench_of_tab(*tab).unwrap_or(bench);
+                self.conn.send_msg(ClientMsg::FocusTab { tab: *tab });
+                if holder != bench {
+                    self.show(holder, cx);
+                }
+                view.update(cx, |v, cx| v.go_to_message(session.clone(), uuid.clone(), *role, excerpt.clone(), cx));
+                Ok(())
+            }
+        }
     }
 
     /// What should have the keyboard in a bench's window: its active tab's
@@ -1605,6 +1675,7 @@ mod tests {
             launcher: name.into(),
             window: None,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 
@@ -1783,6 +1854,7 @@ mod tests {
             launcher: "work".into(),
             window: None,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         };
         let id = bench.id;
         let tree = Shed { benches: vec![bench], ..Default::default() };

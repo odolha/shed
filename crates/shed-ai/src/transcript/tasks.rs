@@ -557,7 +557,7 @@ impl Transcript {
             let at = self.now();
             let read = crate::notes::read_user_text(&prompt);
             if !read.prompt.is_empty() {
-                let entry = self.push(Entry::User { text: read.prompt, images: 0, at, pictures: Vec::new() });
+                let entry = self.push(Entry::User { text: read.prompt, images: 0, at, pictures: Vec::new(), uuid: String::new() });
                 self.mark_prompt(entry, None);
             }
         }
@@ -679,7 +679,7 @@ impl Transcript {
                     let text = s(b, "text").trim().to_string();
                     if !text.is_empty() {
                         run.last = first_line(&text, 120);
-                        push_step(run, Entry::Assistant { text, at });
+                        push_step(run, Entry::Assistant { text, at, uuid: String::new() });
                     }
                 }
                 ("assistant", "tool_use") => {

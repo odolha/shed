@@ -112,6 +112,7 @@ mod tests {
             window: None,
             started: false,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 

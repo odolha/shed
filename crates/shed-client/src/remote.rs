@@ -775,6 +775,7 @@ mod tests {
             window: None,
             started: false,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         });
         let hosts = recent_from(vec!["shared".into()], &tree, &store);
         assert_eq!(hosts, ["shared", "running-host", "new-host", "old-host"]);

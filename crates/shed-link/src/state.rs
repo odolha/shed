@@ -235,6 +235,7 @@ mod tests {
             window: None,
             started: true,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 

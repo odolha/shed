@@ -183,6 +183,18 @@ pub fn menu_items() -> Vec<crate::overlay::TabAction> {
         }),
         (Item::new("Edit in $EDITOR").hint("e"), |app, _| app.edit_in_editor()),
         (Item::new("Read Again").hint("r"), |app, tab| app.project_load(tab)),
+        (Item::new("Bookmark").hint("m"), |app, tab| {
+            let Some(v) = app.projects.get(&tab) else { return };
+            let mark = match (&v.file, v.right) {
+                (Some(f), true) => shed_model::Bookmark::file(f.path.clone(), Some(f.scroll as u32 + 1)),
+                _ => match v.rows.get(v.sel) {
+                    Some(r) if r.dir => shed_model::Bookmark::folder(r.path.clone()),
+                    Some(r) => shed_model::Bookmark::file(r.path.clone(), None),
+                    None => return,
+                },
+            };
+            app.add_bookmark(mark);
+        }),
     ]
 }
 
@@ -451,6 +463,12 @@ impl App {
                 KeyCode::End | KeyCode::Char('G') => file.scroll = file.lines.len().saturating_sub(page),
                 KeyCode::Char('e') => self.edit_in_editor(),
                 KeyCode::Char('o') => self.quick_open(tab),
+                // The file, at the line at the top of the view (a marked one, if shown).
+                KeyCode::Char('m') => {
+                    let line = file.mark.filter(|m| *m >= file.scroll && *m < file.scroll + page).unwrap_or(file.scroll);
+                    let mark = shed_model::Bookmark::file(file.path.clone(), Some(line as u32 + 1));
+                    self.add_bookmark(mark);
+                }
                 _ => {}
             }
             return;
@@ -499,6 +517,11 @@ impl App {
             KeyCode::Char('g') => self.git_open(tab),
             KeyCode::Char('e') => self.edit_in_editor(),
             KeyCode::Char('r') => self.project_load(tab),
+            KeyCode::Char('m') => {
+                let Some(row) = v.rows.get(v.sel) else { return };
+                let mark = if row.dir { shed_model::Bookmark::folder(row.path.clone()) } else { shed_model::Bookmark::file(row.path.clone(), None) };
+                self.add_bookmark(mark);
+            }
             KeyCode::Esc => {
                 if let Side::Search(_) = v.side {
                     v.side = Side::Files;

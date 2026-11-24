@@ -1835,6 +1835,7 @@ mod tests {
             launcher: name.into(),
             window: None,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 

@@ -1203,7 +1203,7 @@ mod tests {
     /// A running agent goes out with its latest steps; the keeper keeps all.
     #[test]
     fn a_running_agent_goes_out_light() {
-        let step = |n: usize| shed_ai::Entry::Assistant { text: format!("step {n}"), at: 0 };
+        let step = |n: usize| shed_ai::Entry::Assistant { text: format!("step {n}"), at: 0, uuid: String::new() };
         let run = shed_ai::Run { steps: (0..30).map(step).collect(), skipped: 2, ..Default::default() };
         let mut entry = shed_ai::Entry::Tool(shed_ai::Tool { name: "Agent".into(), run: Some(Box::new(run)), ..Default::default() });
         let shed_ai::Entry::Tool(sent) = glimpse(&mut entry) else { panic!() };

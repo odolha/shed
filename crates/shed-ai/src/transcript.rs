@@ -273,7 +273,7 @@ impl Transcript {
     /// out with.
     pub fn user(&mut self, text: &str, images: &[(String, Vec<u8>)], now: u64, uuid: Option<String>) {
         let pictures = images.iter().filter_map(|(media, data)| self.keep_picture(media, data)).collect();
-        let entry = self.push(Entry::User { text: text.to_string(), images: images.len() as u32, at: now, pictures });
+        let entry = self.push(Entry::User { text: text.to_string(), images: images.len() as u32, at: now, pictures, uuid: uuid.clone().unwrap_or_default() });
         self.mark_prompt(entry, uuid);
         self.status.state = State::Working;
         self.status.since = Some(now);
@@ -463,7 +463,8 @@ impl Transcript {
             "content_block_start" => {
                 let index = e.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let entry = match e.get("content_block").and_then(|b| b.get("type")).and_then(Value::as_str) {
-                    Some("text") => Entry::Assistant { text: String::new(), at: self.now() },
+                    // (Its id comes with the whole message, at its end.)
+                    Some("text") => Entry::Assistant { text: String::new(), at: self.now(), uuid: String::new() },
                     Some("thinking") => Entry::Thinking { text: String::new() },
                     _ => return,
                 };
@@ -512,8 +513,15 @@ impl Transcript {
                     });
                     match streamed {
                         Some(i) => {
+                            let record = self.applying_uuid.clone().unwrap_or_default();
                             match &mut self.entries[i] {
-                                Entry::Assistant { text: t, .. } | Entry::Thinking { text: t } => *t = text,
+                                Entry::Assistant { text: t, uuid, .. } => {
+                                    *t = text;
+                                    if uuid.is_empty() {
+                                        *uuid = record;
+                                    }
+                                }
+                                Entry::Thinking { text: t } => *t = text,
                                 _ => {}
                             }
                             self.touch(i);
@@ -521,7 +529,8 @@ impl Transcript {
                         None if text.trim().is_empty() => {}
                         None if kind == "text" => {
                             let at = self.now();
-                            self.push(Entry::Assistant { text, at });
+                            let uuid = self.applying_uuid.clone().unwrap_or_default();
+                            self.push(Entry::Assistant { text, at, uuid });
                         }
                         None => {
                             self.push(Entry::Thinking { text });
@@ -635,8 +644,8 @@ impl Transcript {
         };
         if !words.is_empty() || images > 0 {
             let at = self.now();
-            let entry = self.push(Entry::User { text: words, images, at, pictures });
             let uuid = self.applying_uuid.clone();
+            let entry = self.push(Entry::User { text: words, images, at, pictures, uuid: uuid.clone().unwrap_or_default() });
             self.mark_prompt(entry, uuid);
         }
         if !read.hook.is_empty() {
@@ -912,6 +921,26 @@ mod tests {
         saved.apply(&json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [{"type": "text", "text": "hi"}]}}));
         saved.apply(&json!({"type": "user", "uuid": "p2", "message": {"role": "user", "content": "again"}}));
         assert_eq!(saved.prompt_mark(2).unwrap(), &PromptMark { entry: 2, uuid: Some("p2".into()), before: Some("a1".into()), session: None });
+    }
+
+    /// Prompts and answers carry Claude Code's ids (for bookmarks), whether
+    /// streamed live or read from a saved session.
+    #[test]
+    fn messages_carry_their_ids() {
+        use serde_json::json;
+        let ids = |t: &Transcript| t.entries.iter().filter_map(|e| e.message().map(|m| m.2.to_string())).collect::<Vec<_>>();
+        let mut t = Transcript::new("/tmp");
+        t.user("first", &[], 0, Some("u1".into()));
+        t.apply(&json!({"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m1"}}}));
+        t.apply(&json!({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}}));
+        t.apply(&json!({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"text": "on"}}}));
+        assert_eq!(ids(&t), ["u1", ""], "not known while it streams");
+        t.apply(&json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [{"type": "text", "text": "one"}]}}));
+        assert_eq!(ids(&t), ["u1", "a1"]);
+        let mut saved = Transcript::new("/tmp");
+        saved.apply(&json!({"type": "user", "uuid": "p1", "message": {"role": "user", "content": "hello"}}));
+        saved.apply(&json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [{"type": "text", "text": "hi"}]}}));
+        assert_eq!(ids(&saved), ["p1", "a1"]);
     }
 
     #[test]

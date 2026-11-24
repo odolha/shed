@@ -87,6 +87,8 @@ pub struct AiView {
     started: bool,
     /// Which entry each drawn line of the conversation belongs to.
     line_entries: Vec<usize>,
+    /// An entry to scroll to at the next drawing (a bookmark's).
+    pub jump: Option<usize>,
     conversation_area: Rect,
 }
 
@@ -110,6 +112,7 @@ impl AiView {
             panel: Panel::Conversation,
             started: false,
             line_entries: Vec::new(),
+            jump: None,
             conversation_area: Rect::default(),
         }
     }
@@ -138,6 +141,11 @@ impl AiView {
             }
         }
         self.status = status;
+    }
+
+    /// The last prompt or answer with a line in view.
+    pub fn last_message_in_view(&self) -> Option<usize> {
+        self.line_entries.iter().rev().copied().find(|i| self.entries.get(*i).and_then(Entry::message).is_some())
     }
 
     /// Something counts time on screen: a timer, or a run going on.
@@ -459,6 +467,7 @@ pub fn menu_items() -> Vec<crate::overlay::TabAction> {
         (Item::new("Queued Messages…").hint("Alt+Q"), |app, tab| app.ai_queued(tab)),
         (Item::new("Attach Files…").hint("Alt+I"), |app, tab| app.ai_attach(tab)),
         (Item::new("Unfold Tools and Thinking").hint("Alt+T"), |app, tab| app.ai_toggle_fold(tab)),
+        (Item::new("Bookmark the Last Message in View").hint("Alt+B"), |app, tab| app.bookmark_ai_message(tab)),
         (Item::new("Stop").hint("Esc"), |app, tab| app.send(ClientMsg::AiStop { tab })),
     ]
 }
@@ -496,6 +505,7 @@ impl App {
                 'q' => return self.ai_queued(tab),
                 'i' => return self.ai_attach(tab),
                 't' => return self.ai_toggle_fold(tab),
+                'b' => return self.bookmark_ai_message(tab),
                 'x' => {
                     view.images.clear();
                     view.files.clear();
@@ -921,6 +931,12 @@ impl App {
         view.conversation_area = conv;
         let (lines, owners) = view.conversation(w.saturating_sub(1), &c);
         let total = lines.len();
+        // A bookmarked message: its first line at the top.
+        if let Some(entry) = view.jump.take()
+            && let Some(line) = owners.iter().position(|e| *e == entry)
+        {
+            view.scroll = total.saturating_sub(conv_h as usize + line);
+        }
         let max_scroll = total.saturating_sub(conv_h as usize);
         view.scroll = view.scroll.min(max_scroll);
         let start = total.saturating_sub(conv_h as usize + view.scroll);
@@ -1324,7 +1340,7 @@ mod tests {
     #[test]
     fn entries_change_in_place() {
         let mut v = view();
-        let a = |t: &str| Entry::Assistant { text: t.into(), at: 0 };
+        let a = |t: &str| Entry::Assistant { text: t.into(), at: 0, uuid: String::new() };
         v.update(0, vec![a("one"), a("two")], Default::default());
         v.replace(vec![(0, a("ONE")), (7, a("nowhere"))], Default::default());
         assert_eq!(v.entries, vec![a("ONE"), a("two")]);
@@ -1368,7 +1384,7 @@ mod tests {
     #[test]
     fn updates_replace_from_where_they_start() {
         let mut v = view();
-        let a = |t: &str| Entry::Assistant { text: t.into(), at: 0 };
+        let a = |t: &str| Entry::Assistant { text: t.into(), at: 0, uuid: String::new() };
         v.update(0, vec![a("one"), a("two")], Default::default());
         v.update(1, vec![a("two, longer"), a("three")], Default::default());
         assert_eq!(v.entries, vec![a("one"), a("two, longer"), a("three")]);

@@ -222,3 +222,37 @@ fn a_project_tab_lists_files_and_opens_one_by_name() {
     h.key(KeyCode::Enter, KeyModifiers::NONE);
     h.until_screen("println!(\"hello\")");
 }
+
+#[test]
+fn bookmarks_are_listed_and_gone_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    let text: String = (1..=80).map(|n| format!("line number {n}\n")).collect();
+    std::fs::write(work.join("src/lib.rs"), text).unwrap();
+    let mut h = Harness::new(dir.path());
+    h.app.start(ShowTarget::NewBench { name: Some("marks".into()), cwd: Some(work.clone()) });
+    h.until("the bench", |a| a.screen == Screen::Bench && tabs(a) == 1);
+    let bench = h.app.current_bench().unwrap().id;
+    let mark = shed_model::Bookmark::file(work.join("src/lib.rs"), Some(60));
+    h.app.send(shed_proto::ClientMsg::AddBookmark { bench, bookmark: mark });
+    h.until("bookmarked", |a| a.current_bench().is_some_and(|b| b.bookmarks.len() == 1));
+
+    // C-b b lists them; choosing one opens a project tab for its file, at its line.
+    h.key(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Char('b'), KeyModifiers::NONE);
+    h.until_screen("lib.rs:60");
+    h.key(KeyCode::Enter, KeyModifiers::NONE);
+    h.until("a project tab", |a| a.active_tab().is_some_and(|t| t.project_info().is_some()));
+    h.until_screen("line number 60");
+
+    // m in the file bookmarks the line marked (already a bookmark: not
+    // twice), or the one at the top of the view.
+    h.key(KeyCode::Char('m'), KeyModifiers::NONE);
+    h.until_screen("bookmarked lib.rs:60");
+    h.key(KeyCode::PageDown, KeyModifiers::NONE);
+    h.key(KeyCode::Char('m'), KeyModifiers::NONE);
+    h.until("bookmarked again", |a| a.current_bench().is_some_and(|b| b.bookmarks.len() == 2));
+    let second = h.app.current_bench().unwrap().bookmarks[1].clone();
+    assert!(matches!(second.kind, shed_model::BookmarkKind::File { line: Some(l), .. } if l > 60), "{second:?}");
+}

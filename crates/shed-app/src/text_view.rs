@@ -45,6 +45,8 @@ pub struct TextOptions {
     pub placeholder: Option<SharedString>,
     /// What line comments start with, for Ctrl+/.
     pub comment: Option<&'static str>,
+    /// A file's editor: Bookmark Line (Ctrl+Shift+B) sends `Bookmark`.
+    pub bookmark: bool,
 }
 
 pub enum TextEvent {
@@ -55,6 +57,8 @@ pub enum TextEvent {
     Save,
     /// Alt+Z: wrap long lines, or not.
     ToggleWrap,
+    /// Bookmark Line (Ctrl+Shift+B): a bookmark to the cursor's line.
+    Bookmark,
 }
 
 /// Colours per line: byte ranges of the line, each with its colour.
@@ -449,6 +453,7 @@ impl TextView {
             "h" | "r" if sec && editable && !self.options.submit_on_enter => self.open_find(true, window, cx),
             "g" if sec && self.options.auto_height.is_none() => self.open_goto(window, cx),
             "s" if sec => cx.emit(TextEvent::Save),
+            "b" if sec && shift && self.options.bookmark => cx.emit(TextEvent::Bookmark),
             "z" if m.alt && !m.control && !m.platform && self.options.line_numbers => cx.emit(TextEvent::ToggleWrap),
             _ => match ks.key_char.as_deref() {
                 Some(text) if editable && !m.control && !m.platform && !text.chars().any(char::is_control) => {
@@ -552,6 +557,11 @@ impl TextView {
             cx.notify();
         }));
         entries.push(menu::item("Find…", |this: &mut Self, window, cx| this.open_find(false, window, cx)));
+        if self.options.bookmark {
+            entries.push(MenuEntry::Separator);
+            let key = if cfg!(target_os = "macos") { "Keep this line in the bench's bookmarks (Cmd+Shift+B)" } else { "Keep this line in the bench's bookmarks (Ctrl+Shift+B)" };
+            entries.push(menu::item("Bookmark Line", |_: &mut Self, _, cx| cx.emit(TextEvent::Bookmark)).icon("bookmark").tip(key));
+        }
         entries
     }
 

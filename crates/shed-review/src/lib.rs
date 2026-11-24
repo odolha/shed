@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn scopes_start_at_prompts() {
-        let user = |at: u64| Entry::User { text: String::new(), images: 0, at, pictures: Vec::new() };
+        let user = |at: u64| Entry::User { text: String::new(), images: 0, at, pictures: Vec::new(), uuid: String::new() };
         let entries = vec![user(0), user(100), Entry::Notice { text: String::new(), error: false }, user(200)];
         assert_eq!(review_since(&entries, Scope::Session), Some(100));
         assert_eq!(review_since(&entries, Scope::Turn), Some(200));

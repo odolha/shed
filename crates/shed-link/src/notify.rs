@@ -117,6 +117,7 @@ mod tests {
             window: None,
             started: false,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         };
         (Shed { benches: vec![bench], ..Default::default() }, TabId::from_bytes([3; 16]), PaneId::from_bytes([1; 16]))
     }

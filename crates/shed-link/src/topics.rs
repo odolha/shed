@@ -48,13 +48,13 @@ fn secs(t: u64) -> u32 {
 
 fn entry(e: &shed_ai::Entry) -> api::AiEntry {
     match e {
-        shed_ai::Entry::User { text, images, at, pictures } => api::AiEntry::User(api::AiUser {
+        shed_ai::Entry::User { text, images, at, pictures, .. } => api::AiEntry::User(api::AiUser {
             text: text.clone(),
             at: secs(*at),
             pictures: pictures.iter().map(|p| picture_name(p)).collect(),
             images: *images,
         }),
-        shed_ai::Entry::Assistant { text, at } => api::AiEntry::Assistant(api::AiAssistant { text: text.clone(), at: secs(*at) }),
+        shed_ai::Entry::Assistant { text, at, .. } => api::AiEntry::Assistant(api::AiAssistant { text: text.clone(), at: secs(*at) }),
         shed_ai::Entry::Thinking { text } => api::AiEntry::Thinking(api::AiText { text: text.clone() }),
         shed_ai::Entry::Tool(t) => api::AiEntry::Tool(api::AiTool {
             id: t.id.clone(),

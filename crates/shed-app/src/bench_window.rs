@@ -56,6 +56,8 @@ enum EditTarget {
     EditLink(usize),
     /// The name of the bench's link at this index.
     RenameLink(usize),
+    /// A bookmark's name.
+    RenameBookmark(shed_model::BookmarkId),
 }
 
 impl EditTarget {
@@ -70,6 +72,7 @@ impl EditTarget {
             EditTarget::RemoteHost => "Opening a remote tab: host, or user@host, as ssh takes it",
             EditTarget::AddLink | EditTarget::EditLink(_) => "A link: name, then the address (app localhost:3000)",
             EditTarget::RenameLink(_) => "The link's name",
+            EditTarget::RenameBookmark(_) => "The bookmark's name",
         }
     }
 }
@@ -137,7 +140,7 @@ struct BarWidths {
     groups: Vec<(bool, Vec<f32>)>,
     /// The usage limits (0 without).
     limits: f32,
-    /// New Tab, Run Startup or Teardown, Setup, the bench's name.
+    /// New Tab, Bookmarks, Run Startup or Teardown, Setup, the bench's name.
     actions: Vec<f32>,
     links: Vec<f32>,
 }
@@ -163,7 +166,8 @@ fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bo
         }
         groups.last_mut().unwrap().1.push(tab(t));
     }
-    let mut actions = vec![32.0 * s];
+    // New Tab, Bookmarks.
+    let mut actions = vec![32.0 * s, 32.0 * s];
     if lifecycle {
         actions.push(32.0 * s);
     }
@@ -235,6 +239,8 @@ struct BarLayout {
     assumed: Vec<f32>,
     /// Drawn again to arrange the controls by the tabs' real widths.
     recheck: bool,
+    /// Where the Bookmarks button is: the list opens under it.
+    bookmarks_button: Option<Bounds<Pixels>>,
 }
 
 impl BarLayout {
@@ -404,6 +410,10 @@ pub struct BenchWindow {
     remote_menu: Option<String>,
     /// While a tab is dragged over the tab bar: where it would go.
     drop_hint: Option<DropAt>,
+    /// The bookmarks list is open.
+    bookmarks_open: bool,
+    /// Why the bookmark chosen could not be gone to, in the list.
+    bookmark_problem: Option<String>,
     _following: Subscription,
 }
 
@@ -418,6 +428,9 @@ struct Shown {
     errors: Vec<String>,
     /// The bench's colour and its shown tab (`None` once the bench is gone).
     bench: Option<(Rgb, Content)>,
+    /// The bench's bookmarks and folder (for the bookmarks list).
+    bookmarks: Vec<shed_model::Bookmark>,
+    folder: std::path::PathBuf,
 }
 
 /// The shown tab's content: the views it holds, and how its panes are laid out.
@@ -439,9 +452,9 @@ struct Panes {
 }
 
 impl Shown {
-    fn of(bench: BenchId, state: &AppState) -> Self {
+    fn of(bench_id: BenchId, state: &AppState) -> Self {
         let settings = &state.settings;
-        let bench = state.tree.bench(bench).map(|b| {
+        let bench = state.tree.bench(bench_id).map(|b| {
             let content = match b.active_tab() {
                 Some(tab) if tab.project_info().is_some() => Content::Project(state.projects.get(&tab.id).cloned()),
                 Some(tab) if tab.ai_info().is_some() => Content::Ai(state.ai_views.get(&tab.id).cloned()),
@@ -455,7 +468,8 @@ impl Shown {
             };
             (b.color.accent(), content)
         });
-        Self { ui: settings.ui.clone(), background: settings.palette.background, errors: settings.errors.clone(), bench }
+        let (bookmarks, folder) = state.tree.bench(bench_id).map(|b| (b.bookmarks.clone(), b.cwd.clone())).unwrap_or_default();
+        Self { ui: settings.ui.clone(), background: settings.palette.background, errors: settings.errors.clone(), bench, bookmarks, folder }
     }
 }
 
@@ -529,6 +543,8 @@ impl BenchWindow {
             place,
             remote_shells: HashMap::new(),
             remote_menu: None,
+            bookmarks_open: false,
+            bookmark_problem: None,
             _following: following,
         };
         this.follow_state(cx);
@@ -559,6 +575,7 @@ impl BenchWindow {
             editing: self.editing.as_ref().map(|(t, e, _)| (*t, e.clone())),
             drop_hint: self.drop_hint,
             setup_open: self.setup.is_some(),
+            bookmarks_open: self.bookmarks_open,
         });
         self.bar.update(cx, |bar, cx| {
             if bar.model != model {
@@ -899,6 +916,7 @@ impl BenchWindow {
             EditTarget::RemoteHost | EditTarget::AddLink => Some(String::new()),
             EditTarget::EditLink(i) => self.bench(cx).and_then(|b| b.links.get(i)).map(crate::links::unparse),
             EditTarget::RenameLink(i) => self.bench(cx).and_then(|b| b.links.get(i)).map(|l| l.name.clone()),
+            EditTarget::RenameBookmark(id) => self.bench(cx).and_then(|b| b.bookmarks.iter().find(|k| k.id == id)).map(|k| k.label.clone()),
         };
         let Some(current) = current else { return };
         let editor = cx.new(|cx| LineEditor::selected(current, cx).submit_on_blur(window, cx).without_hint());
@@ -925,6 +943,8 @@ impl BenchWindow {
             EditTarget::ProjectFolder => ClientMsg::NewProjectTab { bench: self.bench, root: text.trim().into() },
             EditTarget::RemoteHost if text.trim().is_empty() => return,
             EditTarget::RemoteHost => ClientMsg::NewRemoteTab { bench: self.bench, host: text.trim().to_string(), join: None },
+            EditTarget::RenameBookmark(_) if text.trim().is_empty() => return,
+            EditTarget::RenameBookmark(id) => ClientMsg::RenameBookmark { bench: self.bench, id, label: text },
             EditTarget::RenameLink(i) => {
                 let Some(bench) = self.bench(cx) else { return };
                 let Some(links) = crate::links::renamed(&bench.links, i, &text) else { return };
@@ -1435,6 +1455,7 @@ struct BarModel {
     editing: Option<(EditTarget, Entity<LineEditor>)>,
     drop_hint: Option<DropAt>,
     setup_open: bool,
+    bookmarks_open: bool,
 }
 
 impl BarModel {
@@ -1654,6 +1675,23 @@ impl TabBar {
                 this.open_menu(e.position, entries, cx);
             }))
             .child(svg().path(icon("tab-new")).size(px(16.0 * s)).text_color(hsla(ui.text_dim)));
+        // The bench's bookmarks, in a list under it.
+        let marks_open = m.bookmarks_open;
+        let marks_at = layout.clone();
+        let bookmarks = div()
+            .id("bookmarks-button")
+            .relative()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .px_2()
+            .cursor_pointer()
+            .when(marks_open, |d| d.bg(hsla_alpha(accent, 0.2)))
+            .hover(|s| s.bg(hsla(ui.tab_hover)))
+            .tooltip(menu::tooltip(if cfg!(target_os = "macos") { "Bookmarks (Cmd+Shift+M)" } else { "Bookmarks (Ctrl+Shift+M)" }))
+            .on_click(self.on(|this, _: &ClickEvent, _, cx| this.toggle_bookmarks(cx)))
+            .child(svg().path(icon("bookmark")).size(px(16.0 * s)).text_color(hsla(if marks_open { ui.ink(accent) } else { ui.text_dim })))
+            .child(canvas(move |bounds, _, _| marks_at.borrow_mut().bookmarks_button = Some(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full());
         // Drawn over the tabs once they are laid out: the faint lines between
         // groups on a row, and while a tab is dragged, where it would go.
         let hint = m.drop_hint.filter(|_| cx.has_active_drag());
@@ -1756,13 +1794,14 @@ impl TabBar {
                 .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if setup_open { ui.ink(accent) } else { ui.text_dim })))
         });
         // The controls on the right, on a panel of their own, in rows: New
-        // Tab, Run Startup, Setup and the bench's name; the usage limits; its
+        // Tab, Bookmarks, Run Startup, Setup and the bench's name; the usage limits; its
         // links. Beside one row of tabs, all on one row in that order; beside
         // two, two (the actions over the limits and links); else three,
         // narrower, leaving the tabs the width. Each row is centred in the
         // panel. The tabs' widths are as laid out last (`BarLayout::assumed`).
         let ctl_h = px(24.0 * s);
-        let actions: Vec<AnyElement> = std::iter::once(new_tab.h(ctl_h).into_any_element())
+        let actions: Vec<AnyElement> = [new_tab.h(ctl_h).into_any_element(), bookmarks.h(ctl_h).into_any_element()]
+            .into_iter()
             .chain(lifecycle.map(|l| l.h(ctl_h).into_any_element()))
             .chain(setup.map(|d| d.h(ctl_h).into_any_element()))
             .chain(std::iter::once(div().h(ctl_h).flex().items_center().child(self.render_bench_label(m)).into_any_element()))
@@ -2008,6 +2047,9 @@ impl BenchWindow {
     }
 }
 
+#[path = "bookmarks.rs"]
+mod bookmarks;
+
 impl MenuHost for BenchWindow {
     fn menu_slot(&mut self) -> &mut Option<Menu<Self>> {
         &mut self.menu
@@ -2043,6 +2085,7 @@ impl Render for BenchWindow {
             Content::Project(None) | Content::Ai(None) | Content::None => div().into_any_element(),
         };
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
+        let bookmarks = self.bookmarks_open.then(|| self.render_bookmarks(&ui, accent, cx));
 
         div()
             .key_context("BenchWindow")
@@ -2057,6 +2100,9 @@ impl Render for BenchWindow {
                 if this.menu.is_some() && e.keystroke.key == "escape" {
                     this.menu = None;
                     this.refocus(window, cx);
+                    cx.stop_propagation();
+                } else if this.bookmarks_open && e.keystroke.key == "escape" {
+                    this.close_bookmarks(cx);
                     cx.stop_propagation();
                 }
             }))
@@ -2103,6 +2149,7 @@ impl Render for BenchWindow {
             }))
             .on_action(cx.listener(|this, _: &RenameBench, window, cx| this.start_edit(EditTarget::BenchName, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSetup, window, cx| this.toggle_setup(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleBookmarks, _, cx| this.toggle_bookmarks(cx)))
             .on_action(cx.listener(|this, _: &ShowShed, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))))
             .on_action(cx.listener(|this, a: &FocusBench, _, cx| {
                 if let Some(handle) = this.state.read(cx).window_at(a.0, cx) {
@@ -2153,6 +2200,7 @@ impl Render for BenchWindow {
                         .child(format!("shed.toml: {}", errors.join("; "))),
                 )
             })
+            .children(bookmarks)
             .children(menu)
             // Painted last: how long the frame took (`SHED_PERF`).
             .when(perf, |d| d.child(canvas(|_, _, _| {}, |_, _, _, _| crate::terminal_view::perf::bench_frame_painted()).absolute().size_0()))
@@ -2189,6 +2237,7 @@ mod tests {
             launcher: name.into(),
             window: None,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 
@@ -2254,6 +2303,46 @@ mod tests {
         let [(a3, ab3), (w3, wb3)] = drawn(cx);
         assert_eq!((a3, ab3), (a2, ab2));
         assert!(w3 > w2 && wb3 > wb2);
+    }
+
+    /// The bookmarks list opens under its button, says why a bookmark
+    /// cannot be gone to (staying open), and closes again.
+    #[gpui::test]
+    fn the_bookmarks_list_opens_and_says_what_it_cannot_open(cx: &mut gpui::TestAppContext) {
+        use shed_model::{Bookmark, MessageRole};
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let state = cx.new(|_| AppState::new(KeeperConn::detached(), crate::settings::Settings::default()));
+        let mut b = bench("api", &["~/api"]);
+        let terminal = b.tabs[0].id;
+        let (gone, chat) = (
+            Bookmark::file("/no/such/folder/main.rs".into(), Some(3)),
+            Bookmark::message(terminal, None, None, MessageRole::User, "Fix it"),
+        );
+        b.bookmarks = vec![gone.clone(), Bookmark::folder(std::env::temp_dir()), chat.clone()];
+        let id = b.id;
+        state.update(cx, |s, cx| {
+            s.tree = shed_model::Shed { benches: vec![b], ..Default::default() };
+            cx.notify();
+        });
+        let tracker = PlaceTracker::new(Some(id), KeeperConn::detached(), gpui::WindowBounds::Windowed(gpui::Bounds::default()), None);
+        let st = state.clone();
+        let h = cx.add_window(|window, cx| BenchWindow::new(id, st, tracker, window, cx));
+        cx.run_until_parked();
+        h.update(cx, |v, _, cx| v.toggle_bookmarks(cx)).unwrap();
+        cx.run_until_parked();
+        let (open, button) = h.update(cx, |v, _, cx| (v.bookmarks_open, v.bar.read(cx).layout.borrow().bookmarks_button)).unwrap();
+        assert!(open && button.is_some(), "open, under its button");
+        h.update(cx, |v, _, cx| v.go_to_bookmark(gone.id, cx)).unwrap();
+        let problem = h.update(cx, |v, _, _| (v.bookmarks_open, v.bookmark_problem.clone())).unwrap();
+        assert_eq!(problem, (true, Some("/no/such/folder/main.rs is not there any more".into())));
+        h.update(cx, |v, _, cx| v.go_to_bookmark(chat.id, cx)).unwrap();
+        assert_eq!(h.update(cx, |v, _, _| v.bookmark_problem.clone()).unwrap().as_deref(), Some("Its AI tab is closed"));
+        cx.run_until_parked();
+        h.update(cx, |v, _, cx| v.toggle_bookmarks(cx)).unwrap();
+        assert!(!h.update(cx, |v, _, _| v.bookmarks_open).unwrap());
     }
 
     /// Two rows: groups [a b] [c] on the first, [d] (wrapped) on the second.

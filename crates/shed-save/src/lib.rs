@@ -74,7 +74,79 @@ pub struct SavedBench {
     /// gathers those here.)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<shed_model::ProjectLink>,
+    /// Files, folders and AI messages to come back to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bookmarks: Vec<SavedBookmark>,
     pub tabs: Vec<SavedTab>,
+}
+
+/// A bookmark as saved: its paths `~/`-relative when under home.
+///
+/// ```toml
+/// [[bookmarks]]
+/// id = "…"
+/// label = "main.rs:42"
+/// created = 1764000000
+/// kind = "file"
+/// path = "~/code/api/src/main.rs"
+/// line = 42
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedBookmark {
+    pub id: shed_model::BookmarkId,
+    pub label: String,
+    #[serde(default)]
+    pub created: u64,
+    #[serde(flatten)]
+    pub kind: SavedBookmarkKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum SavedBookmarkKind {
+    File {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<u32>,
+    },
+    Folder { path: String },
+    Message {
+        tab: TabId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uuid: Option<String>,
+        #[serde(default)]
+        role: shed_model::MessageRole,
+        #[serde(default)]
+        excerpt: String,
+    },
+}
+
+impl SavedBookmark {
+    pub fn of(b: &shed_model::Bookmark) -> Self {
+        use shed_model::BookmarkKind as K;
+        let kind = match &b.kind {
+            K::File { path, line } => SavedBookmarkKind::File { path: home_relative(path), line: *line },
+            K::Folder { path } => SavedBookmarkKind::Folder { path: home_relative(path) },
+            K::AiMessage { tab, session, uuid, role, excerpt } => {
+                SavedBookmarkKind::Message { tab: *tab, session: session.clone(), uuid: uuid.clone(), role: *role, excerpt: excerpt.clone() }
+            }
+        };
+        SavedBookmark { id: b.id, label: b.label.clone(), created: b.created, kind }
+    }
+
+    pub fn to_bookmark(&self) -> shed_model::Bookmark {
+        use shed_model::BookmarkKind as K;
+        let kind = match &self.kind {
+            SavedBookmarkKind::File { path, line } => K::File { path: expand_home(path), line: *line },
+            SavedBookmarkKind::Folder { path } => K::Folder { path: expand_home(path) },
+            SavedBookmarkKind::Message { tab, session, uuid, role, excerpt } => {
+                K::AiMessage { tab: *tab, session: session.clone(), uuid: uuid.clone(), role: *role, excerpt: excerpt.clone() }
+            }
+        };
+        shed_model::Bookmark { id: self.id, label: self.label.clone(), kind, created: self.created }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -375,6 +447,7 @@ impl SavedBench {
             aliases: bench.aliases.clone(),
             window: bench.window,
             links: bench.links.clone(),
+            bookmarks: bench.bookmarks.iter().map(SavedBookmark::of).collect(),
             tabs,
         }
     }
@@ -484,6 +557,7 @@ impl SavedBench {
             launcher: self.launcher(),
             window: self.window,
             links: self.all_links(),
+            bookmarks: self.bookmarks.iter().map(SavedBookmark::to_bookmark).collect(),
         };
         Ok((bench, panes_out))
     }
@@ -1037,7 +1111,29 @@ mod tests {
             launcher: "backend".into(),
             window: Some(WindowPlace { x: 40.0, y: 30.0, width: 1200.0, height: 800.0, state: WindowState::Maximized }),
             links: vec![shed_model::ProjectLink { name: "local".into(), url: "http://localhost:3000/".into() }],
+            bookmarks: Vec::new(),
         }
+    }
+
+    #[test]
+    fn bookmarks_are_kept() {
+        let home = home().unwrap_or_else(|| "/".into());
+        let mut bench = sample();
+        let ai = bench.tabs[3].id;
+        bench.bookmarks = vec![
+            shed_model::Bookmark::file(home.join("code/api/src/main.rs"), Some(42)),
+            shed_model::Bookmark::folder("/srv/data".into()),
+            shed_model::Bookmark::message(ai, Some("abc".into()), Some("u-1".into()), shed_model::MessageRole::Assistant, "The fix is in **login.rs**."),
+            shed_model::Bookmark::message(ai, None, None, shed_model::MessageRole::User, "Why does it fail?"),
+        ];
+        bench.bookmarks[1].label = "Data".into();
+        let text = SavedBench::from_bench(&bench, |_| PaneExtras::default()).to_toml();
+        assert!(text.contains("path = \"~/code/api/src/main.rs\"") || home == std::path::Path::new("/"), "{text}");
+        assert!(text.contains("kind = \"message\"") && text.contains("role = \"assistant\""), "{text}");
+        let (back, _) = SavedBench::from_toml(&text).unwrap().to_bench().unwrap();
+        assert_eq!(back.bookmarks, bench.bookmarks);
+        // Files from before have none, and say nothing of them.
+        assert!(!SavedBench::from_bench(&sample(), |_| PaneExtras::default()).to_toml().contains("bookmarks"));
     }
 
     #[test]

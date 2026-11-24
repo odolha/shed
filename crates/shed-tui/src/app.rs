@@ -127,6 +127,8 @@ pub struct App {
     pub(crate) ticks: u64,
     /// The focused pane's cursor shape, as last drawn (`None`: no cursor there).
     pub cursor_shape: Option<shed_emu::CursorShape>,
+    /// A bookmark being gone to, until its tab is there to show it.
+    pub(crate) pending_bookmark: Option<(shed_model::Bookmark, Instant)>,
 }
 
 impl App {
@@ -163,6 +165,7 @@ impl App {
             last_tab: None,
             ticks: 0,
             cursor_shape: None,
+            pending_bookmark: None,
         }
     }
 
@@ -326,6 +329,7 @@ impl App {
                 _ => {}
             }
         }
+        self.settle_bookmark();
     }
 
     /// Leaving the tab shown: an AI prompt's text is kept with its tab.
@@ -435,6 +439,7 @@ impl App {
                 if let Some(view) = self.ais.get_mut(&tab) {
                     view.update(from as usize, entries, status);
                 }
+                self.settle_bookmark();
             }
             KeeperMsg::AiEntries { tab, entries, status } => {
                 if let Some(view) = self.ais.get_mut(&tab) {
@@ -547,6 +552,7 @@ impl App {
             KeyCode::Char('s') | KeyCode::Char('w') => self.show_benches(),
             KeyCode::Char('r') => self.open_logbook(),
             KeyCode::Esc => {}
+            KeyCode::Char('b') if self.screen == Screen::Bench && self.bench.is_some() => self.bookmarks_menu(),
             _ if self.screen != Screen::Bench || self.bench.is_none() => self.note("open a bench first (Enter on it)"),
             KeyCode::Char('c') => self.new_terminal_tab(self.here()),
             KeyCode::Char('t') => self.new_tab_menu(),
@@ -776,6 +782,7 @@ impl App {
                 items.push((Item::new("Search History").hint("C-b r"), |app, _| app.open_logbook()));
             }
         }
+        items.push((Item::new("Bookmarks…").hint("C-b b"), |app, _| app.bookmarks_menu()));
         items.push((Item::new("New Tab…").hint("C-b t"), |app, _| app.new_tab_menu()));
         items.push((Item::new("Rename Tab…").hint("C-b ,"), |app, _| app.rename_tab()));
         items.push((Item::new("Move Tab Left").hint("C-b <"), |app, _| app.move_tab_by(-1)));

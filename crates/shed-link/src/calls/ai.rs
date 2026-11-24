@@ -378,6 +378,7 @@ mod tests {
             window: None,
             started: false,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         };
         let hidden = private_sessions_in(std::iter::once(&bench));
         assert!(hidden.contains("secret-session") && hidden.contains("draft-x") && hidden.contains("other-secret"));

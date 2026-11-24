@@ -242,6 +242,9 @@ pub struct Bench {
     /// shown on its tab bar and in Shed.
     #[serde(default)]
     pub links: Vec<ProjectLink>,
+    /// Files, folders and AI messages to come back to.
+    #[serde(default)]
+    pub bookmarks: Vec<crate::Bookmark>,
 }
 
 /// A bench name made safe for app IDs and file names.
@@ -1014,6 +1017,7 @@ mod tests {
             launcher: "main".into(),
             window: None,
             links: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 

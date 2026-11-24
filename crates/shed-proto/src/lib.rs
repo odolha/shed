@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 56;
+pub const PROTOCOL_VERSION: u32 = 57;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -228,6 +228,11 @@ pub enum ClientMsg {
     /// A new terminal tab just before or after `tab`, in its group, in `cwd`
     /// or the bench's folder; it becomes the shown tab.
     NewTabNextTo { tab: TabId, after: bool, cwd: Option<PathBuf> },
+    /// Adds a bookmark to a running bench (one to the same place is not
+    /// added twice).
+    AddBookmark { bench: BenchId, bookmark: shed_model::Bookmark },
+    RemoveBookmark { bench: BenchId, id: shed_model::BookmarkId },
+    RenameBookmark { bench: BenchId, id: shed_model::BookmarkId, label: String },
 }
 
 /// One change to an AI tab's settings or kept state.

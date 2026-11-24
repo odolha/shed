@@ -326,7 +326,21 @@ pub struct AiView {
     newest_run: u64,
     /// Sub-agents running or just ended, newest last: the strip above the prompt.
     agents: Vec<usize>,
+    /// A bookmarked message to show once its conversation is here.
+    jump: Option<Jump>,
+    /// A message shown marked for a moment (a bookmark's, gone to).
+    flash: Option<(usize, Task<()>)>,
     _subs: Vec<Subscription>,
+}
+
+/// A bookmarked message to go to: in which session, and how to know it.
+struct Jump {
+    session: Option<String>,
+    uuid: Option<String>,
+    role: shed_model::MessageRole,
+    excerpt: String,
+    /// Given up on, if its conversation has not come by then.
+    until: std::time::Instant,
 }
 
 /// An entry's text as drawn: pieces of selectable text, and the colours of
@@ -469,7 +483,7 @@ impl AiView {
                 }
                 // Ctrl+S keeps the message as a draft.
                 TextEvent::Save => this.save_draft(cx),
-                TextEvent::ToggleWrap => {}
+                TextEvent::ToggleWrap | TextEvent::Bookmark => {}
             }),
             cx.observe(&filter, |_, _, cx| cx.notify()),
         ];
@@ -550,6 +564,8 @@ impl AiView {
             running: false,
             newest_run: 0,
             agents: Vec::new(),
+            jump: None,
+            flash: None,
             _subs: subs,
         };
         view.load_sessions(cx);
@@ -655,6 +671,7 @@ impl AiView {
         }
         self.open_steps.retain(|(e, _)| *e < from);
         self.set_status(status, cx);
+        self.try_jump(cx);
     }
 
     /// Entries changed in place (a sub-agent's progress), from the keeper.
@@ -1652,6 +1669,90 @@ impl AiView {
         self.conn.send_msg(ClientMsg::AiOpenSession { tab: self.tab, session });
     }
 
+    /// Goes to a bookmarked message: its session opened if another is
+    /// shown, then the message (by its id, else by its first words)
+    /// scrolled to and marked for a moment.
+    pub fn go_to_message(&mut self, session: Option<String>, uuid: Option<String>, role: shed_model::MessageRole, excerpt: String, cx: &mut Context<Self>) {
+        let shown = self.status.session.clone().or_else(|| self.ai.session.clone());
+        if session.is_some() && session != shown {
+            self.open_session(session.clone());
+        }
+        self.jump = Some(Jump { session, uuid, role, excerpt, until: std::time::Instant::now() + Duration::from_secs(15) });
+        self.try_jump(cx);
+    }
+
+    /// Goes to the message a bookmark asked for, once its conversation is here.
+    fn try_jump(&mut self, cx: &mut Context<Self>) {
+        let Some(jump) = &self.jump else { return };
+        if std::time::Instant::now() > jump.until {
+            self.jump = None;
+            return;
+        }
+        // Another session's entries still (the bookmark's is on its way).
+        let shown = self.status.session.as_ref().or(self.ai.session.as_ref());
+        if jump.session.is_some() && shown != jump.session.as_ref() {
+            return;
+        }
+        let found = shed_ai::find_message(&self.entries, jump.uuid.as_deref(), jump.role, &jump.excerpt);
+        if found.is_none() && self.entries.is_empty() {
+            return;
+        }
+        self.jump = None;
+        if let Some(i) = found {
+            self.show_entry(i, cx);
+        }
+    }
+
+    /// Scrolls an entry to the top of the view and marks it for a moment.
+    fn show_entry(&mut self, i: usize, cx: &mut Context<Self>) {
+        self.reveal(i);
+        self.list.scroll_to(gpui::ListOffset { item_ix: self.row(i), offset_in_item: px(0.0) });
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(2500)).await;
+            this.update(cx, |this, cx| {
+                this.flash = None;
+                cx.notify();
+            })
+            .ok();
+        });
+        self.flash = Some((i, task));
+        cx.notify();
+    }
+
+    /// A bookmark to entry `i` (a prompt or an answer), in the bench's list.
+    fn bookmark_message(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some((text, role, uuid)) = self.entries.get(i).and_then(Entry::message) else { return };
+        let session = self.status.session.clone().or_else(|| self.ai.session.clone());
+        let bookmark = shed_model::Bookmark::message(self.tab, session, Some(uuid.to_string()), role, text);
+        self.conn.send_msg(ClientMsg::AddBookmark { bench: self.bench, bookmark });
+        self.copied(format!("bookmark-{i}").into(), cx);
+    }
+
+    /// The small "Bookmark" button beside a message's Copy.
+    fn bookmark_button(&self, i: usize, ui: &UiColors, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let key: SharedString = format!("bookmark-{i}").into();
+        let done = self.copied.as_ref().is_some_and(|(k, _)| *k == key);
+        div()
+            .id(key)
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_1p5()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_size(px(11.0 * self.z()))
+            .text_color(hsla(ui.text_dim))
+            .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+            .tooltip(menu::tooltip("Keep this message in the bench's bookmarks"))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.bookmark_message(i, cx);
+            }))
+            .child(svg().path(icon("bookmark")).size(px(12.0)).text_color(hsla(ui.text_dim)))
+            .child(if done { "Bookmarked" } else { "Bookmark" })
+    }
+
     /// The session in Claude Code's own terminal interface.
     fn continue_in_terminal(&self, session: &str) {
         let command = format!("claude --resume {session}");
@@ -1830,6 +1931,9 @@ impl AiView {
             }
         }
         entries.push(menu::item("Copy Message", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(text.clone(), &text))).icon("copy"));
+        if self.entries.get(i).and_then(Entry::message).is_some() {
+            entries.push(menu::item("Bookmark", move |this: &mut Self, _, cx| this.bookmark_message(i, cx)).icon("bookmark"));
+        }
         entries.push(menu::item("Copy Message as Plain Text", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(plain.clone()))));
         entries.push(menu::item("Copy the Whole Conversation", move |_, _, cx| cx.write_to_clipboard(ai_text::formatted_item(all.clone(), &all))));
         if self.expanded.iter().any(|&e| matches!(self.entries.get(e), Some(Entry::Tool(_) | Entry::Thinking { .. } | Entry::Note(_)))) {
@@ -2846,7 +2950,7 @@ impl AiView {
             cx.notify();
         });
         let body = match entry {
-            Entry::User { text, images, at, pictures } => {
+            Entry::User { text, images, at, pictures, .. } => {
                 let lines: Vec<&str> = text.lines().collect();
                 let group: SharedString = format!("prompt-{i}").into();
                 let idle = self.status.state == AiState::Idle;
@@ -2883,6 +2987,7 @@ impl AiView {
                                     .on_click(cx.listener(move |this, _, window, cx| this.revert_to(i, window, cx))),
                             )
                     })
+                    .child(self.bookmark_button(i, &ui, cx))
                     .child(self.copy_button(format!("copy-prompt-{i}").into(), ClipboardItem::new_string(text.clone()), &ui, cx));
                 let editing = self.editing == Some(i);
                 div().group(group).flex().flex_col().child(div()
@@ -2910,7 +3015,7 @@ impl AiView {
                     .child(div().flex().items_center().gap_2().children(stamp(at, None, &ui, self.z())).child(actions))
                     .into_any_element()
             }
-            Entry::Assistant { text, at } => {
+            Entry::Assistant { text, at, .. } => {
                 let parsed = self.entry_pieces(i);
                 // When the response began: over its first part.
                 let first = !self.entries[..i].iter().rev().take_while(|e| !matches!(e, Entry::User { .. })).any(|e| matches!(e, Entry::Assistant { .. }));
@@ -2932,7 +3037,7 @@ impl AiView {
                     .flex_col()
                     .children(when.map(|w| w.mb_1()))
                     .child(self.render_pieces(i, &parsed, &ui, &mono, cx))
-                    .child(div().flex().justify_end().invisible().group_hover(group, |s| s.visible()).child(copy))
+                    .child(div().flex().justify_end().gap_1().invisible().group_hover(group, |s| s.visible()).child(self.bookmark_button(i, &ui, cx)).child(copy))
                     .into_any_element()
             }
             Entry::Thinking { text } => div()
@@ -3156,7 +3261,7 @@ impl AiView {
                 el.into_any_element()
             }
         };
-        let found = self.find.as_ref().is_some_and(|f| f.1 == Some(i));
+        let found = self.find.as_ref().is_some_and(|f| f.1 == Some(i)) || self.flash.as_ref().is_some_and(|f| f.0 == i);
         div()
             .id(("entry", i))
             .px_4()
@@ -5038,6 +5143,87 @@ mod tests {
     }
 
     /// Frame time with a long real conversation (measurement, not a check):
+    /// Bookmarking a prompt keeps its id; an answer without one, its first
+    /// words. Going to a bookmark scrolls to the message, found by its id
+    /// or by its words, and marks it; in another session, that session is
+    /// opened first and the message gone to when its conversation comes.
+    #[gpui::test]
+    fn messages_are_bookmarked_and_gone_to(cx: &mut gpui::TestAppContext) {
+        use shed_model::{BookmarkKind, MessageRole};
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        let conn = KeeperConn::with_closer(tx, None, Arc::new(|| {}));
+        let (bench, tab) = (BenchId::new(), TabId::new());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let ai = shed_model::AiTab { session: Some("s1".into()), ..Default::default() };
+            AiView::new(bench, tab, ai, Rgb::hex(0xFF8A57), conn, crate::settings::Settings::default(), cx)
+        });
+        cx.simulate_resize(gpui::size(px(1000.0), px(700.0)));
+        let user = |t: &str, id: &str| Entry::User { text: t.into(), images: 0, at: 0, pictures: Vec::new(), uuid: id.into() };
+        let said = |t: &str, id: &str| Entry::Assistant { text: t.into(), at: 0, uuid: id.into() };
+        let mut entries: Vec<Entry> = (0..60).map(|n| said(&format!("Step {n} of a long answer.\n\nWith a second paragraph."), "")).collect();
+        entries[30] = user("Fix the login, please", "u7");
+        entries[35] = said("The cookie is renewed now.", "");
+        let status = |s: &str| Status { session: Some(s.into()), ..Default::default() };
+        view.update(cx, |v, cx| v.update(0, entries, status("s1"), cx));
+        cx.run_until_parked();
+        let sent = |rx: &std::sync::mpsc::Receiver<shed_proto::Frame>| -> Vec<ClientMsg> {
+            rx.try_iter().filter_map(|f| match f {
+                shed_proto::Frame::Client(m) => Some(m),
+                _ => None,
+            }).collect()
+        };
+        let bookmark = |rx: &std::sync::mpsc::Receiver<shed_proto::Frame>| {
+            sent(rx).into_iter().find_map(|m| match m {
+                ClientMsg::AddBookmark { bench: b, bookmark } if b == bench => Some(bookmark),
+                _ => None,
+            }).expect("a bookmark sent")
+        };
+        let go = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext, kind: BookmarkKind| {
+            let BookmarkKind::AiMessage { session, uuid, role, excerpt, .. } = kind else { panic!() };
+            view.update(cx, |v, cx| v.go_to_message(session, uuid, role, excerpt, cx));
+            cx.run_until_parked();
+        };
+        let at = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |v, _| (v.flash.as_ref().map(|f| f.0), v.entry_at(v.list.logical_scroll_top().item_ix)))
+        };
+
+        // A prompt: its id.
+        view.update(cx, |v, cx| v.bookmark_message(30, cx));
+        let prompt = bookmark(&rx);
+        assert_eq!(prompt.label, "Fix the login, please");
+        let BookmarkKind::AiMessage { tab: t, session, uuid, role, .. } = &prompt.kind else { panic!("{prompt:?}") };
+        assert_eq!((*t, session.as_deref(), uuid.as_deref(), *role), (tab, Some("s1"), Some("u7"), MessageRole::User));
+        assert!(view.update(cx, |v, _| v.copied.as_ref().is_some_and(|c| c.0 == "bookmark-30")), "the button says Bookmarked");
+        // An answer whose id is not known: its words.
+        view.update(cx, |v, cx| v.bookmark_message(35, cx));
+        let answer = bookmark(&rx);
+        assert!(matches!(&answer.kind, BookmarkKind::AiMessage { uuid: None, role: MessageRole::Assistant, excerpt, .. } if excerpt == "The cookie is renewed now."));
+
+        // Gone to, by id and by words: at the top of the view, marked.
+        view.update(cx, |v, _| v.list.scroll_to(gpui::ListOffset { item_ix: v.row(59), offset_in_item: px(0.0) }));
+        go(&view, cx, prompt.kind.clone());
+        assert_eq!(at(&view, cx), (Some(30), Some(30)));
+        go(&view, cx, answer.kind.clone());
+        assert_eq!(at(&view, cx), (Some(35), Some(35)));
+        assert!(sent(&rx).iter().all(|m| !matches!(m, ClientMsg::AiOpenSession { .. })), "its session is the one shown");
+
+        // In another session: that one opens, and the message is gone to
+        // when its conversation comes (not before, in this one's).
+        let elsewhere = shed_model::Bookmark::message(tab, Some("s2".into()), Some("x9".into()), MessageRole::User, "Fix the login, please");
+        go(&view, cx, elsewhere.kind);
+        assert!(sent(&rx).iter().any(|m| matches!(m, ClientMsg::AiOpenSession { session: Some(s), .. } if s == "s2")));
+        assert_eq!(at(&view, cx).1, Some(35), "still where it was");
+        let other: Vec<Entry> = vec![user("Hello", "x1"), said("Hi.", "a1"), user("Fix the login, please", "x9"), said("Done.", "a2")];
+        view.update(cx, |v, cx| v.update(0, other, status("s2"), cx));
+        cx.run_until_parked();
+        assert_eq!(at(&view, cx).0, Some(2));
+        assert!(view.update(cx, |v, _| v.jump.is_none()));
+    }
+
     /// SHED_PERF_SESSION=<folder>:<id> cargo test -p shed-app --bins perf_long -- --ignored --nocapture
     #[gpui::test]
     #[ignore]
@@ -5157,7 +5343,7 @@ mod tests {
         let mut changed = view.update(cx, |v, _| v.entries[agent].clone());
         if let Entry::Tool(tool) = &mut changed {
             let run = tool.run.as_mut().unwrap();
-            run.steps.push(Entry::Assistant { text: "and **more**".into(), at: 0 });
+            run.steps.push(Entry::Assistant { text: "and **more**".into(), at: 0, uuid: String::new() });
             run.state = RunState::Running;
         }
         view.update(cx, |v, cx| v.replace(vec![(agent as u32, changed)], status, cx));
@@ -5275,8 +5461,8 @@ mod tests {
 
     #[test]
     fn jumps_land_on_messages() {
-        let user = || Entry::User { text: "q".into(), images: 0, at: 0, pictures: Vec::new() };
-        let said = || Entry::Assistant { text: "a".into(), at: 0 };
+        let user = || Entry::User { text: "q".into(), images: 0, at: 0, pictures: Vec::new(), uuid: String::new() };
+        let said = || Entry::Assistant { text: "a".into(), at: 0, uuid: String::new() };
         let tool = || Entry::Tool(Default::default());
         // 0 you, 1 response (2, 3 more of it), 4 you, 5 response, 6 more.
         let e = vec![user(), said(), tool(), said(), user(), tool(), said()];

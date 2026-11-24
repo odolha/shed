@@ -38,6 +38,7 @@ actions!(
         PrevBlock,
         NextBlock,
         Quit,
+        ToggleBookmarks,
     ]
 );
 
@@ -85,6 +86,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("f2", "rename_tab"),
     ("shift-f2", "rename_bench"),
     ("ctrl-shift-s", "setup"),
+    ("ctrl-shift-m", "bookmarks"),
     ("super-space", "shed"),
     ("ctrl-shift-space", "shed"),
     ("ctrl-1", "activate_tab_1"),
@@ -140,6 +142,7 @@ pub const MAC_KEYS: &[(&str, &str)] = &[
     ("f2", "rename_tab"),
     ("shift-f2", "rename_bench"),
     ("cmd-shift-s", "setup"),
+    ("cmd-shift-m", "bookmarks"),
     ("cmd-shift-space", "shed"),
     ("cmd-q", "quit"),
     ("cmd-1", "activate_tab_1"),
@@ -211,6 +214,7 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         "rename_tab" => KeyBinding::new(key, RenameTab, w),
         "rename_bench" => KeyBinding::new(key, RenameBench, w),
         "setup" => KeyBinding::new(key, ToggleSetup, w),
+        "bookmarks" => KeyBinding::new(key, ToggleBookmarks, w),
         // "pegboard" from before Shed had its own window.
         "shed" | "pegboard" => KeyBinding::new(key, ShowShed, w),
         // Closes Shed, as closing its window does (asking first).

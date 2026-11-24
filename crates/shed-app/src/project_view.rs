@@ -603,6 +603,21 @@ impl ProjectView {
         cx.notify();
     }
 
+    /// Shows a folder in Files: the folders down to it open, it open too
+    /// and selected (a bookmark's).
+    pub fn reveal_folder(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.panel = Panel::Files;
+        if path != self.root {
+            self.expanded.insert(path.clone());
+        }
+        self.reveal(&path, cx);
+    }
+
+    /// Adds a bookmark to the bench.
+    fn bookmark(&self, bookmark: shed_model::Bookmark) {
+        self.conn.send_msg(ClientMsg::AddBookmark { bench: self.bench, bookmark });
+    }
+
     /// Opens the folders down to `path` and selects it in the tree.
     fn reveal(&mut self, path: &Path, cx: &mut Context<Self>) {
         for dir in path.ancestors().skip(1) {
@@ -781,7 +796,7 @@ impl ProjectView {
     /// brought back, following its changes and keys.
     fn edit_text(&mut self, file: &mut OpenFile, text: &str, cx: &mut Context<Self>) {
         let lang = file.lang;
-        let options = TextOptions { line_numbers: true, wrap: self.settings.config.editor.wrap, comment: lang.and_then(|l| l.comment), ..Default::default() };
+        let options = TextOptions { line_numbers: true, wrap: self.settings.config.editor.wrap, comment: lang.and_then(|l| l.comment), bookmark: true, ..Default::default() };
         let settings = self.settings.clone();
         let view = cx.new(|cx| TextView::new(text, options, &settings, cx));
         // Unsaved edits from before (a crash, a closed bench) come back.
@@ -807,6 +822,13 @@ impl ProjectView {
                 TextEvent::ToggleWrap => {
                     let wrap = !this.settings.config.editor.wrap;
                     this.set_wrap(wrap, cx);
+                }
+                // The cursor's line.
+                TextEvent::Bookmark => {
+                    let buffer = &view.read(cx).buffer;
+                    let line = buffer.line_of(buffer.selection().head) as u32 + 1;
+                    let path = this.open[i].path.clone();
+                    this.bookmark(shed_model::Bookmark::file(path, Some(line)));
                 }
                 TextEvent::Submit | TextEvent::Cancel => {}
             }
@@ -1516,6 +1538,15 @@ impl ProjectView {
             entries.push(menu::item("Open", move |this: &mut Self, _, cx| this.open_path(open.clone(), None, cx)).icon("file"));
         }
         let to_ai = path.to_path_buf();
+        let marked = path.to_path_buf();
+        entries.push(
+            menu::item("Bookmark", move |this: &mut Self, _, _| {
+                let path = marked.clone();
+                this.bookmark(if dir { shed_model::Bookmark::folder(path) } else { shed_model::Bookmark::file(path, None) });
+            })
+            .icon("bookmark")
+            .tip("Keep it in the bench's bookmarks (the bookmark button on the tab bar)"),
+        );
         if let Some(git) = &self.git
             && let Ok(rel) = path.strip_prefix(&git.session.repo.root)
         {

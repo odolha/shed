@@ -684,7 +684,30 @@ with no keeper running). Settings writers use `paths::write_whole` (temporary
 file, then rename; links followed).
 
 The keeper saves every running bench each minute, within a second of a change to
-setup or aliases, on rename, when closing a bench, and when it stops.
+setup, aliases or bookmarks, on rename, when closing a bench, and when it stops.
+
+**Bookmarks** are the bench's (`Bench::bookmarks`, `shed_model::bookmarks`): a
+`Bookmark` has an id, a label, when it was made and a `BookmarkKind`: a file
+(absolute path, a line from 1), a folder, or an AI tab's message (`AiMessage`:
+the tab, Claude Code's session, the message's uuid when known, its role, and
+its first 120 characters as an excerpt). Windows add them with `AddBookmark`
+(the keeper skips one to the same place, `Bookmark::same_place`), and change
+them with `RenameBookmark` and `RemoveBookmark`; the keeper saves soon after.
+Saved, they are `[[bookmarks]]` tables with a `kind` (`file`, `folder`,
+`message`) and paths `~/`-relative (`SavedBookmark`). Prompts and answers
+carry Claude Code's uuid (`Entry::User`/`Entry::Assistant`, `uuid`; a prompt's
+is the one Shed sends it with, an answer's that of the record it came in, so
+the same after a session is read back from its file); `shed_ai::find_message`
+finds a bookmarked message by it, else by its excerpt. Going to a bookmark is
+the window's (`AppState::open_bookmark`): a file goes the way a terminal's
+Ctrl+click does (`reveal_file`: the project tab holding it, else one opened for
+its project), a folder to `ProjectView::reveal_folder`, a message to
+`AiView::go_to_message`, which opens its session if another is shown and goes
+to the message once that conversation's `AiUpdate` comes (`Jump`, given up
+after 15 s). The list is drawn by the bench window (`bookmarks.rs`), under the
+tab bar's button (`BarLayout::bookmarks_button`). `shed tui` has the same
+(`crates/shed-tui/src/bookmarks.rs`: a pending bookmark settled as tabs and
+conversations arrive). The nexus API does not carry them yet.
 
 A closed bench is changed in its file: Shed sends the keeper an edit (`EditSaved`:
 rename, colour, badge, a tab's name, tags or place, a new or removed tab, a pane's
