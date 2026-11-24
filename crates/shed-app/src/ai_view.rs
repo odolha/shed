@@ -3125,7 +3125,8 @@ impl AiView {
                     .when(foldable, |d| d.cursor_pointer().hover(|s| s.bg(hsla(ui.tab_hover))).on_click(toggle))
                     .when(foldable, |d| d.child(div().flex_none().w(px(10.0)).child(if open { "▾" } else { "▸" })))
                     .child(svg().path(icon(glyph)).flex_none().size(px(12.0 * self.z())).text_color(hsla(color)))
-                    .child(div().flex_1().min_w_0().truncate().child(n.text.clone()))
+                    // One line (a note's title is; more is its detail).
+                    .child(div().flex_1().min_w_0().truncate().child(n.text.lines().next().unwrap_or("").to_string()))
                     .children((n.at > 0).then(|| div().flex_none().text_size(px(11.0 * self.z())).text_color(hsla_alpha(ui.text_dim, 0.85)).child(local_time(n.at))));
                 let report = n.kind == NoteKind::Message;
                 let mut el = div().flex().flex_col().when(report, |d| d.pl_1p5().border_l_2().border_color(hsla_alpha(accent, 0.7))).child(line);
@@ -5173,6 +5174,50 @@ mod tests {
         let status = view.update(cx, |v, _| v.status.clone());
         view.update(cx, |v, cx| v.update(agent, vec![Entry::Notice { text: "Stopped".into(), error: false }], status, cx));
         assert!(!view.update(cx, |v, _| v.expanded.contains(&agent)));
+    }
+
+    /// A note titled by a long command (a background command without a
+    /// description): one line, folded, however much it says; opened, the
+    /// command as code.
+    #[gpui::test]
+    fn long_notes_draw_folded_on_one_line(cx: &mut gpui::TestAppContext) {
+        let mut t = shed_ai::Transcript::new("/tmp");
+        let command = "sed -i 's/ fn new_tab(/ fn new_tab_at(/' src/a.rs && CARGO_TARGET_DIR=target/x python3 - <<'EOF'\nimport re\nprint(re.sub('a', 'b', open('x').read()))\nEOF";
+        t.apply(&serde_json::json!({"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": command, "run_in_background": true}}]}}));
+        t.apply(&serde_json::json!({"type": "system", "subtype": "task_started", "task_id": "b1", "tool_use_id": "b", "is_backgrounded": true}));
+        t.apply(&serde_json::json!({"type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "b", "status": "completed", "summary": format!("Background command \"{command}\" completed (exit code 0)")}));
+        let mut entries = t.entries.clone();
+        let long = entries.iter().position(|e| matches!(e, Entry::Note(_))).expect("a note");
+        entries.push(Entry::Note(shed_ai::Note { text: "Short".into(), ..Default::default() }));
+        // A title of more lines (none comes so now): its first alone.
+        entries.push(Entry::Note(shed_ai::Note { text: "one\ntwo\nthree".into(), ..Default::default() }));
+        let (short, lines) = (entries.len() - 2, entries.len() - 1);
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let ai = shed_model::AiTab { folder: "/tmp".into(), ..Default::default() };
+            AiView::new(BenchId::new(), TabId::new(), ai, Rgb::hex(0xFF8A57), crate::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default(), cx)
+        });
+        cx.simulate_resize(gpui::size(px(900.0), px(1200.0)));
+        view.update(cx, |v, cx| v.update(0, entries, Status::default(), cx));
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let height = |cx: &mut gpui::VisualTestContext, i: usize| view.update(cx, |v, _| v.list.bounds_for_item(v.row(i)).map(|b| b.size.height)).expect("drawn");
+        let one = height(cx, short);
+        assert!(!view.update(cx, |v, _| v.expanded.contains(&long) || v.parsed.contains_key(&long)), "folded on arrival");
+        assert_eq!(height(cx, long), one, "one line");
+        assert_eq!(height(cx, lines), one, "one line");
+        view.update(cx, |v, _| {
+            v.expanded.insert(long);
+            v.list.remeasure();
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(height(cx, long) > one * 3.0);
+        let parsed = view.update(cx, |v, _| v.parsed.get(&long).cloned()).expect("opened, its detail drawn");
+        assert!(matches!(&parsed.pieces[..], [Piece { kind: Kind::Code { lang, .. }, text }] if lang == "sh" && text.text.contains("print(re.sub")), "{:?}", parsed.pieces.iter().map(|p| &p.kind).collect::<Vec<_>>());
     }
 
     #[gpui::test]

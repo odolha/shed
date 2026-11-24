@@ -212,6 +212,44 @@ pub fn first_line(text: &str, max: usize) -> String {
     }
 }
 
+/// The longest a note's title gets.
+pub const NOTE_TITLE: usize = 120;
+
+/// A note as shown: its title one line (cut to `NOTE_TITLE`), whatever
+/// more it said moved into its detail, ahead of what was there. In Markdown
+/// (`Command` and `Hook` notes' detail is plain text) as code: it is a
+/// command, mostly (Claude Code names a command without a description by
+/// the command itself).
+pub fn one_line_note(kind: crate::NoteKind, text: String, detail: String) -> (String, String) {
+    let title = first_line(&text, NOTE_TITLE);
+    let whole = text.trim();
+    let one = !whole.contains('\n') && whole.chars().count() <= NOTE_TITLE;
+    if one || detail.contains(whole) {
+        return (title, detail);
+    }
+    let spill = if matches!(kind, crate::NoteKind::Command | crate::NoteKind::Hook) { whole.to_string() } else { fenced(whole, "") };
+    let detail = if detail.trim().is_empty() { spill } else { format!("{spill}\n\n{detail}") };
+    (title, detail)
+}
+
+/// `text` as a Markdown code block, its fence longer than any in it.
+pub fn fenced(text: &str, lang: &str) -> String {
+    let mut fence = "```".to_string();
+    while text.contains(&fence) {
+        fence.push('`');
+    }
+    format!("{fence}{lang}\n{}\n{fence}", text.trim_end())
+}
+
+/// Claude Code's line for a command in the background
+/// (`Background command "cargo test" completed (exit code 0)`): the
+/// command, and what became of it.
+pub fn command_summary(summary: &str) -> Option<(&str, &str)> {
+    let rest = summary.strip_prefix("Background command \"")?;
+    let end = rest.rfind('"')?;
+    Some((&rest[..end], rest[end + 1..].trim()))
+}
+
 /// Reads a user message's text.
 pub fn read_user_text(text: &str) -> UserText {
     let mut out = UserText::default();

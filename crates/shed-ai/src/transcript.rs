@@ -88,6 +88,10 @@ pub struct Transcript {
     runs: HashMap<String, usize>,
     /// Tools a sub-agent called, by id: the entry of the agent they belong to.
     owners: HashMap<String, usize>,
+    /// Tasks a sub-agent started (its commands, in the background or not),
+    /// by Claude Code's task id: the agent's entry, the step's tool id, and
+    /// whether it went on in the background.
+    sub_tasks: HashMap<String, (usize, String, bool)>,
     /// The inputs of tools whose results say more than their text (agents,
     /// timers, background commands), by tool id.
     inputs: HashMap<String, Value>,
@@ -98,7 +102,11 @@ pub struct Transcript {
     woken: bool,
 }
 
-/// The file name a picture is kept under: its content's hash, its kind.
+/// A `system` event about a task (a command, an agent, a watch).
+fn is_task_event(m: &Value) -> bool {
+    matches!(m.get("subtype").and_then(Value::as_str), Some("task_started" | "task_progress" | "task_updated" | "task_notification"))
+}
+
 /// Claude Code's own note after a tool returned a picture, sent as a user
 /// message: `[Image: original 1440x4742, displayed at …]` (one per line).
 fn is_picture_note(text: &str) -> bool {
@@ -162,6 +170,7 @@ pub fn prune_files(dir: &std::path::Path, max_age: std::time::Duration) -> usize
     prune(dir, cutoff)
 }
 
+/// The file name a picture is kept under: its content's hash, its kind.
 fn picture_name(data: &[u8], media_type: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -293,6 +302,7 @@ impl Transcript {
         self.tools.retain(|_, i| *i < entry);
         self.runs.retain(|_, i| *i < entry);
         self.owners.retain(|_, i| *i < entry);
+        self.sub_tasks.retain(|_, (i, ..)| *i < entry);
         self.touched.retain(|i| *i < entry);
         self.streaming.clear();
         self.streamed.clear();
@@ -306,10 +316,12 @@ impl Transcript {
         self.push(Entry::Notice { text: text.into(), error });
     }
 
-    /// One of Claude Code's notes, in the conversation.
+    /// One of Claude Code's notes, in the conversation: its title one line,
+    /// whatever more it says in its (folded) detail.
     fn note(&mut self, kind: NoteKind, text: impl Into<String>, detail: impl Into<String>, error: bool) {
         let at = self.now();
-        self.push(Entry::Note(Note { kind, text: text.into(), detail: detail.into(), error, at }));
+        let (text, detail) = crate::notes::one_line_note(kind, text.into(), detail.into());
+        self.push(Entry::Note(Note { kind, text, detail, error, at }));
     }
 
     /// Keeps a prompt's picture in `picture_dir` (once: the same picture is
@@ -400,6 +412,9 @@ impl Transcript {
         if let Some(parent) = m.get("parent_tool_use_id").and_then(Value::as_str) {
             if matches!(kind, "assistant" | "user") {
                 self.sub_message(parent, kind, m);
+            } else if kind == "system" && is_task_event(m) {
+                // Its own tasks: its agent's, never the conversation's.
+                self.task_event(m);
             }
             return None;
         }
@@ -702,7 +717,7 @@ impl Transcript {
                 let why = m.get("message").and_then(Value::as_str).unwrap_or("Permission denied");
                 self.notice(why.to_string(), true);
             }
-            "task_started" | "task_progress" | "task_updated" | "task_notification" => self.task_event(m),
+            _ if is_task_event(m) => self.task_event(m),
             _ => {}
         }
     }

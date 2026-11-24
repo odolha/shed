@@ -9,11 +9,14 @@
 use serde_json::Value;
 
 use super::{Transcript, cut, message_text, result_text};
-use crate::notes::{TaskNote, agent_report, first_line, peer_message};
+use crate::notes::{TaskNote, agent_report, command_summary, fenced, first_line, peer_message};
 use crate::{Entry, NoteKind, Run, RunState, State, Timer, TimerKind, Tool, summarize};
 
 /// Tools whose input is kept, for what their result means.
 pub(super) const KEEP_INPUT: &[&str] = &["Agent", "Task", "Bash", "Monitor", "TaskStop", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "SendMessage"];
+
+/// The most of a command a note's title shows.
+const COMMAND_IN_TITLE: usize = 80;
 
 fn is_agent(name: &str) -> bool {
     matches!(name, "Agent" | "Task")
@@ -237,10 +240,41 @@ impl Transcript {
         }
     }
 
-    /// A `system` event about a task: started, progress, done.
+    /// The sub-agent (its entry) a task belongs to, by the step that
+    /// started it or the task's id; none for the conversation's own.
+    fn sub_task_owner(&self, tool: Option<&str>, task: &str) -> Option<usize> {
+        if let Some(&top) = tool.and_then(|t| self.owners.get(t)) {
+            return Some(top);
+        }
+        if tool.is_some_and(|t| self.tools.contains_key(t)) {
+            return None;
+        }
+        self.sub_tasks.get(task).map(|(top, ..)| *top)
+    }
+
+    /// A `system` event about a task: started, progress, done. A
+    /// sub-agent's own (a command it runs) goes to its agent.
     pub(super) fn task_event(&mut self, m: &Value) {
         let task = s(m, "task_id").to_string();
         let tool = s(m, "tool_use_id");
+        let tool_id = Some(tool).filter(|t| !t.is_empty());
+        let mut sub = self.sub_task_owner(tool_id, &task);
+        // Not seen as its step yet: known by the agent's task, or the
+        // agent's tool it streams under.
+        if sub.is_none() && !self.tools.contains_key(tool) && !self.runs.contains_key(&task) {
+            let parent_task = s(m, "parent_task_id");
+            let parent_tool = s(m, "parent_tool_use_id");
+            let by_task = Some(parent_task).filter(|t| !t.is_empty()).and_then(|t| self.runs.get(t));
+            let by_tool = Some(parent_tool).filter(|t| !t.is_empty()).and_then(|t| self.owners.get(t).or_else(|| self.tools.get(t)));
+            sub = by_task.or(by_tool).copied();
+            if sub.is_none() && m.get("owned_by_subagent").and_then(Value::as_bool) == Some(true) {
+                // Whose, not known: still never the conversation's.
+                return;
+            }
+        }
+        if let Some(top) = sub {
+            return self.sub_task_event(top, m);
+        }
         let i = self.tools.get(tool).or_else(|| self.runs.get(&task)).copied();
         let now = self.now();
         match s(m, "subtype") {
@@ -281,29 +315,74 @@ impl Transcript {
                 run.ended = num(patch.get("end_time")).map_or(now, |ms| ms / 1000);
                 self.touch_one(i);
             }
-            "task_notification" => {
-                let usage = m.get("usage").cloned().unwrap_or(Value::Null);
-                let note = TaskNote {
-                    task,
-                    tool: Some(tool.to_string()).filter(|t| !t.is_empty()),
-                    status: s(m, "status").to_string(),
-                    summary: s(m, "summary").to_string(),
-                    output: s(m, "output_file").to_string(),
-                    tokens: num(usage.get("total_tokens")).unwrap_or(0),
-                    tool_uses: num(usage.get("tool_uses")).unwrap_or(0) as u32,
-                    duration_ms: num(usage.get("duration_ms")).unwrap_or(0),
-                    ..Default::default()
-                };
-                self.task_note(&note, true);
-            }
+            "task_notification" => self.task_note(&system_task_note(m), true),
             _ => {}
         }
+    }
+
+    /// A `system` event about a task a sub-agent started (at `top`).
+    fn sub_task_event(&mut self, top: usize, m: &Value) {
+        let task = s(m, "task_id").to_string();
+        match s(m, "subtype") {
+            "task_started" => {
+                let background = m.get("is_backgrounded").and_then(Value::as_bool) == Some(true);
+                self.sub_tasks.insert(task, (top, s(m, "tool_use_id").to_string(), background));
+            }
+            "task_notification" => self.sub_task_note(top, &system_task_note(m)),
+            // Its progress shows in the agent's steps; its end comes as a
+            // notification.
+            _ => {}
+        }
+    }
+
+    /// A task a sub-agent started (at `top`) ended: its step and its
+    /// agent's last line say so; the conversation is not told (the agent
+    /// is).
+    fn sub_task_note(&mut self, top: usize, n: &TaskNote) {
+        if !self.noted.insert(format!("sub|{}|{}|{}|{}", n.task, n.status, n.summary, n.event)) && n.event.is_empty() {
+            return;
+        }
+        let known = self.sub_tasks.get(&n.task).cloned();
+        let tool = n.tool.clone().or_else(|| known.as_ref().map(|(_, t, _)| t.clone())).unwrap_or_default();
+        let Some(run) = self.tool_mut(top).and_then(|t| t.run.as_mut()) else { return };
+        let step = run.steps.iter_mut().rev().find_map(|e| match e {
+            Entry::Tool(x) if !tool.is_empty() && x.id == tool => Some(x),
+            _ => None,
+        });
+        let in_background = known.as_ref().is_some_and(|k| k.2) || step.as_ref().is_some_and(|x| x.result.as_deref().is_some_and(|r| r.starts_with("Command running in background")));
+        if !in_background && n.event.is_empty() {
+            // A command it waited for: its result says how it went.
+            return;
+        }
+        let what = if !n.event.is_empty() {
+            format!("Saw: {}", first_line(&n.event, 100))
+        } else {
+            match command_summary(&n.summary) {
+                Some((_, how)) if !how.is_empty() => how.to_string(),
+                _ if !n.status.is_empty() => n.status.clone(),
+                _ => first_line(&n.summary, 100),
+            }
+        };
+        let line = format!("In the background: {what}");
+        if let Some(step) = step {
+            let said = step.result.take().unwrap_or_default();
+            step.result = Some(if said.contains(&line) { said } else if said.is_empty() { line.clone() } else { format!("{said}\n\n{line}") });
+            step.error |= n.failed();
+        }
+        if run.running() {
+            run.last = line;
+        }
+        self.touch_one(top);
     }
 
     /// A task finished (or a watch saw something): its tool's run says so,
     /// and when it ran in the background, a note in the conversation.
     /// Live, an agent's summary is what it ended with.
     pub(super) fn task_note(&mut self, n: &TaskNote, live: bool) {
+        // A sub-agent's own task: its agent's, not the conversation's.
+        if let Some(top) = self.sub_task_owner(n.tool.as_deref(), &n.task) {
+            return self.sub_task_note(top, n);
+        }
         // A task ends once (a saved session may tell it twice); a watch may
         // see the same line again, and each time is an event.
         let event = n.status.is_empty() && !n.event.is_empty();
@@ -320,12 +399,25 @@ impl Transcript {
                 self.touch_one(i.unwrap_or_default());
             }
             let text = format!("{}: {}", n.summary.trim_end_matches(':'), first_line(&n.event, 100));
-            return self.note(NoteKind::Task, text, n.event.clone(), false);
+            return self.note(NoteKind::Task, text, fenced(&n.event, ""), false);
         }
         let state = run_state(&n.status);
         let mut background = true;
         let mut text = n.summary.clone();
         let mut detail = n.result.clone();
+        // A command without a description is named by itself: its first
+        // line in the title, the whole below.
+        if let Some((command, how)) = command_summary(&n.summary)
+            && (command.contains('\n') || command.chars().count() > COMMAND_IN_TITLE)
+        {
+            // As much as the title has room for.
+            let room = crate::notes::NOTE_TITLE.saturating_sub(how.chars().count() + 24).clamp(20, COMMAND_IN_TITLE);
+            let short = first_line(command, room);
+            let short = if short.ends_with('…') { short } else { format!("{short} …") };
+            text = format!("Background command \"{short}\" {how}").trim_end().to_string();
+            let code = fenced(command.trim(), "sh");
+            detail = if detail.trim().is_empty() { code } else { format!("{code}\n\n{detail}") };
+        }
         if let Some(i) = i
             && let Some(t) = self.tool_mut(i)
         {
@@ -564,6 +656,16 @@ impl Transcript {
 
     /// One of a sub-agent's records, as a step of the agent's run at `top`.
     fn sub_record(&mut self, top: usize, kind: &str, m: &Value) {
+        // A task of its own told of (a command it ran in the background).
+        if kind == "user" {
+            let text = message_text(m.get("message").and_then(|x| x.get("content")));
+            if text.trim_start().starts_with("<task-notification>") {
+                for n in crate::notes::task_notes(&text) {
+                    self.sub_task_note(top, &n);
+                }
+                return;
+            }
+        }
         let at = self.now();
         let cwd = self.cwd.clone();
         let Some(content) = m.get("message").and_then(|x| x.get("content")).and_then(Value::as_array).cloned() else { return };
@@ -670,11 +772,23 @@ impl Transcript {
             let mut last = None;
             for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
                 // Only messages: most lines are other records.
-                if !(line.contains("\"assistant\"") || line.contains("\"tool_result\"")) {
+                if !(line.contains("\"assistant\"") || line.contains("\"tool_result\"") || line.contains("<task-notification>")) {
                     continue;
                 }
                 let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
                 let kind = s(&v, "type").to_string();
+                // Its own tasks' notifications, as they came to it.
+                if kind == "attachment" {
+                    let prompt = v.get("attachment").filter(|a| s(a, "type") == "queued_command").and_then(|a| a.get("prompt"));
+                    let prompt = match prompt {
+                        Some(Value::String(p)) => p.clone(),
+                        other => message_text(other),
+                    };
+                    for n in crate::notes::task_notes(&prompt) {
+                        self.sub_task_note(top, &n);
+                    }
+                    continue;
+                }
                 if !matches!(kind.as_str(), "assistant" | "user") {
                     continue;
                 }
@@ -710,6 +824,22 @@ impl Transcript {
         self.end_runs("Ended with its session");
         self.status.timers.clear();
         self.woken = false;
+    }
+}
+
+/// A `system` `task_notification`, as a notification.
+fn system_task_note(m: &Value) -> TaskNote {
+    let usage = m.get("usage").cloned().unwrap_or(Value::Null);
+    TaskNote {
+        task: s(m, "task_id").to_string(),
+        tool: Some(s(m, "tool_use_id").to_string()).filter(|t| !t.is_empty()),
+        status: s(m, "status").to_string(),
+        summary: s(m, "summary").to_string(),
+        output: s(m, "output_file").to_string(),
+        tokens: num(usage.get("total_tokens")).unwrap_or(0),
+        tool_uses: num(usage.get("tool_uses")).unwrap_or(0) as u32,
+        duration_ms: num(usage.get("duration_ms")).unwrap_or(0),
+        ..Default::default()
     }
 }
 
@@ -799,6 +929,121 @@ mod tests {
         assert_eq!((sleep.state, sleep.task.as_str()), (RunState::Done, "bcxut3v3y"));
         assert_eq!(notes(&t), ["Background command \"Sleep 4 seconds in background\" completed (exit code 0)", "Agent “Echo twice” finished"]);
         assert_eq!(t.status.state, State::Idle);
+    }
+
+    fn step<'a>(run: &'a Run, id: &str) -> &'a Tool {
+        run.steps.iter().find_map(|e| matches!(e, Entry::Tool(x) if x.id == id).then(|| if let Entry::Tool(x) = e { x } else { unreachable!() })).unwrap_or_else(|| panic!("no step {id} in {:#?}", run.steps))
+    }
+
+    /// Recorded: a sub-agent runs a three-line command in the background
+    /// with no description, then one it waits for. Claude Code tells of
+    /// both as tasks (`task_started`, `task_notification`, with the
+    /// sub-agent's tool ids and no `parent_tool_use_id`): they are the
+    /// agent's steps, never notes in the conversation (they were, titled
+    /// with the whole command).
+    #[test]
+    fn a_sub_agents_own_tasks_stay_under_it() {
+        let mut t = Transcript::new("/tmp/shed-cap-sub");
+        for v in lines("subagent-tasks.jsonl") {
+            t.apply(&v);
+        }
+        assert_eq!(notes(&t), Vec::<String>::new(), "{:#?}", t.entries);
+        let agent = tool(&t, "Agent: Background bash run and read output");
+        let run = agent.run.as_ref().unwrap();
+        assert_eq!((run.state, run.tools), (RunState::Done, 3));
+        let bash = step(run, "toolu_01BmoMjdrn3kWS9ayCxmFWQM");
+        let result = bash.result.as_deref().unwrap();
+        assert!(result.starts_with("Command running in background") && result.ends_with("In the background: completed (exit code 0)"), "{result}");
+        assert!(!bash.error);
+        let wait = step(run, "toolu_01EC1ibbPq8nLJgvTqMKTNTo");
+        assert_eq!(wait.result.as_deref(), Some("(Bash completed with no output)"), "a command it waited for keeps its result");
+        assert!(t.sub_tasks.contains_key("b1j5084qi"));
+        assert!(!t.runs.contains_key("b1j5084qi"), "never a run of the conversation's");
+    }
+
+    /// The other ways a sub-agent's task is told of: its start before its
+    /// step is seen (known by the agent's task), an event under the
+    /// agent's tool, the notification as text (to Claude, or to the agent
+    /// itself), and one whose agent is not known at all.
+    #[test]
+    fn a_sub_agents_tasks_in_every_shape_go_to_it() {
+        let mut t = Transcript::new("/tmp");
+        t.clock = 10;
+        t.apply(&json!({"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "ag", "name": "Agent", "input": {"description": "Build", "prompt": "build it", "run_in_background": true}}]}}));
+        t.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "a1", "tool_use_id": "ag", "is_backgrounded": true, "task_type": "local_agent"}));
+        // Started before its step streams in.
+        t.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "b1", "tool_use_id": "s1", "owned_by_subagent": true, "parent_task_id": "a1", "is_backgrounded": true, "task_type": "local_bash", "description": "cargo build \\\n  --release"}));
+        t.apply(&json!({"type": "assistant", "parent_tool_use_id": "ag", "message": {"id": "m2", "content": [
+            {"type": "tool_use", "id": "s1", "name": "Bash", "input": {"command": "cargo build \\\n  --release", "run_in_background": true}},
+            {"type": "tool_use", "id": "s2", "name": "Bash", "input": {"command": "npm run dev", "run_in_background": true}},
+            {"type": "tool_use", "id": "s3", "name": "Bash", "input": {"command": "make lint", "run_in_background": true}},
+        ]}}));
+        t.apply(&json!({"type": "user", "parent_tool_use_id": "ag", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "s1", "content": "Command running in background with ID: b1. Output is being written to: /tmp/b1.output."},
+            {"type": "tool_result", "tool_use_id": "s2", "content": "Command running in background with ID: b2. Output is being written to: /tmp/b2.output."},
+            {"type": "tool_result", "tool_use_id": "s3", "content": "Command running in background with ID: b3. Output is being written to: /tmp/b3.output."},
+        ]}}));
+        // Ended: a system event with no tool id, under the agent's tool.
+        t.apply(&json!({"type": "system", "subtype": "task_notification", "parent_tool_use_id": "ag", "task_id": "b1", "status": "failed", "summary": "Background command \"cargo build \\\n  --release\" failed with exit code 101"}));
+        // As text, to Claude.
+        t.apply(&json!({"type": "user", "message": {"content": "<task-notification>\n<task-id>b2</task-id>\n<tool-use-id>s2</tool-use-id>\n<status>killed</status>\n<summary>Background command \"npm run dev\" was stopped</summary>\n</task-notification>"}}));
+        // As text, to the agent.
+        t.apply(&json!({"type": "user", "parent_tool_use_id": "ag", "message": {"content": [{"type": "text", "text": "<task-notification>\n<task-id>b3</task-id>\n<tool-use-id>s3</tool-use-id>\n<status>completed</status>\n<summary>Background command \"make lint\" completed (exit code 0)</summary>\n</task-notification>"}]}}));
+        // A sub-agent's, whose agent is not known: dropped.
+        t.apply(&json!({"type": "system", "subtype": "task_notification", "task_id": "b9", "tool_use_id": "s9", "owned_by_subagent": true, "parent_task_id": "a9", "status": "completed", "summary": "Background command \"ls\" completed (exit code 0)"}));
+        assert_eq!(notes(&t), Vec::<String>::new(), "{:#?}", t.entries);
+        assert!(!t.woken, "nothing told Claude to go on");
+        let Entry::Tool(agent) = &t.entries[0] else { panic!() };
+        let run = agent.run.as_ref().unwrap();
+        assert!(run.running(), "its own tasks ending is not the agent ending");
+        let build = step(run, "s1");
+        assert!(build.error && build.result.as_deref().unwrap().ends_with("In the background: failed with exit code 101"), "{build:#?}");
+        assert!(step(run, "s2").error);
+        assert!(!step(run, "s3").error && step(run, "s3").result.as_deref().unwrap().ends_with("completed (exit code 0)"));
+        assert_eq!(run.last, "In the background: completed (exit code 0)");
+        // The conversation's own background command still gets its note.
+        t.apply(&json!({"type": "assistant", "message": {"id": "m3", "content": [{"type": "tool_use", "id": "own", "name": "Bash", "input": {"command": "sleep 1", "run_in_background": true}}]}}));
+        t.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "b5", "tool_use_id": "own", "is_backgrounded": true}));
+        t.apply(&json!({"type": "system", "subtype": "task_notification", "task_id": "b5", "tool_use_id": "own", "status": "completed", "summary": "Background command \"sleep 1\" completed (exit code 0)"}));
+        assert_eq!(notes(&t), ["Background command \"sleep 1\" completed (exit code 0)"]);
+    }
+
+    /// A saved sub-agent's file: a notification of its own task, as an
+    /// attachment, goes to its step.
+    #[test]
+    fn a_saved_sub_agents_task_notifications_go_to_its_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let records = [
+            json!({"type": "assistant", "isSidechain": true, "message": {"id": "m1", "content": [{"type": "tool_use", "id": "s1", "name": "Bash", "input": {"command": "make\n&& make test", "run_in_background": true}}]}}),
+            json!({"type": "user", "isSidechain": true, "message": {"content": [{"type": "tool_result", "tool_use_id": "s1", "content": "Command running in background with ID: b1."}]}}),
+            json!({"type": "attachment", "isSidechain": true, "attachment": {"type": "queued_command", "commandMode": "task-notification", "prompt": "<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>s1</tool-use-id>\n<status>completed</status>\n<summary>Background command \"make\n&amp;&amp; make test\" completed (exit code 0)</summary>\n</task-notification>"}}),
+        ];
+        std::fs::write(dir.path().join("agent-a1.jsonl"), records.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
+        std::fs::write(dir.path().join("agent-a1.meta.json"), json!({"toolUseId": "ag", "agentType": "general-purpose"}).to_string()).unwrap();
+        let mut t = Transcript::new("/tmp");
+        t.apply(&json!({"type": "assistant", "message": {"id": "m0", "content": [{"type": "tool_use", "id": "ag", "name": "Agent", "input": {"description": "Make", "prompt": "make it"}}]}}));
+        t.read_subagents(dir.path());
+        assert_eq!(notes(&t), Vec::<String>::new());
+        let Entry::Tool(agent) = &t.entries[0] else { panic!() };
+        assert!(step(agent.run.as_ref().unwrap(), "s1").result.as_deref().unwrap().ends_with("In the background: completed (exit code 0)"));
+    }
+
+    /// A note's title is one line; the rest is below, folded, as code.
+    #[test]
+    fn note_titles_are_one_line() {
+        let mut t = Transcript::new("/tmp");
+        t.apply(&json!({"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": "sed -i 's/a/b/' x.rs && python3 - <<'EOF'\nprint(1)\nEOF", "run_in_background": true}}]}}));
+        t.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "b1", "tool_use_id": "b", "is_backgrounded": true}));
+        t.apply(&json!({"type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "b", "status": "completed", "summary": "Background command \"sed -i 's/a/b/' x.rs && python3 - <<'EOF'\nprint(1)\nEOF\" completed (exit code 0)"}));
+        // A note with no tool to go with, a long one.
+        let long = "x".repeat(300);
+        t.apply(&json!({"type": "user", "message": {"content": format!("<task-notification>\n<task-id>q</task-id>\n<status>completed</status>\n<summary>{long}\nand more</summary>\n</task-notification>")}}));
+        let all: Vec<&Note> = t.entries.iter().filter_map(|e| if let Entry::Note(n) = e { Some(n) } else { None }).collect();
+        assert_eq!(all[0].text, "Background command \"sed -i 's/a/b/' x.rs && python3 - <<'EOF' …\" completed (exit code 0)");
+        assert_eq!(all[0].detail, "```sh\nsed -i 's/a/b/' x.rs && python3 - <<'EOF'\nprint(1)\nEOF\n```");
+        assert_eq!(all[1].text, format!("{}…", "x".repeat(120)));
+        assert_eq!(all[1].detail, format!("```\n{long}\nand more\n```"));
+        assert!(all.iter().all(|n| !n.text.contains('\n') && n.text.chars().count() <= 121));
     }
 
     /// An agent working in the background while the conversation goes on

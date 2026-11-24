@@ -467,7 +467,10 @@ them into steps of that tool (`transcript/tasks.rs`, `owners` maps the tools an
 agent calls back to it), never into entries. `system` events tell the rest:
 `task_started` (task id, tool id, `is_backgrounded`), `task_progress` (tool
 calls, tokens), `task_updated`, `task_notification` (status, summary; an
-agent's summary is its last words). A background agent's tool result is "Async
+agent's summary is its last words). A sub-agent's own tasks (its commands)
+come as such events too, with its tool ids (`owned_by_subagent`,
+`parent_task_id`): they go to its run (`sub_tasks`), the step marked as it
+ended, never a note in the conversation. A background agent's tool result is "Async
 agent launched" with its `agentId` (`tool_use_result` live, `toolUseResult` in
 the file); a background command's has `backgroundTaskId`. Saved sessions keep
 sub-agents apart: `<session>/subagents/agent-ID.jsonl` (`isSidechain` records)
@@ -505,7 +508,9 @@ user's `/name args`), `<local-command-stdout>`, `<bash-input>`/`<bash-stdout>`
 (`turnOrigin: "scheduled"`) or a background agent handing back (`origin.kind:
 "peer"`, `<agent-message from=…>`), the rest hidden. `shed_ai::notes` reads
 them; the transcript updates the run they name and adds an `Entry::Note` (kind,
-line, folded detail) instead of a prompt. Live, notifications are `system`
+line, folded detail) instead of a prompt. A note's line is always one line
+(`notes::one_line_note`): more (a command without a description, which Claude
+Code names by the command) goes into its detail, as code. Live, notifications are `system`
 events, not messages.
 
 An agent's hand-back (its report, sent with its `SubagentHandback` tool) comes

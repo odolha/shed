@@ -1076,7 +1076,9 @@ A sub-agent's line says how it does (`running 3 min · $ cargo test · 4 tool
 calls`, `done in 40 s`); unfolded, it shows the kind of agent, its steps
 (`N earlier steps not shown` before the latest) and its report. Claude Code's
 own notes (a background task finished, a wake-up, a command's output, a
-compaction) are lines of their own, their detail folded. Wake-ups, scheduled
+compaction) are lines of their own, one line each, their detail folded (a long
+command in full, as code). A sub-agent's own background commands show in its
+steps, not as notes. Wake-ups, scheduled
 jobs and watches Claude set wait above the prompt, counting down (`⏰ Wakes up
 in 18 min`), and the tool that set one says when it fires; so do running
 sub-agents (the latest four, and those ended in the last minute). `Alt+I` attaches a
