@@ -212,7 +212,7 @@ SHED_NEXUS_WEB=1 cargo test -p shed-nexus --test account web   # the built-in ap
 
 `tools/screenshots/take.sh` builds a demo world (`demo-world.sh`: a neutral
 prompt, a few projects with Git history and changes, benches with terminal,
-project and AI tabs, a made-up Claude Code session in the demo home, usage limits),
+project and AI tabs and bookmarks, a made-up Claude Code session in the demo home, usage limits),
 runs a separate Shed in it on a virtual X display of its own (Xvfb, at 2× density,
 with Mesa's software Vulkan), and writes the screenshots in `docs/images/`. Nothing
 shows on your screen and your input is untouched, so it can run while you work.

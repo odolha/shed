@@ -126,6 +126,8 @@ xtype "$docs_win" %0.3 @Control_L+Shift_L+r %3 && xtype "$docs_win" @Shift_L+e %
 # A prompt whose turn leaves an agent working in the background and a
 # wake-up waiting (the stand-in Claude Code plays it).
 xtype "$docs_win" %0.3 "Check the links in the guides, and build the site" %0.3 @Control_L+Return %5 && grab "$docs_win" ai-agents || true
+# The bench's bookmarks (Ctrl+Shift+M), under their button on the tab bar.
+xtype "$docs_win" %0.3 @Control_L+Shift_L+m %1.2 && grab "$docs_win" bookmarks && xtype "$docs_win" @Escape %0.3 || true
 "$shed" hide docs >/dev/null; sleep 4
 grab "$shed_win" shed
 echo 'theme = "shed-light"' > "$XDG_CONFIG_HOME/shed/shed.toml"; sleep 3
@@ -148,7 +150,7 @@ def scaled(im, factor):
     return im.resize((int(im.width * factor), int(im.height * factor)), Image.LANCZOS)
 # (colours.png and tab-menu.png need right-clicks, which do not reach GPUI on
 # Xvfb: they stay as they were.)
-for name in ["shed", "bench", "shed-light", "project", "ai", "ai-agents", "review", "setup", "logbook", "find"]:
+for name in ["shed", "bench", "shed-light", "project", "ai", "ai-agents", "review", "setup", "logbook", "find", "bookmarks"]:
     path = f"{demo}/{name}.png"
     if os.path.exists(path):
         im = Image.open(path).convert("RGB")

@@ -229,6 +229,8 @@ tabs' conversations, to come back to. Add them where they are:
 - In an AI tab, hover one of your prompts or one of Claude's answers and click
   **Bookmark** beside Copy (or right-click it).
 
+![A bench's bookmarks, under their button](images/bookmarks.png)
+
 The bookmark button on the tab bar (after New Tab), or Ctrl+Shift+M
 (Cmd+Shift+M), lists them under it, by kind (files, folders, messages), each
 with its name and, dimmed, where it is: a path under the bench's folder, or

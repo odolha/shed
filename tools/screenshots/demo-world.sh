@@ -205,7 +205,26 @@ bench board blue "~/projects/board" "$(tab "dev server" "right 0.55 (0) (1)" "";
 bench api violet "~/projects/api" "$(tab "tests" "0" ""; pane "~/projects/api" "./watch.sh")$(tab "db" "0" 'tags = [{ label = "local", color = "#5FD38D" }]'; pane "~/projects/api" "clear" "ls src")$(printf '\n[[tabs]]\nid = "%s"\nactive_pane = 0\n\n[tabs.project]\nroot = "~/projects/api"\nopen = ["src/db.rs", "src/routes.rs"]\nactive = 1\n' "$(uuid)")$(place 2600.0 0.0)"
 sed -i 's/^active_tab = 0$/active_tab = 2/' "$root/xdg/data/shed/benches/api.toml"
 bench infra amber "~/projects/infra" "$(tab "prod" "0" 'tags = [{ label = "prod", color = "#F0566A", tint = true }]'; pane "~/projects/infra" "clear" "ls k8s" "./rollout.sh")$(tab "staging" "0" ""; pane "~/projects/infra" "clear" "ls k8s")"
-bench docs teal "~/projects/docs" "$(tab "guides" "0" ""; pane "~/projects/docs" "clear" "ls guides")$(printf '\n[[tabs]]\nid = "%s"\nactive_pane = 0\n\n[tabs.ai]\nfolder = "~/projects/docs"\nsession = "%s"\nmode = "auto"\n' "$(uuid)" "$session")$(place 0.0 900.0)"
+docs_ai=$(uuid)
+bench docs teal "~/projects/docs" "$(tab "guides" "0" ""; pane "~/projects/docs" "clear" "ls guides")$(printf '\n[[tabs]]\nid = "%s"\nactive_pane = 0\n\n[tabs.ai]\nfolder = "~/projects/docs"\nsession = "%s"\nmode = "auto"\n' "$docs_ai" "$session")$(place 0.0 900.0)"
 sed -i 's/^active_tab = 0$/active_tab = 1/' "$root/xdg/data/shed/benches/docs.toml"
+# The docs bench's bookmarks: files, a folder, and two messages of its session.
+mark() { printf '\n[[bookmarks]]\nid = "%s"\nlabel = "%s"\ncreated = %s\n%b\n' "$(uuid)" "$1" "$now" "$2"; }
+{
+  mark "setup.md:9" 'kind = "file"\npath = "~/projects/docs/guides/setup.md"\nline = 9'
+  mark "intro.md" 'kind = "file"\npath = "~/projects/docs/guides/intro.md"'
+  mark "guides" 'kind = "folder"\npath = "~/projects/docs/guides"'
+  mark "The setup guide only says to run…" "$(printf 'kind = "message"\ntab = "%s"\nsession = "%s"\nrole = "user"\nexcerpt = "The setup guide only says to run ./dev.sh. Make it walk a new contributor through everything, from cloning to a first change."' "$docs_ai" "$session")"
+  mark "Four steps, from cloning to a first change" "$(printf 'kind = "message"\ntab = "%s"\nsession = "%s"\nrole = "assistant"\nexcerpt = "The guide now walks through the whole path in four steps: 1. **Get the code**: clone, and the branches that matter. 2. **Install…"' "$docs_ai" "$session")"
+} > "$root/marks.toml"
+python3 - "$root/xdg/data/shed/benches/docs.toml" "$root/marks.toml" <<'PY'
+import sys
+bench, marks = sys.argv[1], open(sys.argv[2]).read()
+text = open(bench).read()
+# Before the tabs: TOML's arrays of tables go in any order, but keep them together.
+at = text.index("\n[[tabs]]")
+open(bench, "w").write(text[:at] + marks + text[at:])
+PY
+rm "$root/marks.toml"
 printf '\n[[links]]\nname = "local"\nurl = "http://localhost:5173"\n' >> "$root/xdg/data/shed/benches/board.toml"
 echo "$root"
