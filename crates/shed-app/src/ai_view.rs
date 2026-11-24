@@ -1100,6 +1100,7 @@ impl AiView {
                 p.buffer.insert(&unsent);
                 cx.notify();
             });
+            self.store_unsent_now(cx);
             cx.notify();
             return;
         }
@@ -1112,6 +1113,7 @@ impl AiView {
             p.buffer.insert(&unsent);
             cx.notify();
         });
+        self.store_unsent_now(cx);
         self.completion = None;
         self.list.scroll_to_end();
         cx.notify();
@@ -1192,6 +1194,7 @@ impl AiView {
             p.buffer.insert(&unsent);
             cx.notify();
         });
+        self.store_unsent_now(cx);
         cx.notify();
     }
 
@@ -1246,6 +1249,7 @@ impl AiView {
             p.buffer.insert(&draft.text);
             cx.notify();
         });
+        self.store_unsent_now(cx);
         let focus = self.prompt.read(cx).focus_handle().clone();
         window.focus(&focus, cx);
         cx.notify();
@@ -1288,6 +1292,7 @@ impl AiView {
             p.buffer.insert(&before);
             cx.notify();
         });
+        self.store_unsent_now(cx);
         cx.notify();
     }
 
@@ -1331,6 +1336,19 @@ impl AiView {
             }
         })
         .detach();
+    }
+
+    /// Keeps what is in the prompt with the tab now: for changes made here
+    /// rather than typed (a message sent, a draft kept or opened), which
+    /// `save_unsent_soon` does not hear of; otherwise a message sent would
+    /// come back into the prompt after a restart.
+    fn store_unsent_now(&mut self, cx: &mut Context<Self>) {
+        self.unsent_save = None;
+        let text = self.prompt.read(cx).buffer.text();
+        if text != self.ai.unsent {
+            self.ai.unsent = text.clone();
+            self.conn.send_msg(ClientMsg::AiChange { tab: self.tab, change: AiChange::Unsent(text) });
+        }
     }
 
     /// Keeps what is in the prompt with the tab (saved with the bench), a
@@ -4975,6 +4993,8 @@ mod tests {
         view.update(cx, |v, cx| v.send(cx));
         assert_eq!(drafts(&view, cx), ["second, changed"]);
         assert_eq!(prompt(&view, cx), "half written");
+        // What the prompt holds now is what the tab keeps (not the message sent).
+        assert_eq!(view.update(cx, |v, _| v.ai.unsent.clone()), "half written");
     }
 
     /// Merge into Prompt: a draft's text goes at the end of the prompt after

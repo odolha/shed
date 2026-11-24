@@ -330,6 +330,19 @@ impl Keeper {
 
     pub(super) fn ai_send(self: &Arc<Self>, client: ClientId, tab: TabId, text: String, images: Vec<AiImage>) {
         let mut st = self.lock();
+        // What the prompt kept is this message (or the start of it, saved
+        // before the last keys): sent now, it is not unsent any more, and must
+        // not come back into the prompt after a restart, whichever client
+        // sent it.
+        if let Some(t) = st.tree.tab_mut(tab)
+            && let TabKind::Ai(ai) = &mut t.kind
+            && !ai.unsent.trim().is_empty()
+            && text.trim_start().starts_with(ai.unsent.trim())
+        {
+            ai.unsent.clear();
+            st.broadcast_tree();
+            self.save_soon.notify_one();
+        }
         // Claude is busy: the message waits its turn, kept with the tab (and
         // its pictures as files), and goes when a turn ends.
         let busy = self.ai_rt(&mut st, tab).is_some_and(|rt| rt.transcript.status.state != AiState::Idle);

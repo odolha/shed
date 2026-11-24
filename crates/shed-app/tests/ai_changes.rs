@@ -86,3 +86,30 @@ fn changes_from_two_clients_do_not_undo_each_other() {
     });
     assert_eq!(windows, 1);
 }
+
+#[test]
+fn a_sent_message_is_no_longer_unsent() {
+    let dir = tempfile::tempdir().unwrap();
+    // No Claude Code is started: sending fails after the keeper has seen it.
+    // SAFETY: only this test binary's AI code reads it.
+    unsafe { std::env::set_var("SHED_CLAUDE", dir.path().join("no-claude")) };
+    let env = start_in(dir.path(), "shedd.sock");
+    let mut a = Client::connect(&env.socket);
+    let tab = ai_tab(&mut a, dir.path());
+    // Kept a moment before the last keys, then sent whole.
+    a.msg(ClientMsg::AiChange { tab, change: AiChange::Unsent("count the li".into()) });
+    tree_until(&mut a, "unsent kept", |t| ai(t, tab).is_some_and(|a| a.unsent == "count the li"));
+    a.msg(ClientMsg::AiSend { tab, text: "count the lines".into(), images: Vec::new() });
+    tree_until(&mut a, "unsent cleared", |t| ai(t, tab).is_some_and(|a| a.unsent.is_empty()));
+    // Something else kept stays.
+    a.msg(ClientMsg::AiChange { tab, change: AiChange::Unsent("another thought".into()) });
+    tree_until(&mut a, "kept again", |t| ai(t, tab).is_some_and(|a| a.unsent == "another thought"));
+    a.msg(ClientMsg::AiSend { tab, text: "a different message".into(), images: Vec::new() });
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    a.msg(ClientMsg::Status);
+    let t = a.until("status", |f, _| match f {
+        Frame::Keeper(KeeperMsg::Status(s)) => Some(s.tree.clone()),
+        _ => None,
+    });
+    assert_eq!(ai(&t, tab).unwrap().unsent, "another thought");
+}
