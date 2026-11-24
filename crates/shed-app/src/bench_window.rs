@@ -1755,12 +1755,12 @@ impl TabBar {
                 .on_click(self.on(|this, _: &ClickEvent, window, cx| this.toggle_setup(window, cx)))
                 .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if setup_open { ui.ink(accent) } else { ui.text_dim })))
         });
-        // The controls on the right, on a panel of their own, in rows: the
-        // usage limits; New Tab, Run Startup, Setup and the bench's name; its
-        // links. Beside one row of tabs, all on one row; beside two, two (the
-        // limits over the rest, or without limits, the links under); else
-        // three, narrower, leaving the tabs the width. The tabs' widths are
-        // as laid out last (`BarLayout::assumed`).
+        // The controls on the right, on a panel of their own, in rows: New
+        // Tab, Run Startup, Setup and the bench's name; the usage limits; its
+        // links. Beside one row of tabs, all on one row in that order; beside
+        // two, two (the actions over the limits and links); else three,
+        // narrower, leaving the tabs the width. Each row is centred in the
+        // panel. The tabs' widths are as laid out last (`BarLayout::assumed`).
         let ctl_h = px(24.0 * s);
         let actions: Vec<AnyElement> = std::iter::once(new_tab.h(ctl_h).into_any_element())
             .chain(lifecycle.map(|l| l.h(ctl_h).into_any_element()))
@@ -1774,11 +1774,12 @@ impl TabBar {
         let gap = 4.0 * s;
         let (l, a, k) = (w.limits, row_width(&w.actions, gap), row_width(&w.links, gap));
         let room = f32::from(width);
-        // The panel's padding and margin.
-        let frame = 12.0 * s + f32::from(pad) + 2.0;
-        let one = row_width(&[l, a, k].into_iter().filter(|w| *w > 0.0).collect::<Vec<_>>(), gap);
+        // The panel's padding (left and right) and margin.
+        let panel_px = 10.0 * s;
+        let frame = 2.0 * panel_px + f32::from(pad) + 2.0;
+        let one = row_width(&[a, l, k].into_iter().filter(|w| *w > 0.0).collect::<Vec<_>>(), gap);
         let cap = |share: f32| l.max(a).max(room * share);
-        let two = if l > 0.0 { l.max((a + gap + k).min(cap(0.3))) } else { a.max(k.min(cap(0.3))) };
+        let two = a.max(row_width(&[l, k].into_iter().filter(|w| *w > 0.0).collect::<Vec<_>>(), gap).min(cap(0.3)));
         let three = l.max(a).max(k.min(cap(0.25)));
         let rows = if w.tab_rows(room - one - frame, s) <= 1 {
             1
@@ -1787,7 +1788,7 @@ impl TabBar {
         } else {
             3
         };
-        let line = move || div().flex().flex_wrap().justify_end().items_center().gap_x(px(gap)).gap_y(px(4.0 * s));
+        let line = move || div().flex().flex_wrap().justify_center().items_center().gap_x(px(gap)).gap_y(px(4.0 * s));
         // As tall as the tab rows (the bar's padding above and below), its
         // rows centred.
         let mut panel = div()
@@ -1795,21 +1796,22 @@ impl TabBar {
             .flex()
             .flex_col()
             .justify_center()
-            .items_end()
+            .items_center()
             .gap_y(px(4.0 * s))
             .mr(pad)
             .my(pad_y)
-            .px(px(6.0 * s))
+            .px(px(panel_px))
+            .py(px(2.0 * s))
             .rounded_md()
             .bg(hsla_alpha(ui.text, 0.05));
+        let max_w = |w: f32| px(w.ceil() + 2.0 + 2.0 * panel_px);
         panel = match rows {
-            1 => panel.child(line().flex_nowrap().children(limits).children(actions).children(links)),
-            2 if l > 0.0 => panel.max_w(px(two.ceil() + 2.0 + 12.0 * s)).children(limits.map(|l| line().child(l))).child(line().children(actions).children(links)),
-            2 => panel.max_w(px(two.ceil() + 2.0 + 12.0 * s)).child(line().children(actions)).when(k > 0.0, |p| p.child(line().children(links))),
+            1 => panel.child(line().flex_nowrap().children(actions).children(limits).children(links)),
+            2 => panel.max_w(max_w(two)).child(line().children(actions)).when(l > 0.0 || k > 0.0, |p| p.child(line().children(limits).children(links))),
             _ => panel
-                .max_w(px(three.ceil() + 2.0 + 12.0 * s))
-                .children(limits.map(|l| line().child(l)))
+                .max_w(max_w(three))
                 .child(line().children(actions))
+                .children(limits.map(|l| line().child(l)))
                 .when(k > 0.0, |p| p.child(line().children(links))),
         };
         div()

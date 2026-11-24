@@ -179,12 +179,12 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   menu has **New Tab to the Left** and **New Tab to the Right**: a terminal
   just before or after that tab, in its group. When the tabs do not fit on one
   row they wrap onto more, the bar growing to hold them. The controls on the
-  right (usage limits, New Tab, Run Startup, Setup, the bench's name and its
-  links) sit on a panel of their own as tall as the tab rows, centred in it:
-  beside one row of tabs on one row; beside two, on two (the usage limits over
-  the rest); otherwise on three (the usage limits; New Tab, Run Startup, Setup
-  and the bench's name; the links, wrapping if need be), so the tabs get the
-  width.
+  right (New Tab, Run Startup, Setup and the bench's name; the usage limits;
+  the links, in that order) sit on a panel of their own as tall as the tab
+  rows, centred in it: beside one row of tabs on one row; beside two, on two
+  (the actions over the usage limits and links); otherwise on three (the
+  actions; the usage limits; the links, wrapping if need be), so the tabs get
+  the width.
 - **Groups**: tabs can be put in groups, set apart by a wider gap with a faint
   line in it; a group goes onto the next row whole (it wraps inside only when it
   alone is wider than the bar), and can start a row of its own. Groups have no
@@ -208,11 +208,11 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   group; the bench's name (right of the tab bar) for rename,
   badge, colours, **Appearance** (Auto, Light or Dark, for all of Shed), Show Shed
   and Close Bench.
-- On the right of the tab bar: on a bench with an AI tab, Claude's usage
-  limits (see [AI tabs](#ai-tabs)); the new-tab button (right-click it for a
-  project, AI or remote tab); the bench's [links](#links); for a terminal
-  tab the **rack**, which opens the Setup panel (or Ctrl+Shift+S); and the
-  bench's name with its menu. Super+Space brings Shed forward.
+- On the right of the tab bar: the new-tab button (right-click it for a
+  project, AI or remote tab); for a terminal tab the **rack**, which opens the
+  Setup panel (or Ctrl+Shift+S); the bench's name with its menu; on a bench
+  with an AI tab, Claude's usage limits (see [AI tabs](#ai-tabs)); and the
+  bench's [links](#links). Super+Space brings Shed forward.
 
 A new tab or pane opens in the folder of the one you were in. (Set
 `new_pane_dir = "bench"` to use the bench's folder instead.)
