@@ -18,7 +18,7 @@ use gpui::{
 };
 use shed_ai::{
     Command, Entry, Limits, Model, NoteKind, Run, RunState, SessionInfo, SessionRow, State as AiState, Status, Timer,
-    TimerKind,
+    TimerKind, WorkKind,
 };
 use shed_model::{AiTab, BenchId, Rgb, TabId};
 use shed_proto::{AiChange, AiImage, ClientMsg};
@@ -38,8 +38,8 @@ const SESSIONS_WIDTH: f32 = 260.0;
 const FOLD_LINES: usize = 12;
 /// …or longer than this (long lines wrap to many): folded too.
 const FOLD_CHARS: usize = 1_500;
-/// Agents that ended stay in the strip above the prompt this long (seconds).
-const AGENT_KEPT: u64 = 60;
+/// Background work that ended stays in the strip above the prompt this long (seconds).
+const ENDED_KEPT: u64 = 60;
 /// An opened agent's prompt, as a step of its own, opened apart.
 const PROMPT_STEP: &str = "\u{0}prompt";
 
@@ -67,13 +67,6 @@ fn same_entry(a: &Entry, b: &Entry) -> bool {
     }
 }
 
-/// A sub-agent's tool and its run, if `e` is one.
-fn agent_run(e: &Entry) -> Option<(&shed_ai::Tool, &Run)> {
-    match e {
-        Entry::Tool(t) if matches!(t.name.as_str(), "Agent" | "Task") => t.run.as_deref().map(|r| (t, r)),
-        _ => None,
-    }
-}
 /// Lines of a tool's output shown when it is opened.
 const RESULT_LINES: usize = 40;
 
@@ -324,8 +317,6 @@ pub struct AiView {
     running: bool,
     /// When the latest of them started (its seconds are counted for a minute).
     newest_run: u64,
-    /// Sub-agents running or just ended, newest last: the strip above the prompt.
-    agents: Vec<usize>,
     /// A bookmarked message to show once its conversation is here.
     jump: Option<Jump>,
     /// A message shown marked for a moment (a bookmark's, gone to).
@@ -563,7 +554,6 @@ impl AiView {
             open_steps: HashSet::new(),
             running: false,
             newest_run: 0,
-            agents: Vec::new(),
             jump: None,
             flash: None,
             _subs: subs,
@@ -705,8 +695,6 @@ impl AiView {
         });
         self.newest_run = running.clone().map(|r| r.started).max().unwrap_or(0);
         self.running = running.count() > 0;
-        let now = unix_now();
-        self.agents = self.entries.iter().enumerate().filter(|(_, e)| agent_run(e).is_some_and(|(_, r)| r.running() || r.ended + AGENT_KEPT > now)).map(|(i, _)| i).collect();
         self.tick(cx);
         cx.notify();
     }
@@ -980,8 +968,8 @@ impl AiView {
         if fresh || self.status.timers.iter().filter(counted).any(|t| t.at <= now + 60) {
             return Some(Duration::from_secs(1));
         }
-        // An agent that ended leaves the strip after a minute.
-        if self.agents.iter().any(|&i| self.entries.get(i).and_then(agent_run).is_some_and(|(_, r)| !r.running() && r.ended + AGENT_KEPT > now)) {
+        // Work that ended leaves the strip after a minute.
+        if self.background().iter().any(|w| !w.going()) {
             return Some(Duration::from_secs(5));
         }
         // In minutes, the rest: runs going on for long (a server in the
@@ -3414,32 +3402,82 @@ impl AiView {
         cx.notify();
     }
 
-    /// The strip above the prompt: sub-agents running, and those that just
-    /// ended, each a line (what it is, how it does, its last step); a click
-    /// opens it in the conversation.
-    fn render_agents(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<gpui::Div> {
+    /// What Claude started that goes on beside the conversation, as the
+    /// strip above the prompt shows it: sub-agents, background commands and
+    /// watches (those that just ended too, for a minute), wake-ups and jobs.
+    fn background(&self) -> Vec<shed_ai::Work<'_>> {
         let now = unix_now();
-        let shown: Vec<(usize, &shed_ai::Tool, &Run)> =
-            self.agents.iter().filter_map(|&i| self.entries.get(i).and_then(agent_run).map(|(t, r)| (i, t, r))).filter(|(_, _, r)| r.running() || r.ended + AGENT_KEPT > now).collect();
+        let mut work = shed_ai::background_work(&self.entries, &self.status);
+        work.retain(|w| w.going() || w.ended() + ENDED_KEPT > now);
+        work
+    }
+
+    /// How many pieces of background work are going: Claude waits on them
+    /// once its turn is over.
+    fn background_count(&self) -> u32 {
+        shed_ai::background_count(&self.entries, &self.status)
+    }
+
+    /// The strip above the prompt: all the work Claude started in the
+    /// background, a line each (what it is, how it does, what it did last);
+    /// a click shows where it started in the conversation (opened).
+    fn render_background(&self, ui: &UiColors, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let shown = self.background();
         if shown.is_empty() {
             return None;
         }
         let accent = self.accent;
         let z = self.z();
         let mut out = div().flex().flex_col().gap_0p5();
-        for (i, t, run) in shown {
-            let (mark, color) = match run.state {
-                RunState::Running => (self.turning(), ui.ink(accent)),
-                RunState::Done => ("✓", ui.ink(accent)),
-                RunState::Failed => ("✗", ui.danger),
-                RunState::Stopped => ("■", ui.text_dim),
+        for (n, w) in shown.iter().enumerate() {
+            let going = w.going();
+            let (mark, color) = match w.run.map(|r| r.state) {
+                Some(RunState::Running) => (self.turning(), ui.ink(accent)),
+                Some(RunState::Done) => ("✓", ui.ink(accent)),
+                Some(RunState::Failed) => ("✗", ui.danger),
+                Some(RunState::Stopped) => ("■", ui.text_dim),
+                None => ("", ui.text_dim),
             };
-            let name = t.summary.strip_prefix("Agent: ").unwrap_or(&t.summary).to_string();
-            let tools = (run.tools > 0).then(|| format!("{} tool call{}", run.tools, if run.tools == 1 { "" } else { "s" }));
-            let last = Some(run.last.clone()).filter(|l| run.running() && !l.is_empty() && l != "Starting");
+            let glyph = match w.kind {
+                WorkKind::Agent => "agent",
+                WorkKind::Command => "terminal",
+                WorkKind::Watch => "eye",
+                WorkKind::Wakeup | WorkKind::Job => "clock",
+            };
+            let summary = w.tool.map(|t| t.summary.clone()).unwrap_or_default();
+            let name = match (w.kind, w.timer) {
+                (WorkKind::Agent, _) => summary.strip_prefix("Agent: ").unwrap_or(&summary).to_string(),
+                (WorkKind::Command, _) => summary,
+                (_, Some(t)) if !t.what.is_empty() => t.what.clone(),
+                _ => summary,
+            };
+            // How it does: for how long it ran, or when it fires.
+            let when = match (w.kind, w.run, w.timer) {
+                (WorkKind::Wakeup, _, Some(t)) => format!("wakes up {}", timer_when(t)),
+                (WorkKind::Job, _, Some(t)) => format!("scheduled, {}", timer_when(t)),
+                (WorkKind::Watch, Some(r), Some(t)) if r.running() => format!("{}, {}", run_time(r), timer_when(t)),
+                (_, Some(r), _) => run_time(r),
+                (_, None, Some(t)) => timer_when(t),
+                _ => String::new(),
+            };
+            let tools = w.run.filter(|r| w.kind == WorkKind::Agent && r.tools > 0).map(|r| format!("{} tool call{}", r.tools, if r.tools == 1 { "" } else { "s" }));
+            // What it did last: an agent's step, a command's last line of
+            // output, what a watch saw.
+            let last = w.run.filter(|r| r.running()).map(|r| r.last.clone()).filter(|l| !l.is_empty() && l != "Starting" && !l.starts_with("Watching"));
+            let tip = match (w.kind, w.timer) {
+                (WorkKind::Agent, _) => "Show this agent in the conversation, opened: its prompt, steps and report".to_string(),
+                (WorkKind::Command, _) => "Show this command in the conversation, opened (it runs in the background; its last line of output is beside it)".to_string(),
+                (_, Some(t)) => {
+                    let detail = if t.prompt.is_empty() { t.what.clone() } else { format!("{}\n\nIt tells Claude: {}", t.what, t.prompt) };
+                    format!("{detail}\n\nClaude Code does it while it keeps running for this tab. Closing the tab or its bench, changing the tab's folders or effort, or stopping Shed's keeper cancels it.")
+                }
+                _ => "Show where it started in the conversation".to_string(),
+            };
+            let entry = w.entry;
+            let run = w.run.is_some();
             out = out.child(
                 div()
-                    .id(("agent-chip", i))
+                    .id(("background", n))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -3447,15 +3485,17 @@ impl AiView {
                     .py_0p5()
                     .rounded_md()
                     .border_1()
-                    .border_color(hsla_alpha(accent, if run.running() { 0.5 } else { 0.25 }))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(hsla_alpha(accent, 0.1)))
-                    .tooltip(menu::tooltip("Show this agent in the conversation, opened: its prompt, steps and report"))
-                    .on_click(cx.listener(move |this, _, _, cx| this.show_agent(i, cx)))
-                    .child(div().flex_none().w(px(12.0)).text_color(hsla(color)).child(mark))
-                    .child(svg().path(icon("agent")).flex_none().size(px(12.0 * z)).text_color(hsla(ui.ink(accent))))
+                    .border_color(hsla_alpha(accent, if going { 0.5 } else { 0.25 }))
+                    .tooltip(menu::tooltip_text(tip))
+                    .when_some(entry, |d, i| {
+                        d.cursor_pointer().hover(|s| s.bg(hsla_alpha(accent, 0.1))).on_click(cx.listener(move |this, _, _, cx| {
+                            if run { this.show_agent(i, cx) } else { this.show_entry(i, cx) }
+                        }))
+                    })
+                    .child(div().flex_none().w(px(12.0 * z)).text_color(hsla(color)).child(mark))
+                    .child(svg().path(icon(glyph)).flex_none().size(px(12.0 * z)).text_color(hsla(ui.ink(accent))))
                     .child(div().flex_none().max_w(relative(0.4)).truncate().text_color(hsla(ui.text)).child(name))
-                    .child(div().flex_none().text_color(hsla(if run.running() { ui.ink(accent) } else { ui.text_dim })).child(run_time(run)))
+                    .child(div().flex_none().text_color(hsla(if going { ui.ink(accent) } else { ui.text_dim })).child(when))
                     .children(tools.map(|n| div().flex_none().text_color(hsla(ui.text_dim)).child(n)))
                     .child(div().flex_1().min_w_0().truncate().font_family(self.settings.font.family.clone()).text_color(hsla(ui.text_dim)).children(last)),
             );
@@ -3520,6 +3560,7 @@ impl AiView {
                     .map(|(_, a)| a);
                 match away {
                     Some(shed_model::AiActivity::Waiting) => meta.insert(0, "waiting for you".to_string()),
+                    Some(shed_model::AiActivity::Background(n)) => meta.insert(0, shed_model::waiting_on(n)),
                     Some(_) => meta.insert(0, "working".to_string()),
                     None => {}
                 }
@@ -3557,7 +3598,11 @@ impl AiView {
                         }))
                         // Working in the background, or waiting for you there.
                         .when_some(away, |d, a| {
-                            let glyph = if a == shed_model::AiActivity::Waiting { "tool-waiting" } else { "ai" };
+                            let glyph = match a {
+                                shed_model::AiActivity::Waiting => "tool-waiting",
+                                shed_model::AiActivity::Background(_) => "hourglass",
+                                _ => "ai",
+                            };
                             d.child(svg().flex_none().path(icon(glyph)).size(px(13.0 * z)).text_color(hsla(ui.ink(accent))))
                         })
                         .child(
@@ -3871,7 +3916,11 @@ impl AiView {
         let accent = self.accent;
         let working = self.status.state != AiState::Idle;
         let status = match self.status.state {
-            AiState::Idle => String::new(),
+            // Its turn over, work it started still going on.
+            AiState::Idle => match self.background_count() {
+                0 => String::new(),
+                n => format!("Idle · {}", shed_model::waiting_on(n)),
+            },
             AiState::Working => format!("{} · {}", self.activity(), self.status.since.map(secs_since).unwrap_or_default()),
             AiState::Waiting => "Waiting for your answer".into(),
         };
@@ -4196,38 +4245,10 @@ impl AiView {
                 );
             }
         }
-        // What Claude set to happen later: wake-ups, scheduled jobs, watches.
-        for (n, t) in self.status.timers.iter().enumerate() {
+        // All the work Claude started in the background, pinned where it is seen.
+        if let Some(work) = self.render_background(ui, cx) {
             any = true;
-            let (glyph, label) = match t.kind {
-                TimerKind::Wakeup => ("clock", format!("Wakes up {}", timer_when(t))),
-                TimerKind::Job => ("clock", format!("Scheduled job, {}", timer_when(t))),
-                TimerKind::Watch => ("eye", format!("Watching, {}", timer_when(t))),
-            };
-            let detail = if t.prompt.is_empty() { t.what.clone() } else { format!("{}\n\nIt tells Claude: {}", t.what, t.prompt) };
-            out = out.child(
-                div()
-                    .id(("timer", n))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(hsla_alpha(accent, 0.4))
-                    .tooltip(menu::tooltip_text(format!(
-                        "{detail}\n\nClaude Code does it while it keeps running for this tab. Closing the tab or its bench, changing the tab's folders or effort, or stopping Shed's keeper cancels it."
-                    )))
-                    .child(svg().path(icon(glyph)).size(px(12.0)).flex_none().text_color(hsla(ui.ink(accent))))
-                    .child(div().flex_none().text_color(hsla(ui.ink(accent))).child(label))
-                    .child(div().flex_1().min_w_0().truncate().text_color(hsla(ui.text)).child(t.what.clone())),
-            );
-        }
-        // Sub-agents at work (and just done), pinned where they are seen.
-        if let Some(agents) = self.render_agents(ui, cx) {
-            any = true;
-            out = out.child(agents);
+            out = out.child(work);
         }
         // Waiting for Claude to be free (kept by the keeper, with the bench).
         let idle = self.status.state == AiState::Idle;
@@ -5352,8 +5373,12 @@ mod tests {
         assert!(view.update(cx, |v, _| v.running));
         let parsed = view.update(cx, |v, _| v.parsed.get(&agent).cloned()).unwrap();
         assert_eq!(parsed.groups.len(), 5);
-        // Running, it is pinned above the prompt; its line there opens it.
-        assert_eq!(view.update(cx, |v, _| v.agents.clone()), vec![agent]);
+        // Running, it is pinned above the prompt with the rest of the
+        // background work, in the order each started; its line there opens it.
+        let strip = view.update(cx, |v, _| v.background().iter().map(|w| (w.kind, w.entry)).collect::<Vec<_>>());
+        assert!(strip.contains(&(WorkKind::Agent, Some(agent))), "{strip:?}");
+        let kinds: Vec<WorkKind> = strip.iter().map(|(k, _)| *k).collect();
+        assert!(kinds.contains(&WorkKind::Wakeup) && kinds.contains(&WorkKind::Job) && kinds.contains(&WorkKind::Watch), "{kinds:?}");
         view.update(cx, |v, cx| {
             v.expanded.remove(&agent);
             v.show_agent(agent, cx);

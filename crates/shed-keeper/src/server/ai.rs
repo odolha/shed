@@ -25,6 +25,8 @@ use super::{ClientId, Keeper, State};
 
 /// Updates from a streaming answer are sent this often at most.
 const FLUSH_EVERY: Duration = Duration::from_millis(40);
+/// How often a background command's last line of output is read.
+const OUTPUT_EVERY: Duration = Duration::from_secs(2);
 
 const INIT_REQUEST: &str = "shed-init";
 /// How many changes marked viewed, and explanations, an AI tab keeps.
@@ -184,8 +186,14 @@ fn ai_tab(st: &State, tab: TabId) -> Option<AiTab> {
     st.tree.tab(tab).and_then(|t| t.ai_info()).cloned()
 }
 
-fn activity_of(state: AiState) -> AiActivity {
-    match state {
+/// Where a conversation is, for the tab bar: its turn, or between turns,
+/// the work it waits on in the background (while its process runs).
+fn activity_of(rt: &AiRt) -> AiActivity {
+    match rt.transcript.status.state {
+        AiState::Idle if rt.input.is_some() => match rt.transcript.background_count() {
+            0 => AiActivity::Idle,
+            n => AiActivity::Background(n),
+        },
         AiState::Idle => AiActivity::Idle,
         AiState::Working => AiActivity::Working,
         AiState::Waiting => AiActivity::Waiting,
@@ -201,9 +209,10 @@ fn ai_away_to_tree(st: &mut State, tab: TabId) -> bool {
         .into_iter()
         .flatten()
         .filter_map(|rt| {
-            // Busy in the background between turns (an agent, a wake-up) counts as working.
-            let activity = match activity_of(rt.transcript.status.state) {
-                AiActivity::Idle => AiActivity::Working,
+            // Kept for something going on: between turns, that is
+            // background work (an agent, a wake-up).
+            let activity = match activity_of(rt) {
+                AiActivity::Idle => AiActivity::Background(1),
                 a => a,
             };
             Some(AiAway { session: rt.transcript.status.session.clone()?, activity })
@@ -851,7 +860,7 @@ impl Keeper {
         if let Some(mut rt) = back {
             rt.transcript.touch_all();
             let info = (!rt.commands.is_empty()).then(|| KeeperMsg::AiInfo { tab, commands: rt.commands.clone(), models: rt.models.clone() });
-            let activity = activity_of(rt.transcript.status.state);
+            let activity = activity_of(&rt);
             st.ai.insert(tab, rt);
             if let Some(TabKind::Ai(ai)) = st.tree.tab_mut(tab).map(|t| &mut t.kind) {
                 ai.activity = activity;
@@ -1163,7 +1172,7 @@ impl Keeper {
                     let entries = rt.transcript.entries[from.min(rt.transcript.entries.len())..].to_vec();
                     updates.push(KeeperMsg::AiUpdate { tab, from: from as u32, entries, status: rt.transcript.status.clone() });
                 }
-                let activity = activity_of(rt.transcript.status.state);
+                let activity = activity_of(rt);
                 let session = rt.transcript.status.session.clone();
                 if let Some(t) = st.tree.tab_mut(tab)
                     && let TabKind::Ai(ai) = &mut t.kind
@@ -1191,6 +1200,46 @@ impl Keeper {
             }
             if tree_changed {
                 st.broadcast_tree();
+            }
+            // Commands in the background: their last line of output, now and then.
+            if !st.ai_tailing && st.ai.values().any(|rt| !rt.transcript.output_files().is_empty()) {
+                st.ai_tailing = true;
+                tokio::spawn(self.clone().ai_tail_loop());
+            }
+        }
+    }
+
+    /// Reads the last line each command going on in the background wrote
+    /// (Claude Code writes their output to files), every few seconds while
+    /// any runs in a tab's shown conversation; it shows as what the command
+    /// does now.
+    async fn ai_tail_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(OUTPUT_EVERY).await;
+            let files: Vec<(TabId, usize, String)> = {
+                let mut st = self.lock();
+                let files: Vec<_> = st.ai.iter().flat_map(|(tab, rt)| rt.transcript.output_files().into_iter().map(|(i, f)| (*tab, i, f))).collect();
+                if files.is_empty() {
+                    st.ai_tailing = false;
+                    return;
+                }
+                files
+            };
+            let lines = tokio::task::spawn_blocking(move || {
+                files.into_iter().filter_map(|(tab, i, f)| Some((tab, i, shed_ai::background::last_output_line(std::path::Path::new(&f), 160)?))).collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+            let mut st = self.lock();
+            let mut changed = false;
+            for (tab, i, line) in lines {
+                if let Some(rt) = st.ai.get_mut(&tab) {
+                    changed |= rt.transcript.set_output_line(i, line);
+                }
+            }
+            drop(st);
+            if changed {
+                self.ai_dirty.notify_one();
             }
         }
     }

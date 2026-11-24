@@ -13,7 +13,7 @@ macro_rules! icons {
 const FILES: &[(&str, &[u8])] = icons![
     "bench", "bench-new", "close", "detach", "keeper", "logbook", "pane", "pegboard", "private", "rack",
     "shed", "split-down", "split-right", "tab", "tab-new", "tag", "tool", "tool-waiting", "bench-color", "bench-load", "theme-auto", "theme-light",
-    "theme-dark", "more", "power", "trash", "pencil", "go", "grip", "project", "folder", "file", "terminal", "refresh", "search", "ai", "send", "stop", "eye", "branch", "plus", "minus", "discard", "history", "pull", "push", "link", "server", "copy", "view-cards", "view-list", "arrow-up", "arrow-down", "settings", "globe", "clock", "alert", "paperclip", "check", "open-only", "agent", "bookmark",
+    "theme-dark", "more", "power", "trash", "pencil", "go", "grip", "project", "folder", "file", "terminal", "refresh", "search", "ai", "send", "stop", "eye", "branch", "plus", "minus", "discard", "history", "pull", "push", "link", "server", "copy", "view-cards", "view-list", "arrow-up", "arrow-down", "settings", "globe", "clock", "alert", "paperclip", "check", "open-only", "agent", "bookmark", "hourglass",
 ];
 
 pub struct Assets;

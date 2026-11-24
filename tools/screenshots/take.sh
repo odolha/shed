@@ -40,10 +40,11 @@ xtype() { python3 "$repo/tools/screenshots/xtype.py" "$@"; }
 # A stand-in for Claude Code, for the review's explanations.
 cat > "$demo/claude" <<'PY'
 #!/usr/bin/env python3
-import json, re, sys, time
+import json, os, re, sys, time
 if "--input-format" in sys.argv:
     # The AI tab's Claude Code: a turn that leaves an agent working in the
-    # background, builds the site, and sets a wake-up; then it waits.
+    # background, builds the site in the background, watches a log, and sets
+    # a wake-up; then it waits on all four.
     sid = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else "demo"
     now = time.time()
     def ts(ago):
@@ -72,14 +73,20 @@ if "--input-format" in sys.argv:
             call("toolu_s3", "Bash", {"command": "curl -sI https://example.com/board | head -1"}, 200, "HTTP/2 200", parent="toolu_agent")
             call("toolu_s4", "Bash", {"command": "curl -sI https://nodejs.org/en/download | head -1"}, 60, None, parent="toolu_agent")
             out(type="system", subtype="task_progress", task_id="a51c7e0d2b9f4e6a1", tool_use_id="toolu_agent", description="Running curl", usage={"tool_uses": 4, "total_tokens": 18400, "duration_ms": 190000})
+            # The build goes on: its output file has what it printed so far.
+            output = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks", "b2m8q4.output")
+            os.makedirs(os.path.dirname(output), exist_ok=True)
+            with open(output, "w") as f:
+                f.write("> docs@1.4.0 build\n> vite build\n\nvite v5.4.8 building for production...\n\x1b[32m✓\x1b[39m 212 modules transformed.\nrendering pages (41/58)\n")
             call("toolu_build", "Bash", {"command": "npm run build", "description": "Build the docs site", "run_in_background": True}, 120,
-                 "Command running in background with ID: b2m8q4. Output is being written to: /tmp/claude/tasks/b2m8q4.output.", {"backgroundTaskId": "b2m8q4"})
+                 "Command running in background with ID: b2m8q4. Output is being written to: %s." % output, {"backgroundTaskId": "b2m8q4"})
             out(type="system", subtype="task_started", task_id="b2m8q4", tool_use_id="toolu_build", description="Build the docs site", is_backgrounded=True, task_type="local_bash")
-            out(type="system", subtype="task_notification", task_id="b2m8q4", tool_use_id="toolu_build", status="completed", summary="Background command \"Build the docs site\" completed (exit code 0)")
+            call("toolu_watch", "Monitor", {"command": "tail -f logs/preview.log | grep --line-buffered -i error", "description": "errors in the preview server's log", "timeout_ms": 1800000}, 90,
+                 "Monitor started (task w7k2p9, expires in 30m unless the source ends first).", {"taskId": "w7k2p9", "timeoutMs": 1800000})
             at = int(now) + 18 * 60
             call("toolu_wake", "ScheduleWakeup", {"delaySeconds": 1080, "reason": "read the link check's report", "prompt": "Read the agent's link report and fix the broken links."}, 30,
                  "Next wakeup scheduled (in 1080s).", {"scheduledFor": at * 1000, "clampedDelaySeconds": 1080})
-            say("The site builds. The agent is still checking links in the background; I'll read its report in about 18 minutes, or as soon as it finishes.", 20)
+            say("The site is building and an agent checks the links, both in the background; I'm watching the preview server's log for errors, and I'll read the agent's report in about 18 minutes, or as soon as it finishes.", 20)
             out(type="result", subtype="success", duration_ms=9000, total_cost_usd=0.42)
     sys.exit(0)
 asked = sys.stdin.read()

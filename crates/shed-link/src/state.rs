@@ -149,7 +149,8 @@ pub(crate) fn tab(t: &Tab, held: &HashSet<PaneId>) -> api::Tab {
 
 pub(crate) fn activity(a: shed_model::AiActivity) -> api::AiActivity {
     match a {
-        shed_model::AiActivity::Idle => api::AiActivity::Idle,
+        // (The API has no word for waiting on background work: the turn is over.)
+        shed_model::AiActivity::Idle | shed_model::AiActivity::Background(_) => api::AiActivity::Idle,
         shed_model::AiActivity::Working => api::AiActivity::Working,
         shed_model::AiActivity::Waiting => api::AiActivity::Waiting,
     }

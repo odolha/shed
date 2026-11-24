@@ -406,7 +406,9 @@ every line coming out goes through `shed_ai::Transcript`, which turns stream
 events, tool calls, tool results and permission requests (`control_request`
 `can_use_tool`) into entries. Changes are sent to every window as `AiUpdate`
 (entries from the first changed one on, at most every 40 ms), and the tab's
-activity (idle, working, waiting) and session id go into the tree. The user's
+activity (idle, working, waiting, or `Background(n)`: the turn over, with `n`
+pieces of background work going on while the process runs) and session id go
+into the tree. The user's
 answer to a permission request goes back as a `control_response` (with
 Claude Code's suggested rules for "for this session"); Stop is a `control_request`
 `interrupt`. Model and mode changes go to the running process; other folders or
@@ -545,6 +547,24 @@ new wake-up replaces the waiting one. They are Claude Code's own and live only
 as long as its process (`--input-format stream-json` keeps it, and it does
 fire them); `Transcript::stopped` (the process ends: the tab or bench closes,
 folders or effort change, the keeper stops) clears them with a note saying so.
+
+**Background work.** `shed_ai::background_work` lists, from the entries and the
+status, everything Claude started beside the conversation in the order it
+started: agents, background commands and watches (their runs, ended ones too; a
+watch's run and timer are one item), then wake-ups and jobs. The AI view draws
+it as the strip above the prompt (going, or ended in the last minute; a click
+opens the tool call that started it); `background_count` (what is still going)
+is the keeper's `AiActivity::Background(n)` between turns and the view's "Idle ·
+waiting on n background tasks". Away sessions kept for their work are
+`Background` too; `overall_activity` adds the counts up, below working and
+waiting, and the tab bar and Shed's tab cards show it as an hourglass with the
+number. The link maps it to idle (the API has no word for it), and it is no
+notification: "Claude is done" comes as the turn ends, and again after a turn
+the work wakes Claude for. A background command's output goes to a file
+(`Run::output`); while one runs in a shown conversation, the keeper's
+`ai_tail_loop` reads each file's last line every 2 s
+(`background::last_output_line`: escape sequences out, the part after the last
+carriage return) into the run's `last`, sent as a changed entry.
 
 Claude's questions come as a `can_use_tool` request for its AskUserQuestion
 tool: the transcript keeps them in the `Permission` entry (`questions`), the

@@ -42,7 +42,8 @@ impl Notifier {
                     if self.seen && !tab.private {
                         match (before, ai.overall_activity()) {
                             (Some(b), AiActivity::Waiting) if b != AiActivity::Waiting => out.push(at(NotificationKind::AiWaiting, "Claude waits for an answer")),
-                            (Some(AiActivity::Working), AiActivity::Idle) => out.push(at(NotificationKind::AiDone, "Claude is done")),
+                            // (Its turn over, work it started may go on: no word of that.)
+                            (Some(AiActivity::Working), AiActivity::Idle | AiActivity::Background(_)) => out.push(at(NotificationKind::AiDone, "Claude is done")),
                             _ => {}
                         }
                     }
@@ -152,6 +153,23 @@ mod tests {
         n.changed(&private, t0 + Duration::from_secs(110));
         let (private_done, ..) = tree(AiActivity::Idle, None, true);
         assert!(n.changed(&private_done, t0 + Duration::from_secs(300)).is_empty());
+    }
+
+    /// A turn that ends with work going on in the background is done, once:
+    /// that work ending says nothing (Claude, woken by it, says so again).
+    #[test]
+    fn background_work_is_no_news() {
+        let mut n = Notifier::default();
+        let t0 = Instant::now();
+        let (working, ..) = tree(AiActivity::Working, None, false);
+        n.changed(&working, t0);
+        let (waiting_on, ..) = tree(AiActivity::Background(2), None, false);
+        let said = n.changed(&waiting_on, t0);
+        assert_eq!(said.iter().map(|s| s.kind).collect::<Vec<_>>(), [NotificationKind::AiDone]);
+        let (fewer, ..) = tree(AiActivity::Background(1), None, false);
+        assert!(n.changed(&fewer, t0).is_empty());
+        let (idle, ..) = tree(AiActivity::Idle, None, false);
+        assert!(n.changed(&idle, t0).is_empty());
     }
 
     #[test]

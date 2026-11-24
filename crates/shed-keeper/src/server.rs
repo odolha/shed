@@ -161,6 +161,9 @@ struct State {
     /// Conversations a tab moved away from while Claude was at them: their
     /// processes go on until done (`ai::AiRt::has_work`).
     ai_away: HashMap<TabId, Vec<ai::AiRt>>,
+    /// The last lines of background commands' output are being read
+    /// (`ai::Keeper::ai_tail_loop`, while some run).
+    ai_tailing: bool,
     /// The account's usage limits, as Claude Code last reported them.
     ai_limits: Option<shed_ai::Limits>,
 }
@@ -379,6 +382,7 @@ impl Keeper {
                 dark: true,
                 ai: HashMap::new(),
                 ai_away: HashMap::new(),
+                ai_tailing: false,
                 // The last ones Claude Code reported, while still current.
                 ai_limits: std::fs::read_to_string(&limits_file)
                     .ok()

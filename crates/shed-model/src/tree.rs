@@ -446,13 +446,21 @@ impl AiTab {
 
     /// Where the tab's conversations are, all told: waiting for the user
     /// if any is, else working if any is (the one shown or one in the
-    /// background).
+    /// background), else waiting on background work (how much, all told).
     pub fn overall_activity(&self) -> AiActivity {
-        std::iter::once(self.activity).chain(self.away.iter().map(|a| a.activity)).max_by_key(|a| match a {
-            AiActivity::Idle => 0,
-            AiActivity::Working => 1,
-            AiActivity::Waiting => 2,
-        }).unwrap_or_default()
+        let all = || std::iter::once(self.activity).chain(self.away.iter().map(|a| a.activity));
+        let top = all()
+            .max_by_key(|a| match a {
+                AiActivity::Idle => 0,
+                AiActivity::Background(_) => 1,
+                AiActivity::Working => 2,
+                AiActivity::Waiting => 3,
+            })
+            .unwrap_or_default();
+        match top {
+            AiActivity::Background(_) => AiActivity::Background(all().map(|a| if let AiActivity::Background(n) = a { n } else { 0 }).sum()),
+            other => other,
+        }
     }
 
     /// The sessions Claude is at, with where each is: the one shown (when
@@ -500,6 +508,14 @@ pub enum AiActivity {
     Working,
     /// It waits for the user to allow or deny something.
     Waiting,
+    /// Its turn is over, but it waits on work it started in the background
+    /// (agents, commands, watches; or a wake-up or job to come): how many.
+    Background(u32),
+}
+
+/// Background work waited on, in words: `waiting on 2 background tasks`.
+pub fn waiting_on(n: u32) -> String {
+    format!("waiting on {n} background task{}", if n == 1 { "" } else { "s" })
 }
 
 /// A folder of code, shown in a project tab.
@@ -1123,6 +1139,12 @@ mod tests {
         assert_eq!(ai.overall_activity(), AiActivity::Waiting);
         ai.away.clear();
         assert_eq!(ai.overall_activity(), AiActivity::Working);
+        // Waiting on background work, here and there: all of it counted.
+        ai.away = vec![AiAway { session: "b".into(), activity: AiActivity::Background(2) }];
+        ai.activity = AiActivity::Background(1);
+        assert_eq!(ai.overall_activity(), AiActivity::Background(3));
+        ai.activity = AiActivity::Idle;
+        assert_eq!(ai.overall_activity(), AiActivity::Background(2));
     }
 
     #[test]

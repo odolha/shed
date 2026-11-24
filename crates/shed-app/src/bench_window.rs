@@ -81,27 +81,54 @@ impl EditTarget {
 /// is (terminal, program running, project, AI, remote), or that it waits
 /// for you or is working; and its colour. An AI tab connected to the
 /// browser shows a globe, so it is clear which one is.
-pub fn tab_icon(tab: &Tab, accent: Rgb, ui: &UiColors) -> (&'static str, Rgb) {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TabIcon {
+    pub glyph: &'static str,
+    pub color: Rgb,
+    /// An AI tab whose turn is over waits on this much work it started in
+    /// the background (its hourglass carries the number).
+    pub background: u32,
+}
+
+pub fn tab_icon(tab: &Tab, accent: Rgb, ui: &UiColors) -> TabIcon {
     let waiting = tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some());
+    let plain = |glyph, color| TabIcon { glyph, color, background: 0 };
     if waiting {
-        ("tool-waiting", ui.ink(accent))
+        plain("tool-waiting", ui.ink(accent))
     } else if let Some(ai) = tab.ai_info() {
         let glyph = if ai.browser { "globe" } else { "ai" };
         // (Sessions going on in the background count too.)
         match ai.overall_activity() {
-            shed_model::AiActivity::Waiting => ("tool-waiting", ui.ink(accent)),
-            shed_model::AiActivity::Working => (glyph, ui.ink(accent)),
-            shed_model::AiActivity::Idle => (glyph, if ai.browser { ui.text } else { ui.text_dim }),
+            shed_model::AiActivity::Waiting => plain("tool-waiting", ui.ink(accent)),
+            shed_model::AiActivity::Working => plain(glyph, ui.ink(accent)),
+            shed_model::AiActivity::Background(n) => TabIcon { glyph: "hourglass", color: ui.ink(accent), background: n },
+            shed_model::AiActivity::Idle => plain(glyph, if ai.browser { ui.text } else { ui.text_dim }),
         }
     } else if tab.project_info().is_some() {
-        ("project", ui.text_dim)
+        plain("project", ui.text_dim)
     } else if tab.remote_info().is_some() {
-        ("server", ui.text_dim)
+        plain("server", ui.text_dim)
     } else if tab.panes.iter().any(|p| p.tool.is_some()) {
-        ("tool", ui.text_dim)
+        plain("tool", ui.text_dim)
     } else {
-        ("terminal", ui.text_dim)
+        plain("terminal", ui.text_dim)
     }
+}
+
+/// The number of background tasks an AI tab waits on, small beside its
+/// hourglass (tab bar, Shed's tab cards), saying so on hover.
+pub fn background_badge(id: impl Into<gpui::ElementId>, n: u32, accent: Rgb, ui: &UiColors, size: Pixels) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .px(size * 0.3)
+        .rounded_sm()
+        .text_size(size)
+        .font_weight(FontWeight::MEDIUM)
+        .bg(hsla_alpha(accent, 0.22))
+        .text_color(hsla(ui.ink(accent)))
+        .tooltip(menu::tooltip_text(format!("Claude's turn is over; it is {}", shed_model::waiting_on(n))))
+        .child(n.to_string())
 }
 
 /// `tags` with the one `text` describes added: "prod", or "prod red". Without
@@ -158,6 +185,7 @@ fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bo
             + tags
             + if t.zoom != 0.0 { 44.0 * s } else { 0.0 }
             + if t.private { 18.0 * s } else { 0.0 }
+            + if t.icon.background > 0 { 22.0 * s } else { 0.0 }
     };
     let mut groups: Vec<(bool, Vec<f32>)> = Vec::new();
     for (i, t) in bench.tabs.iter().enumerate() {
@@ -1376,7 +1404,7 @@ struct BarTab {
     id: TabId,
     title: String,
     /// Its icon and the icon's colour (`tab_icon`).
-    icon: (&'static str, Rgb),
+    icon: TabIcon,
     private: bool,
     zoom: f32,
     tags: Vec<Tag>,
@@ -1602,14 +1630,18 @@ impl TabBar {
                 (false, None) => el.hover(|s| s.bg(hsla_alpha(ui.text, 0.06)).text_color(hsla(ui.text))),
             };
             // One icon, as in Shed: what the tab is, or that it waits or works.
-            let (glyph, tint) = tab.icon;
-            el = el.child(svg().path(icon(glyph)).size(px(14.0 * s)).flex_none().text_color(hsla(tint)));
+            let tab_icon = tab.icon;
+            el = el.child(svg().path(icon(tab_icon.glyph)).size(px(14.0 * s)).flex_none().text_color(hsla(tab_icon.color)));
             if tab.private {
                 el = el.child(svg().path(icon("private")).size(px(12.0 * s)).flex_none().text_color(hsla(ui.text_dim)));
             }
             match m.editor_for(EditTarget::TabName(tab_id)) {
                 Some(editor) => el = el.child(editor),
                 None => el = el.child(div().truncate().child(title)),
+            }
+            // Work Claude started in the background, waited on: how much.
+            if tab_icon.background > 0 {
+                el = el.child(background_badge(("background", i), tab_icon.background, accent, ui, px(10.5 * s)));
             }
             // A zoomed tab says how much; a click puts it back.
             if tab.zoom != 0.0 {

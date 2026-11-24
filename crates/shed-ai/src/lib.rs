@@ -5,12 +5,14 @@
 
 pub mod markdown;
 pub mod aside;
+pub mod background;
 pub mod listing;
 pub mod notes;
 pub mod sessions;
 mod summary;
 mod transcript;
 
+pub use background::{Work, WorkKind, background_count, background_work};
 pub use listing::{SessionRow, family_of, session_rows};
 pub use sessions::{SessionInfo, going_on_from, list_sessions, load_session, prune_trash, rename_session, trash_sessions};
 pub use summary::{BROWSER_TOOLS, span, summarize};

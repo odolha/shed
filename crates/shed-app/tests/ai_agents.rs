@@ -70,6 +70,8 @@ for line in sys.stdin:
     // The window's copy of the conversation, as it follows both messages.
     let mut entries: Vec<Entry> = Vec::new();
     let mut alone = 0;
+    // Between its turns, the tab waits on the agent it left working.
+    let mut waited_on = false;
     let echoed = |e: &[Entry]| {
         e.iter().any(|x| matches!(x, Entry::Tool(t) if t.summary == "Agent: Echo twice" && t.run.as_ref().is_some_and(|r| r.state == RunState::Done && r.steps.len() == 3)))
     };
@@ -86,11 +88,15 @@ for line in sys.stdin:
                     entries[*i as usize] = e.clone();
                 }
             }
+            Frame::Keeper(KeeperMsg::TreeChanged(tree)) => {
+                waited_on |= tree.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.activity == AiActivity::Background(1));
+            }
             _ => {}
         }
         (echoed(&entries) && finished_twice(&entries)).then_some(())
     });
     assert!(alone > 0, "the agent's later steps came alone");
+    assert!(waited_on, "between turns, the tab waited on the agent in the background");
     let users: Vec<&str> = entries.iter().filter_map(|e| if let Entry::User { text, .. } = e { Some(text.as_str()) } else { None }).collect();
     assert_eq!(users, ["count, and echo in the background"], "sub-agents' prompts are theirs");
     let said: Vec<&str> = entries.iter().filter_map(|e| if let Entry::Assistant { text, .. } = e { Some(text.as_str()) } else { None }).collect();

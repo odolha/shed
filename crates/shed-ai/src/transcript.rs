@@ -380,6 +380,31 @@ impl Transcript {
             || self.entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.run.as_ref().is_some_and(|r| r.running())))
     }
 
+    /// How many pieces of background work are going (`background_count`).
+    pub fn background_count(&self) -> u32 {
+        crate::background_count(&self.entries, &self.status)
+    }
+
+    /// Commands going on in the background whose output Claude Code writes
+    /// to a file: their entry and the file (to show their last line).
+    pub fn output_files(&self) -> Vec<(usize, String)> {
+        crate::background_work(&self.entries, &self.status)
+            .into_iter()
+            .filter(|w| w.kind == crate::WorkKind::Command && w.going())
+            .filter_map(|w| Some((w.entry?, w.run?.output.clone())).filter(|(_, o)| !o.is_empty()))
+            .collect()
+    }
+
+    /// What a command going on in the background last wrote (its run's
+    /// last line, while it runs); whether that changed it.
+    pub fn set_output_line(&mut self, entry: usize, line: String) -> bool {
+        let Some(Entry::Tool(t)) = self.entries.get_mut(entry) else { return false };
+        let Some(run) = t.run.as_mut().filter(|r| r.running() && r.last != line) else { return false };
+        run.last = line;
+        self.touch_one(entry);
+        true
+    }
+
     /// The turn ended without a result (the process stopped). What it ran
     /// in the background stopped with it, and its timers will not fire.
     pub fn stopped(&mut self) {

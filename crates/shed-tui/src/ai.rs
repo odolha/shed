@@ -973,7 +973,11 @@ impl App {
                 Span::styled(format!("● Working {secs}s (Esc stops) "), c.accent())
             }
             shed_ai::State::Waiting => Span::styled("! Waiting for you ", c.accent().add_modifier(Modifier::BOLD)),
-            shed_ai::State::Idle => Span::styled("○ Ready ", c.dim()),
+            // Its turn over, with work it started still going on.
+            shed_ai::State::Idle => match shed_ai::background_count(&view.entries, &view.status) {
+                0 => Span::styled("○ Ready ", c.dim()),
+                n => Span::styled(format!("◷ Ready · {} ", shed_model::waiting_on(n)), c.accent()),
+            },
         };
         let model = ai.model.clone().or(view.status.model.clone()).unwrap_or_else(|| "default model".into());
         let mode = MODES.iter().find(|(m, _)| *m == ai.mode).map_or("Ask Before Edits", |(_, l)| l);
@@ -1248,6 +1252,7 @@ impl App {
 fn with_away(meta: String, away: Option<shed_model::AiActivity>) -> String {
     match away {
         Some(shed_model::AiActivity::Waiting) => format!("waiting for you · {meta}"),
+        Some(shed_model::AiActivity::Background(n)) => format!("{} · {meta}", shed_model::waiting_on(n)),
         Some(_) => format!("working · {meta}"),
         None => meta,
     }

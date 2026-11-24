@@ -1403,7 +1403,7 @@ impl BenchCard {
         let card_key = entry.bench_ref();
         let pane = tab.active();
         let tool = pane.and_then(|p| p.tool.as_ref());
-        let (glyph, tint) = crate::bench_window::tab_icon(tab, accent, ui);
+        let tab_icon = crate::bench_window::tab_icon(tab, accent, ui);
         // Beside the title: the program in front, else the folder's last part.
         let detail = match tool {
             Some(tool) => Some(tool.display()),
@@ -1469,8 +1469,11 @@ impl BenchCard {
             }))
             // The tab the bench shows: a short bar in its colour.
             .when(active, |d| d.child(div().absolute().left_0().top(px(6.0)).h(px(14.0)).w(px(2.0)).rounded_full().bg(hsla(accent))))
-            .child(svg().path(icon(glyph)).size(crate::theme::us(14.0)).flex_none().text_color(hsla(tint)))
+            .child(svg().path(icon(tab_icon.glyph)).size(crate::theme::us(14.0)).flex_none().text_color(hsla(tab_icon.color)))
             .child(title_el)
+            .when(tab_icon.background > 0, |d| {
+                d.child(crate::bench_window::background_badge(SharedString::from(format!("background-{tab_id}")), tab_icon.background, accent, ui, crate::theme::us(10.5)))
+            })
             .child(tags)
             .when(tab.private, |d| d.child(svg().path(icon("private")).size(crate::theme::us(11.0)).flex_none().text_color(hsla(ui.text_dim))))
             .child(div().flex_1())
@@ -1488,8 +1491,20 @@ impl BenchCard {
         if tab.project_info().is_some() {
             head = head.child(svg().path(icon("project")).size(crate::theme::us(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
         }
-        if tab.ai_info().is_some() {
+        if let Some(ai) = tab.ai_info() {
             head = head.child(svg().path(icon("ai")).size(crate::theme::us(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
+            // Waiting for you, or on work it started in the background.
+            match ai.overall_activity() {
+                shed_model::AiActivity::Waiting => {
+                    head = head.child(svg().path(icon("tool-waiting")).size(crate::theme::us(12.0)).flex_none().text_color(hsla(ui.ink(accent))));
+                }
+                shed_model::AiActivity::Background(n) => {
+                    head = head
+                        .child(svg().path(icon("hourglass")).size(crate::theme::us(12.0)).flex_none().text_color(hsla(ui.ink(accent))))
+                        .child(crate::bench_window::background_badge(SharedString::from(format!("background-{tab_id}")), n, accent, ui, crate::theme::us(10.5)));
+                }
+                _ => {}
+            }
         }
         if tab.remote_info().is_some() {
             head = head.child(svg().path(icon("server")).size(crate::theme::us(13.0)).flex_none().text_color(hsla(ui.ink(accent))));

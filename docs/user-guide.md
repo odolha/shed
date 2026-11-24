@@ -93,7 +93,8 @@ framed box with a header line (its colour dot, filled while it runs and a ring w
 name, click to open, double-click to rename; whether it is hidden or when it was
 saved; its links; **Open** or **Go to**; **⋯**) with its tabs below in even
 columns, each on a light ground of its own. Each tab has an icon for what it is (terminal, program running, project,
-AI, remote; the waiting icon when it waits for you), its title, its tags as small
+AI, remote; the waiting icon when it waits for you; an AI tab waiting on work
+Claude started in the background, an hourglass and how many), its title, its tags as small
 dots, and what runs in it or its folder, cut short with "…" (hover for all of it).
 A short bar in the bench's colour marks the tab the bench shows. Tabs work like
 cards: click, drag, middle-click, right-click; **New tab** shows when the mouse is
@@ -174,6 +175,10 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   the same. Each tab has one icon, the same as in Shed's compact view: what it is
   (terminal, program running, project, AI, remote), or, in the bench's colour,
   that it is working or that a command is [waiting for Enter](#opening-hiding-closing).
+  An AI tab whose turn is over while work Claude started still goes on in the
+  background (an agent, a command, a watch, a wake-up to come) shows an
+  hourglass and how many ("2"; hover it for "waiting on 2 background tasks"),
+  on its card in Shed too.
 - **New tab**: the new-tab button, first of the controls on the right of the
   tab bar, or Ctrl+Shift+T; it opens after the shown tab. A tab's right-click
   menu has **New Tab to the Left** and **New Tab to the Right**: a terminal
@@ -441,7 +446,9 @@ terminal of the bench.
   its conversation, titled "Fork of …", and what you send next goes to the
   copy, while the original stays as it was (Claude Code's `--fork-session`).
   A session Claude is at shows it in the list: the AI
-  mark and **working** (or **waiting for you**, when it asks something). One
+  mark and **working** (or **waiting for you**, when it asks something; or the
+  hourglass and **waiting on 2 background tasks**, its turn over while work it
+  started goes on). One
   still working when you open another goes on in the background until it is
   done: its row keeps the mark, the tab's icon counts it too, and opening it
   again shows it as it goes. Right-click a session to continue it in a terminal
@@ -529,11 +536,22 @@ terminal of the bench.
   show their agents' steps too (Claude Code keeps them beside the session).
   Agents stand out with their own icon and a line in the tab's colour; opened,
   their prompt stays folded (**Its prompt**) until clicked.
-- **Agents above the prompt**: while sub-agents run, each has a line just above
-  the prompt, whatever you scrolled to: what it is, how long it has run, how many
-  tool calls, and its latest step. An agent that ended stays there a minute,
-  marked done, failed or stopped. Click a line to open that agent in the
-  conversation. Nothing shows when no agent runs.
+- **Background work above the prompt**: everything Claude started that goes on
+  beside the conversation has a line just above the prompt, whatever you
+  scrolled to, in the order it started: sub-agents (how long, how many tool
+  calls, their latest step), commands left running in the background (how
+  long, and the last line they printed, read from their output as they go),
+  watches (how long, when they end, and what they last saw), wake-ups and
+  scheduled jobs (counting down: "wakes up in 18 min", "scheduled, every
+  minute"). An agent, command or watch that ended stays a minute, marked done,
+  failed or stopped. Click a line to see where it started in the conversation
+  (opened). Nothing shows when nothing goes on.
+- **Waiting on background work**: when Claude's turn is over but something it
+  started still goes on (or a wake-up is to come), the line under the prompt
+  says so ("Idle · waiting on 2 background tasks"), and the tab shows an
+  hourglass with the number, in the tab bar and on its card in Shed. When the
+  work tells Claude something, Claude goes on by itself; no notification comes
+  until that turn is over ("Claude finished").
 - **Agent reports**: an agent that hands its report back as a message (rather
   than as its result) gets a note of its own, folded: "Agent report from “Count
   the guides' words”: Word count"; click it for the whole report, and **▴
@@ -541,7 +559,7 @@ terminal of the bench.
   when opened). It never shows as your message. A long message of yours shows
   its start, with **Show all** to open it.
 
-  ![A sub-agent at work in the background, a finished command, and a wake-up waiting above the prompt](images/ai-agents.png)
+  ![Work Claude left going on above the prompt: a sub-agent, a build with its last line of output, a watch and a wake-up; the tab waits on all four](images/ai-agents.png)
 
 - **Claude Code's notes**: what Claude Code adds to a conversation shows as a
   note of its own, never as if you had typed it: a background task finishing,
@@ -551,9 +569,10 @@ terminal of the bench.
   more to it opens with a click. Its internal reminders are left out.
 - **Wake-ups, scheduled jobs and watches**: Claude can set itself to come back
   later (a wake-up, a scheduled job, maybe repeating) or watch a command's
-  output. What is waiting shows above the prompt ("Wakes up in 18 min · read the
-  link check's report", "Scheduled job, every minute · …", "Watching, ends in 28
-  min · …"), counting down; the step that set it says when it fires. When it
+  output. What is waiting shows above the prompt with the rest of the
+  background work ("read the link check's report · wakes up in 18 min", "… ·
+  scheduled, every minute", "the log · running 2 min, ends in 28 min"),
+  counting down; the step that set it says when it fires. When it
   fires, Claude goes on by itself: a note says why, and the tab shows Claude
   working (a message you send meanwhile waits its turn). They belong to the
   tab's running Claude Code: closing the tab or its bench, changing the tab's
@@ -1120,7 +1139,9 @@ the model, the mode (Full Auto in red), effort, cost, how full the context
 is, and the usage limits.
 
 A sub-agent's line says how it does (`running 3 min · $ cargo test · 4 tool
-calls`, `done in 40 s`); unfolded, it shows the kind of agent, its steps
+calls`, `done in 40 s`); with Claude's turn over and work it started still
+going on, the state line says `◷ Ready · waiting on 2 background tasks` and
+the tab's mark is `◷`; unfolded, it shows the kind of agent, its steps
 (`N earlier steps not shown` before the latest) and its report. Claude Code's
 own notes (a background task finished, a wake-up, a command's output, a
 compaction) are lines of their own, one line each, their detail folded (a long
