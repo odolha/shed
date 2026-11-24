@@ -166,9 +166,9 @@ and stronger type, and a tab's tags follow its title as small coloured words. Ho
 large it is drawn is a setting (**Tab bar size** in Settings).
 
 - **Tabs**: click to switch, double-click to rename, drag to reorder: dropped on
-  a tab's left half it goes before it, on the right half after it (a line shows
-  which), into that tab's group either way; a group's first tab leaving keeps
-  the group, the next tab starting it. Middle-click
+  a tab's left half it goes before it, on the right half after it (a caret in
+  the bench's colour shows where), into that tab's group either way; a group's
+  first tab leaving keeps the group, the next tab starting it. Middle-click
   or **Close Tab…** in the right-click menu closes one, after asking, so a slip
   does not stop what runs in it; closing a tab's only pane (Ctrl+Shift+W) asks
   the same. Each tab has one icon, the same as in Shed's compact view: what it is
@@ -177,23 +177,31 @@ large it is drawn is a setting (**Tab bar size** in Settings).
 - **New tab**: the button after the last tab, or Ctrl+Shift+T. When the tabs do
   not fit on one row they wrap onto more, the bar growing to hold them. The
   controls on the right (usage limits, Run Startup, Setup, the bench's name and
-  its links) stay on one row when there is room; when the tabs need more rows,
-  they form a column beside them, the usage limits on top and the rest below
-  (the links wrapping if need be), so the tabs get the width. Either way they
-  are centred against the tabs.
-- **Groups**: right-click a tab, **Divider Before**: **Space** starts a group
-  there (groups are set apart by a wider gap, the new-tab button after the
-  last; a group goes onto the next row whole, and wraps inside
-  only when it alone is wider than the bar), **New Row** starts its group on a row
-  of its own, **None** joins it to the tabs before. Dividers are saved with the
-  bench.
+  its links) sit on a panel of their own, centred against the tabs: beside one
+  row of tabs on one row; beside two, on two (the usage limits over the rest);
+  beside three or more, on three (the usage limits; Run Startup, Setup and the
+  bench's name; the links, wrapping if need be), so the tabs get the width.
+- **Groups**: tabs can be put in groups, set apart by a wider gap with a faint
+  line in it; a group goes onto the next row whole (it wraps inside only when it
+  alone is wider than the bar), and can start a row of its own. Groups have no
+  names. Drag a tab onto another group's tabs to move it there; drop it in the
+  gap between two groups to make it a group of its own there, or at the very
+  start of a row to put it on a new row of its own (the caret shows which, with
+  a stroke along the top for a new row). Right-click between a group's tabs or
+  on the line before it for the group's menu: **New Tab in Group** (a terminal
+  at its end), **Start on a New Row**, **Merge with Previous Group**, **Move
+  Group Left** / **Right** (its tabs in their order), and **Close Group's
+  Tabs…** (after asking). A tab's menu has **Move to Group** (the other groups,
+  each by its first tab's title, or **New Group** at the end) and **New Group
+  From Here**, which starts a group at that tab. Groups are saved with the bench.
 - **Zoom**: Ctrl+= / Ctrl+- / Ctrl+0, or **Ctrl+wheel** anywhere in the tab
   (Cmd on macOS). A zoomed tab shows how much on the tab (`120%`); click that to
   go back to the usual size.
 - **Splits**: Ctrl+Shift+E splits right, Ctrl+Shift+O splits down; drag the line
   between panes to resize; Alt+arrows move between panes.
 - **Right-click** a pane for copy, paste, split and close; a tab for rename, tags,
-  setup, private, **Move to Bench** and close; the bench's name (right of the tab bar) for rename,
+  groups, setup, private, **Move to Bench** and close; between tabs for their
+  group; the bench's name (right of the tab bar) for rename,
   badge, colours, **Appearance** (Auto, Light or Dark, for all of Shed), Show Shed
   and Close Bench.
 - On the right of the tab bar: on a bench with an AI tab, Claude's usage

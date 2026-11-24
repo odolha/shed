@@ -700,6 +700,21 @@ it writes the tab into that file under new ids (so loading that bench cannot
 mistake its panes for the ones still stopping), then stops the panes as closing
 would; between closed benches it moves the tab and its scrollback between files.
 
+Tab groups on a bench's tab bar are only dividers: a tab's `divider` (`TabDivider`:
+none, a space, a new row) starts a group there, and a group is the tabs from one
+divider to the next (`shed_model::groups`). Moving one tab (`MoveTab`,
+`MoveTabNextTo`) puts it into the group it lands in, a group's first tab handing
+its divider on as it leaves; changing a divider (`SetTabDivider`) starts, joins or
+moves a group to a row of its own. What moves several tabs or dividers at once (a
+group moved left or right, a tab dropped to make a group or a row of its own) is
+worked out by the window from the bench as it knows it (`groups::move_group`,
+`groups::alone_before`) and sent as the bench's whole new order, `ArrangeTabs`,
+which the keeper applies in one change (`Shed::arrange_tabs`; tabs opened
+meanwhile stay after). The tab bar notes where each tab was laid out
+(`BarLayout`, from the groups' `on_children_prepainted`), and goes by that for
+where a dragged tab would drop (`DropAt`), which group a right-click is for, and
+the lines it paints between groups sharing a row.
+
 **Loading** rebuilds the bench in the keeper: panes start in their folder, with
 their old scrollback fed to the emulator dimmed above a "restored" line, then either
 run their startup commands or bring back what was running, by the rack rules
@@ -1309,7 +1324,7 @@ distributor's endpoint to `POST /api/v1/push/subscribe`.
 
 | Crate | What it holds |
 | --- | --- |
-| `shed-model` | The bench → tab → pane tree, ids, colours, settings and themes, XDG paths, a bench's links as typed |
+| `shed-model` | The bench → tab → pane tree, ids, colours, settings and themes, XDG paths, a bench's links as typed, tab groups (`groups.rs`) |
 | `shed-proto` | The socket messages and framing |
 | `shed-emu` | The `Emulator` trait and its `alacritty_terminal` backend, replay, key and mouse encoding, shell-mark parsing |
 | `shed-keeper` | `shedd`: PTYs, the socket server, saving, closing, the shell marks |
