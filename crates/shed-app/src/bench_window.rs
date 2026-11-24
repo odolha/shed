@@ -88,11 +88,14 @@ pub struct TabIcon {
     /// An AI tab whose turn is over waits on this much work it started in
     /// the background (its hourglass carries the number).
     pub background: u32,
+    /// Claude is at work in an AI tab: the working mark turns in place of
+    /// the icon (`pulse::working_mark`).
+    pub working: bool,
 }
 
 pub fn tab_icon(tab: &Tab, accent: Rgb, ui: &UiColors) -> TabIcon {
     let waiting = tab.panes.iter().any(|p| p.waiting.is_some() || p.held.is_some());
-    let plain = |glyph, color| TabIcon { glyph, color, background: 0 };
+    let plain = |glyph, color| TabIcon { glyph, color, background: 0, working: false };
     if waiting {
         plain("tool-waiting", ui.ink(accent))
     } else if let Some(ai) = tab.ai_info() {
@@ -100,8 +103,8 @@ pub fn tab_icon(tab: &Tab, accent: Rgb, ui: &UiColors) -> TabIcon {
         // (Sessions going on in the background count too.)
         match ai.overall_activity() {
             shed_model::AiActivity::Waiting => plain("tool-waiting", ui.ink(accent)),
-            shed_model::AiActivity::Working => plain(glyph, ui.ink(accent)),
-            shed_model::AiActivity::Background(n) => TabIcon { glyph: "hourglass", color: ui.ink(accent), background: n },
+            shed_model::AiActivity::Working => TabIcon { working: true, ..plain(glyph, ui.ink(accent)) },
+            shed_model::AiActivity::Background(n) => TabIcon { background: n, ..plain("hourglass", ui.ink(accent)) },
             shed_model::AiActivity::Idle => plain(glyph, if ai.browser { ui.text } else { ui.text_dim }),
         }
     } else if tab.project_info().is_some() {
@@ -607,6 +610,10 @@ impl BenchWindow {
         });
         self.bar.update(cx, |bar, cx| {
             if bar.model != model {
+                // An AI tab at work: its mark turns with the app's beat,
+                // redrawing the bar alone.
+                let working = model.as_ref().is_some_and(|m| m.bench.tabs.iter().any(|t| t.icon.working));
+                crate::pulse::animate(cx, working);
                 bar.model = model;
                 cx.notify();
             }
@@ -1519,6 +1526,7 @@ impl TabBar {
         let s = b.scale;
         let ui = &b.ui;
         let accent = b.accent;
+        let frame = crate::pulse::frame();
         // Tabs wrap onto more rows when they do not fit.
         let pad = px(4.0 * s);
         let pad_y = px(6.0 * s);
@@ -1631,7 +1639,10 @@ impl TabBar {
             };
             // One icon, as in Shed: what the tab is, or that it waits or works.
             let tab_icon = tab.icon;
-            el = el.child(svg().path(icon(tab_icon.glyph)).size(px(14.0 * s)).flex_none().text_color(hsla(tab_icon.color)));
+            el = match tab_icon.working {
+                true => el.child(crate::pulse::working_mark(frame, px(14.0 * s), tab_icon.color)),
+                false => el.child(svg().path(icon(tab_icon.glyph)).size(px(14.0 * s)).flex_none().text_color(hsla(tab_icon.color))),
+            };
             if tab.private {
                 el = el.child(svg().path(icon("private")).size(px(12.0 * s)).flex_none().text_color(hsla(ui.text_dim)));
             }
@@ -2335,6 +2346,69 @@ mod tests {
         let [(a3, ab3), (w3, wb3)] = drawn(cx);
         assert_eq!((a3, ab3), (a2, ab2));
         assert!(w3 > w2 && wb3 > wb2);
+    }
+
+    /// An AI tab at work turns its mark with the app's beat: the tab bar is
+    /// drawn again a few times a second, the other bench's window not at
+    /// all; once Claude is done, nothing is drawn by itself any more.
+    #[gpui::test]
+    fn a_working_ai_tab_animates_its_tab_bar_alone(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let state = cx.new(|_| AppState::new(KeeperConn::detached(), crate::settings::Settings::default()));
+        let (mut api, web) = (bench("api", &["~/api"]), bench("web", &["~/web"]));
+        let ai = Tab::ai("/tmp".into());
+        let ai_id = ai.id;
+        api.tabs.push(ai);
+        let (api_id, web_id) = (api.id, web.id);
+        state.update(cx, |s, cx| {
+            s.tree = shed_model::Shed { benches: vec![api, web], ..Default::default() };
+            cx.notify();
+        });
+        let open = |id: BenchId, cx: &mut gpui::TestAppContext| {
+            let tracker = PlaceTracker::new(Some(id), KeeperConn::detached(), gpui::WindowBounds::Windowed(gpui::Bounds::default()), None);
+            let st = state.clone();
+            cx.add_window(|window, cx| BenchWindow::new(id, st, tracker, window, cx))
+        };
+        let (a, w) = (open(api_id, cx), open(web_id, cx));
+        cx.run_until_parked();
+        let drawn = |cx: &mut gpui::TestAppContext| [a, w].map(|h| h.update(cx, |v, _, cx| v.bar.read(cx).drawn).unwrap());
+        let set = |activity, cx: &mut gpui::TestAppContext| {
+            state.update(cx, |s, cx| {
+                if let Some(shed_model::TabKind::Ai(ai)) = s.tree.tab_mut(ai_id).map(|t| &mut t.kind) {
+                    ai.activity = activity;
+                }
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+        let beats = |n: u32, cx: &mut gpui::TestAppContext| {
+            for _ in 0..n {
+                cx.executor().advance_clock(crate::pulse::STEP);
+                cx.run_until_parked();
+            }
+        };
+        // Idle: no beat, nothing drawn.
+        let before = drawn(cx);
+        beats(4, cx);
+        assert_eq!(drawn(cx), before);
+        assert!(!cx.update(|cx| crate::pulse::running(cx)));
+
+        set(shed_model::AiActivity::Working, cx);
+        let [a0, w0] = drawn(cx);
+        beats(4, cx);
+        let [a1, w1] = drawn(cx);
+        assert!(a1 >= a0 + 4, "api's bar drawn at each beat ({a0} → {a1})");
+        assert_eq!(w1, w0, "web's window is left alone");
+
+        // Waiting on background work: an hourglass, still.
+        set(shed_model::AiActivity::Background(2), cx);
+        assert!(!cx.update(|cx| crate::pulse::running(cx)), "the beat stops with nothing to animate");
+        let still = drawn(cx);
+        beats(4, cx);
+        assert_eq!(drawn(cx), still);
     }
 
     /// The bookmarks list opens under its button, says why a bookmark

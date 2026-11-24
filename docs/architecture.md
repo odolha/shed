@@ -566,6 +566,16 @@ the work wakes Claude for. A background command's output goes to a file
 (`background::last_output_line`: escape sequences out, the part after the last
 carriage return) into the run's `last`, sent as a changed entry.
 
+**The working mark.** While Claude works (`AiActivity::Working`, here or
+away), the tab's icon is a ring of dots that turns (`pulse::working_mark`, in
+the tab bar, on Shed's tab cards, on the session's row). `shed-app/src/pulse.rs`
+is one beat for the whole app: a timer of 4 steps a second, running only while
+some view asks for it (`pulse::animate`); each step notifies just those views
+(a tab bar, a bench's view in Shed, an AI view for its dots, times and sessions
+list), so a window draws once per step, and nothing draws when nothing works.
+The step is told by the clock (`pulse::frame`), not read from a global: a view
+that reads a global is drawn again whenever the global changes.
+
 Claude's questions come as a `can_use_tool` request for its AskUserQuestion
 tool: the transcript keeps them in the `Permission` entry (`questions`), the
 window draws them as a form, and `AiAnswerQuestions` answers with the tool's

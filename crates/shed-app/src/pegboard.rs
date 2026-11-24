@@ -143,6 +143,8 @@ pub struct BenchCard {
     model: CardModel,
     /// How many times it was drawn (tests check what a change draws).
     drawn: usize,
+    /// The app's beat as of this drawing (working marks turn with it).
+    frame: u64,
 }
 
 impl BenchCard {
@@ -159,6 +161,7 @@ impl Render for BenchCard {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let started = std::time::Instant::now();
         self.drawn += 1;
+        self.frame = crate::pulse::frame();
         let ui = self.model.ui.clone();
         let entry = &self.model.entry;
         let element = if self.model.compact { self.render_bench_line(entry, &ui) } else { self.render_bench(entry, &ui) };
@@ -334,19 +337,27 @@ impl Pegboard {
         let ids: Vec<BenchId> = models.iter().map(|m| m.entry.bench.id).collect();
         for model in models {
             let id = model.entry.bench.id;
-            match self.cards.get(&id) {
-                Some(card) => card.update(cx, |card, cx| {
-                    if card.model != model {
-                        card.model = model;
-                        cx.notify();
-                    }
-                }),
+            // An AI tab at work: its mark turns with the app's beat, redrawing
+            // this bench's view alone.
+            let working = model.entry.bench.tabs.iter().filter(|t| model.entry.tabs.contains(&t.id)).filter_map(|t| t.ai_info()).any(|a| a.overall_activity() == shed_model::AiActivity::Working);
+            let card = match self.cards.get(&id) {
+                Some(card) => {
+                    card.update(cx, |card, cx| {
+                        if card.model != model {
+                            card.model = model;
+                            cx.notify();
+                        }
+                    });
+                    card.clone()
+                }
                 None => {
                     let board = cx.weak_entity();
-                    let card = cx.new(|_| BenchCard { board, model, drawn: 0 });
-                    self.cards.insert(id, card);
+                    let card = cx.new(|_| BenchCard { board, model, drawn: 0, frame: 0 });
+                    self.cards.insert(id, card.clone());
+                    card
                 }
-            }
+            };
+            card.update(cx, |_, cx| crate::pulse::animate(cx, working));
         }
         self.cards.retain(|id, _| ids.contains(id));
         let (ui, open_only) = {
@@ -1469,7 +1480,10 @@ impl BenchCard {
             }))
             // The tab the bench shows: a short bar in its colour.
             .when(active, |d| d.child(div().absolute().left_0().top(px(6.0)).h(px(14.0)).w(px(2.0)).rounded_full().bg(hsla(accent))))
-            .child(svg().path(icon(tab_icon.glyph)).size(crate::theme::us(14.0)).flex_none().text_color(hsla(tab_icon.color)))
+            .child(match tab_icon.working {
+                true => crate::pulse::working_mark(self.frame, crate::theme::us(14.0), tab_icon.color).into_any_element(),
+                false => svg().path(icon(tab_icon.glyph)).size(crate::theme::us(14.0)).flex_none().text_color(hsla(tab_icon.color)).into_any_element(),
+            })
             .child(title_el)
             .when(tab_icon.background > 0, |d| {
                 d.child(crate::bench_window::background_badge(SharedString::from(format!("background-{tab_id}")), tab_icon.background, accent, ui, crate::theme::us(10.5)))
@@ -1493,8 +1507,10 @@ impl BenchCard {
         }
         if let Some(ai) = tab.ai_info() {
             head = head.child(svg().path(icon("ai")).size(crate::theme::us(13.0)).flex_none().text_color(hsla(ui.ink(accent))));
-            // Waiting for you, or on work it started in the background.
+            // At work (turning), waiting for you, or on work it started in
+            // the background.
             match ai.overall_activity() {
+                shed_model::AiActivity::Working => head = head.child(crate::pulse::working_mark(self.frame, crate::theme::us(12.0), ui.ink(accent))),
                 shed_model::AiActivity::Waiting => {
                     head = head.child(svg().path(icon("tool-waiting")).size(crate::theme::us(12.0)).flex_none().text_color(hsla(ui.ink(accent))));
                 }

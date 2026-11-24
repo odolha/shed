@@ -626,6 +626,7 @@ impl AiView {
         }
         if ai != self.ai {
             self.ai = ai;
+            self.follow_beat(cx);
             cx.notify();
         }
     }
@@ -695,7 +696,7 @@ impl AiView {
         });
         self.newest_run = running.clone().map(|r| r.started).max().unwrap_or(0);
         self.running = running.count() > 0;
-        self.tick(cx);
+        self.follow_beat(cx);
         cx.notify();
     }
 
@@ -953,13 +954,13 @@ impl AiView {
             .collect()
     }
 
-    /// How often the view is drawn again by itself: a few times a second
-    /// while Claude works (its dots and time), every second while an agent
-    /// runs in the background or a wake-up is near, now and then while one
-    /// waits further off; never otherwise.
+    /// How often the view is drawn again by itself, beside the beat
+    /// (`animating`): every second while an agent runs in the background or
+    /// a wake-up is near, now and then while one waits further off; never
+    /// otherwise.
     fn tick_every(&self) -> Option<Duration> {
-        if self.status.state != AiState::Idle {
-            return Some(Duration::from_millis(350));
+        if self.animating() {
+            return None;
         }
         let now = unix_now();
         // Counting in seconds: a run in its first minute, a timer in its last.
@@ -980,7 +981,21 @@ impl AiView {
     /// The mark of something running: turning while Claude works, still
     /// otherwise (a server left running would keep the window drawing).
     fn turning(&self) -> &'static str {
-        if self.status.state == AiState::Idle { "◐" } else { ["◐", "◓", "◑", "◒"][self.spin % 4] }
+        if self.status.state != AiState::Working { "◐" } else { ["◐", "◓", "◑", "◒"][self.spin % 4] }
+    }
+
+    /// The view steps with the app's beat (`pulse`): while Claude works on
+    /// the session shown (its dots, its time, turning marks), or on one in
+    /// the background listed in the sessions shown (its working mark).
+    fn animating(&self) -> bool {
+        self.status.state == AiState::Working || (!self.show_prompts && self.ai.away.iter().any(|a| a.activity == shed_model::AiActivity::Working))
+    }
+
+    /// Steps with the beat or not, as `animating` says; and keeps its own
+    /// slower ticks (`tick`) for the rest.
+    fn follow_beat(&mut self, cx: &mut Context<Self>) {
+        crate::pulse::animate(cx, self.animating());
+        self.tick(cx);
     }
 
     /// Keeps the "working for" time, agents' times and countdowns current.
@@ -997,7 +1012,6 @@ impl AiView {
                 let Ok(Some(every)) = this.update(cx, |this, _| this.tick_every()) else { break };
                 cx.background_executor().timer(every).await;
                 let ticked = this.update(cx, |this, cx| {
-                    this.spin = this.spin.wrapping_add(1);
                     // Nothing to keep up any more: a later change starts it again.
                     if this.tick_every().is_none() {
                         this.ticker = None;
@@ -3601,7 +3615,8 @@ impl AiView {
                             let glyph = match a {
                                 shed_model::AiActivity::Waiting => "tool-waiting",
                                 shed_model::AiActivity::Background(_) => "hourglass",
-                                _ => "ai",
+                                // Working: the mark turns, with the app's beat.
+                                _ => return d.child(crate::pulse::working_mark(self.spin as u64, px(13.0 * z), ui.ink(accent))),
                             };
                             d.child(svg().flex_none().path(icon(glyph)).size(px(13.0 * z)).text_color(hsla(ui.ink(accent))))
                         })
@@ -4439,6 +4454,8 @@ impl MenuHost for AiView {
 
 impl Render for AiView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Turning marks and dots step with the app's beat.
+        self.spin = crate::pulse::frame() as usize;
         let ui = current_ui(cx);
         let menu = self.menu.as_ref().map(|m| menu::render(m, &ui, cx));
         let count = self.shown_sessions(cx).len();
@@ -4480,6 +4497,7 @@ impl Render for AiView {
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.show_prompts = prompts;
+                    this.follow_beat(cx);
                     cx.notify();
                 }))
         }));

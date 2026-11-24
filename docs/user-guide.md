@@ -93,8 +93,9 @@ framed box with a header line (its colour dot, filled while it runs and a ring w
 name, click to open, double-click to rename; whether it is hidden or when it was
 saved; its links; **Open** or **Go to**; **⋯**) with its tabs below in even
 columns, each on a light ground of its own. Each tab has an icon for what it is (terminal, program running, project,
-AI, remote; the waiting icon when it waits for you; an AI tab waiting on work
-Claude started in the background, an hourglass and how many), its title, its tags as small
+AI, remote; the waiting icon when it waits for you; a turning mark while
+Claude works in an AI tab; an AI tab waiting on work Claude started in the
+background, an hourglass and how many), its title, its tags as small
 dots, and what runs in it or its folder, cut short with "…" (hover for all of it).
 A short bar in the bench's colour marks the tab the bench shows. Tabs work like
 cards: click, drag, middle-click, right-click; **New tab** shows when the mouse is
@@ -175,6 +176,9 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   the same. Each tab has one icon, the same as in Shed's compact view: what it is
   (terminal, program running, project, AI, remote), or, in the bench's colour,
   that it is working or that a command is [waiting for Enter](#opening-hiding-closing).
+  While Claude works in an AI tab (here or in a session it went on with in the
+  background), a ring of dots turns in place of its icon, on its card in Shed
+  too; it stops, and nothing is drawn for it, once Claude is done.
   An AI tab whose turn is over while work Claude started still goes on in the
   background (an agent, a command, a watch, a wake-up to come) shows an
   hourglass and how many ("2"; hover it for "waiting on 2 background tasks"),
@@ -445,7 +449,7 @@ terminal of the bench.
   goes on from it in a new session that starts as a copy of it: the tab shows
   its conversation, titled "Fork of …", and what you send next goes to the
   copy, while the original stays as it was (Claude Code's `--fork-session`).
-  A session Claude is at shows it in the list: the AI
+  A session Claude is at shows it in the list: the turning
   mark and **working** (or **waiting for you**, when it asks something; or the
   hourglass and **waiting on 2 background tasks**, its turn over while work it
   started goes on). One
