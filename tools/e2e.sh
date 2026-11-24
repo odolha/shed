@@ -38,7 +38,7 @@ bin=$E2E_TARGET/$E2E_PROFILE
 
 # ---- a world of its own
 rm -rf "$E2E_DIR"
-mkdir -p "$E2E_DIR"/{run,config/shed,data,state,nexus/data,home,bin,shots,chrome}
+mkdir -p "$E2E_DIR"/{run,config/shed,data,state,nexus/data,home,bin,shots,chrome,chrome-setup}
 export SHED_RUNTIME_DIR=$E2E_DIR/run XDG_CONFIG_HOME=$E2E_DIR/config XDG_DATA_HOME=$E2E_DIR/data \
        XDG_STATE_HOME=$E2E_DIR/state HOME=$E2E_DIR/home SHED_CLAUDE=$E2E_DIR/bin/claude
 unset SHED_PANE SHED_TAB SHED_BENCH

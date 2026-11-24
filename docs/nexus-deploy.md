@@ -84,7 +84,8 @@ they exist ([What the script did](#what-the-script-did) has the details).
 
 Open the setup link the script printed
 (`https://nexus.example.com/setup#code=…`): choose a user name and password,
-add the authenticator (scan the QR code), confirm with a code from it, and keep
+add the authenticator (scan the QR code, or type in the key; Authy's 7-digit
+codes are taken too), confirm with a code from it, and keep
 the recovery codes somewhere safe (each signs you in once if the authenticator
 is lost). The link is new at every start of the nexus and works only until the
 account exists. Later, to see it again:

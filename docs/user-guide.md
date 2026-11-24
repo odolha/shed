@@ -1117,8 +1117,10 @@ None of it is needed: without a nexus, Shed works just the same on its own.
 setup link to a file in its data folder and its log says where ([Deploying a
 nexus](nexus-deploy.md#4-the-account)); the code is in the link after `#`, so it
 stays out of servers' logs. Open it, choose a user name and password, scan the
-QR code with an authenticator app, type the code it shows, and keep the
-recovery codes (each signs you in once if the authenticator is lost).
+QR code with an authenticator app (or type in the key under it: 6 digits, 30
+seconds, SHA-1), type the code it shows, and keep the recovery codes (each
+signs you in once if the authenticator is lost). Authy's 7- or 8-digit codes
+work too, wherever a code is asked for: type them all, or their last 6 digits.
 **Signing in**, in the web app or the Android app, always asks for the user
 name, the password and a code.
 

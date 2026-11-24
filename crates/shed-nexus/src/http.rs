@@ -434,7 +434,7 @@ async fn setup(State(app): State<Arc<App>>, client: Client, Body(req): Body<Setu
     let hash = argon(&app, move || auth::hash_password(&password)).await??;
     let secret = auth::new_totp_secret();
     let totp = auth::totp(&secret, &username)?;
-    let answer = SetupTotp { secret: secret.clone(), url: totp.get_url() };
+    let answer = SetupTotp { secret: secret.clone(), url: auth::totp_url(&totp) };
     app.setup.lock().unwrap_or_else(|e| e.into_inner()).pending =
         Some(PendingSetup { username, password: hash, totp_secret: secret });
     Ok(Json(answer))

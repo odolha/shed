@@ -76,18 +76,36 @@ pub fn totp(secret: &str, username: &str) -> anyhow::Result<TOTP> {
         .map_err(|e| anyhow::anyhow!("TOTP: {e}"))
 }
 
+/// The `otpauth://` URL for the QR code, saying digits, period and algorithm
+/// even where they are the defaults (`get_url` leaves those out), so no
+/// authenticator guesses them.
+pub fn totp_url(totp: &TOTP) -> String {
+    let mut url = totp.get_url();
+    let params = [("digits", totp.digits.to_string()), ("period", totp.step.to_string()), ("algorithm", totp.algorithm.to_string())];
+    for (key, value) in params {
+        if !url.contains(&format!("?{key}=")) && !url.contains(&format!("&{key}=")) {
+            url.push_str(&format!("&{key}={value}"));
+        }
+    }
+    url
+}
+
 /// The time step a code is valid for, if it is one of the current step or
-/// the ones either side of it.
+/// the ones either side of it. Spaces and dashes are ignored, and 7 or 8
+/// digit codes are taken too: some authenticators (Authy, for keys typed in)
+/// show longer codes, whose last 6 digits are the 6-digit code (HOTP
+/// truncation is the same number modulo 10^digits).
 pub fn totp_step(totp: &TOTP, code: &str, now: u64) -> Option<u64> {
-    let code = code.trim().replace(' ', "");
-    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+    let code: String = code.chars().filter(|c| !c.is_whitespace() && *c != '-').collect();
+    if !(6..=8).contains(&code.len()) || !code.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
+    let code = &code[code.len() - 6..];
     let step = now / 30;
     let mut found = None;
     // Every candidate is compared, so the time taken says nothing.
     for candidate in [step.saturating_sub(1), step, step + 1] {
-        if same(&totp.generate(candidate * 30), &code) {
+        if same(&totp.generate(candidate * 30), code) {
             found = Some(candidate);
         }
     }
@@ -437,6 +455,38 @@ mod tests {
         assert_eq!(totp_step(&totp, &totp.generate(now + 30), now), Some(now / 30 + 1));
         assert_eq!(totp_step(&totp, &totp.generate(now - 90), now), None);
         assert_eq!(totp_step(&totp, "abc", now), None);
+    }
+
+    #[test]
+    fn totp_url_says_digits_period_and_algorithm() {
+        let totp = totp(&new_totp_secret(), "me").unwrap();
+        let url = totp_url(&totp);
+        assert!(url.starts_with("otpauth://totp/Shed:me?secret="), "{url}");
+        for part in ["&issuer=Shed", "&digits=6", "&period=30", "&algorithm=SHA1"] {
+            assert!(url.contains(part), "{url} has no {part}");
+        }
+    }
+
+    #[test]
+    fn totp_takes_longer_codes_by_their_last_six_digits() {
+        let secret = new_totp_secret();
+        let totp = totp(&secret, "me").unwrap();
+        let bytes = Secret::Encoded(secret).to_bytes().unwrap();
+        let longer = |digits| TOTP::new(Algorithm::SHA1, digits, 1, 30, bytes.clone(), None, "me".into()).unwrap();
+        let now = 1_000_000_000;
+        let seven = longer(7).generate(now);
+        let eight = longer(8).generate(now - 30);
+        assert_eq!(seven.len(), 7);
+        assert_eq!(eight.len(), 8);
+        assert_eq!(totp_step(&totp, &seven, now), Some(now / 30));
+        assert_eq!(totp_step(&totp, &eight, now), Some(now / 30 - 1));
+        let six = totp.generate(now);
+        assert_eq!(totp_step(&totp, &format!(" {}-{} ", &six[..3], &six[3..]), now), Some(now / 30));
+        // Too long, too short, not digits, or out of the window.
+        assert_eq!(totp_step(&totp, &format!("12{eight}"), now), None);
+        assert_eq!(totp_step(&totp, "12345", now), None);
+        assert_eq!(totp_step(&totp, "12a4567", now), None);
+        assert_eq!(totp_step(&totp, &longer(8).generate(now - 90), now), None);
     }
 
     #[test]

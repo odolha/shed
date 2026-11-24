@@ -349,7 +349,8 @@ makes a world in `/tmp/shed-e2e` (`E2E_DIR`; a home with a neutral prompt, a
 Git project with a change, a stand-in `claude` playing a recorded turn, a
 keeper that stays without windows), starts a nexus on `127.0.0.1:7871`
 (`E2E_PORT`) serving the web app, and a keeper of its own. Then
-`tools/e2e/e2e.mjs` sets up the account over HTTP (TOTP codes computed from
+`tools/e2e/e2e.mjs` checks the setup page draws its QR code and key (in
+headless Chrome), sets up the account over HTTP (TOTP codes computed from
 the secret; each 30 s step is used once, so the run waits for fresh ones),
 pairs the keeper with `shed nexus join`, waits for the link, makes a bench
 with a terminal, a project and an AI tab through the API, and drives the web

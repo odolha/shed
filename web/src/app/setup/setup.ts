@@ -132,6 +132,7 @@ export function groupSecret(secret: string): string {
                     <shed-icon name="copy" [size]="14" />{{ 'common.copy' | t }}
                   </button>
                 </div>
+                <small class="dim">{{ 'setup.params' | t }}</small>
               </div>
               <label class="field">
                 <span>{{ 'setup.totp' | t }}</span>
@@ -140,12 +141,13 @@ export function groupSecret(secret: string): string {
                   name="totp"
                   inputmode="numeric"
                   autocomplete="one-time-code"
-                  maxlength="8"
+                  maxlength="10"
                   placeholder="123456"
                   required
                   [ngModel]="totp()"
                   (ngModelChange)="totp.set($event)"
                 />
+                <small class="dim">{{ 'setup.longerCodes' | t }}</small>
               </label>
               @if (error(); as e) {
                 <div class="error-box" role="alert">{{ e }}</div>
@@ -273,7 +275,10 @@ export function groupSecret(secret: string): string {
       border-radius: var(--radius-sm);
       background: var(--bg);
       border: 1px solid var(--divider);
-      word-break: break-all;
+      /* Wraps between the groups of four only: a letter alone on the next
+         line is easily left out when typing the key. */
+      word-break: normal;
+      overflow-wrap: normal;
       user-select: all;
     }
     .codes {
@@ -325,7 +330,7 @@ export class SetupPage implements OnInit {
       this.password().length >= MIN_PASSWORD &&
       this.password() === this.password2(),
   );
-  protected readonly canConfirm = computed(() => !this.busy() && this.totp().replace(/\s/g, '').length >= 6);
+  protected readonly canConfirm = computed(() => !this.busy() && this.totp().replace(/[\s-]/g, '').length >= 6);
   protected readonly downloadUrl = computed(() => {
     const text = `${t('setup.fileHeader')}\n\n${this.recovery().join('\n')}\n`;
     return URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
@@ -380,7 +385,7 @@ export class SetupPage implements OnInit {
     try {
       const signed = await this.http.setupConfirm({
         code: this.code().trim(),
-        totp: this.totp().replace(/\s/g, ''),
+        totp: this.totp().replace(/[\s-]/g, ''),
         device: { kind: 'browser', name: browserName() },
       });
       this.auth.signedIn(signed);
@@ -407,10 +412,22 @@ export class SetupPage implements OnInit {
   }
 }
 
-/** The `otpauth://` URL as a QR code, as an SVG data URL (drawn here, never sent anywhere). */
-async function qrDataUrl(url: string): Promise<string | null> {
+/**
+ * A CommonJS package's exports from a dynamic `import()`: the production
+ * build's chunk for one exports only `default` (a namespace without the
+ * named functions), while the dev server and tests give them by name.
+ */
+export function commonJs<T extends object>(mod: T): T {
+  return (mod as { default?: T }).default ?? mod;
+}
+
+/**
+ * The `otpauth://` URL as a QR code, as an SVG data URL (drawn here, never
+ * sent anywhere).
+ */
+export async function qrDataUrl(url: string): Promise<string | null> {
   try {
-    const QR = await import('qrcode');
+    const QR = commonJs(await import('qrcode'));
     const svg = await QR.toString(url, {
       type: 'svg',
       margin: 0,
@@ -418,7 +435,8 @@ async function qrDataUrl(url: string): Promise<string | null> {
       color: { dark: '#000000', light: '#ffffff' },
     });
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  } catch {
+  } catch (e) {
+    console.error('could not draw the QR code', e);
     return null;
   }
 }

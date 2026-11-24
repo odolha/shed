@@ -80,7 +80,8 @@ function address(req: IncomingMessage): string {
 
 function totpOk(code: string): void {
   const c = code.replace(/\s/g, '');
-  if (/^\d{6}$/.test(c) && c !== '000000') return;
+  // 6 digits, or 7–8 (Authy's), as the nexus takes them: by their last six.
+  if (/^\d{6,8}$/.test(c) && !c.endsWith('000000')) return;
   if (/^[a-z0-9]{4}-[a-z0-9]{4}$/i.test(c)) return; // a recovery code
   throw new Fail('wrongCode', 'that code is not right');
 }
@@ -174,7 +175,7 @@ async function answer(route: string, req: IncomingMessage, res: ServerResponse):
       account.username = b.username.trim();
       account.password = b.password;
       account.secret = Array.from(randomBytes(32), (b) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'[b % 32]).join('');
-      return { secret: account.secret, url: `otpauth://totp/Shed:${encodeURIComponent(account.username)}?secret=${account.secret}&issuer=Shed` };
+      return { secret: account.secret, url: `otpauth://totp/Shed:${encodeURIComponent(account.username)}?secret=${account.secret}&issuer=Shed&digits=6&period=30&algorithm=SHA1` };
     }
     case 'POST /setup/confirm': {
       const b = await body<SetupConfirm>(req);

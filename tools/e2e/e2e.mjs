@@ -168,7 +168,32 @@ async function main() {
   const link = readFileSync(`${NEXUS_DATA}/setup-link.txt`, 'utf8');
   const setupCode = /code=([^\s&]+)/.exec(link)?.[1];
   check(setupCode, 'the setup link has a code');
+
+  // The setup page as a person sees it: its QR code (the production build's
+  // chunk for the CommonJS qrcode package once drew none) and the key.
+  // Starting setup again below replaces what this page started.
+  const setupBrowser = await Browser.launch(`${DIR}/chrome-setup`, { width: 900, height: 1100 });
+  try {
+    await setupBrowser.goto(`${URL_}/setup#code=${setupCode}`);
+    await setupBrowser.type('input[name=username]', USER);
+    await setupBrowser.type('input[name=password]', PASSWORD);
+    await setupBrowser.type('input[name=password2]', PASSWORD);
+    await setupBrowser.click('button[type=submit]', null, 'Next');
+    await setupBrowser.waitFor('document.querySelector("input[name=totp]")', 'the authenticator step');
+    const qr = await setupBrowser.waitFor(
+      `(() => { const i = document.querySelector('img.qr'); return i?.complete && i.naturalWidth > 0 && i.src.startsWith('data:image/svg+xml') && i.src; })()`,
+      'the QR code',
+    );
+    check(decodeURIComponent(qr).includes('<path'), 'the QR code is drawn');
+    const key = await setupBrowser.eval(`document.querySelector('code.secret').textContent.replace(/\\s/g, '')`);
+    check(/^[A-Z2-7]{32}$/.test(key), `the page shows a 32-letter base32 key (got ${key})`);
+    await setupBrowser.screenshot(`${SHOTS}/00-setup.png`);
+  } finally {
+    await setupBrowser.close();
+  }
+
   const totp = await http('POST', '/setup', { code: setupCode, username: USER, password: PASSWORD });
+  check(/[?&]digits=6(&|$)/.test(totp.url) && /[?&]period=30(&|$)/.test(totp.url) && /[?&]algorithm=SHA1(&|$)/.test(totp.url) && /[?&]issuer=Shed(&|$)/.test(totp.url), `the otpauth URL says issuer, digits, period and algorithm (got ${totp.url})`);
   const secret = totp.secret;
   const signed = await http('POST', '/setup/confirm', {
     code: setupCode,
