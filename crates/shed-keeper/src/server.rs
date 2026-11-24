@@ -837,6 +837,12 @@ impl Keeper {
             ClientMsg::AiAnswerQuestions { tab, request, answers } => self.ai_answer_questions(tab, request, answers),
             ClientMsg::ResetZoom => self.reset_zoom(client),
             ClientMsg::SetTabDivider { tab, divider } => self.edit_tab(tab, |t| t.divider = divider),
+            ClientMsg::ArrangeTabs { bench, tabs, focus } => {
+                let mut st = self.lock();
+                if st.tree.arrange_tabs(bench, &tabs, focus) {
+                    st.broadcast_tree();
+                }
+            }
             ClientMsg::RunStartup { bench } => self.run_startup(bench),
             ClientMsg::RunTeardown { bench } => {
                 let keeper = self.clone();

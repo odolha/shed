@@ -471,3 +471,39 @@ fn tag_rules_follow_tools() {
     assert_eq!(tree.bench(bench).unwrap().tabs[0].auto_tags[0].label, "napping");
     c.tree_where("auto tag gone", |t| t.bench(bench).is_some_and(|b| b.tabs[0].auto_tags.is_empty()));
 }
+
+#[test]
+fn tab_groups_move_and_grow_at_once() {
+    use shed_model::{TabDivider, groups};
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+    let mut c = Client::connect(&socket);
+    let (bench, _) = c.attach();
+    let mut tree = Shed::default();
+    for n in 2..=3 {
+        c.msg(ClientMsg::NewTab { bench, cwd: None });
+        tree = c.tree_where("tabs", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == n));
+    }
+    // Groups [a] [b c].
+    let ids: Vec<_> = tree.bench(bench).unwrap().tabs.iter().map(|t| t.id).collect();
+    let (a, b, cc) = (ids[0], ids[1], ids[2]);
+    c.msg(ClientMsg::SetTabDivider { tab: b, divider: TabDivider::Space });
+    let tree = c.tree_where("a divider", |t| t.tab(b).is_some_and(|t| t.divider == TabDivider::Space));
+
+    // A new tab in the first group: after its last tab, in it.
+    c.msg(ClientMsg::FocusTab { tab: a });
+    c.msg(ClientMsg::NewTab { bench, cwd: None });
+    let tree2 = c.tree_where("new tab in the group", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 4));
+    let now = groups::of(tree2.bench(bench).unwrap());
+    let d = now[1].0;
+    assert_eq!(now, [(a, TabDivider::None), (d, TabDivider::None), (b, TabDivider::Space), (cc, TabDivider::None)]);
+
+    // The second group moved left, as a window works it out (from the
+    // order it knew, without `d`): one change, `d` kept after.
+    let order = groups::move_group(&groups::of(tree.bench(bench).unwrap()), 1, false).unwrap();
+    c.msg(ClientMsg::ArrangeTabs { bench, tabs: order, focus: Some(cc) });
+    let tree = c.tree_where("moved", |t| t.bench(bench).is_some_and(|bn| bn.tabs[0].id == b));
+    let bench_now = tree.bench(bench).unwrap();
+    assert_eq!(groups::of(bench_now), [(b, TabDivider::Space), (cc, TabDivider::None), (a, TabDivider::Space), (d, TabDivider::None)]);
+    assert_eq!(bench_now.active_tab, cc);
+}

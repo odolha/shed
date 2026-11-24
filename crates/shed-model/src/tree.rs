@@ -169,6 +169,27 @@ impl Shed {
         true
     }
 
+    /// Puts a bench's tabs in the order given, with the dividers given
+    /// (`groups::Arrangement`). Tabs not in the bench are passed over; the
+    /// bench's tabs not given (opened meanwhile) stay after, as they were.
+    /// `focus`, one of them, becomes the active tab.
+    pub fn arrange_tabs(&mut self, bench: BenchId, order: &[(TabId, TabDivider)], focus: Option<TabId>) -> bool {
+        let Some(b) = self.bench_mut(bench) else { return false };
+        let mut rest = std::mem::take(&mut b.tabs);
+        for (id, divider) in order {
+            if let Some(at) = rest.iter().position(|t| t.id == *id) {
+                let mut tab = rest.remove(at);
+                tab.divider = *divider;
+                b.tabs.push(tab);
+            }
+        }
+        b.tabs.append(&mut rest);
+        if let Some(focus) = focus.filter(|f| b.tabs.iter().any(|t| t.id == *f)) {
+            b.active_tab = focus;
+        }
+        true
+    }
+
     /// Removes a tab that has no panes (a project tab); a bench left without
     /// tabs is removed. Tabs with panes leave as their panes exit.
     pub fn close_paneless_tab(&mut self, tab: TabId) -> Option<Tab> {

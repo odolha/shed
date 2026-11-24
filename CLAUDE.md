@@ -72,7 +72,8 @@ Crates (`crates/`), lowest first:
 
 - `shed-model`: the tree (`Shed` → `Bench` → `Tab` → `PaneNode`/`Pane`), ids,
   `BenchColor`, settings (`config.rs`: `shed.toml`, themes, aliases), XDG paths,
-  a bench's links as typed (`links.rs`).
+  a bench's links as typed (`links.rs`), a bench's tab groups and their
+  rearranging (`groups.rs`).
   Built-in themes are `crates/shed-model/themes/*.toml`.
 - `shed-proto`: socket framing and messages (`ClientMsg`, `KeeperMsg`, `Frame`).
 - `shed-emu`: `Emulator` trait over vendored `alacritty_terminal`, replay snapshot,

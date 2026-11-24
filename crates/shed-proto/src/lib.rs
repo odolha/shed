@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 54;
+pub const PROTOCOL_VERSION: u32 = 55;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -221,6 +221,10 @@ pub enum ClientMsg {
     /// session whose first prompt starts Claude Code on a copy of it
     /// (`AiTab::fork_of`); the original is left as it is.
     AiForkSession { tab: TabId, session: String },
+    /// Puts a running bench's tabs in this order, with these dividers, at
+    /// once (`shed_model::groups`: a group moved, a tab made a group of its
+    /// own); `focus` becomes the shown tab. Tabs left out stay after.
+    ArrangeTabs { bench: BenchId, tabs: Vec<(TabId, shed_model::TabDivider)>, focus: Option<TabId> },
 }
 
 /// One change to an AI tab's settings or kept state.
