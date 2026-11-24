@@ -129,23 +129,25 @@ pub fn known_tags(cx: &gpui::App, state: &crate::state::AppState) -> Vec<(String
     found.into_iter().map(|(label, (color, n))| (label.clone(), if config.tag_colors.contains_key(&label) { config.tag_color_of(&label) } else { color }, n)).collect()
 }
 
-/// About how wide the tab bar's parts are, at scale `s`. Text is not
-/// measured before it is laid out, so this goes by characters.
+/// About how wide the tab bar's parts are, at scale `s`: each tab as wide
+/// as it was laid out last (`measured`), else by its characters, as text is
+/// not measured before it is laid out.
 struct BarWidths {
     /// Each group's tabs, and whether the group starts a row of its own.
     groups: Vec<(bool, Vec<f32>)>,
-    /// The new-tab button, with the room before it.
-    new_tab: f32,
     /// The usage limits (0 without).
     limits: f32,
-    /// Run Startup or Teardown, Setup, the bench's name.
+    /// New Tab, Run Startup or Teardown, Setup, the bench's name.
     actions: Vec<f32>,
     links: Vec<f32>,
 }
 
-fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bool) -> BarWidths {
+fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bool, measured: &HashMap<TabId, f32>) -> BarWidths {
     let ch = 7.4 * s;
     let tab = |t: &BarTab| {
+        if let Some(w) = measured.get(&t.id) {
+            return *w;
+        }
         let tags: f32 = t.tags.iter().map(|g| g.label.chars().count() as f32 * 6.2 * s + 6.0 * s).sum();
         2.0 * TAB_PAD_X * s
             + 20.0 * s
@@ -161,7 +163,7 @@ fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bo
         }
         groups.last_mut().unwrap().1.push(tab(t));
     }
-    let mut actions = Vec::new();
+    let mut actions = vec![32.0 * s];
     if lifecycle {
         actions.push(32.0 * s);
     }
@@ -170,7 +172,7 @@ fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bo
     }
     actions.push(bench.name.chars().count() as f32 * 8.0 * s + 54.0 * s);
     let links = bench.links.iter().map(|l| l.name.chars().count().min(22) as f32 * 7.0 * s + 40.0 * s).collect();
-    BarWidths { groups, new_tab: 36.0 * s, limits: if limits { 176.0 * s } else { 0.0 }, actions, links }
+    BarWidths { groups, limits: if limits { 176.0 * s } else { 0.0 }, actions, links }
 }
 
 impl BarWidths {
@@ -203,9 +205,6 @@ impl BarWidths {
                 x += if x > 0.0 { gap + w } else { w };
             }
         }
-        if x > 0.0 && x + self.new_tab > room {
-            rows += 1;
-        }
         rows
     }
 }
@@ -232,6 +231,10 @@ enum DropAt {
 #[derive(Default)]
 struct BarLayout {
     tabs: Vec<(TabId, usize, Bounds<Pixels>)>,
+    /// How wide the bar took each tab to be when it arranged its controls.
+    assumed: Vec<f32>,
+    /// Drawn again to arrange the controls by the tabs' real widths.
+    recheck: bool,
 }
 
 impl BarLayout {
@@ -952,6 +955,9 @@ impl BenchWindow {
     fn tab_menu(&self, tab_id: TabId, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let Some(tab) = self.tab(tab_id, cx) else { return Vec::new() };
         let mut entries = vec![
+            item("New Tab to the Left", move |this, _, cx| this.new_tab_beside(tab_id, false, cx)).icon("tab-new"),
+            item("New Tab to the Right", move |this, _, cx| this.new_tab_beside(tab_id, true, cx)).icon("tab-new"),
+            MenuEntry::Separator,
             item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)).icon("pencil"),
             // The tags Shed knows, to pick from; or a new one.
             more("Add Tag", move |this: &mut Self, cx| {
@@ -1105,7 +1111,7 @@ impl BenchWindow {
         let Some(range) = all.get(group).cloned() else { return Vec::new() };
         let ids: Vec<TabId> = now[range.clone()].iter().map(|(t, _)| *t).collect();
         let (first, last) = (ids[0], ids[ids.len() - 1]);
-        let mut entries = vec![item("New Tab in Group", move |this, _, cx| this.new_tab_after(last, cx)).icon("terminal")];
+        let mut entries = vec![item("New Tab in Group", move |this, _, cx| this.new_tab_beside(last, true, cx)).icon("tab-new")];
         if group > 0 {
             let row = now[range.start].1 == TabDivider::Row;
             entries.push(item(if row { "Start on a New Row  ✓" } else { "Start on a New Row" }, move |this, _, cx| {
@@ -1137,13 +1143,11 @@ impl BenchWindow {
         entries
     }
 
-    /// A new terminal tab just after `tab`, in its group.
-    fn new_tab_after(&mut self, tab: TabId, cx: &mut Context<Self>) {
+    /// A new terminal tab just before or after `tab`, in its group.
+    fn new_tab_beside(&mut self, tab: TabId, after: bool, cx: &mut Context<Self>) {
         let pane = self.tab(tab, cx).filter(|t| !t.panes.is_empty()).map(|t| t.active_pane);
         let cwd = self.new_pane_cwd(pane, cx);
-        // A new tab goes after the shown one.
-        self.send(ClientMsg::FocusTab { tab }, cx);
-        self.send(ClientMsg::NewTab { bench: self.bench, cwd }, cx);
+        self.send(ClientMsg::NewTabNextTo { tab, after, cwd }, cx);
     }
 
     /// Closes several tabs, after asking once (one tab: as Close Tab asks).
@@ -1461,19 +1465,28 @@ impl TabBar {
         }
     }
 
-    fn render_bar(&self, m: &BarModel, width: Pixels, cx: &App) -> impl IntoElement + use<> {
+    fn render_bar(&self, m: &BarModel, width: Pixels, me: WeakEntity<TabBar>, cx: &App) -> impl IntoElement + use<> {
         let b = &m.bench;
         let s = b.scale;
         let ui = &b.ui;
         let accent = b.accent;
         // Tabs wrap onto more rows when they do not fit.
         let pad = px(4.0 * s);
+        let pad_y = px(6.0 * s);
         let tab_h = px(TAB_HEIGHT * s);
-        let row_gap = px(2.0 * s);
+        let row_gap = px(6.0 * s);
         // Where the tabs land is noted as they are laid out (each group's
         // tabs, by position), for drops, the group menu and the lines
         // between groups.
         let layout = self.layout.clone();
+        // The tabs as wide as they were last (the controls are arranged by
+        // that); drawn once more when they turn out otherwise (new tabs, a
+        // new title), but not again after that.
+        let (measured, may_recheck) = {
+            let mut l = layout.borrow_mut();
+            let measured: HashMap<TabId, f32> = l.tabs.iter().filter(|t| t.2.size.width > px(0.0)).map(|t| (t.0, f32::from(t.2.size.width))).collect();
+            (measured, !std::mem::take(&mut l.recheck))
+        };
         {
             let mut group = 0;
             layout.borrow_mut().tabs = b
@@ -1488,19 +1501,32 @@ impl TabBar {
                 })
                 .collect();
         }
-        let mut tabs = div().relative().flex_1().min_w_0().flex().flex_wrap().gap_x(px(GROUP_GAP * s)).gap_y(row_gap).p(pad);
+        // Its rows centred when the controls beside them are taller. A
+        // group starting a row of its own starts another run of rows.
+        let mut tabs = div().relative().flex_1().min_w_0().flex().flex_col().justify_center().gap_y(row_gap).px(pad).py(pad_y);
+        let run = || div().flex().flex_wrap().gap_x(px(GROUP_GAP * s)).gap_y(row_gap);
+        let mut section = run();
         // Tabs in groups, split where a tab has a divider before it: a group
         // goes onto the next row whole, and wraps inside only when it alone
         // is wider than the bar. Groups are set apart by space and a faint
         // line.
         let group = |start: usize| {
-            let layout = layout.clone();
-            div().flex().flex_wrap().min_w_0().gap(px(2.0 * s)).on_children_prepainted(move |bounds, _, _| {
+            let (layout, me) = (layout.clone(), me.clone());
+            div().flex().flex_wrap().min_w_0().gap_x(px(2.0 * s)).gap_y(row_gap).on_children_prepainted(move |bounds, _, cx| {
                 let mut layout = layout.borrow_mut();
+                let mut off = false;
                 for (j, b) in bounds.into_iter().enumerate() {
+                    off |= layout.assumed.get(start + j).is_some_and(|w| (w - f32::from(b.size.width)).abs() > 1.0);
                     if let Some(t) = layout.tabs.get_mut(start + j) {
                         t.2 = b;
                     }
+                }
+                if off && may_recheck && !layout.recheck {
+                    layout.recheck = true;
+                    let me = me.clone();
+                    cx.defer(move |cx| {
+                        me.update(cx, |_, cx| cx.notify()).ok();
+                    });
                 }
             })
         };
@@ -1509,10 +1535,9 @@ impl TabBar {
 
         for (i, tab) in b.tabs.iter().enumerate() {
             if i > 0 && tab.divider != TabDivider::None {
-                tabs = tabs.child(std::mem::replace(&mut current, group(i)));
+                section = section.child(std::mem::replace(&mut current, group(i)));
                 if tab.divider == TabDivider::Row {
-                    // A full-width nothing: what follows starts a row.
-                    tabs = tabs.child(div().w_full().h(px(0.0)));
+                    tabs = tabs.child(std::mem::replace(&mut section, run()));
                 }
             }
             let active = tab.id == b.active;
@@ -1603,11 +1628,9 @@ impl TabBar {
             current = current.child(el);
         }
 
-        // The new-tab button stands after the groups, in none, close to the last.
+        // The new-tab button leads the controls on the right.
         let new_tab = div()
             .id("new-tab")
-            .ml(px((4.0 - GROUP_GAP) * s))
-            .h(tab_h)
             .rounded_md()
             .flex()
             .items_center()
@@ -1656,10 +1679,9 @@ impl TabBar {
         };
         // A tab dragged over the bar goes where the pointer says (`drop_at`);
         // right-clicking between tabs is for their group.
-        let (on_move, on_drop, on_group) = (layout.clone(), layout.clone(), layout);
+        let (on_move, on_drop, on_group) = (layout.clone(), layout.clone(), layout.clone());
         let tabs = tabs
-            .child(current)
-            .child(new_tab)
+            .child(section.child(current))
             .child(marks)
             .on_drag_move::<DraggedTab>(self.on(move |this, e: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
                 let at = e.event.position;
@@ -1734,21 +1756,21 @@ impl TabBar {
                 .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if setup_open { ui.ink(accent) } else { ui.text_dim })))
         });
         // The controls on the right, on a panel of their own, in rows: the
-        // usage limits; Run Startup, Setup and the bench's name; its links.
-        // Beside one row of tabs, all on one row; beside two, two (the limits
-        // over the rest, or without limits, the links under); beside three or
-        // more, three. Narrower controls leave the tabs the width. Either way
-        // centred against the tabs.
+        // usage limits; New Tab, Run Startup, Setup and the bench's name; its
+        // links. Beside one row of tabs, all on one row; beside two, two (the
+        // limits over the rest, or without limits, the links under); else
+        // three, narrower, leaving the tabs the width. The tabs' widths are
+        // as laid out last (`BarLayout::assumed`).
         let ctl_h = px(24.0 * s);
-        let actions: Vec<AnyElement> = lifecycle
-            .map(|l| l.h(ctl_h).into_any_element())
-            .into_iter()
+        let actions: Vec<AnyElement> = std::iter::once(new_tab.h(ctl_h).into_any_element())
+            .chain(lifecycle.map(|l| l.h(ctl_h).into_any_element()))
             .chain(setup.map(|d| d.h(ctl_h).into_any_element()))
             .chain(std::iter::once(div().h(ctl_h).flex().items_center().child(self.render_bench_label(m)).into_any_element()))
             .collect();
         let links: Vec<AnyElement> = self.render_links(b).into_iter().map(|l| div().h(ctl_h).flex().items_center().child(l).into_any_element()).collect();
         let limits = limits.map(|l| l.h(tab_h).px_1().into_any_element());
-        let w = bar_widths(b, s, limits.is_some(), lifecycle_shown, terminal || setup_open);
+        let w = bar_widths(b, s, limits.is_some(), lifecycle_shown, terminal || setup_open, &measured);
+        layout.borrow_mut().assumed = w.groups.iter().flat_map(|g| g.1.iter().copied()).collect();
         let gap = 4.0 * s;
         let (l, a, k) = (w.limits, row_width(&w.actions, gap), row_width(&w.links, gap));
         let room = f32::from(width);
@@ -1760,22 +1782,24 @@ impl TabBar {
         let three = l.max(a).max(k.min(cap(0.25)));
         let rows = if w.tab_rows(room - one - frame, s) <= 1 {
             1
-        } else if w.tab_rows(room - two - frame, s) <= 2 || w.tab_rows(room - three - frame, s) <= 2 {
+        } else if w.tab_rows(room - two - frame, s) <= 2 {
             2
         } else {
             3
         };
         let line = move || div().flex().flex_wrap().justify_end().items_center().gap_x(px(gap)).gap_y(px(4.0 * s));
+        // As tall as the tab rows (the bar's padding above and below), its
+        // rows centred.
         let mut panel = div()
             .flex_none()
             .flex()
             .flex_col()
+            .justify_center()
             .items_end()
             .gap_y(px(4.0 * s))
             .mr(pad)
-            .my(px(2.0 * s))
+            .my(pad_y)
             .px(px(6.0 * s))
-            .py(px(2.0 * s))
             .rounded_md()
             .bg(hsla_alpha(ui.text, 0.05));
         panel = match rows {
@@ -1792,7 +1816,7 @@ impl TabBar {
             .id("tab-bar")
             .flex()
             .flex_none()
-            .items_center()
+            .items_stretch()
             // Set apart from the panes: a ground of the bench's colour, a line under it.
             .bg(hsla_alpha(accent, 0.09))
             .border_b_1()
@@ -1872,7 +1896,7 @@ impl Render for TabBar {
         let started = std::time::Instant::now();
         let width = window.viewport_size().width;
         let element = match &self.model {
-            Some(m) => self.render_bar(m, width, cx).into_any_element(),
+            Some(m) => self.render_bar(m, width, cx.entity().downgrade(), cx).into_any_element(),
             None => div().into_any_element(),
         };
         if crate::terminal_view::perf::enabled() {
@@ -2235,7 +2259,7 @@ mod tests {
         let ids = [TabId::new(), TabId::new(), TabId::new(), TabId::new()];
         let tab = |x: f32, y: f32| Bounds::new(gpui::point(px(x), px(y)), gpui::size(px(80.0), px(26.0)));
         let tabs = vec![(ids[0], 0, tab(4.0, 4.0)), (ids[1], 0, tab(86.0, 4.0)), (ids[2], 1, tab(184.0, 4.0)), (ids[3], 2, tab(4.0, 32.0))];
-        (BarLayout { tabs }, ids)
+        (BarLayout { tabs, ..Default::default() }, ids)
     }
 
     #[test]

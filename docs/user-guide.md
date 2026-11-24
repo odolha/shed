@@ -174,13 +174,17 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   the same. Each tab has one icon, the same as in Shed's compact view: what it is
   (terminal, program running, project, AI, remote), or, in the bench's colour,
   that it is working or that a command is [waiting for Enter](#opening-hiding-closing).
-- **New tab**: the button after the last tab, or Ctrl+Shift+T. When the tabs do
-  not fit on one row they wrap onto more, the bar growing to hold them. The
-  controls on the right (usage limits, Run Startup, Setup, the bench's name and
-  its links) sit on a panel of their own, centred against the tabs: beside one
-  row of tabs on one row; beside two, on two (the usage limits over the rest);
-  beside three or more, on three (the usage limits; Run Startup, Setup and the
-  bench's name; the links, wrapping if need be), so the tabs get the width.
+- **New tab**: the new-tab button, first of the controls on the right of the
+  tab bar, or Ctrl+Shift+T; it opens after the shown tab. A tab's right-click
+  menu has **New Tab to the Left** and **New Tab to the Right**: a terminal
+  just before or after that tab, in its group. When the tabs do not fit on one
+  row they wrap onto more, the bar growing to hold them. The controls on the
+  right (usage limits, New Tab, Run Startup, Setup, the bench's name and its
+  links) sit on a panel of their own as tall as the tab rows, centred in it:
+  beside one row of tabs on one row; beside two, on two (the usage limits over
+  the rest); otherwise on three (the usage limits; New Tab, Run Startup, Setup
+  and the bench's name; the links, wrapping if need be), so the tabs get the
+  width.
 - **Groups**: tabs can be put in groups, set apart by a wider gap with a faint
   line in it; a group goes onto the next row whole (it wraps inside only when it
   alone is wider than the bar), and can start a row of its own. Groups have no
@@ -199,13 +203,14 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   go back to the usual size.
 - **Splits**: Ctrl+Shift+E splits right, Ctrl+Shift+O splits down; drag the line
   between panes to resize; Alt+arrows move between panes.
-- **Right-click** a pane for copy, paste, split and close; a tab for rename, tags,
-  groups, setup, private, **Move to Bench** and close; between tabs for their
+- **Right-click** a pane for copy, paste, split and close; a tab for a new tab
+  beside it, rename, tags, groups, setup, private, **Move to Bench** and close; between tabs for their
   group; the bench's name (right of the tab bar) for rename,
   badge, colours, **Appearance** (Auto, Light or Dark, for all of Shed), Show Shed
   and Close Bench.
 - On the right of the tab bar: on a bench with an AI tab, Claude's usage
-  limits (see [AI tabs](#ai-tabs)); the bench's [links](#links); for a terminal
+  limits (see [AI tabs](#ai-tabs)); the new-tab button (right-click it for a
+  project, AI or remote tab); the bench's [links](#links); for a terminal
   tab the **rack**, which opens the Setup panel (or Ctrl+Shift+S); and the
   bench's name with its menu. Super+Space brings Shed forward.
 

@@ -711,24 +711,10 @@ impl Keeper {
                 }
             }
             ClientMsg::Show(target) => self.show(client, target),
-            ClientMsg::NewTab { bench, cwd } => {
-                let mut st = self.lock();
-                let Some(b) = st.tree.bench(bench) else { return };
-                let cwd = cwd.unwrap_or_else(|| b.cwd.clone());
-                let index = b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1);
-                let tab_id = TabId::new();
-                match self.spawn_pane(&mut st, bench, tab_id, cwd) {
-                    Ok(pane) => {
-                        let mut tab = Tab::with_pane(pane);
-                        tab.id = tab_id;
-                        let b = st.tree.bench_mut(bench).unwrap();
-                        b.tabs.insert(index, tab);
-                        b.active_tab = tab_id;
-                        self.sync_alias_files(&mut st);
-                        st.broadcast_tree();
-                    }
-                    Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
-                }
+            ClientMsg::NewTab { bench, cwd } => self.new_tab(client, bench, cwd, None),
+            ClientMsg::NewTabNextTo { tab, after, cwd } => {
+                let Some(bench) = self.lock().tree.bench_of_tab(tab) else { return };
+                self.new_tab(client, bench, cwd, Some((tab, after)));
             }
             ClientMsg::Split { pane, dir, cwd } => {
                 let mut st = self.lock();
@@ -1249,6 +1235,31 @@ impl Keeper {
     fn log_private(&self, tab: TabId) {
         if let Some(tx) = &self.logbook {
             let _ = tx.send(LogOp::MarkPrivate(tab));
+        }
+    }
+
+    /// A new terminal tab in `cwd` (or the bench's folder): after the shown
+    /// tab, or with `next_to`, just before or after that tab, in its group.
+    fn new_tab(self: &Arc<Self>, client: ClientId, bench: BenchId, cwd: Option<PathBuf>, next_to: Option<(TabId, bool)>) {
+        let mut st = self.lock();
+        let Some(b) = st.tree.bench(bench) else { return };
+        let cwd = cwd.unwrap_or_else(|| b.cwd.clone());
+        let index = b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1);
+        let tab_id = TabId::new();
+        match self.spawn_pane(&mut st, bench, tab_id, cwd) {
+            Ok(pane) => {
+                let mut tab = Tab::with_pane(pane);
+                tab.id = tab_id;
+                let b = st.tree.bench_mut(bench).unwrap();
+                b.tabs.insert(index, tab);
+                b.active_tab = tab_id;
+                if let Some((to, after)) = next_to {
+                    st.tree.move_tab_next_to(tab_id, to, after);
+                }
+                self.sync_alias_files(&mut st);
+                st.broadcast_tree();
+            }
+            Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
         }
     }
 

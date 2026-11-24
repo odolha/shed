@@ -715,10 +715,14 @@ group moved left or right, a tab dropped to make a group or a row of its own) is
 worked out by the window from the bench as it knows it (`groups::move_group`,
 `groups::alone_before`) and sent as the bench's whole new order, `ArrangeTabs`,
 which the keeper applies in one change (`Shed::arrange_tabs`; tabs opened
-meanwhile stay after). The tab bar notes where each tab was laid out
-(`BarLayout`, from the groups' `on_children_prepainted`), and goes by that for
-where a dragged tab would drop (`DropAt`), which group a right-click is for, and
-the lines it paints between groups sharing a row.
+meanwhile stay after). A new tab beside one (`NewTabNextTo`) opens in that
+tab's group, as a moved tab would land there. The tab bar notes where each tab
+was laid out (`BarLayout`, from the groups' `on_children_prepainted`), and goes
+by that for where a dragged tab would drop (`DropAt`), which group a
+right-click is for, the lines it paints between groups sharing a row, and how
+wide the tabs are when it arranges its controls in one, two or three rows (a
+tab not laid out yet goes by its characters; when the widths turn out
+otherwise, the bar draws once more, and only once).
 
 **Loading** rebuilds the bench in the keeper: panes start in their folder, with
 their old scrollback fed to the emulator dimmed above a "restored" line, then either

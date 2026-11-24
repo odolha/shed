@@ -507,3 +507,35 @@ fn tab_groups_move_and_grow_at_once() {
     assert_eq!(groups::of(bench_now), [(b, TabDivider::Space), (cc, TabDivider::None), (a, TabDivider::Space), (d, TabDivider::None)]);
     assert_eq!(bench_now.active_tab, cc);
 }
+
+#[test]
+fn new_tabs_open_beside_a_tab_in_its_group() {
+    use shed_model::{TabDivider, groups};
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+    let mut c = Client::connect(&socket);
+    let (bench, _) = c.attach();
+    c.msg(ClientMsg::NewTab { bench, cwd: None });
+    let tree = c.tree_where("two tabs", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 2));
+    // Groups [a] [b].
+    let ids: Vec<_> = tree.bench(bench).unwrap().tabs.iter().map(|t| t.id).collect();
+    let (a, b) = (ids[0], ids[1]);
+    c.msg(ClientMsg::SetTabDivider { tab: b, divider: TabDivider::Space });
+    c.tree_where("a divider", |t| t.tab(b).is_some_and(|t| t.divider == TabDivider::Space));
+
+    // To the left of a group's first tab: first in that group, shown.
+    c.msg(ClientMsg::NewTabNextTo { tab: b, after: false, cwd: None });
+    let tree = c.tree_where("left of b", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 3));
+    let now = groups::of(tree.bench(bench).unwrap());
+    let l = now[1].0;
+    assert_eq!(now, [(a, TabDivider::None), (l, TabDivider::Space), (b, TabDivider::None)]);
+    assert_eq!(tree.bench(bench).unwrap().active_tab, l);
+
+    // To the right of a group's last tab: still in that group.
+    c.msg(ClientMsg::NewTabNextTo { tab: a, after: true, cwd: None });
+    let tree = c.tree_where("right of a", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 4));
+    let now = groups::of(tree.bench(bench).unwrap());
+    let r = now[1].0;
+    assert_eq!(now, [(a, TabDivider::None), (r, TabDivider::None), (l, TabDivider::Space), (b, TabDivider::None)]);
+    assert_eq!(tree.bench(bench).unwrap().active_tab, r);
+}
