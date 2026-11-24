@@ -93,11 +93,51 @@ pub fn open_bounds(place: Option<WindowPlace>, default: Size<Pixels>, cx: &App) 
     let at = Bounds::new(point(px(p.x), px(p.y)), size(px(p.width).max(MIN.width), px(p.height).max(MIN.height)));
     // Enough of it on a display to grab its title bar.
     let grip = Bounds::new(at.origin, size(at.size.width.min(px(160.0)), px(40.0)));
-    let shown = cx.displays().iter().any(|d| d.bounds().intersects(&grip));
+    let displays: Vec<Bounds<Pixels>> = cx.displays().iter().map(|d| d.bounds()).collect();
+    let shown = displays.iter().any(|d| d.intersects(&grip));
     let bounds = if shown { at } else { Bounds::centered(None, at.size, cx) };
     match p.state {
+        // A normal window filling its display was maximized (and saved
+        // unmaximized, as minimized ones were on X11): it opens maximized,
+        // so the window manager draws its maximized frame.
+        WindowState::Normal if fills_a_display(bounds, &displays) => WindowBounds::Maximized(bounds),
         WindowState::Normal => WindowBounds::Windowed(bounds),
         WindowState::Maximized => WindowBounds::Maximized(bounds),
         WindowState::Fullscreen => WindowBounds::Fullscreen(bounds),
+    }
+}
+
+/// Whether `b` spans the whole width of a display and nearly all its height
+/// (all but the title bar and panels).
+fn fills_a_display(b: Bounds<Pixels>, displays: &[Bounds<Pixels>]) -> bool {
+    let slack = px(2.0);
+    displays.iter().any(|d| {
+        (b.origin.x - d.origin.x).abs() <= slack
+            && b.size.width >= d.size.width - slack
+            && b.size.width <= d.size.width + slack
+            && b.origin.y >= d.origin.y
+            && b.origin.y + b.size.height <= d.origin.y + d.size.height + slack
+            && b.size.height >= d.size.height * 0.8
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(y)), size(px(w), px(h)))
+    }
+
+    #[test]
+    fn a_window_filling_its_display_counts_as_maximized() {
+        let displays = [rect(0.0, 0.0, 1536.0, 960.0), rect(1536.0, 0.0, 1920.0, 1080.0)];
+        // Under a title bar, above a panel.
+        assert!(fills_a_display(rect(0.0, 32.0, 1536.0, 880.0), &displays));
+        assert!(fills_a_display(rect(1536.0, 28.0, 1920.0, 1000.0), &displays));
+        // Narrower, shorter, or across two displays.
+        assert!(!fills_a_display(rect(0.0, 32.0, 1200.0, 880.0), &displays));
+        assert!(!fills_a_display(rect(0.0, 32.0, 1536.0, 600.0), &displays));
+        assert!(!fills_a_display(rect(0.0, 32.0, 3456.0, 880.0), &displays));
     }
 }

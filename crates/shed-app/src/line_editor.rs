@@ -152,6 +152,7 @@ impl Render for LineEditor {
             .border_1()
             .border_color(hsla(if focused { ui.accent } else { ui.divider }))
             .rounded_sm()
+            .cursor_text()
             .text_color(hsla(ui.text))
             .children(selection)
             .child(before)

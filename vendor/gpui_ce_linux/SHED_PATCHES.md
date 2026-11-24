@@ -37,6 +37,11 @@ Changes marked `// Shed patch`, in `src/linux/x11/client.rs` and
   pings a calloop source that starts it again (the ping, because the waker can
   run while the client is borrowed). GPU recovery wakes it too. Wayland already
   worked this way.
+- **A minimized maximized window is still maximized.** `is_maximized` was
+  false while the window was hidden, though it keeps its maximized atoms and
+  comes back maximized; Shed then saved it as a normal window the size of the
+  screen, which reopened unmaximized (the window manager drawing its normal
+  frame: rounded corners, a close button not in the corner).
 
 Clipboard (`src/linux.rs`, `src/linux/x11/clipboard.rs`, `src/linux/x11/client.rs`,
 `src/linux/wayland/client.rs`, `src/linux/wayland/clipboard.rs`):

@@ -1460,8 +1460,11 @@ impl PlatformWindow for X11Window {
     fn is_maximized(&self) -> bool {
         let state = self.0.state.borrow();
 
-        // A maximized window that gets minimized will still retain its maximized state.
-        !state.hidden && state.maximized_vertical && state.maximized_horizontal
+        // Shed patch: a maximized window that gets minimized is still
+        // maximized (it keeps both atoms), and comes back maximized; upstream
+        // said it was not, so its place was saved as a normal window the size
+        // of the screen.
+        state.maximized_vertical && state.maximized_horizontal
     }
 
     fn window_bounds(&self) -> WindowBounds {
