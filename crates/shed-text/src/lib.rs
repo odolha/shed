@@ -782,6 +782,60 @@ pub fn expand_tabs(line: &str, tab_width: usize) -> (String, Vec<usize>) {
     (out, starts)
 }
 
+/// The chars of a line that display columns `cols` cover (tabs to their
+/// stops, wide chars two columns): a tab or wide char partly inside counts,
+/// with the zero-width chars after the last. Empty when none are.
+pub fn chars_in_columns(line: &str, cols: Range<usize>, tab_width: usize) -> Range<usize> {
+    let mut found: Option<Range<usize>> = None;
+    let mut width = 0;
+    for (i, c) in line.chars().enumerate() {
+        let w = char_width(c, width, tab_width);
+        if w == 0 {
+            if let Some(r) = found.as_mut().filter(|r| r.end == i) {
+                r.end = i + 1;
+            }
+            continue;
+        }
+        if width >= cols.end {
+            break;
+        }
+        if width + w > cols.start {
+            found.get_or_insert(i..i).end = i + 1;
+        }
+        width += w;
+    }
+    found.filter(|_| !cols.is_empty()).unwrap_or(0..0)
+}
+
+/// What a line shows in display columns `cols`: a wide char partly inside
+/// comes whole, a tab as the spaces inside. A short line gives what it has.
+pub fn columns_text(line: &str, cols: Range<usize>, tab_width: usize) -> String {
+    let chars = chars_in_columns(line, cols.clone(), tab_width);
+    let mut out = String::new();
+    let mut width = 0;
+    for (i, c) in line.chars().enumerate().take(chars.end) {
+        let w = char_width(c, width, tab_width);
+        if i >= chars.start {
+            if c == '\t' {
+                out.extend(std::iter::repeat_n(' ', (width + w).min(cols.end) - width.max(cols.start)));
+            } else {
+                out.push(c);
+            }
+        }
+        width += w;
+    }
+    out
+}
+
+impl Buffer {
+    /// A rectangle's text: each of `lines`' slice of display columns
+    /// `cols` ([`columns_text`]), a line each.
+    pub fn block_text(&self, lines: Range<usize>, cols: Range<usize>) -> String {
+        let lines = lines.start.min(self.len_lines())..lines.end.min(self.len_lines());
+        lines.map(|l| columns_text(&self.line(l), cols.clone(), self.tab_width)).collect::<Vec<_>>().join("\n")
+    }
+}
+
 /// The indentation a text uses: a tab if lines start with one, else the
 /// smallest run of leading spaces (2 to 8), else four spaces.
 fn detect_indent(text: &str) -> String {
@@ -809,6 +863,25 @@ fn detect_indent(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn columns_slice_lines_as_drawn() {
+        // Tabs to their stops (4), cut where the columns cut them.
+        assert_eq!(columns_text("\tab", 2..6, 4), "  ab");
+        assert_eq!(columns_text("a\tb", 0..2, 4), "a ");
+        // A wide char half inside comes whole.
+        assert_eq!(columns_text("ab日本cd", 3..5, 4), "日本");
+        assert_eq!(chars_in_columns("ab日本cd", 3..5, 4), 2..4);
+        // Zero-width marks stay with their char.
+        assert_eq!(columns_text("e\u{301}x", 0..1, 4), "e\u{301}");
+        // Short and empty lines give what they have.
+        assert_eq!(columns_text("abc", 2..10, 4), "c");
+        assert_eq!(columns_text("ab", 4..8, 4), "");
+        assert_eq!(columns_text("abc", 1..1, 4), "");
+        let b = Buffer::new("let a = 1;\nx\n\tlet bb = 22;\n");
+        assert_eq!(b.block_text(0..3, 4..9), "a = 1\n\nlet b");
+        assert_eq!(b.block_text(2..10, 0..2), "  \n");
+    }
 
     fn buf(text: &str, at: usize) -> Buffer {
         let mut b = Buffer::new(text);

@@ -319,6 +319,10 @@ TOML, Markdown, Python, shell, Go, C and C++, and edits as editors do:
 | Ctrl+W | Closes the file |
 | Alt+Z | Wraps long lines at the edge, or not (also **Wrap** in the status bar) |
 
+**Alt+drag** (Option+drag on a Mac) selects a rectangle, to copy: Ctrl+C
+copies each line's part in those columns (tabs count to their stops; a shorter
+line gives what it has). Any other key, or Escape, ends it at the cursor.
+
 On a Mac, Cmd takes Ctrl's place. Wrapping applies to every open file and is
 remembered (`[editor] wrap` in `shed.toml`); a wrapped line keeps one number.
 
@@ -940,6 +944,9 @@ an ordinary shell line again (in bash, a redirection).
   your last selection (a page's copy button, say) is pasted rather than the
   older selection. In programs that
   use the mouse (vim, htop), hold Shift to select.
+- **Alt+drag** (Option+drag on a Mac) selects a rectangle: copying it gives one
+  line per row, without trailing spaces (a column of a listing, say). In
+  programs that use the mouse, Shift+Alt+drag.
 - **Ctrl+click** opens a link, or a file path (relative to the pane's folder).
 - **Scrollbars**: whatever scrolls has one on its right edge (the AI
   conversation and sessions, the file tree, open files, Git lists and diffs,

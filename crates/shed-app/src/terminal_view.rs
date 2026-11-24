@@ -656,12 +656,7 @@ impl TerminalView {
         match button {
             Button::Left if event.modifiers.control => self.open_link(at, cx),
             Button::Left => {
-                let kind = match event.click_count {
-                    1 if event.modifiers.alt => SelectionKind::Block,
-                    1 => SelectionKind::Simple,
-                    2 => SelectionKind::Word,
-                    _ => SelectionKind::Line,
-                };
+                let kind = selection_kind(event.click_count, event.modifiers.alt);
                 self.emu.clear_selection();
                 if kind == SelectionKind::Word || kind == SelectionKind::Line {
                     self.emu.start_selection(kind, at);
@@ -786,6 +781,18 @@ impl TerminalView {
 
 fn mods_of(m: gpui::Modifiers) -> Mods {
     Mods { ctrl: m.control, alt: m.alt, shift: m.shift, super_: m.platform }
+}
+
+/// What a left press starts selecting: Alt (Option) dragging makes a
+/// rectangle; double and triple clicks take words and lines. (Where the
+/// program has the mouse, Shift keeps it for Shed: Shift+Alt for a rectangle.)
+fn selection_kind(click_count: usize, alt: bool) -> SelectionKind {
+    match click_count {
+        1 if alt => SelectionKind::Block,
+        1 => SelectionKind::Simple,
+        2 => SelectionKind::Word,
+        _ => SelectionKind::Line,
+    }
 }
 
 fn button_of(b: MouseButton) -> Option<Button> {
@@ -1305,4 +1312,23 @@ fn short(text: &str, max: usize) -> String {
 /// A font size `zoom` points from `base`, within what stays readable.
 fn zoomed(base: f32, zoom: f32) -> f32 {
     (base + zoom).clamp(6.0, 72.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alt_drag_selects_a_rectangle() {
+        assert_eq!(selection_kind(1, true), SelectionKind::Block);
+        assert_eq!(selection_kind(1, false), SelectionKind::Simple);
+        assert_eq!(selection_kind(2, true), SelectionKind::Word);
+        assert_eq!(selection_kind(3, false), SelectionKind::Line);
+        // As the view does it: the kind starts at the press, grows on the drag.
+        let mut emu = AlacrittyEmulator::new(GridSize::new(20, 3), Palette::default());
+        emu.advance(b"ls -l\r\n-rw  a.txt\r\n-rw  b.txt");
+        emu.start_selection(selection_kind(1, true), GridPoint { col: 5, row: 1, right_half: false });
+        emu.update_selection(GridPoint { col: 9, row: 2, right_half: true });
+        assert_eq!(emu.selection_text().as_deref(), Some("a.txt\nb.txt"));
+    }
 }

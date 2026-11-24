@@ -88,6 +88,29 @@ struct Geometry {
     m: Metrics,
 }
 
+/// An Alt (Option) drag's rectangle, for copying only: the line and display
+/// column where it started and where it is now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Block {
+    anchor: (usize, usize),
+    head: (usize, usize),
+}
+
+impl Block {
+    fn lines(&self) -> Range<usize> {
+        self.anchor.0.min(self.head.0)..self.anchor.0.max(self.head.0) + 1
+    }
+
+    fn cols(&self) -> Range<usize> {
+        self.anchor.1.min(self.head.1)..self.anchor.1.max(self.head.1)
+    }
+
+    /// Covers some columns (a press without a drag does not).
+    fn spans(&self) -> bool {
+        !self.cols().is_empty()
+    }
+}
+
 struct FindBar {
     query: Entity<LineEditor>,
     replace: Option<Entity<LineEditor>>,
@@ -132,6 +155,8 @@ pub struct TextView {
     menu: Option<Menu<Self>>,
     preedit: Option<String>,
     dragging: bool,
+    /// A rectangle selected by an Alt drag; any edit or move ends it.
+    block: Option<Block>,
     /// Wrapped rows, for a version of the text at a width in columns.
     wrapped: Option<(u64, usize, Rc<Vec<Row>>)>,
     /// Columns that fit, from the last layout.
@@ -167,6 +192,7 @@ impl TextView {
             menu: None,
             preedit: None,
             dragging: false,
+            block: None,
             wrapped: None,
             cols: Rc::new(Cell::new(80)),
             geometry: Rc::new(Cell::new(None)),
@@ -232,6 +258,7 @@ impl TextView {
 
     /// Puts the cursor on a line (from 0) and column, in the middle of the view.
     pub fn go_to(&mut self, line: usize, col: usize, cx: &mut Context<Self>) {
+        self.block = None;
         let pos = self.buffer.pos(line, col);
         self.buffer.set_cursor(pos, false);
         self.center = true;
@@ -239,6 +266,7 @@ impl TextView {
     }
 
     pub fn select(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        self.block = None;
         self.buffer.set_selection(Selection { anchor: range.start, head: range.end });
         self.autoscroll = true;
         cx.notify();
@@ -298,14 +326,30 @@ impl TextView {
         shed_text::display_width(line.chars().skip(row.start).take(col.saturating_sub(row.start)), self.buffer.tab_width)
     }
 
-    /// The text position under a point.
-    fn pos_at(&mut self, at: Point<Pixels>) -> usize {
-        let Some(g) = self.geometry.get() else { return self.buffer.selection().head };
+    /// The row under a point, and the column edge nearest it (from the row's start).
+    fn row_edge_at(&mut self, at: Point<Pixels>) -> Option<(Row, usize)> {
+        let g = self.geometry.get()?;
         let y = at.y - g.origin.y + self.scroll_y;
         let count = self.row_count();
         let r = if y < px(0.0) { 0 } else { ((y / g.m.line) as usize).min(count.saturating_sub(1)) };
-        let row = self.row(r);
         let x = ((at.x - g.origin.x + self.scroll_x) / g.m.cell).max(0.0).round() as usize;
+        Some((self.row(r), x))
+    }
+
+    /// The line and display column under a point, past the line's end too.
+    fn line_edge_at(&mut self, at: Point<Pixels>) -> (usize, usize) {
+        match self.row_edge_at(at) {
+            Some((row, x)) => (row.line, self.buffer.display_col(row.line, row.start) + x),
+            None => {
+                let (line, col) = self.buffer.line_col(self.buffer.selection().head);
+                (line, self.buffer.display_col(line, col))
+            }
+        }
+    }
+
+    /// The text position under a point.
+    fn pos_at(&mut self, at: Point<Pixels>) -> usize {
+        let Some((row, x)) = self.row_edge_at(at) else { return self.buffer.selection().head };
         let line = self.buffer.line(row.line);
         let mut width = 0;
         let mut col = row.start;
@@ -336,7 +380,18 @@ impl TextView {
         self.geometry.get().map_or(20, |g| ((g.bounds.size.height / g.m.line) as usize).saturating_sub(2).max(1))
     }
 
+    /// The rectangle's text: each line's slice of its columns.
+    fn block_text(&self) -> Option<String> {
+        let b = self.block.filter(Block::spans)?;
+        Some(self.buffer.block_text(b.lines(), b.cols()))
+    }
+
     fn copy(&mut self, cut: bool, cx: &mut Context<Self>) {
+        // A rectangle is only copied, cut or not.
+        if let Some(text) = self.block_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            return;
+        }
         let sel = self.buffer.selection();
         // Nothing selected: the whole line, as editors do.
         if sel.is_empty() {
@@ -359,6 +414,7 @@ impl TextView {
         if self.options.read_only {
             return;
         }
+        self.block = None;
         self.buffer.insert(&text.replace("\r\n", "\n"));
         self.edited(cx);
     }
@@ -373,6 +429,24 @@ impl TextView {
             this.buffer.move_cursor(motion, shift);
             this.moved(cx);
         };
+        // A rectangle stays for copying; Escape or any other key ends it
+        // (the key then does what it does at the caret).
+        if self.block.is_some() {
+            match ks.key.as_str() {
+                "shift" | "control" | "alt" | "platform" | "function" => return,
+                "c" | "x" if sec && !shift => {}
+                "escape" => {
+                    self.block = None;
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+                _ => {
+                    self.block = None;
+                    cx.notify();
+                }
+            }
+        }
         match ks.key.as_str() {
             "escape" => cx.emit(TextEvent::Cancel),
             "left" if sec => mv(self, Motion::WordLeft, cx),
@@ -471,7 +545,14 @@ impl TextView {
         let pos = self.pos_at(event.position);
         match event.button {
             MouseButton::Left => {
+                self.block = None;
                 match event.click_count {
+                    // Alt (Option) dragging selects a rectangle, to copy.
+                    1 if event.modifiers.alt && !event.modifiers.shift => {
+                        self.buffer.set_cursor(pos, false);
+                        let at = self.line_edge_at(event.position);
+                        self.block = Some(Block { anchor: at, head: at });
+                    }
                     1 => self.buffer.set_cursor(pos, event.modifiers.shift),
                     2 => self.buffer.select_word(pos),
                     _ => self.buffer.select_line(pos),
@@ -481,13 +562,14 @@ impl TextView {
             }
             #[cfg(target_os = "linux")]
             MouseButton::Middle if !self.options.read_only => {
+                self.block = None;
                 if let Some(text) = cx.read_from_primary().and_then(|c| c.text()) {
                     self.buffer.set_cursor(pos, false);
                     self.paste_text(&text, cx);
                 }
             }
             MouseButton::Right => {
-                if !self.buffer.selection().range().contains(&pos) {
+                if self.block.is_none() && !self.buffer.selection().range().contains(&pos) {
                     self.buffer.set_cursor(pos, false);
                 }
                 let entries = self.context_menu();
@@ -503,6 +585,17 @@ impl TextView {
             self.dragging = false;
             return;
         }
+        if let Some(block) = self.block {
+            let head = self.line_edge_at(event.position);
+            if head != block.head {
+                self.block = Some(Block { head, ..block });
+                let pos = self.buffer.pos(head.0, self.buffer.col_at_display(head.0, head.1));
+                self.buffer.set_cursor(pos, false);
+                self.autoscroll = true;
+                cx.notify();
+            }
+            return;
+        }
         let pos = self.pos_at(event.position);
         if pos != self.buffer.selection().head {
             self.buffer.set_cursor(pos, true);
@@ -513,9 +606,14 @@ impl TextView {
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.dragging = false;
+        if self.block.is_some_and(|b| !b.spans()) {
+            self.block = None;
+        }
         // X11 convention: selecting copies to the primary selection.
         #[cfg(target_os = "linux")]
-        if !self.buffer.selection().is_empty() {
+        if let Some(text) = self.block_text() {
+            cx.write_to_primary(ClipboardItem::new_string(text));
+        } else if !self.buffer.selection().is_empty() {
             cx.write_to_primary(ClipboardItem::new_string(self.buffer.selected_text()));
         }
         #[cfg(not(target_os = "linux"))]
@@ -553,6 +651,7 @@ impl TextView {
         }
         entries.push(MenuEntry::Separator);
         entries.push(menu::item("Select All", |this: &mut Self, _, cx| {
+            this.block = None;
             this.buffer.select_all();
             cx.notify();
         }));
@@ -753,6 +852,7 @@ impl TextView {
         let find = self.find.as_ref().map(|f| f.matches.clone()).unwrap_or_default();
         let highlights = self.highlights.clone();
         let current_line = self.buffer.line_of(sel.head);
+        let block = self.block.filter(Block::spans);
 
         let mut frame = Frame { quads: Vec::new(), texts: Vec::new(), gutter_texts: Vec::new(), cursor: None, mask: Bounds::new(point(bounds.origin.x + gutter, bounds.origin.y), size(bounds.size.width - gutter, bounds.size.height)), font_size: m.font_size, line: m.line };
         let accent = self.ui.accent;
@@ -781,7 +881,7 @@ impl TextView {
                 let w = (xb - xa).max(if extra { m.cell * 0.5 } else { px(0.0) });
                 Some(Bounds::new(point(x0 + xa, y), size(w, m.line)))
             };
-            if focused && !self.options.read_only && sel.is_empty() && row.line == current_line && self.options.line_numbers {
+            if focused && !self.options.read_only && sel.is_empty() && block.is_none() && row.line == current_line && self.options.line_numbers {
                 frame.quads.push((Bounds::new(point(frame.mask.origin.x, y), size(frame.mask.size.width, m.line)), hsla_alpha(self.ui.tab_hover, 0.6)));
             }
             for (range, _) in self.flashes.iter().filter(|(r, _)| r.contains(&row.line)) {
@@ -791,6 +891,13 @@ impl TextView {
             for f in find.iter().filter(|f| f.end >= line_start + row.start && f.start <= line_start + row.end) {
                 if let Some(b) = row_band(f.start, f.end, false) {
                     frame.quads.push((b, hsla_alpha(accent, 0.35)));
+                }
+            }
+            // A rectangle: each line's chars in its columns.
+            if let Some(b) = block.filter(|b| b.lines().contains(&row.line)) {
+                let r = shed_text::chars_in_columns(&text, b.cols(), self.buffer.tab_width);
+                if let Some(band) = row_band(line_start + r.start, line_start + r.end, false) {
+                    frame.quads.push((band, hsla(self.selection)));
                 }
             }
             if !sel_range.is_empty() {
@@ -1111,6 +1218,9 @@ impl EntityInputHandler for TextView {
         if self.options.read_only {
             return;
         }
+        if range.is_some() || !text.is_empty() {
+            self.block = None;
+        }
         if let Some(range) = range {
             let rope = self.buffer.rope();
             let (a, b) = (rope.utf16_cu_to_char(range.start.min(rope.len_utf16_cu())), rope.utf16_cu_to_char(range.end.min(rope.len_utf16_cu())));
@@ -1159,6 +1269,16 @@ mod tests {
         assert_eq!(rows, [Row { line: 0, start: 0, end: 10 }, Row { line: 0, start: 10, end: 14 }, Row { line: 1, start: 0, end: 5 }]);
         let rows = wrap(&Buffer::new("abcdefghijkl"), 5);
         assert_eq!(rows.iter().map(|r| (r.start, r.end)).collect::<Vec<_>>(), [(0, 5), (5, 10), (10, 12)]);
+    }
+
+    #[test]
+    fn an_alt_drag_copies_its_rectangle() {
+        // Dragged up and to the left: the same rectangle.
+        let b = Block { anchor: (2, 9), head: (0, 4) };
+        assert_eq!((b.lines(), b.cols()), (0..3, 4..9));
+        assert!(b.spans() && !Block { anchor: (0, 4), head: (2, 4) }.spans());
+        let text = Buffer::new("let a = 1;\nx\n\tlet bb = 22;");
+        assert_eq!(text.block_text(b.lines(), b.cols()), "a = 1\n\nlet b");
     }
 
     #[test]

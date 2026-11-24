@@ -395,7 +395,13 @@ impl Emulator for AlacrittyEmulator {
                     wide: f.contains(Flags::WIDE_CHAR),
                     spacer: f.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
                     has_bg: bg != default_bg,
-                    selected: selection.is_some_and(|r| r.contains(Point::new(Line(row as i32 - offset), Column(col)))),
+                    // Both halves of a wide char show selected when either is.
+                    selected: selection.is_some_and(|r| {
+                        let at = |c: usize| r.contains(Point::new(Line(row as i32 - offset), Column(c)));
+                        at(col)
+                            || (f.contains(Flags::WIDE_CHAR) && col + 1 < cols && at(col + 1))
+                            || (f.contains(Flags::WIDE_CHAR_SPACER) && col > 0 && at(col - 1))
+                    }),
                 };
                 if !matches.is_empty() {
                     let p = Point::new(Line(row as i32 - offset), Column(col));
@@ -482,6 +488,10 @@ impl Emulator for AlacrittyEmulator {
         let sel = self.term.selection.as_ref()?;
         if sel.is_empty() {
             return None;
+        }
+        if sel.ty == SelectionType::Block {
+            let range = sel.to_range(&self.term)?;
+            return Some(self.block_text(range.start, range.end)).filter(|s| s.chars().any(|c| c != '\n'));
         }
         self.term.selection_to_string().filter(|s| !s.is_empty())
     }
@@ -673,6 +683,36 @@ impl AlacrittyEmulator {
 
 /// The core keeps a tab's `\t` in its first cell so copied text keeps the tab;
 /// on screen it is blank.
+impl AlacrittyEmulator {
+    /// A block selection's text: a line per row, each row's cells from
+    /// `start`'s column to `end`'s, trailing spaces trimmed. A wide char
+    /// half inside comes whole.
+    fn block_text(&self, start: Point, end: Point) -> String {
+        let grid = self.term.grid();
+        let mut rows = Vec::new();
+        for line in start.line.0..=end.line.0 {
+            let row = &grid[Line(line)];
+            let mut text = String::new();
+            if start.column <= end.column {
+                let mut from = start.column.0;
+                if from > 0 && row[Column(from)].flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    from -= 1;
+                }
+                for col in from..=end.column.0 {
+                    let cell = &row[Column(col)];
+                    if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                        continue;
+                    }
+                    text.push(visible_char(cell.c));
+                    text.extend(cell.zerowidth().into_iter().flatten());
+                }
+            }
+            rows.push(text.trim_end().to_string());
+        }
+        rows.join("\n")
+    }
+}
+
 fn visible_char(c: char) -> char {
     if c == '\t' { ' ' } else { c }
 }
@@ -776,6 +816,39 @@ mod tests {
         assert_eq!(row[3].bg, Rgb::hex(0x010203));
         assert!(row[3].flags.has_bg);
         assert_eq!(s.cursor.col, 4);
+    }
+
+    #[test]
+    fn block_selection_is_a_rectangle() {
+        let mut e = emu(10, 5);
+        // A wide char across the block's left edge, a short row, a wrapped line.
+        e.advance("ab日本cd\r\nx\r\n0123456789abc\r\n  pad   q".as_bytes());
+        let at = |col, row, right_half| GridPoint { col, row, right_half };
+        e.start_selection(SelectionKind::Block, at(3, 0, false));
+        e.update_selection(at(5, 3, true));
+        // Row 0: 日 (cols 2-3) comes whole, 本 (4-5) too; row 1 has nothing
+        // there; rows 2 and 3 are the wrapped line's two rows, apart.
+        assert_eq!(e.selection_text().as_deref(), Some("日本\n\n345\n"));
+        let mut s = Snapshot::default();
+        e.snapshot(&Palette::default(), &mut s);
+        let selected = |row: usize| (0..10).filter(|&c| s.row(row)[c].flags.selected).collect::<Vec<_>>();
+        assert_eq!(selected(0), [2, 3, 4, 5]);
+        assert_eq!(selected(1), [3, 4, 5]);
+        assert_eq!(selected(4), Vec::<usize>::new());
+        // Trailing spaces go, inner ones stay.
+        e.start_selection(SelectionKind::Block, at(0, 4, false));
+        e.update_selection(at(7, 4, true));
+        assert_eq!(e.selection_text().as_deref(), Some("  pad"));
+        e.update_selection(at(9, 4, true));
+        assert_eq!(e.selection_text().as_deref(), Some("  pad   q"));
+        // Dragged right to left, it is the same rectangle.
+        e.start_selection(SelectionKind::Block, at(6, 2, true));
+        e.update_selection(at(4, 1, false));
+        assert_eq!(e.selection_text().as_deref(), Some("\n456"));
+        // Only blanks: nothing to copy.
+        e.start_selection(SelectionKind::Block, at(5, 1, false));
+        e.update_selection(at(8, 1, true));
+        assert_eq!(e.selection_text(), None);
     }
 
     #[test]
