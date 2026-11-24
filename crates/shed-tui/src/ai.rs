@@ -1116,6 +1116,16 @@ impl App {
                 *panel = Panel::Conversation;
                 self.send(ClientMsg::AiOpenSession { tab, session: Some(session) });
             }
+            // A new session going on from a copy of this one.
+            KeyCode::Char('f') => {
+                let session = match row {
+                    Some(SessionRow::Conversation { tip, .. }) => tip.id,
+                    Some(SessionRow::Part(p)) => p.id,
+                    _ => return,
+                };
+                *panel = Panel::Conversation;
+                self.send(ClientMsg::AiForkSession { tab, session });
+            }
             // A conversation's row: all of it (its first file, and those going on from it).
             KeyCode::Char('D') | KeyCode::Delete => {
                 let (id, shown, prompts) = match row {
@@ -1163,7 +1173,7 @@ impl App {
         };
         let head = Line::from(vec![
             Span::styled(" Sessions ", c.chip(c.accent)),
-            Span::styled("  Enter open · n new · → its parts · r rename · D delete · / filter · Esc back", c.dim()),
+            Span::styled("  Enter open · f fork · n new · → its parts · r rename · D delete · / filter · Esc back", c.dim()),
         ]);
         f.render_widget(Paragraph::new(head), Rect { height: 1, ..area });
         let filter_style = if s.filtering { c.accent() } else { c.dim() };

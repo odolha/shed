@@ -77,8 +77,8 @@ fn fake_claude() {
 import json, os, sys, time, uuid
 log = open("claude.log", "a")
 args = sys.argv[1:]
-sid = args[args.index("--resume") + 1] if "--resume" in args else str(uuid.uuid4())
-log.write("start " + sid + "\n"); log.flush()
+sid = args[args.index("--resume") + 1] if "--resume" in args and "--fork-session" not in args else str(uuid.uuid4())
+log.write("start " + sid + " " + " ".join(args) + "\n"); log.flush()
 recs = [r.strip().replace("bacce851-a991-4454-b02a-2d0dca87d701", sid) for r in open("{stream}") if '"control_response"' not in r]
 init = next(i for i, r in enumerate(recs) if '"subtype":"init"' in r)
 for line in sys.stdin:
@@ -194,4 +194,33 @@ fn a_session_done_in_the_background_lets_go_of_its_process() {
     let ai = ai_until(&mut c, tab, "the slow one done in the background", |a| a.away.is_empty());
     assert_eq!(ai.overall_activity(), AiActivity::Idle);
     assert!(ai.session.is_none());
+}
+
+#[test]
+fn a_fork_goes_on_from_a_copy_of_its_session() {
+    let dir = tempfile::tempdir().unwrap();
+    fake_claude();
+    let (_env, mut c, tab) = ai_tab(dir.path());
+
+    // A session with an answer.
+    c.msg(ClientMsg::AiSend { tab, text: "count the lines".into(), images: Vec::new() });
+    conversation_until(&mut c, tab, Vec::new(), "the answer", done);
+    let first = ai_until(&mut c, tab, "its id", |a| a.session.is_some() && a.activity == AiActivity::Idle).session.unwrap();
+
+    // Forked: no session of its own yet, the first's conversation shown.
+    c.msg(ClientMsg::AiForkSession { tab, session: first.clone() });
+    ai_until(&mut c, tab, "the fork", |a| a.session.is_none() && a.fork_of.as_deref() == Some(first.as_str()));
+    conversation_until(&mut c, tab, Vec::new(), "the fork's notice", |e| {
+        e.iter().any(|e| matches!(e, Entry::Notice { text, .. } if text.starts_with("A fork of this session")))
+    });
+
+    // Its first prompt starts Claude Code on a copy: a new session.
+    c.msg(ClientMsg::AiSend { tab, text: "count again".into(), images: Vec::new() });
+    let ai = ai_until(&mut c, tab, "the fork's own session", |a| a.session.as_ref().is_some_and(|s| *s != first));
+    assert_eq!(ai.fork_of, None);
+    let log = std::fs::read_to_string(dir.path().join("claude.log")).unwrap();
+    let starts: Vec<&str> = log.lines().filter(|l| l.starts_with("start ")).collect();
+    assert_eq!(starts.len(), 2, "{log}");
+    assert!(starts[1].contains(&format!("--resume {first}")) && starts[1].contains("--fork-session"), "{log}");
+    assert!(!starts[0].contains("--fork-session"), "{log}");
 }

@@ -426,6 +426,13 @@ windows. The flush loop stops one once it has nothing left to do (its session
 file has it all). Opening its session again moves it back as it is, without
 reading the file.
 
+**Forks.** `AiForkSession` shows a fork of a session: `AiTab.session` is
+`None` and `fork_of` names the session it copies (saved with the bench until
+it starts). The keeper reads that session's conversation for it, with no
+session id of its own; its first prompt starts Claude Code with `--resume
+<fork_of> --fork-session`, which writes a new session, and the flush loop puts
+its id in `session` and clears `fork_of`, as for any new session.
+
 The browser (Claude in Chrome) belongs to at most one AI tab (`AiTab.browser`;
 `ai_settings` clears it on every other tab, `load_bench` on a bench loaded
 while another tab has it). Claude Code runs with `--no-chrome`, and the
@@ -760,7 +767,10 @@ X11 the vendored `gpui_ce_linux` makes that work: it asks the window manager for
 the position (with static gravity, so it means the window's content, not its
 frame), reads where the window really is on screen, and sets a starting maximized
 or full-screen state as a property before mapping, which is when window managers
-read it.
+read it; a minimized window still reports itself maximized. A normal place that
+fills a display (as older X11 builds saved minimized maximized windows) opens
+maximized, so the window manager draws its maximized frame: square corners, the
+close button in the screen's corner.
 
 Settings (`shed.toml`) and themes are watched and applied live by both processes.
 With `theme = "auto"`, the window process follows the desktop's colour scheme

@@ -346,6 +346,10 @@ pub struct AiTab {
     /// Sessions the tab moved away from while Claude was still at them:
     /// their Claude Code goes on in the background until done (not saved).
     pub away: Vec<AiAway>,
+    /// A fork not started yet (`session` is `None`): the session it copies.
+    /// It shows that one's conversation; its first prompt starts Claude Code
+    /// on a copy of it (`--fork-session`), the original left as it is.
+    pub fork_of: Option<String>,
 }
 
 /// A session Claude goes on with while the tab shows another.

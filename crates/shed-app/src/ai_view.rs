@@ -231,6 +231,8 @@ pub struct AiView {
     review: Option<review::Review>,
     /// A session being renamed: its id, and the field with its name.
     renaming: Option<(String, Entity<LineEditor>, Subscription)>,
+    /// The field is in the title above the conversation, not in the list.
+    renaming_title: bool,
     sessions_task: Option<Task<()>>,
     /// A session being deleted (the keeper moves its files to the trash):
     /// its id, and the task watching for its file to go.
@@ -499,6 +501,7 @@ impl AiView {
             entry_views: HashMap::new(),
             review: None,
             renaming: None,
+            renaming_title: false,
             sessions_task: None,
             filter,
             sessions_scroll: UniformListScrollHandle::new(),
@@ -1639,12 +1642,26 @@ impl AiView {
 
     /// Names a session (or gives Claude Code's own title back, when the name
     /// is emptied), in an editor in place of its title.
-    fn start_rename(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// `in_title`: in the title above the conversation, else in the list.
+    fn start_rename(&mut self, id: String, in_title: bool, window: &mut Window, cx: &mut Context<Self>) {
         let title = self.sessions.iter().find(|s| s.id == id).map(|s| s.title.clone()).unwrap_or_default();
-        let editor = cx.new(|cx| LineEditor::selected(title, cx));
-        let sub = cx.subscribe(&editor, |this, _, e: &EditorEvent, cx| {
+        // Clicking or typing elsewhere keeps the name, as Enter does: the
+        // field never stays open behind the user.
+        let editor = cx.new(|cx| {
+            let editor = LineEditor::selected(title.clone(), cx).submit_on_blur(window, cx);
+            if in_title { editor } else { editor.without_hint() }
+        });
+        let sub = cx.subscribe_in(&editor, window, move |this, editor, e: &EditorEvent, window, cx| {
             let Some((id, _, _)) = this.renaming.take() else { return };
-            if let EditorEvent::Submit(name) = e {
+            // Done by Enter or Escape: the keyboard goes back to the prompt
+            // (gone elsewhere, it stays there).
+            if editor.read(cx).focus_handle(cx).is_focused(window) {
+                let target = this.focus_target(cx);
+                window.focus(&target, cx);
+            }
+            if let EditorEvent::Submit(name) = e
+                && name != title.trim()
+            {
                 if let Some(workspace) = this.remote.clone() {
                     this.rename_remote_session(workspace, id, name.clone(), cx);
                 } else {
@@ -1659,16 +1676,20 @@ impl AiView {
         let focus = editor.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
         self.renaming = Some((id, editor, sub));
+        self.renaming_title = in_title;
         cx.notify();
     }
 
     /// A session row's menu: `id` the session it opens, `delete` what
     /// Delete Session takes (a conversation's row: its first file, so all of it).
     fn session_menu(&self, id: String, delete: ToDelete) -> Vec<MenuEntry<Self>> {
-        let (a, b, c) = (id.clone(), id.clone(), id.clone());
+        let (a, b, c, f) = (id.clone(), id.clone(), id.clone(), id.clone());
         vec![
             menu::item("Open", move |this: &mut Self, _, _| this.open_session(Some(a.clone()))).icon("go"),
-            menu::item("Rename…", move |this: &mut Self, window, cx| this.start_rename(c.clone(), window, cx)).icon("pencil"),
+            menu::item("Fork into a New Session", move |this: &mut Self, _, _| this.conn.send_msg(ClientMsg::AiForkSession { tab: this.tab, session: f.clone() }))
+                .icon("branch")
+                .tip("Go on from here in a new session, a copy of this one; this one stays as it is"),
+            menu::item("Rename…", move |this: &mut Self, window, cx| this.start_rename(c.clone(), false, window, cx)).icon("pencil"),
             menu::item("Continue in a Terminal", move |this: &mut Self, _, _| this.continue_in_terminal(&b)).icon("terminal"),
             menu::item("Copy Session ID", move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(id.clone()))),
             MenuEntry::Separator,
@@ -3385,6 +3406,7 @@ impl AiView {
                 Some(
                     div()
                         .id(("session", n))
+                        .debug_selector(|| format!("session-{n}"))
                         .h(px(44.0))
                         .pl(px(indent))
                         .pr_2()
@@ -3400,7 +3422,7 @@ impl AiView {
                         // A double click renames it.
                         .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
                             if e.click_count() >= 2 {
-                                this.start_rename(id.clone(), window, cx);
+                                this.start_rename(id.clone(), false, window, cx);
                             } else {
                                 this.open_session(Some(id.clone()));
                             }
@@ -3420,8 +3442,15 @@ impl AiView {
                                 .min_w_0()
                                 .flex()
                                 .flex_col()
-                                .child(match self.renaming.as_ref().filter(|(r, _, _)| *r == s.id) {
-                                    Some((_, editor, _)) => div().child(editor.clone()).into_any_element(),
+                                .child(match self.renaming.as_ref().filter(|(r, _, _)| *r == s.id && !self.renaming_title) {
+                                    // Clicks in the field are the field's, not the row's (a
+                                    // double click there would start renaming again).
+                                    Some((_, editor, _)) => div()
+                                        .id(("session-rename", n))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                        .on_click(|_, _, cx| cx.stop_propagation())
+                                        .child(editor.clone())
+                                        .into_any_element(),
                                     None => div().truncate().text_color(hsla(ui.text)).child(s.title.clone()).into_any_element(),
                                 })
                                 .child(div().truncate().text_size(px(11.0 * z)).text_color(hsla(ui.text_dim)).child(meta.join(" · "))),
@@ -3615,6 +3644,10 @@ impl AiView {
             .and_then(|id| self.sessions.iter().find(|s| &s.id == id))
             .map(|s| s.title.clone())
             .or_else(|| {
+                let from = self.ai.fork_of.as_ref()?;
+                Some(format!("Fork of {}", self.sessions.iter().find(|s| &s.id == from).map_or("a session", |s| s.title.as_str())))
+            })
+            .or_else(|| {
                 let key = self.ai.draft_session.as_deref()?;
                 self.ai.draft_sessions().into_iter().find(|d| d.key == key).map(|d| format!("{} (draft)", d.title))
             })
@@ -3668,7 +3701,7 @@ impl AiView {
                     .items_center()
                     .gap_2()
                     .child(svg().path(icon("ai")).size(px(16.0)).flex_none().text_color(hsla(ui.ink(accent))))
-                    .child(match (self.ai.session.clone(), self.renaming.as_ref().filter(|(r, _, _)| Some(r) == self.ai.session.as_ref())) {
+                    .child(match (self.ai.session.clone(), self.renaming.as_ref().filter(|(r, _, _)| self.renaming_title && Some(r) == self.ai.session.as_ref())) {
                         (_, Some((_, editor, _))) => div().w(px(360.0)).text_size(px(14.0 * self.z())).child(editor.clone()).into_any_element(),
                         (session, None) => {
                             let full = title.clone();
@@ -3683,7 +3716,7 @@ impl AiView {
                                 .when_some(session, |d, id| {
                                     d.cursor_pointer().on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
                                         if e.click_count() >= 2 {
-                                            this.start_rename(id.clone(), window, cx);
+                                            this.start_rename(id.clone(), true, window, cx);
                                         }
                                     }))
                                 })
@@ -4250,6 +4283,10 @@ impl MenuHost for AiView {
     }
 
     fn menu_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A choice may have opened a field of its own (Rename…), which keeps the keyboard.
+        if self.renaming.is_some() {
+            return;
+        }
         let target = self.focus_target(cx);
         window.focus(&target, cx);
     }
@@ -4812,6 +4849,72 @@ mod tests {
         cx.run_until_parked();
         println!("bars: {:?}", size.get());
         assert!(size.get().width > px(100.0) && size.get().height > px(10.0), "{:?}", size.get());
+    }
+
+    /// Renaming a session, by a double click on it or from its menu: the
+    /// name's field has the keyboard (and shows it has), not the prompt,
+    /// and closes when the keyboard goes elsewhere.
+    #[gpui::test]
+    fn renaming_a_session_takes_the_keyboard(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let ai = shed_model::AiTab { session: Some("s".into()), ..Default::default() };
+            AiView::new(BenchId::new(), TabId::new(), ai, Rgb::hex(0xFF8A57), crate::keeper_conn::KeeperConn::detached(), crate::settings::Settings::default(), cx)
+        });
+        // (An inactive window tells no blur.)
+        cx.update(|window, _| window.activate());
+        let session = |id: &str, title: &str| shed_ai::SessionInfo { id: id.into(), title: title.into(), prompts: 1, whole: 1, ..Default::default() };
+        view.update(cx, |v, cx| {
+            v.sessions = Arc::new(vec![session("s", "Old name"), session("t", "Other")]);
+            cx.notify();
+        });
+        let state = |view: &Entity<AiView>, cx: &mut gpui::VisualTestContext| {
+            view.update_in(cx, |v, window, cx| {
+                let field = v.renaming.as_ref().map(|(id, e, _)| (id.clone(), e.read(cx).text().to_string(), e.read(cx).focus_handle(cx).is_focused(window)));
+                (field, v.prompt.read(cx).buffer.text())
+            })
+        };
+        let row = |cx: &mut gpui::VisualTestContext, n: usize| {
+            cx.run_until_parked();
+            let selector: &'static str = if n == 0 { "session-0" } else { "session-1" };
+            cx.debug_bounds(selector).expect("the session row is drawn").center()
+        };
+        let click = |cx: &mut gpui::VisualTestContext, at, button, count| {
+            let modifiers = gpui::Modifiers::none();
+            cx.simulate_event(MouseDownEvent { position: at, modifiers, button, click_count: count, first_mouse: false });
+            cx.simulate_event(gpui::MouseUpEvent { position: at, modifiers, button, click_count: count });
+            cx.run_until_parked();
+        };
+
+        // A double click.
+        let at = row(cx, 0);
+        click(cx, at, MouseButton::Left, 1);
+        click(cx, at, MouseButton::Left, 2);
+        cx.simulate_keystrokes("n e w");
+        assert_eq!(state(&view, cx), (Some(("s".into(), "new".into(), true)), String::new()));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(state(&view, cx).0, None);
+        assert!(view.update_in(cx, |v, window, cx| v.prompt.read(cx).focus_handle().is_focused(window)), "the prompt has the keyboard again");
+
+        // From the menu.
+        let at = row(cx, 1);
+        click(cx, at, MouseButton::Right, 1);
+        let item = cx.debug_bounds("menu-item-Rename…").expect("the menu shows Rename…").center();
+        click(cx, item, MouseButton::Left, 1);
+        cx.simulate_keystrokes("x y");
+        assert_eq!(state(&view, cx), (Some(("t".into(), "xy".into(), true)), String::new()));
+
+        // The keyboard going elsewhere (a click in the prompt) ends it, as
+        // Enter does: the field does not stay open behind.
+        view.update_in(cx, |v, window, cx| window.focus(&v.focus_target(cx), cx));
+        // (Blur is told on the next frame.)
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        assert_eq!(state(&view, cx).0, None);
+        assert!(view.update_in(cx, |v, window, cx| v.prompt.read(cx).focus_handle().is_focused(window)));
     }
 
     #[test]

@@ -244,12 +244,20 @@ impl Keeper {
     }
 
     /// A tab's conversation as its saved session has it (a new one if none).
+    /// A fork not started yet reads the session it copies, as no session of
+    /// its own.
     fn read_transcript(ai: &AiTab, picture_dir: PathBuf) -> Transcript {
-        ai.session.as_deref().and_then(|id| shed_ai::load_session(&ai.folder, id, Some(picture_dir.clone()))).unwrap_or_else(|| {
+        let fork = ai.session.is_none().then_some(ai.fork_of.as_deref()).flatten();
+        let mut t = ai.session.as_deref().or(fork).and_then(|id| shed_ai::load_session(&ai.folder, id, Some(picture_dir.clone()))).unwrap_or_else(|| {
             let mut t = Transcript::new(&ai.folder.to_string_lossy());
             t.picture_dir = Some(picture_dir);
             t
-        })
+        });
+        if fork.is_some() {
+            t.status.session = None;
+            t.notice("A fork of this session: what you send next goes to a copy of it, as a new session (this one stays as it is)", false);
+        }
+        t
     }
 
     /// The tab's conversation, made (from its saved session, if any) the first time.
@@ -271,7 +279,7 @@ impl Keeper {
         tokio::task::spawn_blocking(move || {
             let transcript = Self::read_transcript(&ai, dir);
             let mut st = keeper.lock();
-            if ai_tab(&st, tab).is_none_or(|now| now.session != ai.session) {
+            if ai_tab(&st, tab).is_none_or(|now| (&now.session, &now.fork_of) != (&ai.session, &ai.fork_of)) {
                 return;
             }
             // (Read meanwhile, for another window or a prompt: kept as it is.)
@@ -505,8 +513,9 @@ impl Keeper {
             if let Some(t) = st.tree.tab_mut(tab)
                 && let TabKind::Ai(ai) = &mut t.kind
             {
-                // Back to before the first message: its drafts stay with it,
-                // as a draft session.
+                // Back to before the first message: a new session, its
+                // drafts kept with it, as a draft session.
+                ai.fork_of = None;
                 if let Some(old) = ai.session.take()
                     && ai.drafts.iter().any(|d| d.session == old)
                 {
@@ -523,6 +532,9 @@ impl Keeper {
                 && let Some(old) = ai.session.replace(part.clone())
             {
                 ai.move_drafts(&old, &part);
+            }
+            if let Some(TabKind::Ai(ai)) = st.tree.tab_mut(tab).map(|t| &mut t.kind) {
+                ai.fork_of = None;
             }
             st.broadcast_tree();
         }
@@ -547,10 +559,15 @@ impl Keeper {
         // does not turn it on.
         cmd.arg("--allow-dangerously-skip-permissions");
         let resume_at = st.ai.get_mut(&tab).and_then(|rt| rt.resume_at.take());
-        if let Some(s) = &ai.session {
+        // A fork not started yet goes on from a copy of the session it forks.
+        let fork = ai.session.is_none().then_some(ai.fork_of.as_ref()).flatten();
+        if let Some(s) = ai.session.as_ref().or(fork) {
             cmd.args(["--resume", s]);
             if let Some(at) = &resume_at {
-                cmd.args(["--resume-session-at", at, "--fork-session"]);
+                cmd.args(["--resume-session-at", at]);
+            }
+            if resume_at.is_some() || fork.is_some() {
+                cmd.arg("--fork-session");
             }
         }
         // Claude Code keeps what files were before each prompt, so an
@@ -784,21 +801,23 @@ impl Keeper {
     /// before goes on in the background while Claude is at it (its process
     /// kept, shown again when it is opened again); otherwise its process
     /// stops, and one starts for the new session with the next prompt.
-    pub(super) fn ai_open_session(self: &Arc<Self>, tab: TabId, session: Option<String>) {
+    /// With `fork`, a fork of `session` is shown instead (`AiTab::fork_of`).
+    pub(super) fn ai_open_session(self: &Arc<Self>, tab: TabId, session: Option<String>, fork: bool) {
         let mut st = self.lock();
         let Some(TabKind::Ai(ai)) = st.tree.tab(tab).map(|t| &t.kind) else { return };
         // The same session again, Claude at it: it stays as it is (else it
         // is read again, as the files have it now).
-        if session.is_some() && session == ai.session && st.ai.get(&tab).is_some_and(AiRt::has_work) {
+        if !fork && session.is_some() && session == ai.session && st.ai.get(&tab).is_some_and(AiRt::has_work) {
             return;
         }
         let Some(t) = st.tree.tab_mut(tab) else { return };
         let TabKind::Ai(ai) = &mut t.kind else { return };
         // A draft session has no Claude Code session yet: a new one starts
-        // with its first message.
-        (ai.session, ai.draft_session) = match session {
-            Some(key) if AiTab::is_draft_key(&key) => (None, Some(key)),
-            other => (other, None),
+        // with its first message. So does a fork, from a copy of its session.
+        (ai.session, ai.draft_session, ai.fork_of) = match session {
+            Some(key) if fork && !AiTab::is_draft_key(&key) => (None, None, Some(key)),
+            Some(key) if AiTab::is_draft_key(&key) => (None, Some(key), None),
+            other => (other, None, None),
         };
         ai.activity = AiActivity::Idle;
         let ai = ai.clone();
@@ -884,7 +903,7 @@ impl Keeper {
             let (shown_here, stopped_away) = {
                 let mut st = keeper.lock();
                 let shows = |a: &AiTab| {
-                    (a.session.as_ref().is_some_and(|s| ids.contains(s)) || a.away.iter().any(|w| ids.contains(&w.session)))
+                    (a.session.as_ref().or(a.fork_of.as_ref()).is_some_and(|s| ids.contains(s)) || a.away.iter().any(|w| ids.contains(&w.session)))
                         && shed_ai::sessions::sessions_dir(&a.folder) == dir
                 };
                 let elsewhere = st.tree.benches.iter().flat_map(|b| &b.tabs).filter(|t| t.id != tab).filter_map(|t| t.ai_info()).any(shows);
@@ -894,7 +913,7 @@ impl Keeper {
                 let Some(TabKind::Ai(here)) = st.tree.tab_mut(tab).map(|t| &mut t.kind) else {
                     return st.send(client, KeeperMsg::Error("no such AI tab".into()));
                 };
-                let shown = here.session.as_ref().is_some_and(|s| ids.contains(s));
+                let shown = here.session.as_ref().or(here.fork_of.as_ref()).is_some_and(|s| ids.contains(s));
                 // Their drafts have nothing to go with any more.
                 here.drafts.retain(|d| !ids.contains(&d.session));
                 // Going on in the background: they stop.
@@ -911,7 +930,7 @@ impl Keeper {
                 (shown, stopped)
             };
             if shown_here {
-                keeper.ai_open_session(tab, None);
+                keeper.ai_open_session(tab, None, false);
             }
             if shown_here || stopped_away {
                 // Its Claude Code, stopped, writes no more to the files.
@@ -1147,6 +1166,7 @@ impl Keeper {
                             ai.move_drafts(&old, new);
                         }
                         ai.draft_session = None;
+                        ai.fork_of = None;
                         ai.session = session;
                         tree_changed = true;
                         self.save_soon.notify_one();

@@ -383,10 +383,14 @@ terminal of the bench.
   Its **▸** lists the files, each with **↳ continued** or **↳ branched after
   #29**. Hover a session for its whole title. **Rename…** in its right-click
   menu, or a double-click on it (or on the title above the conversation),
-  names it: Enter keeps the name, Escape leaves it, and an empty name gives
+  names it: Enter (or clicking elsewhere) keeps the name, Escape leaves it, and an empty name gives
   Claude Code's own title back. The name is Claude Code's too (its `/rename`):
   it shows in `claude --resume`. Type to filter. Click one to show it and carry on with it; **New
-  Session** starts afresh. A session Claude is at shows it in the list: the AI
+  Session** starts afresh. **Fork into a New Session** (right-click a session)
+  goes on from it in a new session that starts as a copy of it: the tab shows
+  its conversation, titled "Fork of …", and what you send next goes to the
+  copy, while the original stays as it was (Claude Code's `--fork-session`).
+  A session Claude is at shows it in the list: the AI
   mark and **working** (or **waiting for you**, when it asks something). One
   still working when you open another goes on in the background until it is
   done: its row keeps the mark, the tab's icon counts it too, and opening it
@@ -1072,7 +1076,7 @@ path in the message (under "Attached files:"), for Claude to read.
 | --- | --- |
 | `Alt+Enter` | A new line in the prompt |
 | `PgUp` / `PgDn` | Scroll the conversation |
-| `Alt+S` / `Alt+N` | The sessions (Enter opens, → shows a conversation's files, `r` renames, `D` deletes after asking, `n` new) / a new session |
+| `Alt+S` / `Alt+N` | The sessions (Enter opens, `f` forks into a new session, → shows a conversation's files, `r` renames, `D` deletes after asking, `n` new) / a new session |
 | `Alt+M` / `Alt+O` / `Alt+E` | Model / mode (Full Auto asks first) / effort |
 | `Alt+D` / `Alt+P` | Keep the prompt as a draft / the drafts (send, put back in the prompt, merge into the prompt, delete) |
 | `Alt+I` / `Alt+X` | Attach a file, folder or picture by its path / remove what is attached |

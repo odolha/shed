@@ -845,7 +845,8 @@ impl Keeper {
             ClientMsg::AiStop { tab } => self.ai_stop(tab),
             ClientMsg::AiStart { tab } => self.ai_start(client, tab),
             ClientMsg::AiAnswer { tab, request, allow, always } => self.ai_answer(tab, request, allow, always),
-            ClientMsg::AiOpenSession { tab, session } => self.ai_open_session(tab, session),
+            ClientMsg::AiOpenSession { tab, session } => self.ai_open_session(tab, session, false),
+            ClientMsg::AiForkSession { tab, session } => self.ai_open_session(tab, Some(session), true),
             ClientMsg::AiSettings { tab, settings } => self.ai_settings(tab, settings),
             ClientMsg::SetProject { tab, project } => {
                 let mut st = self.lock();

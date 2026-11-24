@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 53;
+pub const PROTOCOL_VERSION: u32 = 54;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -217,6 +217,10 @@ pub enum ClientMsg {
     /// when the nexus said which). The keeper treats a window there as
     /// `ClientKind::Remote`.
     Tunnelled { device: Option<TunnelDevice> },
+    /// Shows a fork of `session` in the tab: its conversation, as a new
+    /// session whose first prompt starts Claude Code on a copy of it
+    /// (`AiTab::fork_of`); the original is left as it is.
+    AiForkSession { tab: TabId, session: String },
 }
 
 /// One change to an AI tab's settings or kept state.

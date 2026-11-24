@@ -153,6 +153,9 @@ pub struct SavedAi {
     /// Connected to the browser (Claude in Chrome).
     #[serde(default, skip_serializing_if = "is_false")]
     pub browser: bool,
+    /// A fork not started yet: the session it copies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_of: Option<String>,
 }
 
 impl SavedAi {
@@ -173,6 +176,7 @@ impl SavedAi {
             viewed: a.viewed.clone(),
             explained: a.explained.clone(),
             browser: a.browser,
+            fork_of: a.fork_of.clone(),
         }
     }
 
@@ -205,6 +209,7 @@ impl SavedAi {
             viewed: self.viewed.clone(),
             explained: self.explained.clone(),
             browser: self.browser,
+            fork_of: self.fork_of.clone().filter(|_| self.session.is_none()),
         }
     }
 }
@@ -562,7 +567,7 @@ impl SavedBench {
         let id = self.add_project_tab(folder);
         let tab = self.tab_mut(id).unwrap();
         tab.project = None;
-        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new(), session_drafts: Vec::new(), draft_session: None, queued: Vec::new(), unsent: String::new(), viewed: Vec::new(), explained: Vec::new(), browser: false });
+        tab.ai = Some(SavedAi { folder: home_relative(folder), add_dirs: Vec::new(), session: None, fork_of: None, model: None, mode: String::new(), effort: None, follow: false, drafts: Vec::new(), session_drafts: Vec::new(), draft_session: None, queued: Vec::new(), unsent: String::new(), viewed: Vec::new(), explained: Vec::new(), browser: false });
         id
     }
 

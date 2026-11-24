@@ -336,7 +336,9 @@ fn list<V: MenuHost>(entries: &[MenuEntry<V>], position: Point<Pixels>, top: boo
                     Some(c) => Some(div().size(px(14.0)).flex().items_center().justify_center().child(div().size(px(10.0)).rounded_full().bg(hsla(*c))).into_any_element()),
                     None => lead(glyph, if *danger { color } else { ui.text_dim }),
                 };
+                let selector = format!("menu-item-{label}");
                 row(i)
+                    .debug_selector(move || selector)
                     .text_color(hsla(color))
                     .hover(|s| s.bg(hsla(ui.tab_hover)))
                     .children(lead)
