@@ -270,9 +270,7 @@ fn ensure_shedd(host: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     say(&format!("Putting shedd on {host} (~/{REMOTE_SHEDD})…"));
-    let script = format!(
-        "mkdir -p .local/bin && cat > {REMOTE_SHEDD}.new && chmod 755 {REMOTE_SHEDD}.new && mv -f {REMOTE_SHEDD}.new {REMOTE_SHEDD} && echo '{id}' > {REMOTE_ID}"
-    );
+    let script = upload_script(&id);
     let mut child = ssh(host).arg(script).stdin(Stdio::piped()).spawn()?;
     std::io::copy(&mut std::fs::File::open(&local)?, child.stdin.as_mut().unwrap())?;
     drop(child.stdin.take());
@@ -280,6 +278,22 @@ fn ensure_shedd(host: &str) -> anyhow::Result<()> {
         anyhow::bail!("could not copy shedd to {host}");
     }
     Ok(())
+}
+
+/// The shell script a server runs to take shedd from its stdin.
+fn upload_script(id: &str) -> String {
+    // Several remote tabs to this server reconnect at once after an update,
+    // each sending shedd: each writes a file of its own (the remote shell's
+    // pid in its name) and renames it into place, so none starts a shedd
+    // another is still writing ("Text file busy") or renames one away
+    // mid-write; the id goes last, the same way. Leftovers of a cut-off copy
+    // older than an hour are cleared.
+    format!(
+        "mkdir -p .local/bin && find .local/bin -maxdepth 1 -name 'shedd.new.*' -mmin +60 -delete 2>/dev/null; \
+         t={REMOTE_SHEDD}.new.$$; i={REMOTE_ID}.new.$$; \
+         cat > \"$t\" && chmod 755 \"$t\" && mv -f \"$t\" {REMOTE_SHEDD} && echo '{id}' > \"$i\" && mv -f \"$i\" {REMOTE_ID}; \
+         s=$?; rm -f \"$t\" \"$i\"; exit $s"
+    )
 }
 
 fn how_ssh_ended(status: ExitStatus) -> String {
@@ -655,6 +669,42 @@ pub fn describe(shell: &RemoteShell) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn shedd_copies_at_once_never_mix() {
+        use std::io::Write;
+        let home = tempfile::tempdir().unwrap();
+        let script = upload_script("id-2");
+        // Four tabs sending shedd at once, each a different (large) file.
+        let children: Vec<_> = (0..4u8)
+            .map(|n| {
+                let mut c = std::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&script)
+                    .current_dir(home.path())
+                    .stdin(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let body = vec![b'a' + n; 4 << 20];
+                let mut stdin = c.stdin.take().unwrap();
+                std::thread::spawn(move || {
+                    stdin.write_all(&body).unwrap();
+                });
+                c
+            })
+            .collect();
+        for mut c in children {
+            assert!(c.wait().unwrap().success());
+        }
+        // One whole copy is in place, the id beside it, nothing left over.
+        let shedd = std::fs::read(home.path().join(REMOTE_SHEDD)).unwrap();
+        assert_eq!(shedd.len(), 4 << 20);
+        assert!(shedd.iter().all(|&b| b == shedd[0]));
+        assert_eq!(std::fs::read_to_string(home.path().join(REMOTE_ID)).unwrap().trim(), "id-2");
+        let left: Vec<_> = std::fs::read_dir(home.path().join(".local/bin")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left.len(), 2, "{left:?}");
+    }
+
     use super::*;
 
     /// A config as people write them: patterns, several names on a line,
