@@ -161,7 +161,8 @@ as it opens and closes; benches never moved come after the others, by name.
 
 The coloured stripe and the tab bar carry the bench's colour; so does the border of
 the focused pane, when a tab is split. The tab bar is set apart by a faint ground
-of that colour and a line under it, the shown tab lighter and in bolder type; how
+of that colour and a line under it; the shown tab has a soft fill of the colour
+and stronger type, and a tab's tags follow its title as small coloured words. How
 large it is drawn is a setting (**Tab bar size** in Settings).
 
 - **Tabs**: click to switch, double-click to rename, drag to reorder: dropped on
@@ -177,10 +178,12 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   not fit on one row they wrap onto more, the bar growing to hold them. The
   controls on the right (usage limits, Run Startup, Setup, the bench's name and
   its links) stay on one row when there is room; when the tabs need more rows,
-  they stack into a narrower block of rows of their own, each level with a row
-  of tabs, so the tabs get the width.
+  they form a column beside them, the usage limits on top and the rest below
+  (the links wrapping if need be), so the tabs get the width. Either way they
+  are centred against the tabs.
 - **Groups**: right-click a tab, **Divider Before**: **Space** starts a group
-  there (each group sits on a tray of its own, a gap between, and a bench without dividers is one group on one tray, the new-tab button after the trays; a group goes onto the next row whole, and wraps inside
+  there (groups are set apart by a wider gap, the new-tab button after the
+  last; a group goes onto the next row whole, and wraps inside
   only when it alone is wider than the bar), **New Row** starts its group on a row
   of its own, **None** joins it to the tabs before. Dividers are saved with the
   bench.

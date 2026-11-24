@@ -30,7 +30,12 @@ use crate::terminal_view::TerminalView;
 use crate::theme::{UiColors, hsla, hsla_alpha};
 use crate::window_place::{PlaceTracker, Placed};
 
-const TAB_BAR_HEIGHT: f32 = 40.0;
+/// A tab's height on the tab bar, before `[window] tab_bar_scale`.
+const TAB_HEIGHT: f32 = 26.0;
+/// The room on either side of a tab's icon and title.
+const TAB_PAD_X: f32 = 8.0;
+/// The space between groups of tabs (tabs in a group are 2 apart).
+const GROUP_GAP: f32 = 18.0;
 
 /// What the inline text field is editing.
 #[derive(Clone, Copy, PartialEq)]
@@ -124,28 +129,27 @@ pub fn known_tags(cx: &gpui::App, state: &crate::state::AppState) -> Vec<(String
     found.into_iter().map(|(label, (color, n))| (label.clone(), if config.tag_colors.contains_key(&label) { config.tag_color_of(&label) } else { color }, n)).collect()
 }
 
-/// About how wide the tab bar's two parts would be on one row, at scale
-/// `s`: the tabs (by their titles, tags and zoom, in their groups), the
-/// controls, and the widest control (the narrowest the controls can get).
-/// Text is not measured before it is laid out, so this goes by characters.
-fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bool) -> (f32, f32, f32) {
+/// About how wide the tab bar's parts would be, at scale `s`: the tabs on
+/// one row (by their titles, tags and zoom, in their groups); the usage
+/// limits; and the other controls (Run Startup, Setup, the bench's name, its
+/// links), each. Text is not measured before it is laid out, so this goes by
+/// characters.
+fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bool) -> (f32, f32, Vec<f32>) {
     let ch = 7.4 * s;
     let tab = |t: &BarTab| {
-        let tags: f32 = t.tags.iter().map(|g| g.label.chars().count() as f32 * 6.5 * s + 16.0 * s).sum();
-        24.0 * s + 22.0 * s + t.title.chars().count() as f32 * ch + tags + if t.zoom != 0.0 { 44.0 * s } else { 0.0 }
+        let tags: f32 = t.tags.iter().map(|g| g.label.chars().count() as f32 * 6.2 * s + 6.0 * s).sum();
+        2.0 * TAB_PAD_X * s + 20.0 * s + t.title.chars().count() as f32 * ch + tags + if t.zoom != 0.0 { 44.0 * s } else { 0.0 }
     };
+    // The bar's edges, the new-tab button.
     let mut tabs = 8.0 * s + 34.0 * s;
     for (i, t) in bench.tabs.iter().enumerate() {
-        // A new group: its tray's edge, and the gap between trays.
-        if i == 0 || t.divider != TabDivider::None {
-            tabs += 6.0 * s + if i == 0 { 0.0 } else { 10.0 * s };
+        if i > 0 && t.divider != TabDivider::None {
+            tabs += GROUP_GAP * s;
         }
         tabs += tab(t) + 2.0 * s;
     }
+    let limits = if limits { 176.0 * s } else { 0.0 };
     let mut items = Vec::new();
-    if limits {
-        items.push(176.0 * s);
-    }
     if lifecycle {
         items.push(32.0 * s);
     }
@@ -154,9 +158,7 @@ fn bar_widths(bench: &BarState, s: f32, limits: bool, lifecycle: bool, setup: bo
     }
     items.push(bench.name.chars().count() as f32 * 8.0 * s + 54.0 * s);
     items.extend(bench.links.iter().map(|l| l.name.chars().count().min(22) as f32 * 7.0 * s + 40.0 * s));
-    let controls = items.iter().sum::<f32>() + 4.0 * s * items.len() as f32 + 8.0 * s;
-    let widest = items.iter().copied().fold(0.0, f32::max);
-    (tabs, controls, widest)
+    (tabs, limits, items)
 }
 
 fn item(label: impl Into<SharedString>, action: impl Fn(&mut BenchWindow, &mut Window, &mut Context<BenchWindow>) + 'static) -> MenuEntry<BenchWindow> {
@@ -1147,29 +1149,15 @@ impl TabBar {
         let ui = &b.ui;
         let accent = b.accent;
         let tab_count = b.tabs.len();
-        let row = px(TAB_BAR_HEIGHT * s);
-        // Tabs wrap onto more rows when they do not fit; the buttons stay on
-        // the right of the first.
+        // Tabs wrap onto more rows when they do not fit.
         let pad = px(4.0 * s);
-        let tab_h = row - pad * 2.0;
-        let mut tabs = div().flex_1().min_w_0().flex().flex_wrap().gap_x(px(10.0 * s)).gap_y(pad).p(pad);
+        let tab_h = px(TAB_HEIGHT * s);
+        let row_gap = px(2.0 * s);
+        let mut tabs = div().flex_1().min_w_0().flex().flex_wrap().gap_x(px(GROUP_GAP * s)).gap_y(row_gap).p(pad);
         // Tabs in groups, split where a tab has a divider before it: a group
         // goes onto the next row whole, and wraps inside only when it alone
-        // is wider than the bar. Each group sits on a tray of its own.
-        let group = move || {
-            div()
-                .flex()
-                .flex_wrap()
-                .min_w_0()
-                .gap(px(2.0 * s))
-                // On a tray, one group or several: the bar looks the same
-                // with dividers or without.
-                .p(px(2.0 * s))
-                .rounded_lg()
-                .bg(hsla_alpha(accent, 0.07))
-                .border_1()
-                .border_color(hsla_alpha(accent, 0.22))
-        };
+        // is wider than the bar. Groups are set apart by space alone.
+        let group = move || div().flex().flex_wrap().min_w_0().gap(px(2.0 * s));
         let mut current = group();
         let base = b.base;
 
@@ -1190,9 +1178,9 @@ impl TabBar {
                 .group("tab")
                 .flex()
                 .items_center()
-                .gap_1p5()
-                .h(tab_h - px(4.0 * s) - px(2.0))
-                .px_3()
+                .gap(px(6.0 * s))
+                .h(tab_h)
+                .px(px(TAB_PAD_X * s))
                 .max_w(px(260.0 * s))
                 .rounded_md()
                 .cursor_pointer()
@@ -1241,16 +1229,13 @@ impl TabBar {
             {
                 el = if after { el.border_r_2() } else { el.border_l_2() }.border_color(hsla(accent));
             }
+            // The shown tab: a soft fill of the bench's colour, stronger text.
             el = match (active, tint) {
                 (true, Some(t)) => el.bg(hsla_alpha(t, 0.35)).text_color(hsla(ui.text)).font_weight(FontWeight::MEDIUM),
                 (false, Some(t)) => el.bg(hsla_alpha(t, 0.16)).hover(|s| s.bg(hsla_alpha(t, 0.26))),
-                (true, None) => el.bg(hsla(ui.tab_active)).text_color(hsla(ui.text)).font_weight(FontWeight::MEDIUM),
-                (false, None) => el.hover(|s| s.bg(hsla_alpha(ui.text, 0.06))),
+                (true, None) => el.bg(hsla_alpha(accent, 0.2)).text_color(hsla(ui.text)).font_weight(FontWeight::MEDIUM),
+                (false, None) => el.hover(|s| s.bg(hsla_alpha(ui.text, 0.06)).text_color(hsla(ui.text))),
             };
-            if active {
-                // The shown tab: lifted, with the bench's colour under it.
-                el = el.border_b_2().border_color(hsla(accent));
-            }
             // One icon, as in Shed: what the tab is, or that it waits or works.
             let (glyph, tint) = tab.icon;
             el = el.child(svg().path(icon(glyph)).size(px(14.0 * s)).flex_none().text_color(hsla(tint)));
@@ -1282,14 +1267,13 @@ impl TabBar {
                         })),
                 );
             }
+            // Tags as small text in their colours.
             for tag in &tab.tags {
                 el = el.child(
                     div()
                         .flex_none()
-                        .px_1()
-                        .rounded_sm()
                         .text_size(px(11.0 * s))
-                        .bg(hsla_alpha(tag.color, 0.25))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(hsla(ui.ink(tag.color)))
                         .child(tag.label.clone()),
                 );
@@ -1300,10 +1284,11 @@ impl TabBar {
             current = current.child(el);
         }
 
-        // The new-tab button stands after the trays, in no group.
+        // The new-tab button stands after the groups, in none, close to the last.
         let tabs = tabs.child(current).child(
             div()
                 .id("new-tab")
+                .ml(px((4.0 - GROUP_GAP) * s))
                 .h(tab_h)
                 .rounded_md()
                 .flex()
@@ -1354,11 +1339,13 @@ impl TabBar {
                 .flex()
                 .items_center()
                 .px_2()
+                .rounded_md()
                 .cursor_pointer()
                 .hover(|st| st.bg(hsla(ui.tab_hover)))
                 .tooltip(menu::tooltip(tip))
                 .child(svg().path(icon(glyph)).size(px(16.0 * s)).text_color(hsla(ui.ink(accent))))
         };
+        let lifecycle_shown = !b.closing && (has_startup && !b.started || b.started && has_teardown);
         let lifecycle = if b.closing {
             None
         } else if has_startup && !b.started {
@@ -1376,49 +1363,59 @@ impl TabBar {
         let limits = b.limits.as_ref().and_then(|(l, palette)| crate::ai_view::limit_bars(*l, ui, palette, s));
         // Setup is for terminal tabs: startup, teardown and aliases.
         let terminal = b.terminal;
-        // The controls on the right: one row when the tabs leave room for it;
-        // when the tabs need more rows, a narrower block of rows of their own
-        // (right-aligned, each as tall as a tab row), so the tabs get the width.
-        let (tabs_w, controls_w, widest) = bar_widths(b, s, limits.is_some(), has_startup && !b.started || b.started && has_teardown, terminal);
-        let room = f32::from(width);
-        let stacked = tabs_w + controls_w > room;
-        let controls_max = if stacked { widest.max(room * 0.28).min(controls_w) } else { controls_w.max(room) };
         let setup_open = m.setup_open;
-        let controls = div()
-            .flex()
-            .flex_none()
-            .flex_wrap()
-            .justify_end()
-            .items_center()
-            .gap_x(px(4.0 * s))
-            .gap_y(pad)
-            .p(pad)
-            .max_w(px(controls_max + f32::from(pad) * 2.0 + 2.0))
-            .children(limits.map(|l| l.h(tab_h).px_1()))
-            .children(lifecycle.map(|l| l.h(tab_h)))
-        .when(terminal || setup_open, |d| d.child(
+        let setup = (terminal || setup_open).then(|| {
             div()
                 .id("setup-button")
-                .h(tab_h)
                 .flex()
                 .items_center()
                 .px_2()
+                .rounded_md()
                 .cursor_pointer()
-                .when(setup_open, |d| d.bg(hsla(ui.tab_active)))
+                .when(setup_open, |d| d.bg(hsla_alpha(accent, 0.2)))
                 .hover(|s| s.bg(hsla(ui.tab_hover)))
                 .tooltip(menu::tooltip(if cfg!(target_os = "macos") { "Setup: startup, teardown, aliases (Cmd+Shift+S)" } else { "Setup: startup, teardown, aliases (Ctrl+Shift+S)" }))
                 .on_click(self.on(|this, _: &ClickEvent, window, cx| this.toggle_setup(window, cx)))
-                .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if setup_open { accent } else { ui.text_dim }))),
-        ))
-            .child(div().h(tab_h).flex().items_center().child(self.render_bench_label(m)))
-            // Links last: stacked, they take the rows below.
-            .children(self.render_links(b).into_iter().map(|l| div().h(tab_h).flex().items_center().child(l)));
+                .child(svg().path(icon("rack")).size(px(16.0 * s)).text_color(hsla(if setup_open { ui.ink(accent) } else { ui.text_dim })))
+        });
+        // Besides the limits: Run Startup, Setup, the bench's name, its links.
+        let others: Vec<AnyElement> = lifecycle
+            .map(|l| l.h(tab_h).into_any_element())
+            .into_iter()
+            .chain(setup.map(|d| d.h(tab_h).into_any_element()))
+            .chain(std::iter::once(div().h(tab_h).flex().items_center().child(self.render_bench_label(m)).into_any_element()))
+            .chain(self.render_links(b).into_iter().map(|l| div().h(tab_h).flex().items_center().child(l).into_any_element()))
+            .collect();
+        // The controls on the right: one row beside the tabs when all fits on
+        // one; when the tabs need more rows, a column beside them (the limits
+        // on top, the rest under them, wrapping), so the tabs get the width.
+        // Either way centred against the tabs.
+        let (tabs_w, limits_w, items) = bar_widths(b, s, limits.is_some(), lifecycle_shown, terminal || setup_open);
+        let gap = 4.0 * s;
+        let items_w = items.iter().sum::<f32>() + gap * items.len().saturating_sub(1) as f32;
+        let one_row = limits_w + if limits_w > 0.0 { gap } else { 0.0 } + items_w + 2.0 * f32::from(pad);
+        let room = f32::from(width);
+        let controls = if tabs_w + one_row <= room {
+            div().flex().flex_none().items_center().gap_x(px(gap)).p(pad).children(limits).children(others)
+        } else {
+            let widest = items.iter().copied().fold(limits_w, f32::max);
+            let column = widest.max(items_w.min(room * 0.25)).ceil() + 2.0;
+            div()
+                .flex()
+                .flex_none()
+                .flex_col()
+                .items_end()
+                .gap_y(row_gap)
+                .p(pad)
+                .max_w(px(column) + pad * 2.0)
+                .children(limits)
+                .child(div().flex().flex_wrap().justify_end().items_center().gap_x(px(gap)).gap_y(row_gap).children(others))
+        };
         div()
             .id("tab-bar")
             .flex()
             .flex_none()
-            .items_start()
-            .min_h(row)
+            .items_center()
             // Set apart from the panes: a ground of the bench's colour, a line under it.
             .bg(hsla_alpha(accent, 0.09))
             .border_b_1()
@@ -1468,7 +1465,9 @@ impl TabBar {
             .flex()
             .items_center()
             .gap_1p5()
+            .h_full()
             .px_3()
+            .rounded_md()
             .cursor_pointer()
             .text_color(hsla(b.ui.ink(accent)))
             .hover(|s| s.bg(hsla(b.ui.tab_hover)))
