@@ -539,3 +539,54 @@ fn new_tabs_open_beside_a_tab_in_its_group() {
     assert_eq!(now, [(a, TabDivider::None), (r, TabDivider::None), (l, TabDivider::Space), (b, TabDivider::None)]);
     assert_eq!(tree.bench(bench).unwrap().active_tab, r);
 }
+
+/// Any kind of tab opens beside a tab, in its group, as a terminal does:
+/// a project tab, an AI tab, a terminal in a folder of its own.
+#[test]
+fn tabs_of_every_kind_open_beside_a_tab() {
+    use shed_model::{TabDivider, groups};
+    use shed_proto::NewTabKind;
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+    let mut c = Client::connect(&socket);
+    let (bench, _) = c.attach();
+    c.msg(ClientMsg::NewTab { bench, cwd: None });
+    let tree = c.tree_where("two tabs", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 2));
+    let ids: Vec<_> = tree.bench(bench).unwrap().tabs.iter().map(|t| t.id).collect();
+    let (a, b) = (ids[0], ids[1]);
+    c.msg(ClientMsg::SetTabDivider { tab: b, divider: TabDivider::Space });
+    c.tree_where("a divider", |t| t.tab(b).is_some_and(|t| t.divider == TabDivider::Space));
+    let folder = dir.path().to_path_buf();
+
+    // A project tab left of the second group's first tab: first in that group.
+    c.msg(ClientMsg::NewTabNextToOfKind { tab: b, after: false, kind: NewTabKind::Project { root: folder.clone() } });
+    let tree = c.tree_where("a project left of b", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 3));
+    let now = groups::of(tree.bench(bench).unwrap());
+    let p = now[1].0;
+    assert!(tree.tab(p).unwrap().project_info().is_some_and(|pr| pr.root == folder));
+    assert_eq!(now, [(a, TabDivider::None), (p, TabDivider::Space), (b, TabDivider::None)]);
+    assert_eq!(tree.bench(bench).unwrap().active_tab, p);
+
+    // An AI tab right of the first group's last tab: still in that group.
+    c.msg(ClientMsg::NewTabNextToOfKind { tab: a, after: true, kind: NewTabKind::Ai { folder: folder.clone() } });
+    let tree = c.tree_where("an AI tab right of a", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 4));
+    let now = groups::of(tree.bench(bench).unwrap());
+    let ai = now[1].0;
+    assert!(tree.tab(ai).unwrap().ai_info().is_some_and(|x| x.folder == folder));
+    assert_eq!(now, [(a, TabDivider::None), (ai, TabDivider::None), (p, TabDivider::Space), (b, TabDivider::None)]);
+    assert_eq!(tree.bench(bench).unwrap().active_tab, ai);
+
+    // A terminal in a folder of its own, right of the project tab.
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    c.msg(ClientMsg::NewTabNextToOfKind { tab: p, after: true, kind: NewTabKind::Terminal { cwd: Some(sub.clone()) } });
+    let tree = c.tree_where("a terminal right of p", |t| t.bench(bench).is_some_and(|b| b.tabs.len() == 5));
+    let now = groups::of(tree.bench(bench).unwrap());
+    let t = now[3].0;
+    assert_eq!(tree.tab(t).unwrap().panes[0].cwd, sub);
+    assert_eq!(now, [(a, TabDivider::None), (ai, TabDivider::None), (p, TabDivider::Space), (t, TabDivider::None), (b, TabDivider::None)]);
+
+    // A folder that is not there: nothing opens, and the client is told.
+    c.msg(ClientMsg::NewTabNextToOfKind { tab: a, after: true, kind: NewTabKind::Project { root: dir.path().join("gone") } });
+    c.expect("refused", |f| matches!(f, Frame::Keeper(KeeperMsg::Error(ref e)) if e.contains("not a folder")).then_some(()));
+}

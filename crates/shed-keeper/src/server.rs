@@ -18,7 +18,7 @@ use shed_save::{PaneExtras, Relaunch, SavedBench, SessionBench, Store};
 use shed_model::config::{Config, FileWatch};
 use shed_model::{AiState, Bench, Held, PaneSetup, BenchColor, BenchId, Pane, PaneId, Shed, Tab, TabId, TabKind, Tool};
 use shed_proto::{
-    AliasTarget, BenchRef, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus,
+    AliasTarget, BenchRef, ClientKind, ClientMsg, Frame, FrameDecoder, KeeperMsg, KeeperStatus, NewTabKind,
     PROTOCOL_VERSION, PegboardInfo, SavedEdit, ShowTarget, StoredBench,
 };
 use tokio::io::unix::AsyncFd;
@@ -720,6 +720,16 @@ impl Keeper {
                 let Some(bench) = self.lock().tree.bench_of_tab(tab) else { return };
                 self.new_tab(client, bench, cwd, Some((tab, after)));
             }
+            ClientMsg::NewTabNextToOfKind { tab, after, kind } => {
+                let Some(bench) = self.lock().tree.bench_of_tab(tab) else { return };
+                let next_to = Some((tab, after));
+                match kind {
+                    NewTabKind::Terminal { cwd } => self.new_tab(client, bench, cwd, next_to),
+                    NewTabKind::Project { root } => self.new_project_tab(client, bench, root, next_to),
+                    NewTabKind::Ai { folder } => self.new_ai_tab(client, bench, folder, next_to),
+                    NewTabKind::Remote { host, join } => self.new_remote_tab(client, bench, host, join, next_to),
+                }
+            }
             ClientMsg::Split { pane, dir, cwd } => {
                 let mut st = self.lock();
                 let Some((bench, tab)) = st.tree.locate_pane(pane) else { return };
@@ -765,7 +775,7 @@ impl Keeper {
                     });
                 }
             }
-            ClientMsg::NewRemoteTab { bench, host, join } => self.new_remote_tab(client, bench, host, join),
+            ClientMsg::NewRemoteTab { bench, host, join } => self.new_remote_tab(client, bench, host, join, None),
             ClientMsg::ReconnectRemote { tab } => self.reconnect_remote(tab),
             ClientMsg::Tunnelled { device } => {
                 let mut st = self.lock();
@@ -800,23 +810,7 @@ impl Keeper {
                     Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
                 }
             }
-            ClientMsg::NewAiTab { bench, folder } => {
-                let mut st = self.lock();
-                let Some(b) = st.tree.bench_mut(bench) else { return };
-                let folder = shed_save::expand_home(&folder.to_string_lossy());
-                if !folder.is_dir() {
-                    st.send(client, KeeperMsg::Error(format!("{} is not a folder", folder.display())));
-                    return;
-                }
-                let tab = Tab::ai(folder);
-                let (id, index) = (tab.id, b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1));
-                b.tabs.insert(index, tab);
-                b.active_tab = id;
-                st.broadcast_tree();
-                st.send(client, KeeperMsg::Done("opened an AI tab".into()));
-                drop(st);
-                self.save_soon.notify_one();
-            }
+            ClientMsg::NewAiTab { bench, folder } => self.new_ai_tab(client, bench, folder, None),
             ClientMsg::AiWatch { tab } => self.ai_watch(client, tab),
             ClientMsg::AiSend { tab, text, images } => self.ai_send(client, tab, text, images),
             ClientMsg::AiQueued { tab, index, text, send } => self.ai_queued(tab, index as usize, text, send),
@@ -855,24 +849,7 @@ impl Keeper {
                 drop(st);
                 self.save_soon.notify_one();
             }
-            ClientMsg::NewProjectTab { bench, root } => {
-                let mut st = self.lock();
-                let Some(b) = st.tree.bench_mut(bench) else { return };
-                let root = shed_save::expand_home(&root.to_string_lossy());
-                if !root.is_dir() {
-                    st.send(client, KeeperMsg::Error(format!("{} is not a folder", root.display())));
-                    return;
-                }
-                let done = format!("opened {} as a project tab", shed_save::home_relative(&root));
-                let tab = Tab::project(root);
-                let (id, index) = (tab.id, b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1));
-                b.tabs.insert(index, tab);
-                b.active_tab = id;
-                st.broadcast_tree();
-                st.send(client, KeeperMsg::Done(done));
-                drop(st);
-                self.save_soon.notify_one();
-            }
+            ClientMsg::NewProjectTab { bench, root } => self.new_project_tab(client, bench, root, None),
             ClientMsg::CloseBench { bench } => {
                 tokio::spawn(self.clone().close_bench(bench));
             }
@@ -1290,6 +1267,43 @@ impl Keeper {
             }
             Err(e) => st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}"))),
         }
+    }
+
+    /// A new project tab for the folder `root`: after the shown tab, or with
+    /// `next_to`, just before or after that tab, in its group.
+    fn new_project_tab(&self, client: ClientId, bench: BenchId, root: PathBuf, next_to: Option<(TabId, bool)>) {
+        let root = shed_save::expand_home(&root.to_string_lossy());
+        if !root.is_dir() {
+            return self.lock().send(client, KeeperMsg::Error(format!("{} is not a folder", root.display())));
+        }
+        let done = format!("opened {} as a project tab", shed_save::home_relative(&root));
+        self.add_paneless_tab(client, bench, Tab::project(root), next_to, done);
+    }
+
+    /// A new AI tab working in `folder`, placed as `new_project_tab` places one.
+    fn new_ai_tab(&self, client: ClientId, bench: BenchId, folder: PathBuf, next_to: Option<(TabId, bool)>) {
+        let folder = shed_save::expand_home(&folder.to_string_lossy());
+        if !folder.is_dir() {
+            return self.lock().send(client, KeeperMsg::Error(format!("{} is not a folder", folder.display())));
+        }
+        self.add_paneless_tab(client, bench, Tab::ai(folder), next_to, "opened an AI tab".into());
+    }
+
+    /// Puts a tab without panes (a project, an AI tab) in a bench, shown:
+    /// after the shown tab, or next to another (`next_to`), in its group.
+    fn add_paneless_tab(&self, client: ClientId, bench: BenchId, tab: Tab, next_to: Option<(TabId, bool)>, done: String) {
+        let mut st = self.lock();
+        let Some(b) = st.tree.bench_mut(bench) else { return };
+        let (id, index) = (tab.id, b.tab_index(b.active_tab).map_or(b.tabs.len(), |i| i + 1));
+        b.tabs.insert(index, tab);
+        b.active_tab = id;
+        if let Some((to, after)) = next_to {
+            st.tree.move_tab_next_to(id, to, after);
+        }
+        st.broadcast_tree();
+        st.send(client, KeeperMsg::Done(done));
+        drop(st);
+        self.save_soon.notify_one();
     }
 
     fn edit_tab(&self, tab: TabId, edit: impl FnOnce(&mut Tab)) {
@@ -2417,7 +2431,7 @@ impl Keeper {
 
     /// A remote tab: a pane running `shed remote connect HOST ID`, again
     /// each time the bench loads, which joins the shell the server keeps.
-    fn new_remote_tab(self: &Arc<Self>, client: ClientId, bench: BenchId, host: String, join: Option<String>) {
+    fn new_remote_tab(self: &Arc<Self>, client: ClientId, bench: BenchId, host: String, join: Option<String>, next_to: Option<(TabId, bool)>) {
         let host = host.trim().to_string();
         let mut st = self.lock();
         let Some(b) = st.tree.bench(bench) else { return };
@@ -2454,6 +2468,9 @@ impl Keeper {
                 let b = st.tree.bench_mut(bench).unwrap();
                 b.tabs.insert(index, tab);
                 b.active_tab = tab_id;
+                if let Some((to, after)) = next_to {
+                    st.tree.move_tab_next_to(tab_id, to, after);
+                }
                 self.sync_alias_files(&mut st);
                 st.broadcast_tree();
                 st.send(client, KeeperMsg::Done("opened a remote tab".into()));

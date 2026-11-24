@@ -768,8 +768,11 @@ group moved left or right, a tab dropped to make a group or a row of its own) is
 worked out by the window from the bench as it knows it (`groups::move_group`,
 `groups::alone_before`) and sent as the bench's whole new order, `ArrangeTabs`,
 which the keeper applies in one change (`Shed::arrange_tabs`; tabs opened
-meanwhile stay after). A new tab beside one (`NewTabNextTo`) opens in that
-tab's group, as a moved tab would land there. The tab bar notes where each tab
+meanwhile stay after). A new tab beside one (`NewTabNextTo` for a terminal,
+`NewTabNextToOfKind` for any kind: terminal, project, AI or remote, as
+`NewTabKind` says) opens in that tab's group, as a moved tab would land there;
+the window's New Tab menu and a tab's New Tab to the Left and Right are one
+list (`BenchWindow::new_tab_menu`, given where the tab goes). The tab bar notes where each tab
 was laid out (`BarLayout`, from the groups' `on_children_prepainted`), and goes
 by that for where a dragged tab would drop (`DropAt`), which group a
 right-click is for, the lines it paints between groups sharing a row, and how

@@ -185,8 +185,10 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   on its card in Shed too.
 - **New tab**: the new-tab button, first of the controls on the right of the
   tab bar, or Ctrl+Shift+T; it opens after the shown tab. A tab's right-click
-  menu has **New Tab to the Left** and **New Tab to the Right**: a terminal
-  just before or after that tab, in its group. When the tabs do not fit on one
+  menu has **New Tab to the Left** and **New Tab to the Right**, each with the
+  kinds the New Tab button's right-click menu has (a terminal, a project and
+  its folder, an AI tab and where it works, a remote tab and its server): the
+  new tab opens just before or after that tab, in its group. When the tabs do not fit on one
   row they wrap onto more, the bar growing to hold them. The controls on the
   right (New Tab, Bookmarks, Run Startup, Setup and the bench's name; the usage limits;
   the links, in that order) sit on a panel of their own as tall as the tab

@@ -16,7 +16,7 @@ use shed_model::{
     groups, tag_color,
 };
 use shed_model::config::NewPaneDir;
-use shed_proto::{BenchRef, ClientMsg};
+use shed_proto::{BenchRef, ClientMsg, NewTabKind};
 
 use crate::actions::*;
 use crate::ai_view::{AiLimits, AiView};
@@ -37,6 +37,10 @@ const TAB_PAD_X: f32 = 8.0;
 /// The space between groups of tabs (tabs in a group are 2 apart).
 const GROUP_GAP: f32 = 18.0;
 
+/// Where a new tab goes: after the shown tab (`None`), or just before or
+/// after a tab (`true`: after), in its group.
+type Place = Option<(TabId, bool)>;
+
 /// What the inline text field is editing.
 #[derive(Clone, Copy, PartialEq)]
 enum EditTarget {
@@ -46,10 +50,11 @@ enum EditTarget {
     Badge,
     /// A colour of one's own: `#rrggbb` or a colour's name.
     Color,
-    /// A folder to open as a project tab, typed where there is no picker.
-    ProjectFolder,
+    /// A folder to open as a project tab, typed where there is no picker
+    /// (placed as asked: `Place`).
+    ProjectFolder(Place),
     /// A server to open a remote tab on (`host` or `user@host`).
-    RemoteHost,
+    RemoteHost(Place),
     /// A new link for the bench: `name url`.
     AddLink,
     /// The bench's link at this index.
@@ -68,8 +73,8 @@ impl EditTarget {
             EditTarget::AddTag(_) => "Adding a tag",
             EditTarget::Badge => "Setting the badge",
             EditTarget::Color => "Choosing a colour (#rrggbb or a name)",
-            EditTarget::ProjectFolder => "Opening a folder as a project tab",
-            EditTarget::RemoteHost => "Opening a remote tab: host, or user@host, as ssh takes it",
+            EditTarget::ProjectFolder(_) => "Opening a folder as a project tab",
+            EditTarget::RemoteHost(_) => "Opening a remote tab: host, or user@host, as ssh takes it",
             EditTarget::AddLink | EditTarget::EditLink(_) => "A link: name, then the address (app localhost:3000)",
             EditTarget::RenameLink(_) => "The link's name",
             EditTarget::RenameBookmark(_) => "The bookmark's name",
@@ -732,18 +737,48 @@ impl BenchWindow {
         crate::state::close_tab(&conn, &tab, BenchRef::Running(self.bench), window, cx);
     }
 
+    /// Opens a tab of `kind` where `place` says.
+    fn open_tab(&self, place: Place, kind: NewTabKind, cx: &Context<Self>) {
+        let bench = self.bench;
+        let msg = match (place, kind) {
+            (Some((tab, after)), kind) => ClientMsg::NewTabNextToOfKind { tab, after, kind },
+            (None, NewTabKind::Terminal { cwd }) => ClientMsg::NewTab { bench, cwd },
+            (None, NewTabKind::Project { root }) => ClientMsg::NewProjectTab { bench, root },
+            (None, NewTabKind::Ai { folder }) => ClientMsg::NewAiTab { bench, folder },
+            (None, NewTabKind::Remote { host, join }) => ClientMsg::NewRemoteTab { bench, host, join },
+        };
+        self.send(msg, cx);
+    }
+
+    /// The kinds of tab to open, as the New Tab button's menu has them, and
+    /// a tab's New Tab to the Left and Right: a terminal, a project (its
+    /// folder asked for), an AI tab (in which folder), a remote tab (on
+    /// which server).
+    fn new_tab_menu(place: Place) -> Vec<MenuEntry<Self>> {
+        vec![
+            item("New Terminal Tab", move |this, _, cx| match place {
+                Some((tab, after)) => this.new_tab_beside(tab, after, cx),
+                None => this.new_tab(cx),
+            })
+            .icon("terminal"),
+            item("New Project Tab…", move |this, window, cx| this.new_project_tab(place, window, cx)).icon("project"),
+            more("New AI Tab", move |this: &mut Self, cx| this.ai_folder_menu(place, cx)).icon("ai"),
+            more("New Remote Tab", move |this: &mut Self, cx| this.remote_host_menu(place, cx)).icon("server"),
+        ]
+    }
+
     /// Asks for a folder and opens it as a project tab; where the desktop
     /// has no folder picker, the folder is typed instead.
-    fn new_project_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn new_project_tab(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
         let picked = crate::state::pick_folder(cx);
         cx.spawn_in(window, async move |this, cx| {
             let picked = picked.await;
             this.update_in(cx, |this, window, cx| match picked {
-                Ok(Some(root)) => this.send(ClientMsg::NewProjectTab { bench: this.bench, root }, cx),
+                Ok(Some(root)) => this.open_tab(place, NewTabKind::Project { root }, cx),
                 Ok(None) => {}
                 Err(e) => {
                     tracing::warn!("no folder picker: {e}");
-                    this.start_edit(EditTarget::ProjectFolder, window, cx);
+                    this.start_edit(EditTarget::ProjectFolder(place), window, cx);
                 }
             })
             .ok();
@@ -752,7 +787,7 @@ impl BenchWindow {
     }
 
     /// Where a new AI tab can work: the bench's projects, its folder, or one to pick.
-    fn ai_folder_menu(&mut self, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+    fn ai_folder_menu(&mut self, place: Place, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
         let Some(bench) = self.bench(cx) else { return Vec::new() };
         let mut folders: Vec<std::path::PathBuf> = bench.tabs.iter().filter_map(|t| Some(t.project_info()?.root.clone())).collect();
         if !folders.contains(&bench.cwd) {
@@ -762,14 +797,14 @@ impl BenchWindow {
             .into_iter()
             .map(|folder| {
                 let label = shed_save::home_relative(&folder);
-                item(label, move |this, _, cx| this.send(ClientMsg::NewAiTab { bench: this.bench, folder: folder.clone() }, cx)).icon("folder")
+                item(label, move |this, _, cx| this.open_tab(place, NewTabKind::Ai { folder: folder.clone() }, cx)).icon("folder")
             })
             .collect();
-        entries.push(item("Other Folder…", |_, window, cx| {
+        entries.push(item("Other Folder…", move |_, window, cx| {
             let picked = crate::state::pick_folder(cx);
             cx.spawn_in(window, async move |this, cx| {
                 if let Ok(Some(folder)) = picked.await {
-                    this.update(cx, |this, cx| this.send(ClientMsg::NewAiTab { bench: this.bench, folder }, cx)).ok();
+                    this.update(cx, |this, cx| this.open_tab(place, NewTabKind::Ai { folder }, cx)).ok();
                 }
             })
             .detach();
@@ -779,22 +814,22 @@ impl BenchWindow {
 
     /// Servers for a new remote tab: those remote tabs used (latest first,
     /// marked so), those in `~/.ssh/config` (not Git hosts), or one to type.
-    fn remote_host_menu(&mut self, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+    fn remote_host_menu(&mut self, place: Place, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
         let recent = shed_client::remote::recent_hosts(&self.state.read(cx).tree);
         let mut entries: Vec<MenuEntry<Self>> = shed_client::remote::known_hosts(&recent)
             .into_iter()
             .map(|host| {
                 let used = recent.contains(&host);
-                more(host.clone(), move |this: &mut Self, cx| this.remote_shell_menu(&host, cx)).icon(if used { "history" } else { "server" })
+                more(host.clone(), move |this: &mut Self, cx| this.remote_shell_menu(&host, place, cx)).icon(if used { "history" } else { "server" })
             })
             .collect();
-        entries.push(item("Other Host…", |this, window, cx| this.start_edit(EditTarget::RemoteHost, window, cx)));
+        entries.push(item("Other Host…", move |this, window, cx| this.start_edit(EditTarget::RemoteHost(place), window, cx)));
         entries
     }
 
     /// A server's menu: a new shell, or one it keeps already (from another
     /// PC, or closed here), asked for over ssh while the menu is open.
-    fn remote_shell_menu(&mut self, host: &str, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
+    fn remote_shell_menu(&mut self, host: &str, place: Place, cx: &mut Context<Self>) -> Vec<MenuEntry<Self>> {
         self.remote_menu = Some(host.to_string());
         let known = match self.remote_shells.remove(host) {
             Some(RemoteShells::Found(list) | RemoteShells::Looking(list)) => list,
@@ -812,7 +847,7 @@ impl BenchWindow {
                 };
                 this.remote_shells.insert(h.clone(), shells);
                 if this.remote_menu.as_deref() == Some(h.as_str()) {
-                    let entries = this.remote_shell_entries(&h, cx);
+                    let entries = this.remote_shell_entries(&h, place, cx);
                     if let Some(menu) = &mut this.menu {
                         menu.entries = entries;
                         cx.notify();
@@ -822,13 +857,13 @@ impl BenchWindow {
             .ok();
         })
         .detach();
-        self.remote_shell_entries(host, cx)
+        self.remote_shell_entries(host, place, cx)
     }
 
-    fn remote_shell_entries(&self, host: &str, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
+    fn remote_shell_entries(&self, host: &str, place: Place, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let h = host.to_string();
         let mut entries = vec![
-            item("New Shell", move |this, _, cx| this.send(ClientMsg::NewRemoteTab { bench: this.bench, host: h.clone(), join: None }, cx)).icon("plus"),
+            item("New Shell", move |this, _, cx| this.open_tab(place, NewTabKind::Remote { host: h.clone(), join: None }, cx)).icon("plus"),
             MenuEntry::Separator,
         ];
         // Shells open on this PC already are not offered again.
@@ -845,7 +880,7 @@ impl BenchWindow {
                     let (h, id) = (host.to_string(), shell.id.clone());
                     entries.push(
                         item(shed_client::remote::describe(shell), move |this, _, cx| {
-                            this.send(ClientMsg::NewRemoteTab { bench: this.bench, host: h.clone(), join: Some(id.clone()) }, cx)
+                            this.open_tab(place, NewTabKind::Remote { host: h.clone(), join: Some(id.clone()) }, cx)
                         })
                         .icon("terminal"),
                     );
@@ -947,8 +982,8 @@ impl BenchWindow {
             EditTarget::AddTag(_) => Some(String::new()),
             EditTarget::Badge => self.bench(cx).map(|b| b.badge.clone().unwrap_or_default()),
             EditTarget::Color => self.bench(cx).map(|b| format!("#{:06X}", b.color.accent().to_hex())),
-            EditTarget::ProjectFolder => self.bench(cx).map(|b| shed_save::home_relative(&b.cwd)),
-            EditTarget::RemoteHost | EditTarget::AddLink => Some(String::new()),
+            EditTarget::ProjectFolder(_) => self.bench(cx).map(|b| shed_save::home_relative(&b.cwd)),
+            EditTarget::RemoteHost(_) | EditTarget::AddLink => Some(String::new()),
             EditTarget::EditLink(i) => self.bench(cx).and_then(|b| b.links.get(i)).map(crate::links::unparse),
             EditTarget::RenameLink(i) => self.bench(cx).and_then(|b| b.links.get(i)).map(|l| l.name.clone()),
             EditTarget::RenameBookmark(id) => self.bench(cx).and_then(|b| b.bookmarks.iter().find(|k| k.id == id)).map(|k| k.label.clone()),
@@ -975,9 +1010,9 @@ impl BenchWindow {
                 Some(color) => ClientMsg::SetBenchColor { bench: self.bench, color },
                 None => return,
             },
-            EditTarget::ProjectFolder => ClientMsg::NewProjectTab { bench: self.bench, root: text.trim().into() },
-            EditTarget::RemoteHost if text.trim().is_empty() => return,
-            EditTarget::RemoteHost => ClientMsg::NewRemoteTab { bench: self.bench, host: text.trim().to_string(), join: None },
+            EditTarget::ProjectFolder(place) => return self.open_tab(place, NewTabKind::Project { root: text.trim().into() }, cx),
+            EditTarget::RemoteHost(_) if text.trim().is_empty() => return,
+            EditTarget::RemoteHost(place) => return self.open_tab(place, NewTabKind::Remote { host: text.trim().to_string(), join: None }, cx),
             EditTarget::RenameBookmark(_) if text.trim().is_empty() => return,
             EditTarget::RenameBookmark(id) => ClientMsg::RenameBookmark { bench: self.bench, id, label: text },
             EditTarget::RenameLink(i) => {
@@ -1010,8 +1045,9 @@ impl BenchWindow {
     fn tab_menu(&self, tab_id: TabId, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let Some(tab) = self.tab(tab_id, cx) else { return Vec::new() };
         let mut entries = vec![
-            item("New Tab to the Left", move |this, _, cx| this.new_tab_beside(tab_id, false, cx)).icon("tab-new"),
-            item("New Tab to the Right", move |this, _, cx| this.new_tab_beside(tab_id, true, cx)).icon("tab-new"),
+            // Any kind of tab, as the New Tab button's menu offers them.
+            more("New Tab to the Left", move |_: &mut Self, _| Self::new_tab_menu(Some((tab_id, false)))).icon("tab-new"),
+            more("New Tab to the Right", move |_: &mut Self, _| Self::new_tab_menu(Some((tab_id, true)))).icon("tab-new"),
             MenuEntry::Separator,
             item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)).icon("pencil"),
             // The tags Shed knows, to pick from; or a new one.
@@ -1354,9 +1390,9 @@ impl BenchWindow {
     fn bench_menu(&self, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
         let current = self.bench(cx).map(|b| b.color);
         let mut entries = vec![
-            item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
-            more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(cx)).icon("ai"),
-            more("New Remote Tab", |this: &mut Self, cx| this.remote_host_menu(cx)).icon("server"),
+            item("New Project Tab…", |this, window, cx| this.new_project_tab(None, window, cx)).icon("project"),
+            more("New AI Tab", |this: &mut Self, cx| this.ai_folder_menu(None, cx)).icon("ai"),
+            more("New Remote Tab", |this: &mut Self, cx| this.remote_host_menu(None, cx)).icon("server"),
             MenuEntry::Separator,
             item("Rename Bench…", |this, window, cx| this.start_edit(EditTarget::BenchName, window, cx)).icon("pencil"),
             item("Set Badge…", |this, window, cx| this.start_edit(EditTarget::Badge, window, cx)),
@@ -1709,12 +1745,7 @@ impl TabBar {
             .on_click(self.on(|this, _: &ClickEvent, _, cx| this.new_tab(cx)))
             .on_mouse_down(MouseButton::Right, self.on(|this, e: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                let entries = vec![
-                    item("New Terminal Tab", |this, _, cx| this.new_tab(cx)).icon("terminal"),
-                    item("New Project Tab…", |this, window, cx| this.new_project_tab(window, cx)).icon("project"),
-                    more("New AI Tab", |this: &mut BenchWindow, cx| this.ai_folder_menu(cx)).icon("ai"),
-                    more("New Remote Tab", |this: &mut BenchWindow, cx| this.remote_host_menu(cx)).icon("server"),
-                ];
+                let entries = BenchWindow::new_tab_menu(None);
                 this.open_menu(e.position, entries, cx);
             }))
             .child(svg().path(icon("tab-new")).size(px(16.0 * s)).text_color(hsla(ui.text_dim)));
@@ -2169,7 +2200,7 @@ impl Render for BenchWindow {
                     None => {}
                 }
             }))
-            .on_action(cx.listener(|this, _: &NewProjectTab, window, cx| this.new_project_tab(window, cx)))
+            .on_action(cx.listener(|this, _: &NewProjectTab, window, cx| this.new_project_tab(None, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
             .on_action(cx.listener(|this, _: &PrevTab, _, cx| this.cycle_tab(-1, cx)))
             .on_action(cx.listener(|this, a: &ActivateTab, _, cx| {
@@ -2409,6 +2440,65 @@ mod tests {
         let still = drawn(cx);
         beats(4, cx);
         assert_eq!(drawn(cx), still);
+    }
+
+    /// A tab's New Tab to the Left and Right offer every kind of tab the New
+    /// Tab button's menu does; one chosen there opens next to that tab.
+    #[gpui::test]
+    fn new_tabs_of_every_kind_open_beside_a_tab(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::set_ui_scale(1.0);
+            cx.set_global(crate::prompt::CurrentUi(UiColors::default()));
+        });
+        let (tx, sent) = std::sync::mpsc::channel();
+        let conn = KeeperConn::with_closer(tx, None, std::sync::Arc::new(|| {}));
+        let state = cx.new(|_| AppState::new(conn, crate::settings::Settings::default()));
+        let api = bench("api", &["~/api", "~/api/src"]);
+        let (api_id, tab) = (api.id, api.tabs[0].id);
+        state.update(cx, |s, cx| {
+            s.tree = shed_model::Shed { benches: vec![api], ..Default::default() };
+            cx.notify();
+        });
+        let tracker = PlaceTracker::new(Some(api_id), KeeperConn::detached(), gpui::WindowBounds::Windowed(gpui::Bounds::default()), None);
+        let st = state.clone();
+        let w = cx.add_window(|window, cx| BenchWindow::new(api_id, st, tracker, window, cx));
+        cx.run_until_parked();
+        let labels = |entries: &[MenuEntry<BenchWindow>]| -> Vec<String> {
+            entries
+                .iter()
+                .filter_map(|e| match e {
+                    MenuEntry::Item { label, .. } | MenuEntry::More { label, .. } => Some(label.to_string()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let kinds = labels(&BenchWindow::new_tab_menu(None));
+        assert_eq!(kinds, ["New Terminal Tab", "New Project Tab…", "New AI Tab", "New Remote Tab"]);
+        w.update(cx, |v, window, cx| {
+            let menu = v.tab_menu(tab, cx);
+            let sub = |label: &str| {
+                menu.iter()
+                    .find_map(|e| match e {
+                        MenuEntry::More { label: l, entries, .. } if l.as_ref() == label => Some(entries.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("no submenu {label}"))
+            };
+            let (left, right) = (sub("New Tab to the Left")(v, cx), sub("New Tab to the Right")(v, cx));
+            assert_eq!(labels(&left), kinds);
+            assert_eq!(labels(&right), kinds);
+            // An AI tab in the bench's folder, to the right of the tab.
+            let MenuEntry::More { entries: folders, .. } = &right[2] else { panic!("New AI Tab is a submenu") };
+            let folders = folders(v, cx);
+            let MenuEntry::Item { action, .. } = &folders[0] else { panic!("a folder") };
+            action(v, window, cx);
+        })
+        .unwrap();
+        let msg = sent.try_iter().find_map(|f| match f {
+            shed_proto::Frame::Client(m @ ClientMsg::NewTabNextToOfKind { .. }) => Some(m),
+            _ => None,
+        });
+        assert_eq!(msg, Some(ClientMsg::NewTabNextToOfKind { tab, after: true, kind: NewTabKind::Ai { folder: "/".into() } }));
     }
 
     /// The bookmarks list opens under its button, says why a bookmark

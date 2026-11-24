@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 58;
+pub const PROTOCOL_VERSION: u32 = 59;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -233,6 +233,22 @@ pub enum ClientMsg {
     AddBookmark { bench: BenchId, bookmark: shed_model::Bookmark },
     RemoveBookmark { bench: BenchId, id: shed_model::BookmarkId },
     RenameBookmark { bench: BenchId, id: shed_model::BookmarkId, label: String },
+    /// A new tab of any kind just before or after `tab`, in its group; it
+    /// becomes the shown tab.
+    NewTabNextToOfKind { tab: TabId, after: bool, kind: NewTabKind },
+}
+
+/// A kind of tab to open, and where it works.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum NewTabKind {
+    /// A terminal in `cwd`, or the bench's folder.
+    Terminal { cwd: Option<PathBuf> },
+    /// The folder `root` as a project tab.
+    Project { root: PathBuf },
+    /// Claude Code working in `folder`.
+    Ai { folder: PathBuf },
+    /// A shell on `host` (a new one, or the one the server keeps as `join`).
+    Remote { host: String, join: Option<String> },
 }
 
 /// One change to an AI tab's settings or kept state.
