@@ -106,6 +106,7 @@ import { BENCH_COLORS, BenchActions } from './bench-actions';
             replaceUrl
             [shedContextMenu]="canChange() ? tabMenu : null"
             (contextmenu)="menuTab = tab"
+            (touchstart)="menuTab = tab"
           >
             <span [style.color]="activity(tab) ? ink(b.color) : null" [class.pulse]="activity(tab) === 'working'">
               <shed-icon [name]="icon(tab)" />
@@ -292,6 +293,17 @@ import { BENCH_COLORS, BenchActions } from './bench-actions';
     }
     .add {
       margin-left: 4px;
+    }
+    @media (pointer: coarse) {
+      .tab {
+        min-height: 44px;
+      }
+      .tabbar {
+        scrollbar-width: none;
+      }
+      .name {
+        min-height: 40px;
+      }
     }
     .pulse {
       animation: pulse 1.4s ease-in-out infinite;

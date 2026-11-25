@@ -141,21 +141,75 @@ export class MenuTrigger {
   }
 }
 
-/** Opens a `shed-menu` on right-click (and long press on touch screens). */
+/** How long a press is long, in ms (Android's own long press comes first, as `contextmenu`). */
+const LONG_PRESS = 550;
+
+/**
+ * Opens a `shed-menu` on right-click, and on a long press on touch screens:
+ * Android sends that as `contextmenu`; iOS does not, so a press held still
+ * this long opens it too (and the tap it ends in is dropped).
+ */
 @Directive({
   selector: '[shedContextMenu]',
   host: {
     '(contextmenu)': 'onContext($event)',
+    '(touchstart)': 'onTouchStart($event)',
+    '(touchmove)': 'onTouchMove($event)',
+    '(touchend)': 'onTouchEnd($event)',
+    '(touchcancel)': 'cancel()',
   },
 })
 export class ContextMenuTrigger {
   readonly shedContextMenu = input.required<Menu | null | undefined>();
   private readonly el = inject<ElementRef<HTMLElement>>(ElementRef);
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private start: { x: number; y: number } | null = null;
+  private openedAt = 0;
+
+  constructor() {
+    // No link preview or text callout on iOS where a long press has a menu.
+    this.el.nativeElement.style.setProperty('-webkit-touch-callout', 'none');
+  }
 
   protected onContext(e: MouseEvent): void {
     const menu = this.shedContextMenu();
     if (!menu) return;
     e.preventDefault();
+    this.cancel();
+    // Opened by the long press already.
+    if (Date.now() - this.openedAt < 1000) return;
     menu.openAt(e.clientX, e.clientY, this.el.nativeElement);
+  }
+
+  protected onTouchStart(e: TouchEvent): void {
+    this.cancel();
+    const t = e.touches[0];
+    if (!this.shedContextMenu() || e.touches.length !== 1 || !t) return;
+    this.start = { x: t.clientX, y: t.clientY };
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      const menu = this.shedContextMenu();
+      if (!menu || !this.start) return;
+      this.openedAt = Date.now();
+      menu.openAt(this.start.x, this.start.y, this.el.nativeElement);
+    }, LONG_PRESS);
+  }
+
+  protected onTouchMove(e: TouchEvent): void {
+    const t = e.touches[0];
+    if (!this.start || !t) return;
+    if (Math.hypot(t.clientX - this.start.x, t.clientY - this.start.y) > 10) this.cancel();
+  }
+
+  protected onTouchEnd(e: TouchEvent): void {
+    this.cancel();
+    // The press opened the menu: its end is not a tap on what is under it.
+    if (Date.now() - this.openedAt < 1000 && e.cancelable) e.preventDefault();
+  }
+
+  protected cancel(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.start = null;
   }
 }

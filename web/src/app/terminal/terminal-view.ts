@@ -335,7 +335,7 @@ function emptyRow(l: ScreenLine): boolean {
     .keys {
       display: flex;
       gap: 4px;
-      padding: 6px;
+      padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
       overflow-x: auto;
       border-top: 1px solid var(--divider);
       background: var(--surface);
@@ -345,6 +345,12 @@ function emptyRow(l: ScreenLine): boolean {
     .keys .btn {
       min-width: 40px;
       font-family: var(--mono);
+    }
+    @media (pointer: coarse) {
+      .keys .btn {
+        min-width: 44px;
+        min-height: 40px;
+      }
     }
   `,
 })

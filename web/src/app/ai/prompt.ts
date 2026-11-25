@@ -353,6 +353,12 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
       :host(.focused) .area {
         max-height: calc(var(--vvh, 100dvh) * 0.45);
       }
+    }
+    @media (pointer: coarse) {
+      /* Phones zoom into fields with smaller text. */
+      .area {
+        font-size: 16px;
+      }
       .box {
         padding: 4px;
       }

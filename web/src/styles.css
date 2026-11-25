@@ -356,15 +356,50 @@ kbd {
   height: 26px;
 }
 
+/*
+ * Touch screens: buttons at least 44 px to a finger. Small ones keep their
+ * look; their target reaches past them (`::after`), so rows stay dense.
+ */
 @media (pointer: coarse) {
   .btn {
-    min-height: 38px;
+    min-height: 40px;
+  }
+
+  .btn.small {
+    min-height: 32px;
   }
 
   .icon-btn {
-    width: 38px;
-    height: 38px;
+    width: 40px;
+    height: 40px;
   }
+
+  .icon-btn.small {
+    width: 32px;
+    height: 32px;
+  }
+
+  .btn,
+  .icon-btn {
+    position: relative;
+  }
+
+  .btn::after,
+  .icon-btn::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+  }
+
+  .btn.small::after,
+  .icon-btn.small::after {
+    inset: -6px -2px;
+  }
+
+  .icon-btn.small::after {
+    inset: -6px;
+  }
+
 }
 
 /* ------------------------------------------------------------- fields */
@@ -398,6 +433,25 @@ kbd {
 .input::placeholder,
 .textarea::placeholder {
   color: var(--text-dim);
+}
+
+@media (pointer: coarse) {
+  /* Phones zoom into fields with smaller text. */
+  .input,
+  .textarea,
+  .select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .check input {
+    width: 20px;
+    height: 20px;
+  }
+
+  .check {
+    min-height: 40px;
+  }
 }
 
 .field {
@@ -490,7 +544,7 @@ kbd {
 .page {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
 }
 
 .scroll {

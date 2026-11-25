@@ -295,6 +295,18 @@ interface WsView {
       color: var(--text);
       text-decoration: none;
     }
+    @media (pointer: coarse) {
+      /* Names stay text-sized, their targets finger-sized. */
+      .bench-name,
+      .ws-name {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+      }
+      .tab {
+        min-height: 44px;
+      }
+    }
     a.bench-name:hover {
       text-decoration: underline;
     }

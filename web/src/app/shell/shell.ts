@@ -94,6 +94,8 @@ import { Viewport } from '../../ui/viewport';
       flex: 1 1 auto;
       min-height: 0;
       overflow: auto;
+      /* Clear of a notch, turned sideways. */
+      padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
       display: flex;
       flex-direction: column;
     }

@@ -1485,6 +1485,11 @@ On a phone (a screen narrower than 700 pixels) the web app makes room:
   line, and **▲ ▼** step aside. With the keyboard up, Shed's top bar and the
   bench's bar make way for the conversation (the tabs stay); putting the
   keyboard away folds the prompt again.
+- Buttons and rows are at least finger-sized (small ones reach past their
+  look), fields do not zoom the page, nothing scrolls sideways but code,
+  terminals and the tab bar, and the screen keeps clear of a notch and the
+  home bar. A long press opens what a right-click does on a computer (a tab's
+  menu, a session's), on iPhone too.
 
 **Add to Home Screen** installs it as an app (on iPhone, needed for
 notifications). Private tabs are listed, never shown: what is in them stays on

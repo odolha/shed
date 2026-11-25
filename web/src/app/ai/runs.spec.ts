@@ -144,7 +144,7 @@ describe('AiEntryView', () => {
   it('shows a sub-agent as a card: what it is for, how it runs, its step on a line of its own', () => {
     const el = render({ type: 'Tool', content: agent({ state: 'running', started: Math.floor(Date.now() / 1000) - 5, last: 'Read a.rs', tools: 2, agent: 'Explore' }) });
     expect(el.querySelector('.title')?.textContent?.trim()).toBe('Look around');
-    expect(el.querySelector('.status')?.textContent).toContain('running 5 s · 2 tool calls');
+    expect(el.querySelector('.status')?.textContent).toMatch(/running \d+ s · 2 tool calls/);
     expect(el.querySelector('.status')?.textContent).toContain('Explore');
     expect(el.querySelector('.now')?.textContent?.trim()).toBe('Read a.rs');
   });

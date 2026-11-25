@@ -71,6 +71,7 @@ export function deleteBody(s: AiSession, later: number): string {
           [shedTip]="s.title"
           [shedContextMenu]="canChange() ? menu : null"
           (contextmenu)="menuFor = s"
+          (touchstart)="menuFor = s"
           [disabled]="!canChange() && s.id !== current()"
         >
           <span class="row" style="gap: 6px">

@@ -233,6 +233,6 @@ button.file:hover,
 @media (pointer: coarse) {
   .file-main,
   button.file {
-    min-height: 38px;
+    min-height: 44px;
   }
 }

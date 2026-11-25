@@ -179,7 +179,7 @@ function join(folder: string, name: string): string {
     }
     @media (pointer: coarse) {
       .row-btn {
-        min-height: 36px;
+        min-height: 44px;
       }
     }
   `,
