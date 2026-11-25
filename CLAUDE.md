@@ -89,6 +89,11 @@ Crates (`crates/`), lowest first:
   tree-sitter colouring, search in files, a folder's entries and project roots
   (`folder.rs`), pictures as data (`picture.rs`), unsaved edits kept aside
   (`recovery.rs`).
+- `shed-markdown`: Markdown parsed into blocks to draw (`parse` for Claude's
+  answers, `parse_doc` for files: footnotes, pictures, diagrams, math, HTML as
+  text, anchors), HTML/text for the clipboard; feature `render` turns Mermaid,
+  Graphviz and math into pictures (`render.rs`). Drawn by
+  `shed-app/src/md_draw.rs` (AI tab and `md_view.rs`, a Markdown file's View).
 - `shed-ai`: Claude Code conversations from its stream-json events and session
   files, the sessions list's rows (`listing.rs`); the keeper runs `claude` per
   AI tab (`shed-keeper/src/server/ai.rs`).
