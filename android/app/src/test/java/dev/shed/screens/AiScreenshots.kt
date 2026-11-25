@@ -8,6 +8,8 @@ import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -66,8 +68,8 @@ class AiScreenshots {
 
     private fun user(text: String) = AiEntry.User(AiUser(text, at = (now - 600).toUInt()))
     private fun answer(text: String) = AiEntry.Assistant(AiAssistant(text))
-    private fun tool(name: String, summary: String, result: String? = "ok", run: AiRun? = null) =
-        AiEntry.Tool(AiTool("t-$summary", name, summary, result = result, run = run))
+    private fun tool(name: String, summary: String, result: String? = "ok", run: AiRun? = null, detail: String? = null) =
+        AiEntry.Tool(AiTool("t-$summary", name, summary, detail = detail, result = result, run = run))
 
     private val entries = listOf(
         user("The sign-in page shows a blank screen on Android 10. Can you look?"),
@@ -78,7 +80,28 @@ class AiScreenshots {
         tool("Bash", "$ ./gradlew testDebugUnitTest"),
         answer("Fixed: the form now lays out once the insets are known.\n\n- `SignInScreen.kt`: waits for the first layout\n- a test for a zero-height start\n\nAll 84 tests pass."),
         user("Thanks. Now make the logbook search keep its query when I rotate the phone."),
-        tool("Agent", "Agent: find where the logbook keeps its query", result = null, run = AiRun(AiRunState.Running, background = true, agent = "Explore", started = (now - 95).toUInt(), last = "Read LogbookScreen.kt", tools = 6u)),
+        tool(
+            "Agent",
+            "Agent: find where the logbook keeps its query",
+            result = null,
+            run = AiRun(
+                AiRunState.Running,
+                background = true,
+                agent = "Explore",
+                started = (now - 95).toUInt(),
+                last = "Read app/src/main/java/dev/shed/ui/logbook/LogbookScreen.kt",
+                tools = 6u,
+                tokens = 18_400.0,
+                steps = listOf(
+                    AiEntry.Tool(AiTool("s1", "Grep", "Grep \"query\" in app/src/main/java/dev/shed/ui", result = "LogbookScreen.kt:72\nLogbookScreen.kt:80")),
+                    AiEntry.Tool(AiTool("s2", "Glob", "Glob **/logbook/*.kt", result = "LogbookScreen.kt")),
+                    AiEntry.Assistant(AiAssistant("The query is kept in `LogbookScreen`; reading it now.")),
+                    AiEntry.Tool(AiTool("s3", "Read", "Read app/src/main/java/dev/shed/ui/logbook/LogbookScreen.kt")),
+                ),
+            ),
+            detail = "Find where the logbook screen keeps its search query and whether it survives a configuration change. Report the file and line.",
+        ),
+        tool("Bash", "$ ./gradlew lintDebug", result = null, run = AiRun(AiRunState.Running, background = true, started = (now - 40).toUInt(), last = "> Task :app:lintAnalyzeDebug")),
         answer("An agent looks for where the query lives; meanwhile, the search field is a plain `remember`, so a rotation drops it. Switching it to `rememberSaveable`…"),
     )
 
@@ -128,7 +151,7 @@ class AiScreenshots {
         drafts = {},
         git = {},
         copyAll = {},
-        userLongPress = { _, _ -> },
+        userAction = { _, _, _ -> },
         picture = {},
         timer = {},
     )
@@ -174,6 +197,51 @@ class AiScreenshots {
 
     @Test fun scrolledUpDark() = shoot(ThemeChoice.Dark, "scrolled-up") {
         compose.onNode(hasScrollToIndexAction()).performTouchInput { swipeDown(startY = top + 100f, endY = bottom - 100f) }
+    }
+
+    /** Scrolled by hand: the scrollbar shows (caught before it fades). */
+    @Test fun scrollbarDark() {
+        compose.setContent { Tab(ThemeChoice.Dark) }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        compose.onNode(hasScrollToIndexAction()).performTouchInput { swipeDown(startY = top + 100f, endY = centerY) }
+        compose.mainClock.advanceTimeBy(250)
+        captureScreenRoboImage(screenshot("ai-scrollbar-dark"))
+    }
+
+    @Test fun agentDark() = shoot(ThemeChoice.Dark, "agent") { scrollTo("find where the logbook") }
+
+    @Test fun agentLight() = shoot(ThemeChoice.Light, "agent") { scrollTo("find where the logbook") }
+
+    @Test fun agentSheetDark() = shoot(ThemeChoice.Dark, "agent-sheet") {
+        scrollTo("find where the logbook")
+        compose.onNodeWithText("find where the logbook", substring = true).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Steps")).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test fun backgroundStripDark() = shoot(ThemeChoice.Dark, "background-open") {
+        compose.onNodeWithText("agent running", substring = true).performClick()
+    }
+
+    @Test fun messageMenuDark() = shoot(ThemeChoice.Dark, "message-menu") {
+        scrollTo("Thanks. Now make")
+        compose.onNodeWithText("Thanks. Now make", substring = true).performTouchInput { longClick() }
+    }
+
+    @Test fun messageMenuLight() = shoot(ThemeChoice.Light, "message-menu") {
+        scrollTo("Thanks. Now make")
+        compose.onNodeWithText("Thanks. Now make", substring = true).performTouchInput { longClick() }
+    }
+
+    @Test fun selectTextDark() = shoot(ThemeChoice.Dark, "select-text") {
+        scrollTo("Thanks. Now make")
+        compose.onNodeWithText("Thanks. Now make", substring = true).performTouchInput { longClick() }
+        compose.onNodeWithText("Select Text…").performClick()
+    }
+
+    private fun scrollTo(text: String) {
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text, substring = true))
+        compose.waitForIdle()
     }
 
     @Test fun typingDark() = shoot(ThemeChoice.Dark, "typing") { type() }

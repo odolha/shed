@@ -1,6 +1,22 @@
 package dev.shed.ui.ai
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.annotation.StringRes
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Dp
+import dev.shed.ui.common.ChoiceMenu
+import dev.shed.ui.common.MenuChoice
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -86,40 +102,87 @@ import dev.shed.ui.common.clock
 import dev.shed.ui.theme.LocalShed
 import dev.shed.ui.theme.Mono
 
-/** One of your messages. */
+/** What a long press on one of your messages offers (changing ones only where you may change things). */
+enum class UserMenu(@StringRes override val label: Int) : MenuChoice {
+    Copy(R.string.copy),
+    Select(R.string.ai_select_text),
+    Edit(R.string.ai_edit_resend),
+    SendAgain(R.string.ai_send_again),
+    Revert(R.string.ai_revert),
+    ;
+
+    override val icon: ImageVector get() = when (this) {
+        Copy -> Icons.Default.ContentCopy
+        Select -> Icons.Default.SelectAll
+        Edit -> Icons.Default.Edit
+        SendAgain -> Icons.Default.Replay
+        Revert -> Icons.AutoMirrored.Filled.Undo
+    }
+    override val danger: Boolean get() = this == Revert
+}
+
+/** The long-press menu of one of your messages. */
+fun userMenu(canChange: Boolean): List<UserMenu> =
+    if (canChange) UserMenu.entries else listOf(UserMenu.Copy, UserMenu.Select)
+
+/** One of your messages: a long press for its menu; Copy beside its time. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun UserEntry(
     user: AiUser,
     pictures: Map<String, ImageBitmap?>,
     loadPicture: (String) -> Unit,
-    onLongPress: () -> Unit,
+    canChange: Boolean,
+    onAction: (UserMenu) -> Unit,
     onPicture: (ImageBitmap) -> Unit,
 ) {
     val shed = LocalShed.current
+    val haptics = LocalHapticFeedback.current
+    var menu by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-        Column(
-            Modifier
-                .widthIn(max = 560.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(shed.accent.copy(alpha = 0.14f))
-                .combinedClickable(onClick = {}, onLongClick = onLongPress)
-                .padding(12.dp),
-        ) {
-            Text(user.text, style = MaterialTheme.typography.bodyMedium)
-            val names = user.pictures.orEmpty()
-            if (names.isNotEmpty()) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
-                    for (name in names) Thumb(name, pictures, loadPicture, onPicture)
+        Box {
+            Column(
+                Modifier
+                    .widthIn(max = 560.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(shed.accent.copy(alpha = 0.14f))
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClickLabel = stringResource(R.string.ai_message_menu),
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            menu = true
+                        },
+                    )
+                    .padding(12.dp),
+            ) {
+                Text(user.text, style = MaterialTheme.typography.bodyMedium)
+                val names = user.pictures.orEmpty()
+                if (names.isNotEmpty()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
+                        for (name in names) Thumb(name, pictures, loadPicture, onPicture)
+                    }
+                }
+                val missing = (user.images?.toInt() ?: 0) - names.size
+                if (missing > 0) {
+                    Text(pluralStringResource(R.plurals.ai_pictures_missing, missing, missing), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            val missing = (user.images?.toInt() ?: 0) - names.size
-            if (missing > 0) {
-                Text(pluralStringResource(R.plurals.ai_pictures_missing, missing, missing), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
-            }
+            ChoiceMenu(menu, userMenu(canChange), onDismiss = { menu = false }, onPick = onAction)
         }
-        user.at?.let { at ->
-            Text(clock(at.toLong()), color = shed.textDim, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp, end = 4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .clickable(onClickLabel = stringResource(R.string.ai_copy_message)) { onAction(UserMenu.Copy) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.ContentCopy, stringResource(R.string.ai_copy_message), tint = shed.textDim, modifier = Modifier.size(14.dp))
+            }
+            user.at?.let { at ->
+                Text(clock(at.toLong()), color = shed.textDim, fontSize = 10.sp, modifier = Modifier.padding(end = 4.dp))
+            }
         }
     }
 }
@@ -173,10 +236,31 @@ private fun toolIcon(name: String): ImageVector = when {
     else -> Icons.Default.Build
 }
 
+/** A tool's icon: a sub-agent's own (the desktop's), the others by kind. */
+@Composable
+fun ToolIcon(tool: AiTool, tint: Color, size: Dp = 16.dp) {
+    when {
+        tool.error == true && tool.run == null -> Icon(Icons.Default.ErrorOutline, null, tint = LocalShed.current.danger, modifier = Modifier.size(size))
+        tool.isAgent -> Icon(painterResource(R.drawable.ic_agent), null, tint = tint, modifier = Modifier.size(size))
+        else -> Icon(toolIcon(tool.name), null, tint = tint, modifier = Modifier.size(size))
+    }
+}
+
+/** A small turning ring, its track drawn so it never reads as a stray mark. */
+@Composable
+fun Spinner(color: Color, size: Dp = 12.dp) {
+    CircularProgressIndicator(
+        Modifier.size(size),
+        color = color,
+        trackColor = color.copy(alpha = 0.22f),
+        strokeWidth = 1.5.dp,
+    )
+}
+
 /**
  * A step Claude took, on one line; open for its input, change and result. A
- * sub-agent or a task in the background shows how it is doing after it, and
- * opens to the agent's own steps and report; a step that set a timer, when it fires.
+ * sub-agent or a task in the background is a [RunEntry] (tap: [onOpenRun]);
+ * a step that set a timer says when it fires.
  */
 @Composable
 fun ToolEntry(
@@ -186,22 +270,22 @@ fun ToolEntry(
     pictures: Map<String, ImageBitmap?>,
     loadPicture: (String) -> Unit,
     onPicture: (ImageBitmap) -> Unit,
+    onOpenRun: (String) -> Unit = {},
 ) {
     val shed = LocalShed.current
-    var open by rememberSaveable(tool.id) { mutableStateOf(false) }
     val run = tool.run
     val working = status != null && status.state != AiActivity.Idle
+    if (run != null) {
+        RunEntry(tool, run, working, now()) { onOpenRun(tool.id) }
+        return
+    }
+    var open by rememberSaveable(tool.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable { open = !open }.padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                if (tool.error == true) Icons.Default.ErrorOutline else toolIcon(tool.name),
-                null,
-                tint = if (tool.error == true) shed.danger else shed.textDim,
-                modifier = Modifier.size(16.dp),
-            )
+            ToolIcon(tool, shed.textDim)
             HSpace(8)
             Column(Modifier.weight(1f)) {
                 Text(
@@ -212,33 +296,17 @@ fun ToolEntry(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // How a run is doing; when a timer it set fires.
-                val info = if (run != null) runLine(tool, run, now()) else firesLine(tool, status, now())
-                if (info != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (run?.background == true) {
-                            Chip(stringResource(R.string.ai_background), shed.textDim)
-                            HSpace(6)
-                        }
-                        Text(
-                            info,
-                            color = if (run?.running == true) shed.ink(shed.accent) else shed.textDim,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                // When a timer it set fires.
+                firesLine(tool, status, now())?.let {
+                    Text(it, color = shed.textDim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            HSpace(6)
-            when {
-                run != null -> RunMark(run.stateOrRunning, working)
-                tool.result == null -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+            if (tool.result == null) {
+                HSpace(6)
+                Spinner(shed.textDim)
             }
         }
-        if (open && run != null && tool.isAgent) {
-            AgentView(tool, run, working)
-        } else if (open) {
+        if (open) {
             Column(Modifier.padding(start = 24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 tool.detail?.takeIf { it.isNotBlank() }?.let { CodeBox(it) }
                 tool.edit?.let { EditDiff(it) }
@@ -256,13 +324,135 @@ fun ToolEntry(
     }
 }
 
+/**
+ * A sub-agent or a command in the background, as a card: what it is for (two
+ * lines at most); its state, for how long, its tool calls; what it does now.
+ */
+@Composable
+fun RunEntry(tool: AiTool, run: AiRun, working: Boolean, now: Long, onOpen: () -> Unit) {
+    val shed = LocalShed.current
+    val running = run.running
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.dp, if (running) shed.accent.copy(alpha = 0.45f) else shed.divider, RoundedCornerShape(10.dp))
+            .clickable(onClickLabel = stringResource(R.string.ai_run_open), onClick = onOpen)
+            .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+    ) {
+        Box(Modifier.padding(top = 2.dp)) { ToolIcon(tool, if (running) shed.ink(shed.accent) else shed.textDim, 18.dp) }
+        HSpace(10)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                runTitle(tool),
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = if (tool.isAgent) null else Mono,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                StateChip(run, working)
+                if (run.background == true) Chip(stringResource(R.string.ai_background), shed.textDim)
+                val status = runStatus(tool, run, now)
+                if (status.isNotEmpty()) Text(status, color = shed.textDim, fontSize = 12.sp, maxLines = 1)
+            }
+            runStep(run)?.let {
+                Text(it, fontFamily = Mono, fontSize = 12.sp, color = shed.textDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Icon(Icons.Default.ChevronRight, null, tint = shed.textDim, modifier = Modifier.align(Alignment.CenterVertically).size(20.dp))
+    }
+}
+
+/** A run's state as a chip with its mark: turning while it runs, ✓ done, ✗ failed, ■ stopped. */
+@Composable
+private fun StateChip(run: AiRun, working: Boolean) {
+    val shed = LocalShed.current
+    val color = when (run.stateOrRunning) {
+        AiRunState.Running, AiRunState.Done -> shed.ink(shed.accent)
+        AiRunState.Failed -> shed.danger
+        AiRunState.Stopped -> shed.textDim
+    }
+    Row(
+        Modifier.clip(RoundedCornerShape(6.dp)).background(color.copy(alpha = 0.14f)).padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RunMark(run.stateOrRunning, working)
+        HSpace(4)
+        Text(runState(run), color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/**
+ * A sub-agent or a background command opened in a sheet: what it was asked,
+ * its steps (each opens to its change and output), its report or output.
+ */
+@Composable
+fun RunSheet(tool: AiTool, working: Boolean, now: Long, onDismiss: () -> Unit) {
+    val shed = LocalShed.current
+    val run = tool.run ?: return
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row {
+                Box(Modifier.padding(top = 2.dp)) { ToolIcon(tool, shed.ink(shed.accent), 20.dp) }
+                HSpace(10)
+                Text(runTitle(tool), style = MaterialTheme.typography.titleMedium, fontFamily = if (tool.isAgent) null else Mono)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                StateChip(run, working)
+                if (run.background == true) Chip(stringResource(R.string.ai_background), shed.textDim)
+                val status = listOf(runStatus(tool, run, now), run.tokens?.takeIf { it > 0 }?.let { tokensShort(it) + " tokens" })
+                    .filter { !it.isNullOrEmpty() }.joinToString(" · ")
+                if (status.isNotEmpty()) Text(status, color = shed.textDim, fontSize = 12.sp)
+            }
+            runStep(run)?.let { Text(it, fontFamily = Mono, fontSize = 12.sp, color = shed.textDim) }
+            tool.detail?.takeIf { it.isNotBlank() }?.let {
+                Text(stringResource(if (tool.isAgent) R.string.ai_run_asked else R.string.ai_run_command), color = shed.textDim, style = MaterialTheme.typography.labelMedium)
+                if (tool.isAgent) MarkdownView(it) else CodeBox(it)
+            }
+            if (tool.isAgent) {
+                Text(stringResource(R.string.ai_run_steps), color = shed.textDim, style = MaterialTheme.typography.labelMedium)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    val skipped = run.skipped?.toInt() ?: 0
+                    if (skipped > 0) {
+                        Text(pluralStringResource(R.plurals.ai_steps_skipped, skipped, skipped), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
+                    }
+                    val steps = run.steps.orEmpty()
+                    if (steps.isEmpty()) {
+                        Text(
+                            stringResource(if (run.running) R.string.ai_no_steps_yet else R.string.ai_steps_unknown),
+                            color = shed.textDim,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    for (step in steps) {
+                        when (step) {
+                            is AiEntry.Tool -> AgentStep(tool.id, step.content, run.running, working)
+                            is AiEntry.Assistant -> if (step.content.text.isNotBlank()) MarkdownView(step.content.text)
+                            else -> {}
+                        }
+                    }
+                }
+            }
+            val report = runReport(tool, run)
+            if (report.isNotBlank()) {
+                Text(stringResource(if (tool.isAgent) R.string.ai_its_report else R.string.ai_run_output), color = shed.textDim, style = MaterialTheme.typography.labelMedium)
+                if (tool.isAgent) MarkdownView(report) else CodeBox(report, shed.textDim)
+            }
+        }
+    }
+}
+
 /** A run's mark: turning while it goes on (still while Claude is idle), ✓ done, ✗ failed, ■ stopped. */
 @Composable
 private fun RunMark(state: AiRunState, working: Boolean) {
     val shed = LocalShed.current
     when (state) {
         AiRunState.Running -> if (working) {
-            CircularProgressIndicator(Modifier.size(12.dp), color = shed.accent, strokeWidth = 1.5.dp)
+            Spinner(shed.accent)
         } else {
             Mark("◐", shed.ink(shed.accent))
         }
@@ -275,50 +465,6 @@ private fun RunMark(state: AiRunState, working: Boolean) {
 @Composable
 private fun Mark(text: String, color: androidx.compose.ui.graphics.Color) {
     Text(text, color = color, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(min = 12.dp))
-}
-
-/** An opened sub-agent: its prompt, kind and tokens, its steps (tool calls that open, what it said), its report. */
-@Composable
-private fun AgentView(tool: AiTool, run: AiRun, working: Boolean) {
-    val shed = LocalShed.current
-    Column(Modifier.padding(start = 24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        tool.detail?.takeIf { it.isNotBlank() }?.let { CodeBox(it) }
-        agentLine(run).takeIf { it.isNotEmpty() }?.let {
-            Text(it, color = shed.textDim, style = MaterialTheme.typography.bodySmall)
-        }
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .drawBehind { drawRect(shed.divider, size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height)) }
-                .padding(start = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            val skipped = run.skipped?.toInt() ?: 0
-            if (skipped > 0) {
-                Text(pluralStringResource(R.plurals.ai_steps_skipped, skipped, skipped), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
-            }
-            val steps = run.steps.orEmpty()
-            if (steps.isEmpty()) {
-                Text(
-                    stringResource(if (run.running) R.string.ai_no_steps_yet else R.string.ai_steps_unknown),
-                    color = shed.textDim,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            for (step in steps) {
-                when (step) {
-                    is AiEntry.Tool -> AgentStep(tool.id, step.content, run.running, working)
-                    is AiEntry.Assistant -> if (step.content.text.isNotBlank()) MarkdownView(step.content.text)
-                    else -> {}
-                }
-            }
-        }
-        val report = runReport(tool, run)
-        if (report.isNotBlank()) {
-            Text(stringResource(R.string.ai_its_report), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
-            MarkdownView(report)
-        }
-    }
 }
 
 /** One of a sub-agent's tool calls: a line that opens to its change or input, and what it returned. */

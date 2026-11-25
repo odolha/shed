@@ -229,7 +229,6 @@
     <string name="ai_other_answer">Other: your own answer</string>
     <string name="ai_send_answers">Send Answers</string>
     <string name="ai_skip">Skip</string>
-    <string name="ai_your_message">Your message</string>
     <string name="ai_edit">Edit</string>
     <string name="ai_merge_draft">Merge into Prompt</string>
     <string name="ai_send_again">Send Again</string>
@@ -301,11 +300,19 @@
     <string name="ai_previous_prompt">Your previous message</string>
     <string name="ai_next_prompt">Your next message</string>
     <string name="ai_to_latest">Jump to the latest</string>
+    <string name="ai_select_text">Select Text…</string>
+    <string name="ai_edit_resend">Edit and Resend…</string>
+    <string name="ai_message_menu">Your message’s actions</string>
+    <string name="ai_copy_message">Copy your message</string>
+    <string name="ai_message_select_title">Your message</string>
+    <string name="ai_copy_all">Copy All</string>
+    <string name="ai_run_open">Show its steps</string>
+    <string name="ai_run_asked">Asked to</string>
+    <string name="ai_run_command">Command</string>
+    <string name="ai_run_steps">Steps</string>
+    <string name="ai_run_output">Output</string>
+    <string name="ai_strip_hide">Fold what goes on in the background</string>
     <string name="ai_timers_show">Show everything waiting</string>
-    <plurals name="ai_timers_more">
-        <item quantity="one">+%1$d more</item>
-        <item quantity="other">+%1$d more</item>
-    </plurals>
     <string name="mode_full_auto_text">In Full Auto, Claude changes files and runs commands on the workspace without asking first.</string>
 
     <!-- Review -->

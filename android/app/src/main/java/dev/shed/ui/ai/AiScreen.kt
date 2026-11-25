@@ -6,6 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.ui.res.painterResource
+import dev.shed.ui.common.ListScrollbar
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -175,7 +180,7 @@ val MODES = listOf(
     FULL_AUTO to R.string.mode_full_auto,
 )
 
-/** What a long press on one of your messages offers. */
+/** One of your messages, to edit or revert. */
 private data class UserAction(val index: Int, val text: String)
 
 /** What an AI tab shows: gathered by [AiScreen] (or a screenshot test) for [AiTabView]. */
@@ -212,7 +217,8 @@ class AiTabActions(
     val drafts: () -> Unit,
     val git: () -> Unit,
     val copyAll: () -> Unit,
-    val userLongPress: (Int, String) -> Unit,
+    /** Edit, Send Again or Revert on one of your messages (Copy and Select Text are the view's own). */
+    val userAction: (UserMenu, Int, String) -> Unit,
     val picture: (ImageBitmap) -> Unit,
     val timer: (AiTimer) -> Unit,
 )
@@ -245,7 +251,6 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
     var showDrafts by rememberSaveable { mutableStateOf(false) }
     // A draft to add at the end of the prompt (Merge into Prompt), until the prompt takes it.
     var mergeIn by remember { mutableStateOf<String?>(null) }
-    var userAction by remember { mutableStateOf<UserAction?>(null) }
     var editing by remember { mutableStateOf<UserAction?>(null) }
     var reverting by remember { mutableStateOf<UserAction?>(null) }
     var bigPicture by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -295,7 +300,14 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
             drafts = { showDrafts = true },
             git = { nav.navigate(Routes.git(ws, tabId)) },
             copyAll = { copy(context, conversationText(vm.entries.value.orEmpty())) },
-            userLongPress = { i, text -> userAction = UserAction(i, text) },
+            userAction = { action, i, text ->
+                when (action) {
+                    UserMenu.Edit -> editing = UserAction(i, text)
+                    UserMenu.SendAgain -> call(Call.AiEdit(AiEdit(tabId, i.toUInt(), text, null)))
+                    UserMenu.Revert -> reverting = UserAction(i, text)
+                    UserMenu.Copy, UserMenu.Select -> {}
+                }
+            },
             picture = { bigPicture = it },
             timer = { timer = it },
         )
@@ -318,33 +330,6 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
 
     if (showSessions) SessionsSheet(ws, tabId, vm, sessions, currentKey, canChange) { showSessions = false }
     if (showDrafts) DraftsSheet(ws, tabId, ai, currentKey, canChange, onMerge = { mergeIn = it }) { showDrafts = false }
-    userAction?.let { action ->
-        AlertDialog(
-            onDismissRequest = { userAction = null },
-            title = { Text(stringResource(R.string.ai_your_message)) },
-            text = { Text(action.text, maxLines = 6, overflow = TextOverflow.Ellipsis) },
-            confirmButton = {
-                Column {
-                    if (canChange) {
-                        TextButton(onClick = { userAction = null; editing = action }) {
-                            Icon(Icons.Default.Edit, null); HSpace(8); Text(stringResource(R.string.ai_edit))
-                        }
-                        TextButton(onClick = {
-                            userAction = null
-                            call(Call.AiEdit(AiEdit(tabId, action.index.toUInt(), action.text, null)))
-                        }) { Icon(Icons.Default.Replay, null); HSpace(8); Text(stringResource(R.string.ai_send_again)) }
-                        TextButton(
-                            onClick = { userAction = null; reverting = action },
-                            colors = ButtonDefaults.textButtonColors(contentColor = shed.danger),
-                        ) { Icon(Icons.AutoMirrored.Filled.Undo, null); HSpace(8); Text(stringResource(R.string.ai_revert)) }
-                    }
-                    TextButton(onClick = { userAction = null; copy(context, action.text) }) {
-                        Icon(Icons.Default.ContentCopy, null); HSpace(8); Text(stringResource(R.string.copy))
-                    }
-                }
-            },
-        )
-    }
     editing?.let { action ->
         TextDialog(
             title = stringResource(R.string.ai_edit),
@@ -391,8 +376,25 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
 @Composable
 fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: String? = null, onMerged: () -> Unit = {}) {
     val runner = rememberRunner()
+    val context = LocalContext.current
+    val snackbar = LocalSnackbar.current
+    val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     var typing by remember { mutableStateOf(false) }
+    var openRun by rememberSaveable { mutableStateOf<String?>(null) }
+    var selecting by remember { mutableStateOf<String?>(null) }
+    val copied = stringResource(R.string.copied)
+    fun copyText(text: String) {
+        copy(context, text)
+        scope.launch { snackbar.showSnackbar(copied) }
+    }
+    val onUser: (UserMenu, Int, String) -> Unit = { action, i, text ->
+        when (action) {
+            UserMenu.Copy -> copyText(text)
+            UserMenu.Select -> selecting = text
+            else -> on.userAction(action, i, text)
+        }
+    }
     ShedScaffold(
         title = data.title,
         subtitle = data.subtitle,
@@ -437,7 +439,8 @@ fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: Strin
                             data.pictures,
                             on.loadPicture,
                             data.canChange,
-                            onUserLongPress = on.userLongPress,
+                            onUser = onUser,
+                            onOpenRun = { openRun = it },
                             onAnswer = { request, allow, always -> runner.run { on.send(Call.AiAnswer(AiAnswer(data.tab, request, allow, always))) } },
                             onAnswers = { request, answers -> runner.run { on.send(Call.AiAnswerQuestions(AiAnswerQuestions(data.tab, request, answers))) } },
                             onPicture = on.picture,
@@ -446,7 +449,7 @@ fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: Strin
                         }
                     }
                 }
-                Timers(data.status, now, folded = typing, onOpen = on.timer)
+                BackgroundStrip(data.entries, data.status, now, folded = typing, onTimer = on.timer, onRun = { openRun = it })
                 if (data.canChange) {
                     Prompt(data, on, promptMax, mergeIn, onMerged) { typing = it }
                 } else {
@@ -454,6 +457,31 @@ fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: Strin
                 }
             }
         }
+    }
+    openRun?.let { id ->
+        val tool = data.entries.orEmpty().firstNotNullOfOrNull { (it as? AiEntry.Tool)?.content?.takeIf { t -> t.id == id && t.run != null } }
+        if (tool == null) {
+            openRun = null
+        } else {
+            RunSheet(tool, data.status?.let { it.state != AiActivity.Idle } == true, now()) { openRun = null }
+        }
+    }
+    selecting?.let { text ->
+        AlertDialog(
+            onDismissRequest = { selecting = null },
+            title = { Text(stringResource(R.string.ai_message_select_title)) },
+            text = {
+                SelectionContainer(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(text, style = MaterialTheme.typography.bodyMedium)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selecting = null; copyText(text) }) {
+                    Icon(Icons.Default.ContentCopy, null); HSpace(8); Text(stringResource(R.string.ai_copy_all))
+                }
+            },
+            dismissButton = { TextButton(onClick = { selecting = null }) { Text(stringResource(R.string.close)) } },
+        )
     }
 }
 
@@ -538,7 +566,8 @@ private fun Transcript(
     pictures: Map<String, ImageBitmap?>,
     loadPicture: (String) -> Unit,
     canChange: Boolean,
-    onUserLongPress: (Int, String) -> Unit,
+    onUser: (UserMenu, Int, String) -> Unit,
+    onOpenRun: (String) -> Unit,
     onAnswer: (String, Boolean, Boolean) -> Unit,
     onAnswers: (String, List<String>) -> Unit,
     onPicture: (ImageBitmap) -> Unit,
@@ -571,19 +600,21 @@ private fun Transcript(
     val previous by remember(entries) { derivedStateOf { previousPrompt(entries, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset > 0) } }
     val next by remember(entries) { derivedStateOf { nextPrompt(entries, list.firstVisibleItemIndex) } }
     val hasPrompts = remember(entries) { promptIndices(entries).isNotEmpty() }
+    val showNav = navigation && hasPrompts && (list.canScrollBackward || list.canScrollForward)
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = list,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 4.dp),
+            // Room at the end for ▲ ▼, so the latest text is never under them.
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = if (navigation && hasPrompts) NAV_ROOM else 4.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             itemsIndexed(entries) { index, entry ->
                 when (entry) {
-                    is AiEntry.User -> UserEntry(entry.content, pictures, loadPicture, { onUserLongPress(index, entry.content.text) }, onPicture)
+                    is AiEntry.User -> UserEntry(entry.content, pictures, loadPicture, canChange, { onUser(it, index, entry.content.text) }, onPicture)
                     is AiEntry.Assistant -> MarkdownView(entry.content.text)
                     is AiEntry.Thinking -> ThinkingEntry(entry.content.text)
-                    is AiEntry.Tool -> ToolEntry(entry.content, status, now, pictures, loadPicture, onPicture)
+                    is AiEntry.Tool -> ToolEntry(entry.content, status, now, pictures, loadPicture, onPicture, onOpenRun)
                     is AiEntry.Permission -> PermissionEntry(
                         entry.content,
                         canChange,
@@ -598,24 +629,27 @@ private fun Transcript(
             }
             item(key = "end") { Spacer(Modifier.height(1.dp)) }
         }
-        Column(
-            Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        ListScrollbar(list, Modifier.align(Alignment.TopEnd)) { follow.dragged() }
+        // ▲ ▼ and ↓ side by side in the bottom corner: small, see-through, out of the text where they can be.
+        Row(
+            Modifier.align(Alignment.BottomEnd).padding(end = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (navigation && hasPrompts && (list.canScrollBackward || list.canScrollForward)) {
+            if (showNav) {
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = shed.surface.copy(alpha = 0.94f),
-                    border = BorderStroke(1.dp, shed.divider),
+                    shape = RoundedCornerShape(16.dp),
+                    color = shed.surface.copy(alpha = 0.72f),
+                    border = BorderStroke(1.dp, shed.divider.copy(alpha = 0.6f)),
                 ) {
-                    Column {
+                    Row {
                         IconButton(
-                            modifier = Modifier.size(width = 40.dp, height = 44.dp),
+                            modifier = Modifier.size(width = 40.dp, height = 32.dp),
                             enabled = previous != null,
                             onClick = { previous?.let { follow.away(); scope.launch { list.animateScrollToItem(it) } } },
-                        ) { Icon(Icons.Default.KeyboardArrowUp, stringResource(R.string.ai_previous_prompt)) }
+                        ) { Icon(Icons.Default.KeyboardArrowUp, stringResource(R.string.ai_previous_prompt), Modifier.size(20.dp)) }
                         IconButton(
-                            modifier = Modifier.size(width = 40.dp, height = 44.dp),
+                            modifier = Modifier.size(width = 40.dp, height = 32.dp),
                             enabled = next != null || moreBelow,
                             onClick = {
                                 val to = next
@@ -627,12 +661,11 @@ private fun Transcript(
                                     scope.launch { list.animateScrollToItem(toEnd()) }
                                 }
                             },
-                        ) { Icon(Icons.Default.KeyboardArrowDown, stringResource(R.string.ai_next_prompt)) }
+                        ) { Icon(Icons.Default.KeyboardArrowDown, stringResource(R.string.ai_next_prompt), Modifier.size(20.dp)) }
                     }
                 }
             }
             if (follow.showJump(moreBelow)) {
-                VSpace(8)
                 SmallFloatingActionButton(
                     onClick = { follow.toLatest(); scope.launch { list.animateScrollToItem(toEnd()) } },
                     containerColor = shed.accent,
@@ -642,6 +675,9 @@ private fun Transcript(
         }
     }
 }
+
+/** The room kept below the last entry for ▲ ▼. */
+private val NAV_ROOM = 44.dp
 
 /** The whole conversation as text, to copy. */
 fun conversationText(entries: List<AiEntry>): String = entries.mapNotNull {
@@ -654,46 +690,79 @@ fun conversationText(entries: List<AiEntry>): String = entries.mapNotNull {
 }.joinToString("\n\n")
 
 /**
- * What Claude set to happen later: wake-ups, scheduled jobs, watches; tap
- * one for what it tells Claude. [folded] (while typing): one line, the
- * first and how many more; tap it to see them all.
+ * What goes on in the background, above the prompt: sub-agents and commands
+ * running (first), then what Claude set to happen later (wake-ups, scheduled
+ * jobs, watches). One thing shows as itself; several as a line saying how
+ * many of each, which opens to the list. A run opens its sheet; a timer what
+ * it tells Claude. [folded] (while typing): back to one line.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Timers(status: AiStatus?, now: () -> Long, folded: Boolean, onOpen: (AiTimer) -> Unit) {
+private fun BackgroundStrip(
+    entries: List<AiEntry>?,
+    status: AiStatus?,
+    now: () -> Long,
+    folded: Boolean,
+    onTimer: (AiTimer) -> Unit,
+    onRun: (String) -> Unit,
+) {
     val timers = status?.timers.orEmpty()
+    val runs = remember(entries) { runningTools(entries.orEmpty()) }
     var unfolded by remember { mutableStateOf(false) }
-    LaunchedEffect(folded) { if (!folded) unfolded = false }
-    if (timers.isEmpty()) return
+    LaunchedEffect(folded) { if (folded) unfolded = false }
+    val count = timers.size + runs.size
+    if (count == 0) return
     val shed = LocalShed.current
     val ink = shed.ink(shed.accent)
+    val agents = runs.count { it.isAgent }
+    val summary = backgroundSummary(agents, runs.size - agents, timers.size)
+    @Composable
+    fun SummaryLine(open: Boolean) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 36.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClickLabel = stringResource(if (open) R.string.ai_strip_hide else R.string.ai_timers_show)) { unfolded = !open }
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (agents > 0) {
+                Icon(painterResource(R.drawable.ic_agent), null, tint = ink, modifier = Modifier.size(16.dp))
+            } else {
+                Icon(if (runs.isNotEmpty()) Icons.Default.Terminal else Icons.Default.Schedule, null, tint = ink, modifier = Modifier.size(14.dp))
+            }
+            HSpace(8)
+            Text(summary, color = ink, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = shed.textDim, modifier = Modifier.size(18.dp))
+        }
+    }
     Column(
         Modifier.fillMaxWidth().background(shed.surface).padding(horizontal = 12.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        if (folded && !unfolded) {
-            val first = timers.first()
+        if (count > 1) {
+            SummaryLine(unfolded)
+            if (!unfolded) return@Column
+        }
+        for (tool in runs) {
+            val run = tool.run ?: continue
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 32.dp)
+                    .heightIn(min = 36.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClickLabel = stringResource(R.string.ai_timers_show)) { unfolded = true }
-                    .padding(horizontal = 8.dp),
+                    .border(1.dp, shed.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .clickable(onClickLabel = stringResource(R.string.ai_run_open)) { onRun(tool.id) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(if (first.kind == AiTimerKind.Watch) Icons.Default.Visibility else Icons.Default.Schedule, null, tint = ink, modifier = Modifier.size(14.dp))
+                ToolIcon(tool, ink, 14.dp)
                 HSpace(6)
-                Text(timerLabel(first, now()), color = ink, fontSize = 12.sp, maxLines = 1)
+                Text(runTime(run, now()), color = ink, fontSize = 12.sp, maxLines = 1)
                 HSpace(8)
-                Text(first.what, color = shed.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (timers.size > 1) {
-                    HSpace(6)
-                    Text(pluralStringResource(R.plurals.ai_timers_more, timers.size - 1, timers.size - 1), color = shed.textDim, fontSize = 12.sp)
-                }
-                Icon(Icons.Default.ExpandMore, null, tint = shed.textDim, modifier = Modifier.size(16.dp))
+                Text(runTitle(tool), color = shed.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             }
-            return@Column
         }
         for (t in timers) {
             Row(
@@ -702,7 +771,7 @@ private fun Timers(status: AiStatus?, now: () -> Long, folded: Boolean, onOpen: 
                     .heightIn(min = 36.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .border(1.dp, shed.accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .combinedClickable(onClick = { onOpen(t) }, onLongClick = { onOpen(t) })
+                    .combinedClickable(onClick = { onTimer(t) }, onLongClick = { onTimer(t) })
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

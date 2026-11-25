@@ -76,6 +76,63 @@ fun runLine(tool: AiTool, run: AiRun, now: Long): String {
     return parts.joinToString(" · ")
 }
 
+/** A run's own words, without the tool's name: an agent's task (`Agent: find x` → `find x`), a command as it is. */
+fun runTitle(tool: AiTool): String {
+    val summary = tool.summary
+    for (prefix in listOf("Agent:", "Task:")) {
+        if (summary.startsWith(prefix)) return summary.removePrefix(prefix).trim().ifEmpty { summary }
+    }
+    return summary
+}
+
+/** A run's state in a word: `running`, `done`, `failed`, `stopped`. */
+fun runState(run: AiRun): String = when (run.stateOrRunning) {
+    AiRunState.Running -> "running"
+    AiRunState.Done -> "done"
+    AiRunState.Failed -> "failed"
+    AiRunState.Stopped -> "stopped"
+}
+
+/**
+ * What follows a run's state on its status line: for how long, how many tool
+ * calls, the kind of agent (`1 min · 6 tool calls · Explore`).
+ */
+fun runStatus(tool: AiTool, run: AiRun, now: Long): String {
+    val parts = mutableListOf<String>()
+    val started = run.started?.toLong() ?: 0
+    val ended = run.ended?.toLong() ?: 0
+    if (started > 0) {
+        if (run.running) {
+            parts += coarse(now - started, false)
+        } else if (ended >= started) {
+            parts += shortSpan(ended - started)
+        }
+    }
+    val tools = run.tools?.toLong() ?: 0
+    if (tool.isAgent && tools > 0) parts += "$tools tool call" + if (tools == 1L) "" else "s"
+    run.agent?.takeIf { it.isNotEmpty() && it != "general-purpose" }?.let { parts += it }
+    return parts.joinToString(" · ")
+}
+
+/** What a run does now (`Read LogbookScreen.kt`); null once it ended, or while it starts. */
+fun runStep(run: AiRun): String? = run.last?.takeIf { run.running && it.isNotBlank() && it != "Starting" }
+
+/** Tools whose run goes on: sub-agents first, then commands in the background, each in the conversation's order. */
+fun runningTools(entries: List<AiEntry>): List<AiTool> {
+    val tools = entries.mapNotNull { (it as? AiEntry.Tool)?.content?.takeIf { t -> t.run?.running == true } }
+    return tools.filter { it.isAgent } + tools.filterNot { it.isAgent }
+}
+
+/**
+ * The strip's line for several things going on in the background:
+ * `2 agents running · 1 background command · 2 timers`.
+ */
+fun backgroundSummary(agents: Int, commands: Int, timers: Int): String = listOfNotNull(
+    agents.takeIf { it > 0 }?.let { "$it agent" + (if (it == 1) "" else "s") + " running" },
+    commands.takeIf { it > 0 }?.let { "$it background command" + if (it == 1) "" else "s" },
+    timers.takeIf { it > 0 }?.let { "$it timer" + if (it == 1) "" else "s" },
+).joinToString(" · ")
+
 /** Tokens, short: `12k`, `1.5M`, `2M`. */
 fun tokensShort(n: Double): String {
     val t = n.toLong()

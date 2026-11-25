@@ -1488,8 +1488,10 @@ Settings.
   (**Allow**, **Allow for This Session**, **Deny**), Claude's questions, and the
   prompt. The conversation opens at its latest entry and follows Claude's
   output while you are at the end; scroll up and it stays where you are, with
-  **↓** to jump back to the latest. **▲ ▼** at its side jump to your previous
-  or next message. Under the title, what Claude is doing, the cost, the context
+  **↓** to jump back to the latest; **▲ ▼**, small and see-through beside it
+  in the bottom corner, jump to your previous or next message. While you
+  scroll, a thin scrollbar shows at the right edge for a second; drag it to
+  move through a long conversation quickly. Under the title, what Claude is doing, the cost, the context
   and your usage limits as two thin bars (5 hours, the week): tap them for the
   percentages and when each resets. The prompt shows a few lines; while you
   type it grows, up to about half of the room above the keyboard, and the
@@ -1502,15 +1504,21 @@ Settings.
   its effort, the mode (**Full Auto…** asks first, and turns the sliders red),
   **Follow edits** (files Claude edits open in their project tab on the
   computer), **Use the browser** (Claude in Chrome) and the folders Claude works
-  in besides the tab's (**Add a Folder…**, × to drop one). A sub-agent or a task in
-  the background says how it does under its line (`running 3 min · 4 tool
-  calls`, `done in 40 s`); tap it for its kind, steps and report. Claude
-  Code's own notes are rows of their own (tap for the detail), and wake-ups,
-  scheduled jobs and watches wait above the prompt, counting down (tap one for
-  what it will tell Claude). While Claude works, messages queue. Drafts,
-  sessions, and **Review** with Viewed and **Explain** are there too.
-  A long press on one of your messages offers Edit, Send Again and Revert…; on
-  a session in the sessions list, Rename… and Delete Session… (asks first).
+  in besides the tab's (**Add a Folder…**, × to drop one). A sub-agent or a
+  command in the background is a card: what it was asked to do (two lines),
+  its state (running, done, failed) with for how long and how many tool calls,
+  and what it does now; tap it for a sheet with what it was asked, its steps
+  (tap one for its change and output) and its report. Claude Code's own notes
+  are rows of their own (tap for the detail). Above the prompt wait what runs
+  in the background (agents first) and Claude's wake-ups, scheduled jobs and
+  watches, counting down; several fold to one line (`2 agents running · 1
+  background command · 2 timers`) that opens to the list. Tap an agent for its
+  sheet, a timer for what it will tell Claude. While Claude works, messages
+  queue. Drafts, sessions, and **Review** with Viewed and **Explain** are there
+  too. Your messages have **Copy** beside their time; a long press offers
+  Copy, **Select Text…** (to copy a part), Edit and Resend…, Send Again and
+  Revert…; on a session in the sessions list, Rename… and Delete Session…
+  (asks first).
 - **Terminals** show the active pane's screen, its lines re-wrapped to the
   phone; scrolling up fetches earlier lines. Type in the field (Enter sends) and
   use the key bar for Esc, Tab, Ctrl, Alt and the arrows. For a full-screen
