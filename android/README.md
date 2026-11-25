@@ -22,6 +22,8 @@ emulator images).
 cd android
 ./gradlew assembleDebug                      # app/build/outputs/apk/debug/app-debug.apk
 ./gradlew testDebugUnitTest lintDebug        # JVM tests and lint
+./gradlew testDebugUnitTest --tests 'dev.shed.screens.*' -Pshed.screenshots=/tmp/shed-android
+                                             # screens drawn as PNGs (default: app/build/screenshots)
 ```
 
 The Gradle wrapper downloads Gradle itself. Versions are pinned in
@@ -109,4 +111,8 @@ in one of two ways, never through Google:
 Tests (`app/src/test`) run on the JVM: JSON round-trips (and what a newer
 workspace may send), the socket against a fake nexus (MockWebServer), sub-agent
 and timer wording, terminal re-wrapping, the Markdown reader, text
-ranges from the API (UTF-16 positions, used as Kotlin strings index them).
+ranges from the API (UTF-16 positions, used as Kotlin strings index them),
+the AI tab's following and jumps (`ui/ai/Follow.kt`) and its settings sheet.
+`screens/` draws screens with Robolectric and Roborazzi at a phone's size,
+dark and light (the AI tab: opened, scrolled up, typing, limits, settings), as
+pictures to look at; nothing is compared, so they never fail on a pixel.

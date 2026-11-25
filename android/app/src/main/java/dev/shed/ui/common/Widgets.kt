@@ -39,6 +39,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -113,6 +116,8 @@ fun TextDialog(
     confirm: String,
     label: String = "",
     allowEmpty: Boolean = false,
+    /** A message rather than a name: several lines. */
+    multiLine: Boolean = false,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -125,7 +130,9 @@ fun TextDialog(
                 value = value,
                 onValueChange = { value = it },
                 label = if (label.isNotEmpty()) ({ Text(label) }) else null,
-                singleLine = true,
+                singleLine = !multiLine,
+                maxLines = if (multiLine) 10 else 1,
+                keyboardOptions = if (multiLine) KeyboardOptions(capitalization = KeyboardCapitalization.Sentences) else KeyboardOptions.Default,
                 modifier = Modifier.fillMaxWidth(),
             )
         },
@@ -239,10 +246,24 @@ fun Dot(color: Color, size: Int = 8) {
     Box(Modifier.size(size.dp).clip(CircleShape).background(color))
 }
 
-/** The account's usage limits, as two small bars (green, amber from 70 %, red from 90 %). */
+/** Whether there are usage limits to show. */
+fun hasLimits(limits: Limits?): Boolean = limits != null && (limits.fiveHour != null || limits.week != null)
+
+/** A limit's colour: green, amber from 70 %, red from 90 %. */
+@Composable
+private fun limitColor(used: Float): Color {
+    val shed = LocalShed.current
+    return when {
+        used >= 0.9f -> shed.danger
+        used >= 0.7f -> shed.warn
+        else -> shed.good
+    }
+}
+
+/** The account's usage limits in detail: each with its percentage, when it resets and how long that is. */
 @Composable
 fun LimitBars(limits: Limits?, modifier: Modifier = Modifier) {
-    if (limits == null || (limits.fiveHour == null && limits.week == null)) return
+    if (limits == null || !hasLimits(limits)) return
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         limits.fiveHour?.let { LimitBar(stringResource(R.string.limit_five_hour), it, Modifier.weight(1f)) }
         limits.week?.let { LimitBar(stringResource(R.string.limit_week), it, Modifier.weight(1f)) }
@@ -253,11 +274,6 @@ fun LimitBars(limits: Limits?, modifier: Modifier = Modifier) {
 private fun LimitBar(name: String, window: LimitWindow, modifier: Modifier) {
     val shed = LocalShed.current
     val used = window.used.coerceIn(0f, 1f)
-    val color = when {
-        used >= 0.9f -> shed.danger
-        used >= 0.7f -> shed.warn
-        else -> shed.good
-    }
     val left = window.resets.toLong() - nowSeconds()
     Column(modifier) {
         Row(Modifier.fillMaxWidth()) {
@@ -265,10 +281,43 @@ private fun LimitBar(name: String, window: LimitWindow, modifier: Modifier) {
             Text("${(used * 100).toInt()} %", fontSize = 11.sp, color = shed.text)
         }
         Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(shed.divider)) {
-            Box(Modifier.fillMaxWidth(used).height(4.dp).background(color))
+            Box(Modifier.fillMaxWidth(used).height(4.dp).background(limitColor(used)))
         }
         if (left > 0) {
-            Text(stringResource(R.string.limit_left, span(left)), fontSize = 10.sp, color = shed.textDim)
+            Text(stringResource(R.string.limit_resets, clock(window.resets.toLong()), span(left)), fontSize = 10.sp, color = shed.textDim)
+        }
+    }
+}
+
+/**
+ * The usage limits at a glance: two thin bars, the 5-hour one and the
+ * week's ([labelled] with a short name each), for a header.
+ */
+@Composable
+fun LimitStrip(limits: Limits?, modifier: Modifier = Modifier, labelled: Boolean = true) {
+    if (limits == null || !hasLimits(limits)) return
+    val shed = LocalShed.current
+    val desc = listOfNotNull(
+        limits.fiveHour?.let { stringResource(R.string.limit_five_hour) + " " + (it.used.coerceIn(0f, 1f) * 100).toInt() + " %" },
+        limits.week?.let { stringResource(R.string.limit_week) + " " + (it.used.coerceIn(0f, 1f) * 100).toInt() + " %" },
+    ).joinToString(", ")
+    Row(
+        modifier.semantics(mergeDescendants = true) { contentDescription = desc },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (labelled) 12.dp else 4.dp),
+    ) {
+        for ((label, window) in listOf(R.string.limit_five_hour_short to limits.fiveHour, R.string.limit_week_short to limits.week)) {
+            if (window == null) continue
+            val used = window.used.coerceIn(0f, 1f)
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                if (labelled) {
+                    Text(stringResource(label), fontSize = 10.sp, color = shed.textDim, maxLines = 1)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Box(Modifier.weight(1f).height(3.dp).clip(RoundedCornerShape(2.dp)).background(shed.divider)) {
+                    Box(Modifier.fillMaxWidth(used).height(3.dp).background(limitColor(used)))
+                }
+            }
         }
     }
 }

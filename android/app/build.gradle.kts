@@ -39,6 +39,17 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Screenshot tests (Robolectric + Roborazzi) draw with the app's resources.
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Where the screenshot tests write their pictures:
+            // ./gradlew testDebugUnitTest -Pshed.screenshots=/tmp/shed-android
+            it.systemProperty(
+                "shed.screenshots",
+                (project.findProperty("shed.screenshots") as String?) ?: layout.buildDirectory.dir("screenshots").get().asFile.path,
+            )
+            it.systemProperty("roborazzi.test.record", "true")
+        }
     }
 
     lint {
@@ -90,4 +101,10 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

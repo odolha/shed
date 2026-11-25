@@ -71,7 +71,11 @@
     </plurals>
     <string name="limit_five_hour">5-hour limit</string>
     <string name="limit_week">Weekly limit</string>
-    <string name="limit_left">%1$s left</string>
+    <string name="limit_resets">Resets %1$s · %2$s left</string>
+    <string name="limit_five_hour_short">5 h</string>
+    <string name="limit_week_short">Week</string>
+    <string name="limits_show">Show the usage limits</string>
+    <string name="limits_hide">Hide the usage limits</string>
     <plurals name="ai_waiting_count">
         <item quantity="one">%1$d waiting</item>
         <item quantity="other">%1$d waiting</item>
@@ -240,7 +244,6 @@
     <string name="ai_edit_queued">Edit the Queued Message</string>
     <string name="ai_send_now">Send Now</string>
     <string name="ai_stop">Stop</string>
-    <string name="ai_attach">Attach</string>
     <string name="ai_attach_picture">Picture…</string>
     <string name="ai_attach_photo">Take a Photo…</string>
     <string name="ai_picture_failed">That picture could not be read.</string>
@@ -260,8 +263,6 @@
     </plurals>
     <string name="ai_timer_note">Claude Code does it while it keeps running for this tab. Closing the tab or its bench, changing the tab’s folders or effort, or stopping Shed’s keeper cancels it.</string>
     <string name="ai_default_model">Default model</string>
-    <string name="ai_effort">%1$s effort</string>
-    <string name="ai_effort_default">Default effort</string>
     <plurals name="ai_delete_session_later">
         <item quantity="one">, and %1$d later session that continues it</item>
         <item quantity="other">, and %1$d later sessions that continue it</item>
@@ -280,6 +281,31 @@
     <string name="mode_plan">Read Only (Plan)</string>
     <string name="mode_full_auto">Full Auto</string>
     <string name="mode_full_auto_title">Let Claude do everything without asking?</string>
+    <string name="ai_settings">Model, mode and effort</string>
+    <string name="ai_model">Model</string>
+    <string name="ai_effort_title">Effort</string>
+    <string name="ai_effort_model">The model\'s own</string>
+    <string name="ai_mode_title">Mode</string>
+    <string name="ai_while_it_works">While it works</string>
+    <string name="ai_follow">Follow edits</string>
+    <string name="ai_follow_detail">Files Claude edits open in their project tab, on the workspace</string>
+    <string name="ai_browser">Use the browser</string>
+    <string name="ai_browser_detail">Claude in Chrome, on the workspace\'s browser</string>
+    <string name="ai_folders">Folders</string>
+    <string name="ai_folder_main">this tab\'s</string>
+    <string name="ai_folder_add">Add a Folder…</string>
+    <string name="ai_folder_add_title">A folder for Claude to work in too</string>
+    <string name="ai_folder_remove">Stop working in %1$s</string>
+    <string name="ai_folders_note">Claude may read and change these folders too, from the next prompt.</string>
+    <string name="ai_prompt_more">Attach, or keep as a draft</string>
+    <string name="ai_previous_prompt">Your previous message</string>
+    <string name="ai_next_prompt">Your next message</string>
+    <string name="ai_to_latest">Jump to the latest</string>
+    <string name="ai_timers_show">Show everything waiting</string>
+    <plurals name="ai_timers_more">
+        <item quantity="one">+%1$d more</item>
+        <item quantity="other">+%1$d more</item>
+    </plurals>
     <string name="mode_full_auto_text">In Full Auto, Claude changes files and runs commands on the workspace without asking first.</string>
 
     <!-- Review -->

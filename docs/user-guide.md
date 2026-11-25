@@ -1486,16 +1486,29 @@ Settings.
 - **AI tabs** work as on the computer: the conversation with its steps
   (tap one for the command, the change and what came back), permission cards
   (**Allow**, **Allow for This Session**, **Deny**), Claude's questions, and the
-  prompt. The paperclip attaches a **File…** (the system's file picker: any
+  prompt. The conversation opens at its latest entry and follows Claude's
+  output while you are at the end; scroll up and it stays where you are, with
+  **↓** to jump back to the latest. **▲ ▼** at its side jump to your previous
+  or next message. Under the title, what Claude is doing, the cost, the context
+  and your usage limits as two thin bars (5 hours, the week): tap them for the
+  percentages and when each resets. The prompt shows a few lines; while you
+  type it grows, up to about half of the room above the keyboard, and the
+  status and what waits in the background fold to a line each (tap the line to
+  see all); putting the keyboard away folds the prompt again. **+** beside it
+  attaches a **File…** (the system's file picker: any
   file up to 16 MB, copied to the workspace, its path sent with the message for
-  Claude to read), a **Picture…** or **Take a Photo…**. A sub-agent or a task in
+  Claude to read), a **Picture…** or **Take a Photo…**, or keeps what you wrote
+  as a draft. The sliders beside **Send** open the tab's settings: the model,
+  its effort, the mode (**Full Auto…** asks first, and turns the sliders red),
+  **Follow edits** (files Claude edits open in their project tab on the
+  computer), **Use the browser** (Claude in Chrome) and the folders Claude works
+  in besides the tab's (**Add a Folder…**, × to drop one). A sub-agent or a task in
   the background says how it does under its line (`running 3 min · 4 tool
   calls`, `done in 40 s`); tap it for its kind, steps and report. Claude
   Code's own notes are rows of their own (tap for the detail), and wake-ups,
   scheduled jobs and watches wait above the prompt, counting down (tap one for
   what it will tell Claude). While Claude works, messages queue. Drafts,
-  sessions, the model, effort and mode (**Full
-  Auto…** asks first), and **Review** with Viewed and **Explain** are there too.
+  sessions, and **Review** with Viewed and **Explain** are there too.
   A long press on one of your messages offers Edit, Send Again and Revert…; on
   a session in the sessions list, Rename… and Delete Session… (asks first).
 - **Terminals** show the active pane's screen, its lines re-wrapped to the
