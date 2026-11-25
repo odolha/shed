@@ -28,6 +28,10 @@ mod links;
 mod logbook;
 #[cfg(feature = "gui")]
 mod logbook_view;
+#[cfg(feature = "gui")]
+mod md_draw;
+#[cfg(feature = "gui")]
+mod md_view;
 #[cfg(all(feature = "gui", target_os = "macos"))]
 mod macos;
 #[cfg(feature = "gui")]

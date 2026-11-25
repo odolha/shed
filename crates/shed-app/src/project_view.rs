@@ -30,6 +30,7 @@ mod remote;
 use remote::Remote;
 use shed_client::nexus_api::RemoteWorkspace;
 use crate::line_editor::LineEditor;
+use crate::md_view::{MarkdownView, MdEvent};
 use crate::menu::{self, Menu, MenuEntry, MenuHost};
 use crate::settings::Settings;
 use crate::text_view::{LineSpans, TextEvent, TextOptions, TextView};
@@ -94,9 +95,19 @@ enum Disk {
     Deleted,
 }
 
+/// A Markdown file drawn as a document, and whether that shows (View) or
+/// its editor does (Edit): one at a time.
+struct MdMode {
+    view: Entity<MarkdownView>,
+    viewing: bool,
+    _sub: Subscription,
+}
+
 struct OpenFile {
     path: PathBuf,
     content: Content,
+    /// A Markdown file's View (with the editor's text).
+    md: Option<MdMode>,
     lang: Option<&'static Lang>,
     disk: Disk,
     /// Unsaved edits were brought back from a recovery file.
@@ -112,6 +123,11 @@ impl OpenFile {
             Content::Text(v) => Some(v),
             _ => None,
         }
+    }
+
+    /// The Markdown View, while it shows instead of the editor.
+    fn viewing(&self) -> Option<&Entity<MarkdownView>> {
+        self.md.as_ref().filter(|m| m.viewing).map(|m| &m.view)
     }
 
     fn name(&self) -> String {
@@ -305,7 +321,11 @@ impl ProjectView {
 
     /// Where the keyboard goes when the tab is shown: the open file, else the tree.
     pub fn focus_target(&self, cx: &gpui::App) -> FocusHandle {
-        match self.active.and_then(|i| self.open.get(i)).and_then(OpenFile::view) {
+        let file = self.active.and_then(|i| self.open.get(i));
+        if let Some(md) = file.and_then(OpenFile::viewing) {
+            return md.read(cx).focus_handle().clone();
+        }
+        match file.and_then(OpenFile::view) {
             Some(view) => view.read(cx).focus_handle().clone(),
             None => self.tree_focus.clone(),
         }
@@ -338,6 +358,9 @@ impl ProjectView {
                     v.apply(&settings, cx);
                     v.set_wrap(wrap, cx);
                 });
+            }
+            if let Some(md) = self.open[i].md.as_ref().map(|m| m.view.clone()) {
+                md.update(cx, |m, cx| m.apply(&settings, cx));
             }
             self.rehighlight(i, cx);
         }
@@ -495,6 +518,10 @@ impl ProjectView {
         for i in 0..self.open.len() {
             if batch.contains(&self.open[i].path) {
                 self.follow_disk(i, cx);
+            }
+            // A picture a Markdown file shows.
+            if let Some(md) = self.open[i].md.as_ref().map(|m| m.view.clone()) {
+                md.update(cx, |m, cx| batch.iter().for_each(|p| m.file_changed(p, cx)));
             }
         }
         cx.notify();
@@ -693,6 +720,12 @@ impl ProjectView {
             "p" if sec && !ks.modifiers.shift => self.open_quick(window, cx),
             "f" if sec && ks.modifiers.shift => self.open_search(window, cx),
             "a" if sec && ks.modifiers.shift => self.send_to_ai(None, cx),
+            // A Markdown file: View or Edit.
+            "v" if sec && ks.modifiers.shift && self.active.and_then(|i| self.open.get(i)).is_some_and(|f| f.md.is_some()) => {
+                if let Some(i) = self.active {
+                    self.toggle_md(i, cx);
+                }
+            }
             "w" if sec && !ks.modifiers.shift => {
                 if let Some(i) = self.active {
                     self.close_file(i, window, cx);
@@ -754,6 +787,10 @@ impl ProjectView {
             }
         };
         self.active = Some(i);
+        // A place in it is shown in the editor.
+        if at.is_some() {
+            self.set_md_viewing(i, false, cx);
+        }
         if let (Some((line, col)), Some(view)) = (at, self.open[i].view().cloned()) {
             view.update(cx, |v, cx| v.go_to(line.saturating_sub(1), col.unwrap_or(1).saturating_sub(1), cx));
         } else if matches!(self.open[i].content, Content::Loading) {
@@ -773,7 +810,7 @@ impl ProjectView {
             return self.remote_load(path, cx);
         }
         let lang = shed_project::detect(&path);
-        let mut file = OpenFile { path: path.clone(), content: Content::Binary, lang, disk: Disk::Same, restored: false, highlight: None, recovery: None, _sub: None };
+        let mut file = OpenFile { path: path.clone(), content: Content::Binary, md: None, lang, disk: Disk::Same, restored: false, highlight: None, recovery: None, _sub: None };
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         if crate::picture::is_picture(&path) {
             file.content = Content::Picture(crate::picture::read(&path), crate::picture::Zoom::Fit);
@@ -833,7 +870,54 @@ impl ProjectView {
                 TextEvent::Submit | TextEvent::Cancel => {}
             }
         }));
+        // Markdown opens drawn (View); Ctrl+Shift+V or the status bar's
+        // toggle shows its editor (Edit).
+        if crate::md_view::is_markdown(&file.path) {
+            let (path, accent, settings, local) = (file.path.clone(), self.accent, self.settings.clone(), self.remote.is_none());
+            let editor = view.clone();
+            let md = cx.new(|cx| MarkdownView::new(path, editor, accent, settings, local, cx));
+            let sub = cx.subscribe(&md, |this, _, event: &MdEvent, cx| match event {
+                MdEvent::OpenFile(path, anchor) => this.open_md_link(path.clone(), anchor.clone(), cx),
+            });
+            file.md = Some(MdMode { view: md, viewing: true, _sub: sub });
+        }
         file.content = Content::Text(view);
+    }
+
+    /// Shows a Markdown file drawn (`true`) or in its editor.
+    fn set_md_viewing(&mut self, i: usize, viewing: bool, cx: &mut Context<Self>) {
+        if let Some(md) = self.open.get_mut(i).and_then(|f| f.md.as_mut())
+            && md.viewing != viewing
+        {
+            md.viewing = viewing;
+            self.focus_editor = true;
+            cx.notify();
+        }
+    }
+
+    fn toggle_md(&mut self, i: usize, cx: &mut Context<Self>) {
+        if let Some(viewing) = self.open.get(i).and_then(|f| f.md.as_ref()).map(|m| m.viewing) {
+            self.set_md_viewing(i, !viewing, cx);
+        }
+    }
+
+    /// A link in a Markdown file's View to a file of the project: opened
+    /// here (at the heading an anchor names), a folder shown in the tree.
+    fn open_md_link(&mut self, path: PathBuf, anchor: Option<String>, cx: &mut Context<Self>) {
+        if self.remote.is_none() && path.is_dir() {
+            self.panel = Panel::Files;
+            return self.reveal_folder(path, cx);
+        }
+        if self.remote.is_none() && !path.is_file() {
+            self.notice = Some(format!("No such file: {}", path.strip_prefix(&self.root).unwrap_or(&path).display()));
+            return cx.notify();
+        }
+        self.open_path(path.clone(), None, cx);
+        if let Some(anchor) = anchor
+            && let Some(md) = self.open.iter().find(|f| f.path == path).and_then(OpenFile::viewing).cloned()
+        {
+            md.update(cx, |m, cx| m.go_to_anchor(&anchor, cx));
+        }
     }
 
     /// Where a file's unsaved edits are kept aside: by its path, or for
@@ -1181,6 +1265,9 @@ impl ProjectView {
             let r = h.ranges.first().cloned().unwrap_or(0..0);
             self.remote_pending(&path, remote::Pending { at: Some((h.line, at(r.start))), select: Some((at(r.start), at(r.end))), focus: true });
             return;
+        }
+        if let Some(i) = self.open.iter().position(|f| f.path == path && f.view().is_some()) {
+            self.set_md_viewing(i, false, cx);
         }
         let Some(view) = self.open.iter().find(|f| f.path == path).and_then(OpenFile::view).cloned() else { return };
         view.update(cx, |v, cx| {
@@ -1958,12 +2045,21 @@ impl ProjectView {
     }
 
     fn render_status(&mut self, ui: &UiColors, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let file = self.open.get(self.active?)?;
+        let i = self.active?;
+        let file = self.open.get(i)?;
         let rel = file.path.strip_prefix(&self.root).unwrap_or(&file.path).display().to_string();
         let mut parts = vec![rel];
         let mut blame_text = None;
         let path = file.path.clone();
-        if let Some(view) = file.view() {
+        // A Markdown file drawn: no cursor, nothing to wrap.
+        let viewing = file.viewing().is_some();
+        let markdown = file.md.is_some();
+        if let Some(view) = file.view().filter(|_| viewing) {
+            parts.push("Markdown".into());
+            if view.read(cx).buffer.is_dirty() {
+                parts.push("modified".into());
+            }
+        } else if let Some(view) = file.view() {
             let b = &view.read(cx).buffer;
             let (line, col) = b.line_col(b.selection().head);
             if self.blame_on && !b.is_dirty() {
@@ -2006,8 +2102,9 @@ impl ProjectView {
                 .border_color(hsla(ui.divider))
                 .child(div().flex_1().min_w_0().truncate().child(parts.join("  ·  ")))
                 .when_some(blame_text, |d, t| d.child(div().flex_none().max_w(px(520.0)).truncate().text_color(hsla(ui.text)).child(t)))
+                .when(markdown, |d| d.child(self.render_md_switch(i, viewing, ui, cx)))
                 // A mode: long lines wrap at the edge, or run on.
-                .child({
+                .when(!viewing, |d| d.child({
                     let on = self.settings.config.editor.wrap;
                     div()
                         .id("wrap-toggle")
@@ -2021,8 +2118,8 @@ impl ProjectView {
                         .tooltip(menu::tooltip("Wrap long lines at the edge (Alt+Z)"))
                         .on_click(cx.listener(move |this, _, _, cx| this.set_wrap(!on, cx)))
                         .child("Wrap")
-                })
-                .when(self.git.is_some(), |d| {
+                }))
+                .when(self.git.is_some() && !viewing, |d| {
                     let on = self.blame_on;
                     d.child(
                         div()
@@ -2044,6 +2141,42 @@ impl ProjectView {
                     )
                 }),
         )
+    }
+
+    /// A Markdown file's View and Edit, side by side in the status bar:
+    /// the one showing is marked.
+    fn render_md_switch(&self, i: usize, viewing: bool, ui: &UiColors, cx: &mut Context<Self>) -> impl IntoElement {
+        let (view_tip, edit_tip) = if cfg!(target_os = "macos") {
+            ("Show the file drawn: headings, tables, pictures, diagrams (Cmd+Shift+V switches)", "Edit the file's text (Cmd+Shift+V switches)")
+        } else {
+            ("Show the file drawn: headings, tables, pictures, diagrams (Ctrl+Shift+V switches)", "Edit the file's text (Ctrl+Shift+V switches)")
+        };
+        let z = self.z();
+        let side = |id: &'static str, icon_name: &'static str, label: &'static str, on: bool, tip: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_1p5()
+                .cursor_pointer()
+                .text_color(hsla(if on { ui.text } else { ui.text_dim }))
+                .when(on, |d| d.bg(hsla_alpha(self.accent, 0.25)))
+                .hover(|s| s.bg(hsla(ui.tab_hover)).text_color(hsla(ui.text)))
+                .tooltip(menu::tooltip(tip))
+                .child(svg().path(icon(icon_name)).size(px(11.0 * z)).text_color(hsla(if on { ui.text } else { ui.text_dim })))
+                .child(label)
+        };
+        div()
+            .flex()
+            .flex_none()
+            .ml_2()
+            .rounded_sm()
+            .overflow_hidden()
+            .border_1()
+            .border_color(hsla(ui.divider))
+            .child(side("md-view", "eye", "View", viewing, view_tip).on_click(cx.listener(move |this, _, _, cx| this.set_md_viewing(i, true, cx))))
+            .child(side("md-edit", "pencil", "Edit", !viewing, edit_tip).on_click(cx.listener(move |this, _, _, cx| this.set_md_viewing(i, false, cx))))
     }
 
     /// Changes an open picture's zoom: `None` fits it, else a step in or out
@@ -2145,8 +2278,9 @@ impl ProjectView {
             return empty("Open a file from the tree, or by name with Ctrl+P".into());
         };
         match &file.content {
-            Content::Text(view) => match &self.merge_sides {
-                Some((path, ours, theirs)) if *path == file.path => self.render_three_ways(ours, view, theirs, ui),
+            Content::Text(view) => match (&self.merge_sides, file.viewing()) {
+                (Some((path, ours, theirs)), _) if *path == file.path => self.render_three_ways(ours, view, theirs, ui),
+                (_, Some(md)) => md.clone().into_any_element(),
                 _ => view.clone().into_any_element(),
             },
             Content::Diff(_) => self.render_diff(self.active.unwrap_or(0), ui, cx),

@@ -83,6 +83,12 @@ cargo clippy --workspace --all-targets
   against an in-process keeper with real bash and draws it on ratatui's
   `TestBackend`: no terminal is touched. Its unit tests cover the split layout,
   keys to bytes, Markdown to styled lines and text wrapping.
+- `shed-markdown`'s tests parse Markdown both ways (answers, files) and, with its
+  `render` feature (on in a workspace build, as `shed-app` asks for it), draw every
+  common Mermaid diagram, a dot graph and math, and check that broken ones say why.
+  Mermaid's measuring keeps a copy of a system font in `$XDG_CACHE_HOME/mmdr`.
+  `md_view.rs`'s GPUI test draws a document with a diagram, a broken diagram and
+  math, follows an anchor and an edit in the editor.
 - `crates/shed-ai/tests/streams/` holds recorded Claude Code streams the
   transcript tests replay (`agents.jsonl`: sub-agents and a background command;
   `timers.jsonl`: a wake-up, a scheduled job and a watch firing), and
@@ -193,7 +199,10 @@ SHED_NEXUS_WEB=1 cargo test -p shed-nexus --test account web   # the built-in ap
   `SHED_PERF_SESSION=<folder>:<session id> cargo test --release -p shed-app --bins
   perf_long -- --ignored --nocapture` loads that Claude Code session and prints
   the time per frame (a full redraw, a hover in one entry, a change to the
-  conversation) and how many entries each frame draws.
+  conversation) and how many entries each frame draws. A Markdown file's View,
+  the same way: `SHED_PERF_DOC=<file.md> cargo test -p shed-app --bins
+  perf_long_document -- --ignored --nocapture` (a full redraw, scrolling, a hover,
+  the file changed, and the rows each draws).
 
 ## Rules worth knowing
 
@@ -221,7 +230,8 @@ not reach GPUI there (Xvfb has no XInput pointer of its own), so the two menu
 screenshots (`colours.png`, `tab-menu.png`) are not retaken. Needs Xvfb (`XVFB=`
 its path when not installed: `apt-get download xvfb` and `dpkg-deb -x` give one
 without root), `xrdb`, `xwininfo`, `xwd`, `ffmpeg` and Python's PIL. Run it from the
-repository root after `cargo build`.
+repository root after `cargo build` (`SHED_BIN=` a `shed` built elsewhere, with its
+`shedd` beside it).
 
 `cargo run -p shed-desktop --example icon_preview -- sheet.png [template.svg]` draws a
 sheet of the bench icon in every colour, at launcher and Dock sizes, on dark and

@@ -13,7 +13,7 @@ path = "src/main.rs"
 default = ["gui", "tui"]
 # The windows (GPUI). Without it, `shed` is the CLI and the terminal
 # interface: a server build, with no display libraries.
-gui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:raw-window-handle", "dep:x11rb"]
+gui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:raw-window-handle", "dep:x11rb", "shed-markdown/render"]
 # `shed tui`, Shed in a terminal (ratatui).
 tui = ["dep:shed-tui"]
 
@@ -27,6 +27,7 @@ shed-save.workspace = true
 shed-text.workspace = true
 shed-project.workspace = true
 shed-ai.workspace = true
+shed-markdown.workspace = true
 shed-git.workspace = true
 shed-review.workspace = true
 shed-client.workspace = true

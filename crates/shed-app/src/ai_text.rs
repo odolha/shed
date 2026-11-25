@@ -5,7 +5,7 @@
 use std::ops::Range;
 
 use gpui::{ClipboardItem, FontStyle, FontWeight, HighlightStyle, StrikethroughStyle, UnderlineStyle, px};
-use shed_ai::markdown::{Align, Block, Text};
+use shed_markdown::{Align, Block, DiagramKind, Text};
 use shed_model::Rgb;
 
 use crate::theme::{hsla, hsla_alpha};
@@ -16,7 +16,7 @@ const HTML_PREFIX: &str = "shed-html:";
 /// `text` for programs that take text, and `markdown` rendered as HTML for
 /// those that keep formatting (mail, documents, chat; Linux only for now).
 pub fn formatted_item(text: String, markdown: &str) -> ClipboardItem {
-    let html = shed_ai::markdown::to_html(markdown);
+    let html = shed_markdown::to_html(markdown);
     ClipboardItem::new_string_with_metadata(text, format!("{HTML_PREFIX}{html}"))
 }
 
@@ -70,6 +70,14 @@ pub enum Kind {
     Code { lang: String, depth: usize },
     Cell { row: usize, col: usize, cols: usize, align: Align },
     Rule,
+    /// A file's picture (`url` as written); the text is its words.
+    Image { url: String, link: Option<String> },
+    /// A diagram; the text is its source.
+    Diagram(DiagramKind),
+    /// Math on a line of its own; the text is its TeX.
+    Math,
+    /// A footnote; the text is its words.
+    Footnote { number: usize },
 }
 
 /// A run of selectable text, as drawn.
@@ -90,6 +98,10 @@ pub fn pieces(blocks: Vec<Block>) -> Vec<Piece> {
             Block::Quote(text) => out.push(Piece { kind: Kind::Quote, text }),
             Block::Code { lang, code, depth } => out.push(Piece { kind: Kind::Code { lang, depth }, text: Text::plain(code) }),
             Block::Rule => out.push(Piece { kind: Kind::Rule, text: Text::default() }),
+            Block::Image { url, alt, link } => out.push(Piece { kind: Kind::Image { url, link }, text: Text::plain(alt) }),
+            Block::Diagram { kind, source } => out.push(Piece { kind: Kind::Diagram(kind), text: Text::plain(source) }),
+            Block::Math(tex) => out.push(Piece { kind: Kind::Math, text: Text::plain(tex) }),
+            Block::Footnote { number, text, .. } => out.push(Piece { kind: Kind::Footnote { number }, text }),
             Block::Table { align, header, rows } => {
                 let cols = header.len().max(rows.iter().map(Vec::len).max().unwrap_or(0));
                 for (row, cells) in std::iter::once(header).chain(rows).enumerate() {
@@ -122,6 +134,11 @@ pub fn highlights(text: &Text, ink: Rgb, code_bg: Rgb) -> Vec<(Range<usize>, Hig
             // Code in the text's own colour on a faint ground: only links
             // are coloured, so they read as links.
             if s.code {
+                h.background_color = Some(hsla_alpha(code_bg, 0.6));
+            }
+            // TeX as written: slanted, on the same faint ground.
+            if s.math {
+                h.font_style = Some(FontStyle::Italic);
                 h.background_color = Some(hsla_alpha(code_bg, 0.6));
             }
             if s.link {
@@ -207,6 +224,8 @@ fn inline_md(text: &Text, range: Range<usize>) -> String {
         }
         let wrap = if style.code {
             "`"
+        } else if style.math {
+            "$"
         } else {
             match (style.bold, style.italic) {
                 (true, true) => "***",
@@ -261,7 +280,7 @@ impl Copy {
             }
             self.plain.push_str(slice);
             match piece.kind {
-                Kind::Code { .. } => self.markdown.push_str(slice),
+                Kind::Code { .. } | Kind::Diagram(_) | Kind::Math | Kind::Image { .. } => self.markdown.push_str(slice),
                 _ => self.markdown.push_str(&inline_md(&piece.text, range)),
             }
             self.last = Some(piece.kind.clone());
@@ -306,6 +325,22 @@ impl Copy {
                 self.plain.push_str(slice);
                 self.markdown.push_str(&format!("```{lang}\n{slice}\n```"));
             }
+            Kind::Diagram(kind) => {
+                self.plain.push_str(slice);
+                self.markdown.push_str(&format!("```{}\n{slice}\n```", kind.lang()));
+            }
+            Kind::Math => {
+                self.plain.push_str(slice);
+                self.markdown.push_str(&format!("$$\n{slice}\n$$"));
+            }
+            Kind::Image { url, .. } => {
+                self.plain.push_str(slice);
+                self.markdown.push_str(&format!("![{slice}]({url})"));
+            }
+            Kind::Footnote { number } => {
+                self.plain.push_str(&format!("[{number}] {slice}"));
+                self.markdown.push_str(&format!("[^{number}]: {inline}"));
+            }
             Kind::Cell { row, col, cols, .. } => {
                 self.plain.push_str(slice);
                 if *col == 0 {
@@ -333,7 +368,7 @@ mod tests {
     use super::*;
 
     fn parts(md: &str) -> Vec<Piece> {
-        pieces(shed_ai::markdown::parse(md))
+        pieces(shed_markdown::parse(md))
     }
 
     #[test]
@@ -496,7 +531,7 @@ pub fn link_files(
 
 /// Sets the link style over `range`, splitting the runs it crosses.
 fn mark_link(text: &mut Text, range: Range<usize>) {
-    use shed_ai::markdown::Style;
+    use shed_markdown::Style;
     let mut cuts: Vec<usize> = text.spans.iter().flat_map(|(r, _)| [r.start, r.end]).chain([range.start, range.end]).collect();
     cuts.sort_unstable();
     cuts.dedup();
@@ -547,9 +582,9 @@ mod file_tests {
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
-        let mut text = shed_ai::markdown::parse("See `src/main.rs:42:7` and Cargo.toml. Not src/gone.rs, nor e.g. or https://x.org/a.rs")
+        let mut text = shed_markdown::parse("See `src/main.rs:42:7` and Cargo.toml. Not src/gone.rs, nor e.g. or https://x.org/a.rs")
             .into_iter()
-            .find_map(|b| if let shed_ai::markdown::Block::Paragraph(t) = b { Some(t) } else { None })
+            .find_map(|b| if let shed_markdown::Block::Paragraph(t) = b { Some(t) } else { None })
             .unwrap();
         let mut exists = |p: &std::path::Path| p.is_file();
         let mut find = |_: &std::path::Path| None;

@@ -3,7 +3,6 @@
 //! session's file, and the list of a folder's sessions. No UI and no
 //! processes: the keeper runs `claude`, windows draw what this builds.
 
-pub mod markdown;
 pub mod aside;
 pub mod background;
 pub mod listing;

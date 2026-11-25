@@ -79,6 +79,64 @@ pane() { # cwd startup...   (ID, READY and AFTER from the environment, if set)
   [ -n "${AFTER:-}" ] && printf 'after = ["%s"]\n' "$AFTER"
   return 0
 }
+# The board's README, as its project tab's Markdown View draws it: a
+# diagram, a table, math, a task list, a picture (drawn here), a footnote.
+mkdir -p "$web/docs"
+python3 - "$web/docs/columns.png" <<'PY'
+import sys
+from PIL import Image, ImageDraw
+im = Image.new("RGB", (720, 200), (37, 41, 51))
+d = ImageDraw.Draw(im)
+for i, (name, cards) in enumerate([("To do", 3), ("Doing", 2), ("Done", 4)]):
+    x = 20 + i * 235
+    d.rounded_rectangle((x, 20, x + 215, 180), 10, fill=(48, 54, 66))
+    d.text((x + 14, 30), name, fill=(220, 224, 232))
+    for c in range(cards):
+        d.rounded_rectangle((x + 12, 54 + c * 30, x + 203, 78 + c * 30), 5, fill=(78, 121, 167) if i < 2 else (89, 161, 79))
+im.save(sys.argv[1])
+PY
+cat > "$web/README.md" <<'MD'
+# Board
+
+A small **kanban board**: cards in columns, dragged between them, shared by a
+link. The web app starts in [src/App.vue](src/App.vue); the API is a project of its own.[^1]
+
+## How it fits together
+
+```mermaid
+flowchart LR
+  Browser[Web app] -->|REST| API[api]
+  API --> DB[(Postgres)]
+  API -.->|events| Browser
+```
+
+## Endpoints
+
+| Method | Path              | What it does        |
+|:-------|:------------------|--------------------:|
+| `GET`  | `/api/boards`     | Lists your boards   |
+| `POST` | `/api/boards`     | Makes a board       |
+| `GET`  | `/api/boards/:id` | One board, its cards |
+
+## Ordering cards
+
+A card's place is the midpoint of its neighbours', so a move writes one row:
+
+$$
+p = \frac{p_{\text{above}} + p_{\text{below}}}{2}
+$$
+
+## Status
+
+- [x] Columns and cards
+- [x] Dark mode
+- [ ] Sharing by link
+
+![The board's columns](docs/columns.png)
+
+[^1]: Both run with `./dev-server.sh`.
+MD
+
 # Code for the project tabs: the api with changes not committed yet.
 cat > "$api/src/routes.rs" <<'RS'
 use axum::{extract::Path, Json};
@@ -201,7 +259,7 @@ place() { printf '\n[window]\nx = %s\ny = %s\nwidth = 1280.0\nheight = 800.0\nst
 printf 'x = 0.0\ny = 0.0\nwidth = 1280.0\nheight = 860.0\nstate = "normal"\n' > "$root/xdg/data/shed/window.toml"
 
 dev=$(uuid)
-bench board blue "~/projects/board" "$(tab "dev server" "right 0.55 (0) (1)" ""; ID=$dev READY="ready in" pane "~/projects/board" "clear" "./dev-server.sh"; AFTER=$dev pane "~/projects/board" "clear" "git log --oneline" "ls src/components")$(tab "shell" "0" ""; pane "~/projects/board" "clear" "ls -A")$(printf '\n[[tabs]]\nid = "%s"\nactive_pane = 0\n\n[tabs.project]\nroot = "~/projects/board"\nopen = ["src/App.vue"]\n' "$(uuid)")$(place 1300.0 0.0)"
+bench board blue "~/projects/board" "$(tab "dev server" "right 0.55 (0) (1)" ""; ID=$dev READY="ready in" pane "~/projects/board" "clear" "./dev-server.sh"; AFTER=$dev pane "~/projects/board" "clear" "git log --oneline" "ls src/components")$(tab "shell" "0" ""; pane "~/projects/board" "clear" "ls -A")$(printf '\n[[tabs]]\nid = "%s"\nactive_pane = 0\n\n[tabs.project]\nroot = "~/projects/board"\nopen = ["README.md", "src/App.vue"]\n' "$(uuid)")$(place 1300.0 0.0)"
 bench api violet "~/projects/api" "$(tab "tests" "0" ""; pane "~/projects/api" "./watch.sh")$(tab "db" "0" 'tags = [{ label = "local", color = "#5FD38D" }]'; pane "~/projects/api" "clear" "ls src")$(printf '\n[[tabs]]\nid = "%s"\nactive_pane = 0\n\n[tabs.project]\nroot = "~/projects/api"\nopen = ["src/db.rs", "src/routes.rs"]\nactive = 1\n' "$(uuid)")$(place 2600.0 0.0)"
 sed -i 's/^active_tab = 0$/active_tab = 2/' "$root/xdg/data/shed/benches/api.toml"
 bench infra amber "~/projects/infra" "$(tab "prod" "0" 'tags = [{ label = "prod", color = "#F0566A", tint = true }]'; pane "~/projects/infra" "clear" "ls k8s" "./rollout.sh")$(tab "staging" "0" ""; pane "~/projects/infra" "clear" "ls k8s")"

@@ -331,7 +331,7 @@ impl ProjectView {
     /// until it comes); `at` and `select` apply once it is there.
     pub(super) fn remote_load(&mut self, path: PathBuf, cx: &mut Context<Self>) -> OpenFile {
         let lang = shed_project::detect(&path);
-        let file = OpenFile { path: path.clone(), content: Content::Loading, lang, disk: Disk::Same, restored: false, highlight: None, recovery: None, _sub: None };
+        let file = OpenFile { path: path.clone(), content: Content::Loading, md: None, lang, disk: Disk::Same, restored: false, highlight: None, recovery: None, _sub: None };
         if let Some((ws, tab)) = self.remote_call() {
             let reply = ws.call(Call::ReadFile(api::ProjectPath { tab, path: self.rel(&path) }));
             cx.spawn(async move |this, cx| {
@@ -350,11 +350,15 @@ impl ProjectView {
         let content = match reply {
             Ok(Reply::File(f)) => match f.kind {
                 api::FileKind::Text => {
-                    let mut file = std::mem::replace(&mut self.open[i], OpenFile { path: path.clone(), content: Content::Loading, lang: None, disk: Disk::Same, restored: false, highlight: None, recovery: None, _sub: None });
+                    let mut file = std::mem::replace(&mut self.open[i], OpenFile { path: path.clone(), content: Content::Loading, md: None, lang: None, disk: Disk::Same, restored: false, highlight: None, recovery: None, _sub: None });
                     self.edit_text(&mut file, &f.text, cx);
                     self.open[i] = file;
                     self.rehighlight(i, cx);
                     let pending = self.remote.as_mut().and_then(|r| r.pending.remove(&path)).unwrap_or_default();
+                    // A place in it is shown in the editor.
+                    if pending.at.is_some() {
+                        self.set_md_viewing(i, false, cx);
+                    }
                     if let Some(view) = self.open[i].view().cloned() {
                         view.update(cx, |v, cx| {
                             if let Some((line, col)) = pending.at {

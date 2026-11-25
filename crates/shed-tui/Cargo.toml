@@ -13,6 +13,7 @@ shed-emu.workspace = true
 shed-client.workspace = true
 shed-logbook.workspace = true
 shed-ai.workspace = true
+shed-markdown.workspace = true
 shed-review.workspace = true
 shed-git.workspace = true
 shed-project.workspace = true

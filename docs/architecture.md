@@ -225,6 +225,35 @@ grid. It is editable or read-only, numbered or not, wrapped or not, and can grow
 with its text, for the prompts to come. Colouring runs off the UI thread a moment
 after typing pauses; the colours of the previous version show meanwhile.
 
+A Markdown file also gets a `MarkdownView` (`md_view.rs`), shown instead of
+its editor while the file is in View (`OpenFile::md`, per open file, View
+first; Ctrl+Shift+V or the status bar's switch). It reads the editor's buffer,
+not the disk, again whenever the buffer's version changes, so unsaved edits
+and reloads show; `shed_markdown::parse_doc` makes blocks, `ai_text::pieces`
+pieces, and `md_draw` (shared with the AI tab) draws them. The document is a
+column of rows (a paragraph, a list, a table, a diagram), each a view of its
+own (`RowView`) in a scrolling `Page`: a row is drawn again only when what it
+shows changes (the link under the mouse and the selection notify only the rows
+they touch, through `PieceHost::text_sel_changed`), and the page holds only the
+rows in view, with spaces as tall as the rest; it learns the heights by laying
+every row out once when the rows, the width or a picture change. (GPUI's
+`list` notes its own state as changed whenever it lays out, so the view
+holding one is drawn again at every frame of the window, and the rows in view
+laid out with it; for a page of text that cost several milliseconds a frame.)
+The View has no ground of its own: the window's is the theme's background.
+Diagrams (`mermaid`, `dot`/`graphviz`) and math (`$$`, `math` blocks) are
+drawn by `shed_markdown::render` on the background executor, as SVG
+(`mermaid-rs-renderer`, `layout-rs`, `latex-rust`) in the theme's colours,
+rasterised with `resvg` at the screen's scale and at most the document's width,
+and kept by source, colours, size and scale (a `RenderImage`, dropped from
+the atlas when replaced or when the view goes); one that cannot be drawn shows
+as its source with the error. Pictures are read with `picture::read` off the
+UI thread and kept by path until the folder watch reports them changed. Links
+to `#anchors` scroll to the heading (GitHub's slugs, `shed_markdown::anchors`),
+to files open them in the tab (`MdEvent::OpenFile`). `mermaid-rs-renderer`
+measures words with the system's fonts and keeps a copy of the face it uses
+in `$XDG_CACHE_HOME/mmdr/font-cache` (`~/.cache` by default).
+
 Following the disk: watch batches reach `ProjectView::on_disk_change`, which
 updates the file list and tree and, for an open file, reloads it if it has no
 unsaved edits or flags the conflict if it has. Saving writes the file; the watch
@@ -582,10 +611,11 @@ window draws them as a form, and `AiAnswerQuestions` answers with the tool's
 input plus `answers` (question → chosen labels joined by ", ", or the user's
 own words), which is where Claude Code reads them.
 
-The window draws an answer from `shed_ai::markdown` (pulldown-cmark turned
-into blocks of text with styled ranges), as pieces of selectable text
-(`shed-app/src/ai_text.rs`); code blocks are coloured by `shed-project`'s
-highlighter. A selection runs from (entry, piece, byte) to another; each piece's
+The window draws an answer from `shed_markdown` (pulldown-cmark turned
+into blocks of text with styled ranges; `parse` for answers, `parse_doc`, with
+pictures, diagrams, math and footnotes, for files), as pieces of selectable
+text (`shed-app/src/ai_text.rs`) drawn by `md_draw.rs`, which a Markdown
+file's View shares; code blocks are coloured by `shed-project`'s highlighter. A selection runs from (entry, piece, byte) to another; each piece's
 `StyledText` layout maps the mouse to a byte. A copy puts plain text on the
 clipboard and the same as HTML (`markdown::to_html`) in the string's metadata
 behind `shed-html:`, which the patched Linux clipboard offers as `text/html`.
@@ -945,7 +975,7 @@ paste behave as in a window; the mouse goes through `shed_emu::mouse` when
 the program asked for it. The prefix key (Ctrl+B) makes the next key Shed's.
 
 AI tabs render the transcript from `AiUpdate` (`ai.rs`), Markdown through
-`shed_ai::markdown` into styled, wrapped lines (`md.rs`), and change the tab
+`shed_markdown` into styled, wrapped lines (`md.rs`), and change the tab
 with the same messages as the windows (`AiSend`, `AiAnswer`,
 `AiAnswerQuestions`, `AiChange`). Project tabs use `shed-project` (walk,
 watch, fuzzy ranking, search, colouring) and `shed_git::session`; the review
@@ -1413,6 +1443,7 @@ distributor's endpoint to `POST /api/v1/push/subscribe`.
 | `shed-desktop` | Bench and app icons, desktop entries |
 | `shed-text` | An editable text buffer: rope, selection, undo, the editor's edits, reload from disk |
 | `shed-project` | A project's file list, a folder's entries and which project holds a path, folder watching, ranking files by name, colouring, pictures as data, unsaved edits kept aside |
+| `shed-markdown` | Markdown as blocks of styled text, for Claude's answers and for files (pictures, diagrams, math, footnotes, anchors); with `render`, diagrams (Mermaid, dot) and math drawn as pictures |
 | `shed-ai` | Claude Code conversations from its stream or session files; session lists, and their rows as shown (families, drafts, filter) |
 | `shed-link` | `shed link`: a workspace's link to a nexus (state, calls, terminals as content, notifications), and `shed nexus join/status/leave` |
 | `shed-git` | Git through the `git` program: status, diffs as hunks, staging hunks, commits, branches, log, blame, conflicts; diffs and changed files laid out as rows; a Git panel's data and operations (`session`) |

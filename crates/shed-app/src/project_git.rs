@@ -502,6 +502,7 @@ impl ProjectView {
                 self.open.push(OpenFile {
                     path: full,
                     content: Content::Diff(Box::new(view)),
+                    md: None,
                     lang: None,
                     disk: super::Disk::Same,
                     restored: false,

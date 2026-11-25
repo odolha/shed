@@ -1,0 +1,19 @@
+[package]
+name = "shed-markdown"
+description = "Markdown as Shed draws it: blocks of styled text for answers and files, and (feature `render`) diagrams and math as pictures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Diagrams (Mermaid, Graphviz's dot) and math (TeX) drawn as pictures, in pure Rust.
+render = ["dep:resvg", "dep:mermaid-rs-renderer", "dep:layout-rs", "dep:latex-rust"]
+
+[dependencies]
+pulldown-cmark.workspace = true
+# Same as shed-desktop's.
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"], optional = true }
+mermaid-rs-renderer = { version = "0.3.1", default-features = false, optional = true }
+layout-rs = { version = "0.1.3", optional = true }
+# 2.x: 3.x wants Rust 1.99.
+latex-rust = { version = "2.1.1", default-features = false, features = ["std"], optional = true }

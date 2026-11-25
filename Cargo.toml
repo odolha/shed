@@ -8,7 +8,7 @@ members = ["crates/*"]
 default-members = [
     "crates/shed-ai", "crates/shed-api", "crates/shed-app", "crates/shed-client", "crates/shed-codegen",
     "crates/shed-desktop", "crates/shed-emu", "crates/shed-git", "crates/shed-keeper", "crates/shed-link",
-    "crates/shed-logbook", "crates/shed-model", "crates/shed-project", "crates/shed-proto", "crates/shed-review",
+    "crates/shed-logbook", "crates/shed-markdown", "crates/shed-model", "crates/shed-project", "crates/shed-proto", "crates/shed-review",
     "crates/shed-save", "crates/shed-text", "crates/shed-tui",
 ]
 
@@ -31,6 +31,7 @@ shed-desktop = { path = "crates/shed-desktop" }
 shed-text = { path = "crates/shed-text" }
 shed-project = { path = "crates/shed-project" }
 shed-ai = { path = "crates/shed-ai" }
+shed-markdown = { path = "crates/shed-markdown" }
 shed-git = { path = "crates/shed-git" }
 shed-tui = { path = "crates/shed-tui" }
 shed-review = { path = "crates/shed-review" }

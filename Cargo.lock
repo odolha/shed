@@ -1596,6 +1596,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
+name = "core_maths"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "cpubits"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2537,6 +2546,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
 dependencies = [
  "roxmltree 0.20.0",
+]
+
+[[package]]
+name = "fontdb"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "457e789b3d1202543297a350643cf459f836cade38934e7a4cf6a39e7cde2905"
+dependencies = [
+ "fontconfig-parser",
+ "log",
+ "memmap2",
+ "slotmap",
+ "tinyvec",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -4302,6 +4325,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "json5"
+version = "1.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c1d229cedc4e210dd2e2a6cdc59e36ce28e7338fb69367d0d2566e26de7d599"
+dependencies = [
+ "serde",
+ "ucd-trie",
+]
+
+[[package]]
 name = "jwt-simple"
 version = "0.12.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4416,6 +4449,21 @@ name = "lab"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
+
+[[package]]
+name = "latex-rust"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8094b939c8af51f9c7d08256ffa607b743e24d466d9a0ccc602dc748c911e54"
+dependencies = [
+ "ttf-parser",
+]
+
+[[package]]
+name = "layout-rs"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b8b38bc67665e362eb770c6b6ae88b48d040d94a0a10c4904c37bc79d263b95"
 
 [[package]]
 name = "lazy_format"
@@ -4737,6 +4785,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "mermaid-rs-renderer"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cb5b469222ce6b9896edf0a969cf68464f5a028ef394fd6643f00bd943df117"
+dependencies = [
+ "anyhow",
+ "fontdb 0.23.0",
+ "json5",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -7523,7 +7588,6 @@ name = "shed-ai"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "pulldown-cmark",
  "serde",
  "serde_json",
  "shed-model",
@@ -7563,6 +7627,7 @@ dependencies = [
  "shed-keeper",
  "shed-link",
  "shed-logbook",
+ "shed-markdown",
  "shed-model",
  "shed-project",
  "shed-proto",
@@ -7714,6 +7779,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shed-markdown"
+version = "0.1.0"
+dependencies = [
+ "latex-rust",
+ "layout-rs",
+ "mermaid-rs-renderer",
+ "pulldown-cmark",
+ "resvg",
+]
+
+[[package]]
 name = "shed-model"
 version = "0.1.0"
 dependencies = [
@@ -7853,6 +7929,7 @@ dependencies = [
  "shed-git",
  "shed-keeper",
  "shed-logbook",
+ "shed-markdown",
  "shed-model",
  "shed-project",
  "shed-proto",
@@ -9154,6 +9231,9 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
+dependencies = [
+ "core_maths",
+]
 
 [[package]]
 name = "tungstenite"
@@ -9366,7 +9446,7 @@ checksum = "977d0a4abdef933f424a99fe09f95576e089b90aebc6f016a3bc813762493e91"
 dependencies = [
  "base64 0.23.1",
  "data-url",
- "fontdb",
+ "fontdb 0.24.0",
  "harfrust",
  "imagesize",
  "kurbo",

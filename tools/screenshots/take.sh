@@ -5,13 +5,14 @@
 # Runs a separate Shed (its own runtime, home and config), so your own Shed is
 # left alone too. Run from the repo root after `cargo build`:
 #   tools/screenshots/take.sh
+# (SHED_BIN=path/to/shed for a build elsewhere, its shedd beside it.)
 # Needs Xvfb (XVFB=/path/to/Xvfb when it is not on PATH; without root,
 # `apt-get download xvfb && dpkg-deb -x xvfb_*.deb dir` gives one), xrdb,
 # xwininfo, xwd, ffmpeg, and python3 with PIL.
 set -euo pipefail
 repo=$(pwd)
 demo=${DEMO:-/tmp/shed-demo}
-shed=$repo/target/debug/shed
+shed=${SHED_BIN:-$repo/target/debug/shed}
 display=${SHOT_DISPLAY:-:93}
 xvfb=${XVFB:-Xvfb}
 
@@ -147,6 +148,8 @@ board=$(win 'Shed — board')
 xtype "$board" %0.4 @Control_L+Shift_L+s %1.5 && grab "$board" setup && xtype "$board" @Control_L+Shift_L+s %0.5 || true
 xtype "$board" %0.3 @Control_L+Shift_L+f %0.4 boards %1.2 && grab "$board" find && xtype "$board" @Escape || true
 xtype "$board" %0.3 @Alt_L+Right %0.4 @Control_L+r %1.5 && grab "$board" logbook && xtype "$board" @Escape || true
+# The board's README in its project tab's Markdown View (tab 3; Ctrl+P opens it).
+xtype "$board" %0.3 @Control_L+3 %1 @Control_L+p %0.5 README %0.5 @Return %3 && grab "$board" markdown || true
 
 mkdir -p docs/images
 python3 - "$demo" <<'PY'
@@ -157,7 +160,7 @@ def scaled(im, factor):
     return im.resize((int(im.width * factor), int(im.height * factor)), Image.LANCZOS)
 # (colours.png and tab-menu.png need right-clicks, which do not reach GPUI on
 # Xvfb: they stay as they were.)
-for name in ["shed", "bench", "shed-light", "project", "ai", "ai-agents", "review", "setup", "logbook", "find", "bookmarks"]:
+for name in ["shed", "bench", "shed-light", "project", "ai", "ai-agents", "review", "setup", "logbook", "find", "bookmarks", "markdown"]:
     path = f"{demo}/{name}.png"
     if os.path.exists(path):
         im = Image.open(path).convert("RGB")

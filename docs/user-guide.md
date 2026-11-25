@@ -351,6 +351,34 @@ with their size in pixels and bytes above: **Fit** shows the whole picture
 zoom out and in, scrolling when it is larger than the space. A picture changed
 on disk shows as it is now.
 
+**Markdown files** (`.md`, `.markdown`) open drawn as a document, the
+**View**: headings, paragraphs, lists (nested, numbered, task lists), quotes
+and GitHub's alerts (`> [!NOTE]`), tables with their alignment, code coloured as
+the editor colours it (each block with **Copy**), footnotes (at the end, as on
+GitHub), and pictures of the project (PNG, JPEG, GIF, WebP, SVG, by a relative
+path; fitted to the width, never enlarged). `mermaid` blocks become diagrams
+(flowcharts, sequence, class, state, ER, Gantt, pie charts, mind maps, Git
+graphs, timelines, journeys and more) and `dot` or `graphviz` blocks graphs, in
+the theme's colours; math on a line of its own (`$$…$$` or a `math` block) is
+set as math, and `$…$` in a sentence shows as its TeX, slanted. A diagram or
+formula that cannot be drawn shows its source, with a line saying why. HTML in
+the file shows as the words it holds (`<br>` breaks the line, `<img>` is a
+picture). Pictures on the web are not fetched: their words show, as a link.
+
+![A README in the View: a diagram, a table, math](images/markdown.png)
+
+**Edit**, at the right of the status bar (or **Ctrl+Shift+V**, Cmd+Shift+V on a
+Mac; again to go back), shows the file's text in the editor instead; one or
+the other, never side by side, and each file keeps its choice while the tab is
+open. The View shows unsaved changes as you make them, and follows the file on
+disk as the editor does. Links work: one to a heading (`#usage`) scrolls there,
+one to a file of the project opens it (at the heading it names, for another
+Markdown file), others open in the browser. Text selects with the mouse, as in
+an AI tab's answers; Ctrl+C copies it (as Markdown too, for programs that take
+formatting), Ctrl+A selects everything. Arrows, Page Up and Down, Space, Home
+and End scroll. Opening the file at a line (from a search result, a terminal's
+link) shows the editor.
+
 **Following the disk.** When a file changes on disk (the AI edited it, Git
 switched branches, a build wrote it), an open file without unsaved changes
 reloads at once: the changed lines flash, and the cursor stays with its text. The
@@ -1059,7 +1087,8 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 
 In a **project tab**: Ctrl+P opens a file by name, Ctrl+Shift+F searches every
 file, Ctrl+Shift+A sends the selection (or the file) to the AI tab, Ctrl+W closes
-the file, and the editor's own keys are listed under [Project tabs](#project-tabs).
+the file, Ctrl+Shift+V switches a Markdown file between View and Edit, and the
+editor's own keys are listed under [Project tabs](#project-tabs).
 In an **AI tab**: Ctrl+Shift+R opens the review, Ctrl+Enter sends (or queues while Claude works), Enter breaks the line, Ctrl+Up and Ctrl+Down
 go through earlier prompts, Escape stops a turn, Ctrl+F finds in the conversation.
 `new_project_tab` can be bound to a key in `[keys]`. On macOS, Cmd takes Ctrl's

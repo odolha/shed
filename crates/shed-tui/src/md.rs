@@ -1,10 +1,10 @@
-//! Claude's Markdown as styled terminal lines: `shed_ai::markdown` parses it
+//! Claude's Markdown as styled terminal lines: `shed_markdown` parses it
 //! into blocks; here they are set in bold, italics, colours and indents,
 //! wrapped to the width, with code coloured as the file viewer colours it.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use shed_ai::markdown::{self, Align, Block, Text};
+use shed_markdown::{self as markdown, Align, Block, Text};
 
 use crate::text::{fit, width, wrap};
 use crate::theme::Colors;
@@ -46,6 +46,11 @@ fn block_lines(block: &Block, cols: usize, colors: &Colors, out: &mut Vec<Line<'
             let bar = || vec![Span::styled("│ ", colors.dim())];
             out.extend(wrap(spans(t, Style::new().add_modifier(Modifier::ITALIC), colors), cols, bar(), bar()));
         }
+        // (Answers have none of these; a file's would show as their source.)
+        Block::Diagram { kind, source } => block_lines(&Block::Code { lang: kind.lang().into(), code: source.clone(), depth: 0 }, cols, colors, out),
+        Block::Math(tex) => block_lines(&Block::Code { lang: "math".into(), code: tex.clone(), depth: 0 }, cols, colors, out),
+        Block::Image { alt, .. } => out.push(cut(vec![Span::styled(format!("[{alt}]"), colors.dim())], cols)),
+        Block::Footnote { number, text, .. } => out.extend(wrap(spans(text, Style::new(), colors), cols, vec![Span::styled(format!("[{number}] "), colors.dim())], vec![Span::raw("    ")])),
         Block::Code { lang, code, depth } => {
             let indent = "  ".repeat(*depth + 1);
             let colored = shed_project::by_name(lang).and_then(|l| shed_project::highlight(l, code));
@@ -120,7 +125,7 @@ fn spans(t: &Text, base: Style, colors: &Colors) -> Vec<Span<'static>> {
         if s.strike {
             st = st.add_modifier(Modifier::CROSSED_OUT);
         }
-        if s.code {
+        if s.code || s.math {
             st = st.patch(colors.fg(colors.ansi[3]));
         }
         if s.link {
