@@ -16,7 +16,8 @@ with its own window, colour and taskbar icon. A bench's tabs come in four kinds:
 - **Terminal tabs**: a GPU terminal, split into panes, with each pane's startup
   and teardown commands (`docker compose up -d`, `npm run dev`) and its history.
 - **Project tabs**: a folder of code, with a file tree, an editor, search across
-  files, and Git: changes by file or by hunk, commits and pushes (shown before
+  files, Markdown files drawn (tables, pictures, Mermaid and Graphviz diagrams,
+  math), and Git: changes by file or by hunk, commits and pushes (shown before
   they go), branches, history, blame and conflicts.
 - **AI tabs**: [Claude Code](https://claude.com/claude-code) conversations with an
   interface of their own: answers drawn from Markdown, each step on a line,
@@ -132,6 +133,7 @@ you are in, and `shed ai` an AI tab working there.
 | Ctrl+Shift+T / Ctrl+Shift+W | New tab / close pane |
 | Ctrl+Shift+E / Ctrl+Shift+O | Split right / split down |
 | Ctrl+P / Ctrl+Shift+F (project tab) | Open a file by name / search every file |
+| Ctrl+Shift+V (Markdown file) | View drawn / edit the text |
 | Ctrl+Enter / Ctrl+S (AI tab) | Send / keep as a draft |
 | Ctrl+Shift+S | Setup: startup, teardown and aliases |
 | Ctrl+R | Search the logbook |
