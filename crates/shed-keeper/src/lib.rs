@@ -2,6 +2,7 @@
 
 mod ask;
 pub mod attach;
+mod idle;
 mod procinfo;
 pub mod pty;
 mod server;

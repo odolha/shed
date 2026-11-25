@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use shed_api::calls::{Call, Reply};
 use shed_api::state::WorkspaceState;
 use shed_api::topics::{Event, Topic};
-use shed_api::wire::{Ended, LinkFrame, LinkHello, NexusFrame, Policy, Response};
+use shed_api::wire::{Ended, LinkFrame, LinkHello, NexusFrame, Notification, Policy, Response};
 use shed_api::{ApiError, ErrorCode};
 use shed_model::{BenchId, PaneId, Shed, TabId};
 use shed_proto::{ClientKind, ClientMsg, Frame, KeeperMsg, PegboardInfo};
@@ -165,6 +165,9 @@ struct Link {
     held: HashMap<PaneId, (u16, u16)>,
     conversations: HashMap<TabId, Conversation>,
     notifier: Notifier,
+    /// Notifications waiting for the keeper to say whether someone is at
+    /// the workspace (`AskPresence`), which decides whether they are pushed.
+    unsent: Vec<Notification>,
     /// The `[nexus]` settings the link runs with; another in `shed.toml`
     /// stops it, to start again with them.
     nexus_config: shed_model::config::NexusConfig,
@@ -213,6 +216,7 @@ impl Link {
             held: HashMap::new(),
             conversations: HashMap::new(),
             notifier: Notifier::default(),
+            unsent: Vec::new(),
             nexus_config,
             config_checked: Instant::now(),
             config_reads: true,
@@ -297,6 +301,13 @@ impl Link {
                     }
                 }
             }
+            KeeperMsg::Presence { idle_secs } => {
+                let away = self.nexus_config.away_after();
+                let present = Duration::from_secs(idle_secs) < away;
+                for n in std::mem::take(&mut self.unsent) {
+                    self.send(LinkFrame::Notify(Notification { present, ..n }));
+                }
+            }
             KeeperMsg::Error(e) => debug!("keeper: {e}"),
             KeeperMsg::Welcome { .. }
             | KeeperMsg::Attached { .. }
@@ -321,8 +332,12 @@ impl Link {
             self.ask_pegboard();
         }
         let tree = self.tree.clone();
-        for n in self.notifier.changed(&tree, Instant::now()) {
-            self.send(LinkFrame::Notify(n));
+        let said = self.notifier.changed(&tree, Instant::now());
+        if !said.is_empty() {
+            if self.unsent.is_empty() {
+                self.ctx.keeper.send_msg(ClientMsg::AskPresence);
+            }
+            self.unsent.extend(said);
         }
         // Watched panes that are gone, or private now, end their subscriptions.
         let gone: Vec<PaneId> = self

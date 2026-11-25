@@ -68,6 +68,7 @@ fn waiting() -> Notification {
         body: "api · claude".into(),
         bench: Some("b1".into()),
         tab: Some("t1".into()),
+        present: false,
     }
 }
 

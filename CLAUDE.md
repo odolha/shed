@@ -216,7 +216,7 @@ timer parks), wired in through
 - **Commits**: a sentence-case summary of what changed for the user, no
   conventional-commit prefix; bullet details in the body.
 - **Platforms**: Linux and macOS (Windows via WSL may come later). OS-specific
-  code is kept to `shed-keeper/src/procinfo.rs`, `shed-client/src/keeper_conn.rs` (peer pid),
+  code is kept to `shed-keeper/src/procinfo.rs`, `shed-keeper/src/idle.rs`, `shed-client/src/keeper_conn.rs` (peer pid),
   `shed-model/src/paths.rs`, `shed-desktop` (Linux desktop entries),
   `shed-app/src/macos.rs` (menus, Dock) and `cfg!`s for keys, fonts and the
   primary selection. Keep `tools/mac-check.sh` clean; CI runs both.

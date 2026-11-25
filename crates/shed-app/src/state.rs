@@ -632,7 +632,7 @@ impl AppState {
                     cx.quit();
                 }
             }
-            Frame::Keeper(KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Done(_)) => {}
+            Frame::Keeper(KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Done(_) | KeeperMsg::Presence { .. }) => {}
             Frame::Keeper(KeeperMsg::AiUpdate { tab, from, entries, status }) => {
                 let Some(view) = self.ai_views.get(&tab).cloned() else { return };
                 let before = view.read(cx).state();

@@ -43,6 +43,7 @@ pub fn keeper(dir: &Path) -> Env {
         shell: Some(bash()),
         home: home.clone(),
         exit_when_idle: false,
+        desktop_idle: false,
         logbook: Some(logbook.clone()),
         state_dir: dir.join("state"),
         shed_bin: None,

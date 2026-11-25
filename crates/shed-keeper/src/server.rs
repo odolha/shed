@@ -79,6 +79,9 @@ pub struct KeeperConfig {
     pub home: PathBuf,
     /// Exit once no panes and no clients remain.
     pub exit_when_idle: bool,
+    /// Ask the desktop how long nobody used the computer (`idle.rs`) when
+    /// asked who is here; off in tests, which must not read the real one.
+    pub desktop_idle: bool,
     /// The logbook database; `None` keeps no logbook.
     pub logbook: Option<PathBuf>,
     /// Shed's state directory, where per-tab history files go.
@@ -150,6 +153,10 @@ struct State {
     clients: HashMap<ClientId, ClientRt>,
     next_client: ClientId,
     started: Instant,
+    /// When someone last used this workspace from a window or `shed tui`
+    /// (`ClientMsg::UserActive`, keys into terminals; not the link's, which
+    /// come from phones and browsers).
+    last_used: Instant,
     palette: Palette,
     /// Benches with a window, as last known: a window process that goes away
     /// without detaching (logout, a crash) leaves its benches here.
@@ -377,6 +384,7 @@ impl Keeper {
                 clients: HashMap::new(),
                 next_client: 1,
                 started: Instant::now(),
+                last_used: Instant::now(),
                 palette: Palette::default(),
                 shown: HashSet::new(),
                 dark: true,
@@ -606,6 +614,9 @@ impl Keeper {
         match frame {
             Frame::Input { pane, bytes } => {
                 let mut st = self.lock();
+                if st.clients.get(&client).is_some_and(|c| c.kind != ClientKind::Link) {
+                    st.last_used = Instant::now();
+                }
                 if let Some(rt) = st.panes.get(&pane) {
                     let _ = rt.input.send(bytes);
                 }
@@ -715,6 +726,27 @@ impl Keeper {
                 }
             }
             ClientMsg::Show(target) => self.show(client, target),
+            ClientMsg::UserActive => {
+                let mut st = self.lock();
+                if st.clients.get(&client).is_some_and(|c| c.kind != ClientKind::Link) {
+                    st.last_used = Instant::now();
+                }
+            }
+            ClientMsg::AskPresence => {
+                let used = self.lock().last_used.elapsed();
+                let keeper = self.clone();
+                tokio::spawn(async move {
+                    // The desktop's own idle time asks the display server or
+                    // a program: off the runtime's threads.
+                    let desktop = if keeper.cfg.desktop_idle {
+                        tokio::task::spawn_blocking(crate::idle::desktop_idle).await.ok().flatten()
+                    } else {
+                        None
+                    };
+                    let idle = desktop.map_or(used, |d| d.min(used));
+                    keeper.lock().send(client, KeeperMsg::Presence { idle_secs: idle.as_secs() });
+                });
+            }
             ClientMsg::NewTab { bench, cwd } => self.new_tab(client, bench, cwd, None),
             ClientMsg::NewTabNextTo { tab, after, cwd } => {
                 let Some(bench) = self.lock().tree.bench_of_tab(tab) else { return };

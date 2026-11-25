@@ -129,6 +129,8 @@ pub struct App {
     pub cursor_shape: Option<shed_emu::CursorShape>,
     /// A bookmark being gone to, until its tab is there to show it.
     pub(crate) pending_bookmark: Option<(shed_model::Bookmark, Instant)>,
+    /// When the keeper was last told someone is here (`UserActive`).
+    told_active: Option<Instant>,
 }
 
 impl App {
@@ -166,6 +168,7 @@ impl App {
             ticks: 0,
             cursor_shape: None,
             pending_bookmark: None,
+            told_active: None,
         }
     }
 
@@ -354,6 +357,14 @@ impl App {
             }
             Event::Term(ev) => {
                 self.dirty = true;
+                // Someone is at the workspace: its notifications stay off
+                // the phone (told at most every few seconds).
+                if matches!(ev, TermEvent::Key(_) | TermEvent::Mouse(_) | TermEvent::Paste(_))
+                    && self.told_active.is_none_or(|t| t.elapsed() >= Duration::from_secs(15))
+                {
+                    self.told_active = Some(Instant::now());
+                    self.conn.send_msg(ClientMsg::UserActive);
+                }
                 match ev {
                     TermEvent::Key(key) => self.on_key(key),
                     TermEvent::Mouse(m) => self.on_mouse(m),
@@ -453,7 +464,7 @@ impl App {
                 }
             }
             KeeperMsg::AiLimits(limits) => self.limits = Some(limits),
-            KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Hide { .. } | KeeperMsg::ShowInWorkspace { .. } => {}
+            KeeperMsg::Welcome { .. } | KeeperMsg::PaneExited { .. } | KeeperMsg::Status(_) | KeeperMsg::Hide { .. } | KeeperMsg::ShowInWorkspace { .. } | KeeperMsg::Presence { .. } => {}
         }
     }
 

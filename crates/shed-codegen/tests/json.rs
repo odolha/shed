@@ -340,6 +340,7 @@ fn samples() -> Vec<(&'static str, Value)> {
                     body: "api · claude".into(),
                     bench: Some("b1".into()),
                     tab: None,
+                    present: false,
                 },
             })),
         ),
@@ -462,6 +463,7 @@ fn samples() -> Vec<(&'static str, Value)> {
                 body: String::new(),
                 bench: Some("b1".into()),
                 tab: None,
+                present: true,
             })),
         ),
         (

@@ -33,6 +33,7 @@ async fn the_env_names_the_topic_and_its_token() {
         body: "api · bash".into(),
         bench: None,
         tab: None,
+        present: false,
     };
     send(&mut link, &LinkFrame::Notify(notification)).await;
     let hits = receiver.wait_for(1).await;

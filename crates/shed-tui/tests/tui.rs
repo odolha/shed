@@ -32,6 +32,7 @@ fn start_keeper(dir: &Path) -> PathBuf {
         shell: Some(bash()),
         home: home.clone(),
         exit_when_idle: false,
+        desktop_idle: false,
         logbook: Some(dir.join("state/logbook.sqlite")),
         state_dir: dir.join("state"),
         shed_bin: None,

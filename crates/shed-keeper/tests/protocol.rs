@@ -18,6 +18,10 @@ struct Client {
 
 impl Client {
     fn connect(socket: &Path) -> Self {
+        Self::connect_as(socket, ClientKind::Window)
+    }
+
+    fn connect_as(socket: &Path, kind: ClientKind) -> Self {
         let deadline = Instant::now() + Duration::from_secs(5);
         let stream = loop {
             match UnixStream::connect(socket) {
@@ -36,7 +40,7 @@ impl Client {
             }
         });
         let mut client = Client { write: stream, frames };
-        client.send(Frame::Client(ClientMsg::Hello { version: PROTOCOL_VERSION, kind: ClientKind::Window }));
+        client.send(Frame::Client(ClientMsg::Hello { version: PROTOCOL_VERSION, kind }));
         client
     }
 
@@ -114,6 +118,7 @@ fn start_keeper(dir: &Path) -> std::path::PathBuf {
                 shell: Some("/bin/sh".into()),
                 home,
                 exit_when_idle: false,
+                desktop_idle: false,
             });
             keeper.serve(listener).await.unwrap();
         });
@@ -589,4 +594,36 @@ fn tabs_of_every_kind_open_beside_a_tab() {
     // A folder that is not there: nothing opens, and the client is told.
     c.msg(ClientMsg::NewTabNextToOfKind { tab: a, after: true, kind: NewTabKind::Project { root: dir.path().join("gone") } });
     c.expect("refused", |f| matches!(f, Frame::Keeper(KeeperMsg::Error(ref e)) if e.contains("not a folder")).then_some(()));
+}
+
+/// Seconds since someone was at the workspace, as the keeper says.
+fn presence(c: &mut Client) -> u64 {
+    c.send(Frame::Client(ClientMsg::AskPresence));
+    c.expect("presence", |f| match f {
+        Frame::Keeper(KeeperMsg::Presence { idle_secs }) => Some(idle_secs),
+        _ => None,
+    })
+}
+
+/// Keys from a window and its `UserActive` say someone is here; the link's
+/// (typed on a phone or in a browser) do not.
+#[test]
+fn presence_follows_windows_not_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = start_keeper(dir.path());
+    let mut window = Client::connect(&socket);
+    let (_, pane) = window.attach();
+    let mut link = Client::connect_as(&socket, ClientKind::Link);
+    std::thread::sleep(Duration::from_millis(2100));
+    assert!(presence(&mut window) >= 2);
+    link.send(Frame::Input { pane, bytes: b"x".to_vec() });
+    link.send(Frame::Client(ClientMsg::UserActive));
+    assert!(presence(&mut link) >= 2);
+    window.send(Frame::Input { pane, bytes: b"y".to_vec() });
+    assert_eq!(presence(&mut window), 0);
+    std::thread::sleep(Duration::from_millis(2100));
+    assert!(presence(&mut link) >= 2);
+    window.send(Frame::Client(ClientMsg::UserActive));
+    // Asked on the same connection: after the keeper took `UserActive`.
+    assert_eq!(presence(&mut window), 0);
 }

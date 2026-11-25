@@ -929,6 +929,7 @@ fn offline_notify(app: &Arc<App>, workspace: String, name: String, conn: u64) {
                 body: String::new(),
                 bench: None,
                 tab: None,
+                present: false,
             };
             crate::push::notify(&app, &workspace, notification);
         }

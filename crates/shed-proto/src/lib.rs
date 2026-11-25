@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 59;
+pub const PROTOCOL_VERSION: u32 = 60;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -236,6 +236,13 @@ pub enum ClientMsg {
     /// A new tab of any kind just before or after `tab`, in its group; it
     /// becomes the shown tab.
     NewTabNextToOfKind { tab: TabId, after: bool, kind: NewTabKind },
+    /// Someone used this client just now (a key or a click in a window, a
+    /// key in `shed tui`): they are at the workspace. Sent at most every
+    /// few seconds.
+    UserActive,
+    /// How long nobody has used this workspace; answered with
+    /// `KeeperMsg::Presence`.
+    AskPresence,
 }
 
 /// A kind of tab to open, and where it works.
@@ -388,6 +395,10 @@ pub enum KeeperMsg {
     /// To the window process: show another workspace's bench
     /// (`ShowTarget::InWorkspace`).
     ShowInWorkspace { workspace: String, bench: String },
+    /// Seconds since anyone used this workspace: a key or click in a window
+    /// or `shed tui` (`ClientMsg::UserActive`), a key into a terminal from
+    /// them, or (where the desktop says) anything done on the computer.
+    Presence { idle_secs: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

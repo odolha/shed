@@ -32,6 +32,7 @@ fn start_keeper(dir: &Path) {
                 shell: Some("/bin/sh".into()),
                 home,
                 exit_when_idle: false,
+                desktop_idle: false,
             });
             keeper.serve(listener).await.unwrap();
         });

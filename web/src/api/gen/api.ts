@@ -1132,6 +1132,11 @@ export interface Notification {
 	/** Where it happened, to open it from the notification. */
 	bench?: string | null;
 	tab?: string | null;
+	/**
+	 * Someone is at the workspace (used it within its `away_after_minutes`):
+	 * shown by apps in view, never pushed.
+	 */
+	present?: boolean;
 }
 
 export interface NotificationFrame {

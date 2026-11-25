@@ -374,6 +374,10 @@ pub struct Notification {
     pub bench: Option<String>,
     #[serde(default)]
     pub tab: Option<String>,
+    /// Someone is at the workspace (used it within its `away_after_minutes`):
+    /// shown by apps in view, never pushed.
+    #[serde(default)]
+    pub present: bool,
 }
 
 #[typeshare]

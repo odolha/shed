@@ -19,6 +19,9 @@ use crate::selection;
 
 /// Shows `target`. If a window process is already running, it shows it and
 /// this process exits; otherwise this process becomes the window process.
+/// How often, at most, windows tell the keeper someone typed.
+const USER_ACTIVE_EVERY: Duration = Duration::from_secs(15);
+
 pub fn run_app(target: ShowTarget) -> anyhow::Result<()> {
     let (conn, rx) = keeper_conn::connect(ClientKind::Cli, true)?;
     conn.send_msg(ClientMsg::Status);
@@ -68,6 +71,21 @@ pub fn run_app(target: ShowTarget) -> anyhow::Result<()> {
         let state = cx.new(|_| AppState::new(conn, settings.clone()));
         cx.set_global(state::AppHandle(state.downgrade()));
         state.update(cx, |state, cx| state.apply_settings(settings, cx));
+        // A key in any window tells the keeper someone is at the workspace
+        // (its notifications then stay off the phone), at most every few
+        // seconds; read from the state each time, which may have switched
+        // workspaces.
+        let present = state.downgrade();
+        let mut told: Option<std::time::Instant> = None;
+        cx.intercept_keystrokes(move |_, _, cx| {
+            if told.is_none_or(|t| t.elapsed() >= USER_ACTIVE_EVERY)
+                && let Some(state) = present.upgrade()
+            {
+                told = Some(std::time::Instant::now());
+                state.read(cx).conn.send_msg(ClientMsg::UserActive);
+            }
+        })
+        .detach();
         let quitting = state.clone();
         cx.on_action(move |_: &actions::Quit, cx| quitting.update(cx, |state, cx| state.request_quit(cx)));
         #[cfg(target_os = "macos")]

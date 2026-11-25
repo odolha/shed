@@ -35,6 +35,7 @@ impl Notifier {
                     body: where_.clone(),
                     bench: Some(bench.id.to_string()),
                     tab: Some(tab.id.to_string()),
+                    present: false,
                 };
                 if let Some(ai) = tab.ai_info() {
                     let before = self.activity.get(&tab.id).copied();

@@ -266,7 +266,8 @@ fn keys(sub: &PushSubscribe) -> Result<(PublicKey, Auth), &'static str> {
 /// connectors while one is in view (nothing pushed then); otherwise, in the
 /// background, to the ntfy topic (if there is one and a phone wants the
 /// kind) and by Web Push to every subscription that wants it: browsers, and
-/// phones too when there is no topic (they read the topic instead).
+/// phones too when there is no topic (they read the topic instead). One
+/// from a workspace someone is at (`present`) is only told live.
 pub fn notify(app: &Arc<App>, workspace: &str, notification: Notification) {
     let notification = Notification {
         title: clip(&notification.title, TITLE_MAX),
@@ -276,7 +277,7 @@ pub fn notify(app: &Arc<App>, workspace: &str, notification: Notification) {
     if app.hub.notify_live(NotificationFrame { workspace: workspace.to_string(), notification: notification.clone() }) {
         return;
     }
-    if app.push.is_none() && app.ntfy.is_none() {
+    if notification.present || (app.push.is_none() && app.ntfy.is_none()) {
         return;
     }
     let app = app.clone();

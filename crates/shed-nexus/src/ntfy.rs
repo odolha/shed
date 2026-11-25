@@ -133,6 +133,7 @@ mod tests {
             body: "api · claude".into(),
             bench: bench.map(Into::into),
             tab: tab.map(Into::into),
+            present: false,
         }
     }
 
@@ -151,6 +152,7 @@ mod tests {
             body: String::new(),
             bench: None,
             tab: None,
+            present: false,
         };
         let m = message("w 1/x", "desk", &offline);
         assert_eq!((m.priority, m.body.as_str(), m.click.as_deref()), ("4", "desk", Some("shed://w/w%201%2Fx")));

@@ -102,9 +102,21 @@ pub struct NexusConfig {
     /// too) by speaking to the keeper through the nexus. Off by default;
     /// needs `control = "full"`.
     pub desktop_clients: bool,
+    /// Notifications go to your phone (and browsers in the background) only
+    /// once nobody has used this computer for this many minutes: no key,
+    /// click or mouse move on its desktop where the desktop tells, else in
+    /// Shed's windows and `shed tui`. Apps in view still show them. 0
+    /// always pushes; 5 when not set.
+    pub away_after_minutes: Option<u64>,
 }
 
 impl NexusConfig {
+    /// How long nobody must have used the workspace before notifications
+    /// are pushed (`away_after_minutes`); zero: always.
+    pub fn away_after(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.away_after_minutes.unwrap_or(5) * 60)
+    }
+
     /// Whether the link should run (given a pairing).
     pub fn active(&self) -> bool {
         !self.url.trim().is_empty() && self.enabled.unwrap_or(true)

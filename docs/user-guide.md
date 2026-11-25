@@ -1272,7 +1272,15 @@ enabled = true                      # false keeps the pairing but does not link
 control = "full"                    # "view": the apps can look at tabs but change nothing
 # ca_file = "~/nexus-ca.pem"        # for a nexus with a certificate of your own making
 desktop_clients = false             # true: Shed on your other computers can show this one
+away_after_minutes = 5              # push to phones only once nobody used this computer this long; 0: always
 ```
+
+While you are at a workspace its notifications stay off your phone: they are
+pushed only once nobody has used the computer for `away_after_minutes` (no
+key, click or mouse move where the desktop tells: X11, GNOME and KDE on
+Wayland, macOS; elsewhere, and on a server, keys and clicks in Shed's windows
+and `shed tui`). What you type from the phone or a browser does not count.
+Apps in view still show them.
 
 The pairing's token is not in `shed.toml` (which backups copy): it is in
 `~/.local/share/shed/nexus.json`, readable only by you, with the nexus it belongs
@@ -1597,7 +1605,9 @@ Settings.
   ntfy app (Settings → Notifications shows it, with **Copy**); with a nexus
   that has no topic, through UnifiedPush, where Settings shows whether the
   nexus pushes to this phone and turning notifications off tells it to stop.
-  Tapping a notification opens its tab, even with the app closed.
+  Tapping a notification opens its tab, even with the app closed. While you
+  are at the workspace's computer (used it in the last five minutes, its
+  `away_after_minutes`), nothing is pushed.
 
 Private tabs show as private: what is in them never leaves the computer. A
 workspace that allows viewing only shows everything and offers no changes.

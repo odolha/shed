@@ -1089,7 +1089,8 @@ only when none is. Each `/api` connection says whether it is in view with
 app: in the foreground), not in view until it says so. While any one is, the
 notification goes to every connector as `ServerFrame::Notification` (workspace
 and notification), the apps show it themselves, and nothing is pushed: you are
-looking at Shed already.
+looking at Shed already. Nor is one the link marks `present` (someone is at
+the workspace): it goes live only.
 
 With none in view it is pushed. **Phones**: with a ntfy topic
 (`push.ntfy_url`, or `SHED_NEXUS_NTFY_URL`, which wins; the token from
@@ -1206,7 +1207,15 @@ shows as nothing; an unknown event is ignored). On Android `ShedJson` makes
 `Unknown` their default deserializer and coerces unknown values of enums
 without data to the field's default (null).
 - **Notifications** from tree changes (`notify.rs`): an AI tab waiting for an
-  answer, a turn done, a command that ran a minute ending.
+  answer, a turn done, a command that ran a minute ending. Before sending, the
+  link asks the keeper who is here (`ClientMsg::AskPresence` →
+  `KeeperMsg::Presence { idle_secs }`): the least of the time since a window
+  or `shed tui` was used (`ClientMsg::UserActive`, sent at most every 15 s on
+  a key, and keys into terminals from any client but the link) and, where the
+  desktop tells, since the computer was (`shed-keeper/src/idle.rs`: X11's
+  screen saver extension, GNOME's or KDE's idle time over D-Bus, macOS's
+  `HIDIdleTime`). Under `[nexus] away_after_minutes` (5) the notification is
+  marked `present`, and the nexus does not push it.
 
 **Terminals as content** (`screen.rs`). For a watched pane the link attaches
 its bench (detaching when nothing there is watched) and runs a `shed-emu`

@@ -179,6 +179,7 @@ pub fn start_with_shell(dir: &Path, socket_name: &str, shell: &Path) -> Env {
         shell: Some(shell.into()),
         home: home.clone(),
         exit_when_idle: false,
+        desktop_idle: false,
         logbook: Some(logbook.clone()),
         state_dir: dir.join("state"),
         shed_bin: Some(env!("CARGO_BIN_EXE_shed").into()),

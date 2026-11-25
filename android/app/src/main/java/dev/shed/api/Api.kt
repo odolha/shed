@@ -1396,7 +1396,10 @@ data class Notification (
 	val body: String? = null,
 	/// Where it happened, to open it from the notification.
 	val bench: String? = null,
-	val tab: String? = null
+	val tab: String? = null,
+	/// Someone is at the workspace (used it within its `away_after_minutes`):
+	/// shown by apps in view, never pushed.
+	val present: Boolean? = null
 )
 
 @Serializable
