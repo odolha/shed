@@ -44,6 +44,7 @@ interface Entry {
   component: Type<unknown>;
   injector: Injector;
   wide: boolean;
+  sheet: boolean;
   ref: DialogRef<unknown, unknown>;
 }
 
@@ -94,7 +95,8 @@ export class Dialogs {
   private next = 1;
   readonly stack = signal<Entry[]>([]);
 
-  open<D, R>(component: Type<unknown>, data: D, opts: { wide?: boolean } = {}): Promise<R | null> {
+  /** `wide`: a wider dialog; `sheet`: a sheet from the bottom of the screen (phones). */
+  open<D, R>(component: Type<unknown>, data: D, opts: { wide?: boolean; sheet?: boolean } = {}): Promise<R | null> {
     return new Promise<R | null>((resolve) => {
       const id = this.next++;
       const ref = new DialogRef<D, R>(data, (result) => {
@@ -107,7 +109,7 @@ export class Dialogs {
       });
       this.stack.update((s) => [
         ...s,
-        { id, component, injector, wide: !!opts.wide, ref: ref as DialogRef<unknown, unknown> },
+        { id, component, injector, wide: !!opts.wide, sheet: !!opts.sheet, ref: ref as DialogRef<unknown, unknown> },
       ]);
     });
   }
@@ -136,13 +138,14 @@ export class Dialogs {
   selector: 'shed-dialog-frame',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <dialog #dlg class="dialog" [class.wide]="wide()" (cancel)="onCancel($event)" (click)="onBackdrop($event)">
+    <dialog #dlg class="dialog" [class.wide]="wide()" [class.sheet]="sheet()" (cancel)="onCancel($event)" (click)="onBackdrop($event)">
       <ng-content />
     </dialog>
   `,
 })
 export class DialogFrame implements AfterViewInit {
   readonly wide = input(false);
+  readonly sheet = input(false);
   readonly dismiss = output<void>();
   private readonly dlg = viewChild.required<ElementRef<HTMLDialogElement>>('dlg');
 
@@ -174,7 +177,7 @@ export class DialogFrame implements AfterViewInit {
   imports: [NgComponentOutlet, DialogFrame],
   template: `
     @for (e of dialogs.stack(); track e.id) {
-      <shed-dialog-frame [wide]="e.wide" (dismiss)="e.ref.close(null)">
+      <shed-dialog-frame [wide]="e.wide" [sheet]="e.sheet" (dismiss)="e.ref.close(null)">
         <ng-container *ngComponentOutlet="e.component; injector: e.injector" />
       </shed-dialog-frame>
     }

@@ -6,11 +6,15 @@ import { TPipe, t } from '../../i18n/i18n';
 import { Icon } from '../../ui/icon';
 import { Menu, MenuTrigger } from '../../ui/menu';
 import { Tooltip } from '../../ui/tooltip';
+import { Viewport } from '../../ui/viewport';
 
 /** The signed-in app: a slim bar on top, the page below. */
 @Component({
   selector: 'shed-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: {
+    '[class.kb]': 'viewport.keyboard()',
+  },
   imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, TPipe, Tooltip, Menu, MenuTrigger],
   template: `
     <header class="bar">
@@ -55,7 +59,8 @@ import { Tooltip } from '../../ui/tooltip';
     :host {
       display: flex;
       flex-direction: column;
-      height: 100dvh;
+      /* What shows above a phone's keyboard (100dvh where the page resizes itself). */
+      height: var(--vvh, 100dvh);
     }
     .bar {
       display: flex;
@@ -63,7 +68,7 @@ import { Tooltip } from '../../ui/tooltip';
       gap: 8px;
       height: 44px;
       flex: none;
-      padding: 0 8px 0 12px;
+      padding: 0 calc(8px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
       padding-top: env(safe-area-inset-top);
       box-sizing: content-box;
       border-bottom: 1px solid var(--divider);
@@ -79,6 +84,12 @@ import { Tooltip } from '../../ui/tooltip';
       font-size: 15px;
       border-radius: var(--radius-sm);
     }
+    /* On a phone with the keyboard up, the room goes to what is typed and read. */
+    @media (max-width: 699px) {
+      :host(.kb) .bar {
+        display: none;
+      }
+    }
     main {
       flex: 1 1 auto;
       min-height: 0;
@@ -93,6 +104,12 @@ import { Tooltip } from '../../ui/tooltip';
   `,
 })
 export class Shell {
+  protected readonly viewport = inject(Viewport);
+
+  constructor() {
+    this.viewport.start();
+  }
+
   protected readonly auth = inject(AuthService);
   protected readonly socket = inject(NexusSocket);
 

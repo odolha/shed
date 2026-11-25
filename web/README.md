@@ -64,11 +64,11 @@ year and revalidates the rest. See
 |---|---|
 | `src/api/gen/api.ts` | The API types, generated from `crates/shed-api` (`cargo run -p shed-codegen`); never edited |
 | `src/api/` | `NexusHttp` (HTTP routes, cookie session, `X-Shed-Csrf`), `NexusSocket` (the `/api` WebSocket: requests by id, subscriptions, reconnect), `WorkspacesStore` (signals), `AuthService` and the route guards |
-| `src/ui/` | The UI kit: icons, menus (popover layer), dialogs (`<dialog>`), tooltips, notices, usage limit bars, time formatting |
+| `src/ui/` | The UI kit: icons, menus (popover layer), dialogs (`<dialog>`, and sheets from the bottom on phones), tooltips, notices, usage limit bars, a thin draggable scrollbar, the viewport above a phone's keyboard (`--vvh`, `--kb`), time formatting |
 | `src/i18n/` | `en.json` and `t()` / the `t` pipe |
 | `src/app/workspaces/` | The overview: workspaces and their benches |
 | `src/app/bench/` | A bench's page: tab bar, new tabs, folder picker, bench actions |
-| `src/app/ai/` | AI tabs: conversation, Markdown, permissions and questions, prompt, sessions, review |
+| `src/app/ai/` | AI tabs: conversation (following its end, `follow.ts`), Markdown, permissions and questions, sub-agents and what waits, prompt, the settings sheet, sessions, review |
 | `src/app/terminal/` | Terminals from the screen's text: re-wrapping, keys, key bar |
 | `src/app/logbook/`, `project/`, `git/` | The logbook; project tabs; Git |
 | `src/app/setup/`, `login/`, `devices/`, `settings/` | The account, devices and pairing, push |

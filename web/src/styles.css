@@ -498,6 +498,15 @@ kbd {
   min-height: 0;
 }
 
+/* Scrolled with a `shed-scrollbar` of its own instead. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* ------------------------------------------------------------- popovers */
 
 .menu {
@@ -602,6 +611,30 @@ dialog.dialog {
 
 dialog.dialog.wide {
   width: min(760px, calc(100vw - 24px));
+}
+
+/* A sheet: from the bottom of the screen, the keyboard and the home bar kept clear. */
+dialog.dialog.sheet {
+  width: min(560px, 100vw);
+  max-width: 100vw;
+  max-height: min(85dvh, calc(var(--vvh, 100dvh) - 24px));
+  margin: auto auto 0;
+  margin-bottom: var(--kb, 0px);
+  border-radius: 14px 14px 0 0;
+  border-bottom: 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+dialog.dialog.sheet::before {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 4px;
+  margin: 8px auto 0;
+  border-radius: 2px;
+  background: var(--divider);
 }
 
 dialog.dialog::backdrop {

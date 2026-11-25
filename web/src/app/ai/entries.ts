@@ -1,18 +1,20 @@
 /** The parts of a conversation: messages, steps, sub-agents, notes, permission and question cards. */
 
-import { ChangeDetectionStrategy, Component, computed, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, type Signal, computed, inject, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import type { AiEntry, AiNote, AiPermission, AiTextEdit, AiTool } from '../../api/gen/api';
+import type { AiEntry, AiNote, AiPermission, AiRun, AiTextEdit, AiTool } from '../../api/gen/api';
 import { WorkspacesStore } from '../../api/workspaces.store';
 import { TPipe, t } from '../../i18n/i18n';
 import { Clipboard } from '../../ui/clipboard';
+import { DialogRef, Dialogs } from '../../ui/dialog';
 import { Icon } from '../../ui/icon';
 import { Notices } from '../../ui/notices';
 import { AgoPipe, ClockPipe } from '../../ui/time';
 import { Tooltip } from '../../ui/tooltip';
+import { NARROW, mediaSignal } from '../../ui/viewport';
 import { MarkdownDirective } from './markdown';
 import { AiPictures } from './pictures';
-import { AiLive, isAgent, runLine, runState, timerWhen, tokens } from './runs';
+import { AiLive, isAgent, runState, runStatus, runStep, runTitle, timerWhen, tokens } from './runs';
 
 /** An edit as diff lines: what it took out, then what it put in. */
 export function editLines(edit: AiTextEdit): { kind: 'removed' | 'added'; text: string }[] {
@@ -70,7 +72,7 @@ export class AiPictureThumb {
 }
 
 /** A step's or tool's mark: how it is doing. */
-type Mark = 'turning' | 'still' | 'pending' | 'done' | 'failed' | 'stopped';
+export type Mark = 'turning' | 'still' | 'pending' | 'done' | 'failed' | 'stopped';
 
 const GLYPHS: Record<Exclude<Mark, 'turning'>, string> = {
   still: '◐',
@@ -155,194 +157,107 @@ export class AiMark {
   });
 }
 
-/** A tool call; a sub-agent's or a background task's with how it runs, its steps and report. */
+/** A tool call's detail: its input, change and result; a run's steps and report. */
 @Component({
-  selector: 'shed-ai-tool',
+  selector: 'shed-ai-tool-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TPipe, Icon, Tooltip, AiPictureThumb, AiMark, MarkdownDirective],
+  imports: [TPipe, Icon, AiPictureThumb, AiMark, MarkdownDirective],
   template: `
     @let tool = entry();
     @let run = tool.run;
-    <div class="line" [class.err]="!run && tool.error">
-      <button class="summary" (click)="open.set(!open())" [attr.aria-expanded]="open()">
-        <shed-icon [name]="open() ? 'chevron-down' : 'chevron-right'" [size]="14" />
-        @if (run) {
-          <shed-ai-mark [mark]="mark()" [attr.title]="state()" />
-        } @else {
-          <shed-icon name="tool" [size]="14" />
+    @if (run && agent()) {
+      @if (tool.detail) {
+        <pre class="code">{{ tool.detail }}</pre>
+      }
+      @if (agentMeta(); as m) {
+        <div class="dim small">{{ m }}</div>
+      }
+      <div class="steps">
+        @if ((run.skipped ?? 0) > 0) {
+          <div class="dim small">{{ 'ai.run.skipped' | t: { n: run.skipped ?? 0 } }}</div>
         }
-        <span class="ellipsis mono name" [class.agent]="agent()" [class.shrink]="!!info()">{{ tool.summary || tool.name }}</span>
-        @if (run?.background) {
-          <span class="tag">{{ 'ai.run.background' | t }}</span>
-        }
-        @if (info(); as i) {
-          <span class="ellipsis info" [class.live]="state() === 'running'">{{ i }}</span>
-        }
-        @if (!run) {
-          @if (tool.result === null || tool.result === undefined) {
-            <span class="spinner" [attr.aria-label]="'ai.running' | t"></span>
-          } @else if (tool.error) {
-            <span class="chip danger">{{ 'ai.toolFailed' | t }}</span>
-          }
-        }
-      </button>
-      <button class="icon-btn small copy" (click)="clip.copy(tool.detail || tool.summary)" [shedTip]="'common.copy' | t">
-        <shed-icon name="copy" [size]="14" />
-      </button>
-    </div>
-    @if (open()) {
-      <div class="detail">
-        @if (run && agent()) {
-          @if (tool.detail) {
-            <pre class="code">{{ tool.detail }}</pre>
-          }
-          @if (agentMeta(); as m) {
-            <div class="dim small">{{ m }}</div>
-          }
-          <div class="steps">
-            @if ((run.skipped ?? 0) > 0) {
-              <div class="dim small">{{ 'ai.run.skipped' | t: { n: run.skipped ?? 0 } }}</div>
-            }
-            @for (s of run.steps ?? []; track $index) {
-              @switch (s.type) {
-                @case ('Tool') {
-                  @let key = s.content.id || 'step-' + $index;
-                  @let more = stepHasMore(s.content);
-                  <button class="step" [class.plain]="!more" (click)="more && toggleStep(key)" [attr.aria-expanded]="more ? stepOpen(key) : null">
-                    @if (more) {
-                      <shed-icon [name]="stepOpen(key) ? 'chevron-down' : 'chevron-right'" [size]="12" />
-                    } @else {
-                      <span class="pad"></span>
-                    }
-                    <shed-ai-mark [mark]="stepMark(s.content)" />
-                    <span class="ellipsis mono">{{ s.content.summary || s.content.name }}</span>
-                  </button>
-                  @if (more && stepOpen(key)) {
-                    <div class="step-more">
-                      @if (s.content.edit; as e) {
-                        <div class="block">
-                          @for (l of editLines(e); track $index) {
-                            <div class="diff-line nonum" [class.added]="l.kind === 'added'" [class.removed]="l.kind === 'removed'">
-                              <span class="sign">{{ l.kind === 'added' ? '+' : '−' }}</span><span>{{ l.text }}</span>
-                            </div>
-                          }
+        @for (s of run.steps ?? []; track $index) {
+          @switch (s.type) {
+            @case ('Tool') {
+              @let key = s.content.id || 'step-' + $index;
+              @let more = stepHasMore(s.content);
+              <button class="step" [class.plain]="!more" (click)="more && toggleStep(key)" [attr.aria-expanded]="more ? stepOpen(key) : null">
+                @if (more) {
+                  <shed-icon [name]="stepOpen(key) ? 'chevron-down' : 'chevron-right'" [size]="12" />
+                } @else {
+                  <span class="pad"></span>
+                }
+                <shed-ai-mark [mark]="stepMark(s.content)" />
+                <span class="ellipsis mono">{{ s.content.summary || s.content.name }}</span>
+              </button>
+              @if (more && stepOpen(key)) {
+                <div class="step-more">
+                  @if (s.content.edit; as e) {
+                    <div class="block">
+                      @for (l of editLines(e); track $index) {
+                        <div class="diff-line nonum" [class.added]="l.kind === 'added'" [class.removed]="l.kind === 'removed'">
+                          <span class="sign">{{ l.kind === 'added' ? '+' : '−' }}</span><span>{{ l.text }}</span>
                         </div>
-                      } @else if (s.content.detail) {
-                        <pre class="code">{{ s.content.detail }}</pre>
-                      }
-                      @if (s.content.result) {
-                        <pre class="code" [class.danger-text]="s.content.error">{{ s.content.result }}</pre>
                       }
                     </div>
+                  } @else if (s.content.detail) {
+                    <pre class="code">{{ s.content.detail }}</pre>
                   }
-                }
-                @case ('Assistant') {
-                  <div class="said" [shedMarkdown]="s.content.text"></div>
-                }
-              }
-            } @empty {
-              <div class="dim small">{{ (state() === 'running' ? 'ai.run.noSteps' : 'ai.run.stepsUnknown') | t }}</div>
-            }
-          </div>
-          @if (report(); as r) {
-            <div class="dim small label">{{ 'ai.run.report' | t }}</div>
-            <div [shedMarkdown]="r"></div>
-          }
-        } @else {
-          @if (tool.edit; as e) {
-            <div class="block">
-              @for (l of editLines(e); track $index) {
-                <div class="diff-line nonum" [class.added]="l.kind === 'added'" [class.removed]="l.kind === 'removed'">
-                  <span class="sign">{{ l.kind === 'added' ? '+' : '−' }}</span><span>{{ l.text }}</span>
+                  @if (s.content.result) {
+                    <pre class="code" [class.danger-text]="s.content.error">{{ s.content.result }}</pre>
+                  }
                 </div>
               }
-            </div>
-          } @else if (tool.detail) {
-            <pre class="code">{{ tool.detail }}</pre>
+            }
+            @case ('Assistant') {
+              <div class="said" [shedMarkdown]="s.content.text"></div>
+            }
           }
-          @if (tool.result) {
-            <div class="dim small label">{{ 'ai.result' | t }}</div>
-            <pre class="code" [class.danger-text]="tool.error">{{ tool.result }}</pre>
-          }
-          @if (tool.pictures?.length) {
-            <div class="row wrap">
-              @for (p of tool.pictures ?? []; track p) {
-                <shed-ai-picture [workspace]="workspace()" [tab]="tab()" [name]="p" />
-              }
-            </div>
-          }
+        } @empty {
+          <div class="dim small">{{ (state() === 'running' ? 'ai.run.noSteps' : 'ai.run.stepsUnknown') | t }}</div>
         }
-        <button class="btn ghost small" (click)="open.set(false)">
-          <shed-icon name="arrow-up" [size]="13" />{{ 'ai.collapse' | t }}
-        </button>
       </div>
+      @if (report(); as r) {
+        <div class="dim small label">{{ 'ai.run.report' | t }}</div>
+        <div [shedMarkdown]="r"></div>
+      }
+    } @else {
+      @if (tool.edit; as e) {
+        <div class="block">
+          @for (l of editLines(e); track $index) {
+            <div class="diff-line nonum" [class.added]="l.kind === 'added'" [class.removed]="l.kind === 'removed'">
+              <span class="sign">{{ l.kind === 'added' ? '+' : '−' }}</span><span>{{ l.text }}</span>
+            </div>
+          }
+        </div>
+      } @else if (tool.detail) {
+        <pre class="code">{{ tool.detail }}</pre>
+      }
+      @if (run && runStep(run); as last) {
+        <div class="dim small label">{{ 'ai.run.now' | t }}</div>
+        <pre class="code">{{ last }}</pre>
+      }
+      @if (tool.result) {
+        <div class="dim small label">{{ 'ai.result' | t }}</div>
+        <pre class="code" [class.danger-text]="tool.error">{{ tool.result }}</pre>
+      }
+      @if (tool.pictures?.length) {
+        <div class="row wrap">
+          @for (p of tool.pictures ?? []; track p) {
+            <shed-ai-picture [workspace]="workspace()" [tab]="tab()" [name]="p" />
+          }
+        </div>
+      }
     }
   `,
   styles: `
-    .line {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .summary {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex: 1;
-      min-width: 0;
-      padding: 3px 6px;
-      border: 0;
-      border-radius: var(--radius-sm);
-      background: none;
-      color: var(--text-dim);
-      font: inherit;
-      font-size: 13px;
-      text-align: left;
-      cursor: pointer;
-    }
-    .summary:hover {
-      background: var(--hover);
-      color: var(--text);
-    }
-    .err .summary {
-      color: var(--danger);
-    }
-    .name.agent {
-      color: var(--text);
-    }
-    .name.shrink {
-      flex: 0 1 auto;
-      max-width: 60%;
-    }
-    .info {
-      flex: 1;
-      min-width: 0;
-      font-size: 12px;
-    }
-    .info.live {
-      color: var(--accent);
-    }
-    .tag {
-      flex: none;
-      padding: 0 4px;
-      border: 1px solid var(--divider);
-      border-radius: var(--radius-sm);
-      font-size: 11px;
-    }
-    .copy {
-      visibility: hidden;
-    }
-    .line:hover .copy,
-    .copy:focus-visible {
-      visibility: visible;
-    }
-    .detail {
+    :host {
       display: flex;
       flex-direction: column;
       gap: 6px;
-      margin: 4px 0 8px 22px;
+      min-width: 0;
     }
-    .detail .code {
+    .code {
       max-height: 360px;
     }
     .block {
@@ -357,9 +272,6 @@ export class AiMark {
     }
     .label {
       margin-top: 2px;
-    }
-    .detail > .btn {
-      align-self: flex-start;
     }
     .steps {
       display: flex;
@@ -390,6 +302,11 @@ export class AiMark {
     .step.plain {
       cursor: default;
     }
+    @media (pointer: coarse) {
+      .step {
+        min-height: 36px;
+      }
+    }
     .pad {
       width: 12px;
       flex: none;
@@ -408,29 +325,14 @@ export class AiMark {
       margin: 2px 0 2px 6px;
       font-size: 13.5px;
     }
-    .spinner {
-      width: 10px;
-      height: 10px;
-      border: 2px solid var(--divider);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      flex: none;
-    }
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
   `,
 })
-export class AiToolEntry {
+export class AiToolDetail {
   readonly entry = input.required<AiTool>();
   readonly workspace = input.required<string>();
   readonly tab = input.required<string>();
-  protected readonly open = signal(false);
-  protected readonly clip = inject(Clipboard);
   protected readonly editLines = editLines;
+  protected readonly runStep = runStep;
   private readonly live = inject(AiLive, { optional: true }) ?? new AiLive();
   private readonly openSteps = signal<ReadonlySet<string>>(new Set());
 
@@ -438,27 +340,6 @@ export class AiToolEntry {
   protected readonly state = computed(() => {
     const run = this.entry().run;
     return run ? runState(run) : null;
-  });
-  protected readonly mark = computed<Mark>(() => {
-    switch (this.state()) {
-      case 'running':
-        // Still while Claude is idle: a server left running would keep it turning.
-        return this.live.busy() ? 'turning' : 'still';
-      case 'failed':
-        return 'failed';
-      case 'stopped':
-        return 'stopped';
-      default:
-        return 'done';
-    }
-  });
-  /** After its line: how a run is doing; when a timer it set fires. */
-  protected readonly info = computed(() => {
-    const tool = this.entry();
-    const now = this.live.now();
-    if (tool.run) return runLine(tool, tool.run, now);
-    const timer = tool.id ? this.live.timers().find((x) => x.tool === tool.id) : undefined;
-    return timer ? t('ai.timer.fires', { when: timerWhen(timer, now) }) : null;
   });
   protected readonly agentMeta = computed(() => {
     const run = this.entry().run;
@@ -497,6 +378,326 @@ export class AiToolEntry {
       if (!next.delete(key)) next.add(key);
       return next;
     });
+  }
+}
+
+/** A run's mark: turning while it runs (still while Claude is idle), then how it ended. */
+export function runMark(run: AiRun, busy: boolean): Mark {
+  switch (runState(run)) {
+    case 'running':
+      // Still while Claude is idle: a server left running would keep it turning.
+      return busy ? 'turning' : 'still';
+    case 'failed':
+      return 'failed';
+    case 'stopped':
+      return 'stopped';
+    default:
+      return 'done';
+  }
+}
+
+/** A sub-agent's or background task's card: what it is for, how it does, what it does now. */
+@Component({
+  selector: 'shed-ai-run-card',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TPipe, AiMark],
+  host: {
+    '[class.ended]': 'state() !== "running"',
+  },
+  template: `
+    @let tool = entry();
+    @let run = tool.run!;
+    <div class="head">
+      <shed-ai-mark [mark]="mark()" [attr.title]="state()" />
+      <span class="title" [class.agent]="agent()" [class.mono]="!agent()">{{ title() }}</span>
+      @if (run.background) {
+        <span class="tag">{{ 'ai.run.background' | t }}</span>
+      }
+    </div>
+    <div class="status small">
+      <span [class.live]="state() === 'running'" [class.danger-text]="state() === 'failed'">{{ status() }}</span>
+      @if (run.agent) {
+        <span class="kind">· {{ run.agent }}</span>
+      }
+    </div>
+    @if (step(); as s) {
+      <div class="now mono ellipsis">{{ s }}</div>
+    }
+  `,
+  styles: `
+    :host {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 0;
+    }
+    .head {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      min-width: 0;
+    }
+    .head shed-ai-mark {
+      height: 1.45em;
+    }
+    .title {
+      flex: 1;
+      min-width: 0;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      color: var(--text);
+    }
+    .title.mono {
+      font-size: 12.5px;
+      line-height: 1.6;
+    }
+    .tag {
+      flex: none;
+      padding: 0 4px;
+      border: 1px solid var(--divider);
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .status,
+    .now {
+      padding-left: 20px;
+      color: var(--text-dim);
+    }
+    .status .live {
+      color: var(--accent);
+    }
+    .kind {
+      margin-left: 2px;
+    }
+    .now {
+      font-size: 12px;
+    }
+    :host(.ended) .title {
+      color: var(--text-dim);
+    }
+  `,
+})
+export class AiRunCard {
+  readonly entry = input.required<AiTool>();
+  private readonly live = inject(AiLive, { optional: true }) ?? new AiLive();
+  protected readonly agent = computed(() => isAgent(this.entry()));
+  protected readonly state = computed(() => runState(this.entry().run ?? {}));
+  protected readonly mark = computed(() => runMark(this.entry().run ?? {}, this.live.busy()));
+  protected readonly title = computed(() => runTitle(this.entry()));
+  protected readonly status = computed(() => runStatus(this.entry(), this.entry().run ?? {}, this.live.now()));
+  protected readonly step = computed(() => runStep(this.entry().run ?? {}));
+}
+
+/** What a run's sheet works with: the run as it changes. */
+export interface RunSheetData {
+  tool: Signal<AiTool>;
+  workspace: string;
+  tab: string;
+  live: AiLive;
+}
+
+/** A sub-agent's or background task's steps and report, as a sheet (phones) or a dialog. */
+@Component({
+  selector: 'shed-ai-run-sheet',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TPipe, Icon, Tooltip, AiRunCard, AiToolDetail],
+  providers: [{ provide: AiLive, useFactory: () => inject<DialogRef<RunSheetData>>(DialogRef).data.live }],
+  template: `
+    <div class="dialog-body">
+      <div class="row top">
+        <shed-ai-run-card class="grow" [entry]="d.tool()" />
+        <button class="icon-btn" (click)="clip.copy(d.tool().detail || d.tool().summary)" [shedTip]="'common.copy' | t">
+          <shed-icon name="copy" />
+        </button>
+        <button class="icon-btn" (click)="ref.close()" [attr.aria-label]="'common.close' | t"><shed-icon name="close" [size]="18" /></button>
+      </div>
+      <shed-ai-tool-detail [entry]="d.tool()" [workspace]="d.workspace" [tab]="d.tab" />
+    </div>
+  `,
+  styles: `
+    .top {
+      align-items: flex-start;
+    }
+  `,
+})
+export class AiRunSheet {
+  protected readonly ref = inject<DialogRef<RunSheetData, null>>(DialogRef);
+  protected readonly d = this.ref.data;
+  protected readonly clip = inject(Clipboard);
+}
+
+/** Opens a run's steps and report: a sheet on narrow screens, a dialog else. */
+export function openRun(dialogs: Dialogs, data: RunSheetData, narrow: boolean): void {
+  void dialogs.open<RunSheetData, null>(AiRunSheet, data, narrow ? { sheet: true } : { wide: true });
+}
+
+/** A tool call; a sub-agent's or a background task's as a card, with its steps and report. */
+@Component({
+  selector: 'shed-ai-tool',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TPipe, Icon, Tooltip, AiRunCard, AiToolDetail],
+  template: `
+    @let tool = entry();
+    @let run = tool.run;
+    @if (run) {
+      <div class="line">
+        <button class="run" (click)="toggle()" [attr.aria-expanded]="open()">
+          <shed-ai-run-card [entry]="tool" />
+        </button>
+        <button class="icon-btn small copy" (click)="clip.copy(tool.detail || tool.summary)" [shedTip]="'common.copy' | t">
+          <shed-icon name="copy" [size]="14" />
+        </button>
+      </div>
+    } @else {
+      <div class="line" [class.err]="tool.error">
+        <button class="summary" (click)="toggle()" [attr.aria-expanded]="open()">
+          <shed-icon [name]="open() ? 'chevron-down' : 'chevron-right'" [size]="14" />
+          <shed-icon name="tool" [size]="14" />
+          <span class="ellipsis mono name" [class.shrink]="!!info()">{{ tool.summary || tool.name }}</span>
+          @if (info(); as i) {
+            <span class="ellipsis info">{{ i }}</span>
+          }
+          @if (tool.result === null || tool.result === undefined) {
+            <span class="spinner" [attr.aria-label]="'ai.running' | t"></span>
+          } @else if (tool.error) {
+            <span class="chip danger">{{ 'ai.toolFailed' | t }}</span>
+          }
+        </button>
+        <button class="icon-btn small copy" (click)="clip.copy(tool.detail || tool.summary)" [shedTip]="'common.copy' | t">
+          <shed-icon name="copy" [size]="14" />
+        </button>
+      </div>
+    }
+    @if (open()) {
+      <div class="detail">
+        <shed-ai-tool-detail [entry]="tool" [workspace]="workspace()" [tab]="tab()" />
+        <button class="btn ghost small" (click)="open.set(false)">
+          <shed-icon name="arrow-up" [size]="13" />{{ 'ai.collapse' | t }}
+        </button>
+      </div>
+    }
+  `,
+  styles: `
+    .line {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+      min-width: 0;
+      padding: 3px 6px;
+      border: 0;
+      border-radius: var(--radius-sm);
+      background: none;
+      color: var(--text-dim);
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .summary:hover {
+      background: var(--hover);
+      color: var(--text);
+    }
+    .err .summary {
+      color: var(--danger);
+    }
+    .name.shrink {
+      flex: 0 1 auto;
+      max-width: 60%;
+    }
+    .info {
+      flex: 1;
+      min-width: 0;
+      font-size: 12px;
+    }
+    .run {
+      flex: 1;
+      min-width: 0;
+      margin: 3px 0;
+      padding: 6px 8px;
+      border: 1px solid var(--divider);
+      border-left: 3px solid color-mix(in srgb, var(--accent) 60%, var(--divider));
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: inherit;
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .run:hover {
+      background: var(--hover);
+    }
+    .copy {
+      visibility: hidden;
+    }
+    .line:hover .copy,
+    .copy:focus-visible {
+      visibility: visible;
+    }
+    @media (pointer: coarse) {
+      .copy {
+        display: none;
+      }
+    }
+    .detail {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 4px 0 8px 22px;
+    }
+    .detail > .btn {
+      align-self: flex-start;
+    }
+    .spinner {
+      width: 10px;
+      height: 10px;
+      border: 2px solid var(--divider);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex: none;
+    }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  `,
+})
+export class AiToolEntry {
+  readonly entry = input.required<AiTool>();
+  readonly workspace = input.required<string>();
+  readonly tab = input.required<string>();
+  protected readonly open = signal(false);
+  protected readonly clip = inject(Clipboard);
+  private readonly dialogs = inject(Dialogs);
+  private readonly narrow = mediaSignal(NARROW);
+  private readonly live = inject(AiLive, { optional: true }) ?? new AiLive();
+
+  /** After a tool's line: when a timer it set fires. */
+  protected readonly info = computed(() => {
+    const tool = this.entry();
+    const timer = tool.id ? this.live.timers().find((x) => x.tool === tool.id) : undefined;
+    return timer ? t('ai.timer.fires', { when: timerWhen(timer, this.live.now()) }) : null;
+  });
+
+  /** A run opens as a sheet on phones; the rest (and runs on wide screens) inline. */
+  protected toggle(): void {
+    if (this.entry().run && this.narrow()) {
+      openRun(this.dialogs, { tool: this.entry, workspace: this.workspace(), tab: this.tab(), live: this.live }, true);
+      return;
+    }
+    this.open.update((o) => !o);
   }
 }
 

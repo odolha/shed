@@ -1406,14 +1406,22 @@ What the web app shows:
 - **AI tabs**, as in Shed: the conversation with its steps (click one for its
   detail, change and result), thinking folded, permission cards (**Allow**,
   **Allow for This Session**, **Deny**) and questions (pick options, or write
-  your own answer). A sub-agent or a task in the background says how it does
-  after its line (`running 3 min · Read src/main.rs · 4 tool calls`, `done in
-  40 s`); click it for the kind of agent, its steps (each opens to its change
-  and result) and its report. Claude Code's own notes (a background task
-  finished, a wake-up, a command's output, a compaction) are lines of their
-  own, their detail folded. Wake-ups, scheduled jobs and watches Claude set wait
-  above the prompt, counting down ("Wakes up in 18 min"; hover for what it will
-  tell Claude). The prompt sends with Enter on a computer (Shift+Enter
+  your own answer). A sub-agent or a task in the background is a card: what
+  it is for (up to two lines), how it does (`running 3 min · 4 tool calls ·
+  Explore`, `done in 40 s`, failed in red) and, while it runs, its current step
+  on a line of its own; click it for its steps (each opens to its change and
+  result) and its report: in place on a computer, as a sheet on a phone.
+  Claude Code's own notes (a background task finished, a wake-up, a command's
+  output, a compaction) are lines of their own, their detail folded. What
+  still runs and what Claude set to happen later wait above the prompt:
+  sub-agents and background commands still running, and wake-ups, scheduled
+  jobs and watches, counting down ("Wakes up in 18 min"; hover or tap for what
+  it will tell Claude). One shows as it is; several fold to a line (`2 agents
+  running · 1 background command · 1 timer`) that opens to the list. The
+  conversation opens at its latest entry and follows Claude's output while
+  you are at the end; scroll up and it stays where you are, with **↓** to
+  jump back. **▲ ▼** at its side jump to your previous or next message, and
+  a thin scrollbar shows while it scrolls (drag it to go far). The prompt sends with Enter on a computer (Shift+Enter
   breaks the line) and with its button on a phone; `/` lists Claude Code's
   commands. **Attach** adds files (as can pasting or dropping them): pictures
   go as pictures (they can be taken with the camera on a phone too); any other
@@ -1422,7 +1430,8 @@ What the web app shows:
   While Claude works, sending queues the message
   (**Edit**, **Send Now**, **Remove**); **Draft** keeps it for later; **Stop**
   interrupts. Below the prompt: the model, its effort, the mode (**Full Auto…**
-  asks first), and the follow and browser switches. The clock button lists the
+  asks first), and the follow and browser switches; on a narrow screen these
+  are behind the sliders beside **Send** (see below). The clock button lists the
   sessions (draft sessions first; double-click to rename; right-click for
   **Delete Session…**, which asks first and moves its files to Shed's trash,
   as in the window); **Review** shows
@@ -1463,7 +1472,21 @@ What the web app shows:
   already on). Only when no Shed app is in view does it come as a browser or
   phone notification.
 
-On a phone, **Add to Home Screen** installs it as an app (on iPhone, needed for
+On a phone (a screen narrower than 700 pixels) the web app makes room:
+
+- In an AI tab the sliders beside **Send** open the tab's settings as a sheet
+  from the bottom: the model, its effort, the mode (**Full Auto…** asks first,
+  and turns the sliders red), **Follow edits**, **Use the browser** and the
+  folders Claude works in besides the tab's (**Add a Folder…**, × to drop
+  one). The usage limits are two thin bars (5 hours, the week) in the bench's
+  bar; tap them for the percentages and when each resets.
+- The prompt shows a few lines; while you type it grows, up to about half of
+  the room above the keyboard, the line of what runs and waits folds to one
+  line, and **▲ ▼** step aside. With the keyboard up, Shed's top bar and the
+  bench's bar make way for the conversation (the tabs stay); putting the
+  keyboard away folds the prompt again.
+
+**Add to Home Screen** installs it as an app (on iPhone, needed for
 notifications). Private tabs are listed, never shown: what is in them stays on
 their workspace.
 

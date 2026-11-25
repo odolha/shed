@@ -19,23 +19,32 @@ import { Icon } from '../../ui/icon';
 import { Menu, MenuTrigger } from '../../ui/menu';
 import { Notices } from '../../ui/notices';
 import { nowSecs, span } from '../../ui/time';
+import { Scrollbar } from '../../ui/scrollbar';
 import { Tooltip } from '../../ui/tooltip';
+import { NARROW, mediaSignal } from '../../ui/viewport';
+import { BenchActions } from '../bench/bench-actions';
 import { tildify } from '../shared/tabs';
-import { AiEntryView, type UserAction } from './entries';
+import { AiEntryView, AiRunCard, openRun, type UserAction } from './entries';
+import {
+  END_SLACK,
+  Follow,
+  type EntryBox,
+  type TopEntry,
+  atEnd,
+  below,
+  nextPrompt,
+  previousPrompt,
+  promptIndices,
+  topEntry,
+} from './follow';
 import { AiPrompt } from './prompt';
 import { AiReviewView } from './review';
 import { AiSessionsPanel } from './sessions';
-import { AiLive, runningStarts, tickEvery, timerLabel, timerTip } from './runs';
+import { AiSettingsSheet, FULL_AUTO, MODES, type SettingsSheetData } from './settings-sheet';
+import { AiLive, type LiveRun, liveRuns, runningStarts, tickEvery, timerLabel, timerTip, waitingSummary } from './runs';
 import { applyAiEvent, workingOn } from './transcript';
 
-/** Claude Code's permission modes: its value, the menu's label key. */
-export const MODES: { value: string; key: string }[] = [
-  { value: 'default', key: 'ai.mode.default' },
-  { value: 'acceptEdits', key: 'ai.mode.acceptEdits' },
-  { value: 'auto', key: 'ai.mode.auto' },
-  { value: 'plan', key: 'ai.mode.plan' },
-];
-export const FULL_AUTO = 'bypassPermissions';
+export { FULL_AUTO, MODES } from './settings-sheet';
 
 const PAGE = 150;
 
@@ -43,7 +52,7 @@ const PAGE = 150;
 @Component({
   selector: 'shed-ai-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TPipe, Icon, Tooltip, Menu, MenuTrigger, AiEntryView, AiPrompt, AiSessionsPanel, AiReviewView],
+  imports: [TPipe, Icon, Tooltip, Menu, MenuTrigger, Scrollbar, AiEntryView, AiRunCard, AiPrompt, AiSessionsPanel, AiReviewView],
   providers: [AiLive],
   template: `
     @let a = ai();
@@ -70,8 +79,8 @@ const PAGE = 150;
         </span>
       </div>
       <span class="grow"></span>
-      <button class="btn small" [class.on]="reviewing()" (click)="reviewing.set(!reviewing())">
-        <shed-icon name="eye" />{{ 'ai.review.open' | t }}
+      <button class="btn small" [class.on]="reviewing()" (click)="reviewing.set(!reviewing())" [shedTip]="'ai.review.open' | t">
+        <shed-icon name="eye" /><span class="review-label">{{ 'ai.review.open' | t }}</span>
       </button>
       <button class="icon-btn" [shedMenu]="more" [shedTip]="'common.more' | t"><shed-icon name="more" [size]="18" /></button>
       <shed-menu #more>
@@ -110,46 +119,72 @@ const PAGE = 150;
             (back)="reviewing.set(false)"
           />
         } @else {
-          <div class="scroll transcript" #scroller (scroll)="onScroll()">
-            <div class="inner">
-              @if (paused()) {
-                <div class="error-box small">{{ 'ai.paused' | t }}</div>
-              }
-              @if (endedText(); as e) {
-                <div class="error-box small">{{ e }}</div>
-              }
-              @if (hidden() > 0) {
-                <div class="earlier">
-                  <button class="btn small" (click)="shown.set(shown() + PAGE)">{{ 'ai.showEarlier' | t: { n: hidden() } }}</button>
-                  <button class="btn small ghost" (click)="shown.set(entries().length)">{{ 'ai.showAll' | t }}</button>
+          <div class="view">
+            <div
+              class="scroll transcript no-scrollbar"
+              #scroller
+              tabindex="-1"
+              (scroll)="onScroll()"
+              (wheel)="userInput()"
+              (keydown)="userInput()"
+              (touchstart)="finger(true)"
+              (touchend)="finger(false)"
+              (touchcancel)="finger(false)"
+            >
+              <div class="inner" [class.navpad]="nav()">
+                @if (paused()) {
+                  <div class="error-box small">{{ 'ai.paused' | t }}</div>
+                }
+                @if (endedText(); as e) {
+                  <div class="error-box small">{{ e }}</div>
+                }
+                @if (hidden() > 0) {
+                  <div class="earlier">
+                    <button class="btn small" (click)="shown.set(shown() + PAGE)">{{ 'ai.showEarlier' | t: { n: hidden() } }}</button>
+                    <button class="btn small ghost" (click)="shown.set(entries().length)">{{ 'ai.showAll' | t }}</button>
+                  </div>
+                }
+                @for (e of visible(); track $index + offset()) {
+                  <shed-ai-entry
+                    [attr.data-i]="$index + offset()"
+                    [entry]="e"
+                    [index]="$index + offset()"
+                    [workspace]="workspace()"
+                    [tab]="tabId()"
+                    [canChange]="canChange()"
+                    (act)="onUserAction($event)"
+                  />
+                } @empty {
+                  @if (loaded()) {
+                    <div class="empty">
+                      <shed-icon name="ai" [size]="28" />
+                      <p>{{ 'ai.emptySession' | t }}</p>
+                    </div>
+                  } @else {
+                    <div class="empty">{{ 'common.loading' | t }}</div>
+                  }
+                }
+              </div>
+            </div>
+            <shed-scrollbar [for]="scroller" (drag)="barDrag($event)" />
+            <div class="float">
+              @if (nav()) {
+                <div class="nav">
+                  <button class="navbtn" (click)="previous()" [disabled]="previousIndex() === null" [shedTip]="'ai.previousPrompt' | t">
+                    <shed-icon name="chevron-up" [size]="18" />
+                  </button>
+                  <button class="navbtn" (click)="next()" [disabled]="nextIndex() === null && !moreBelow()" [shedTip]="'ai.nextPrompt' | t">
+                    <shed-icon name="chevron-down" [size]="18" />
+                  </button>
                 </div>
               }
-              @for (e of visible(); track $index + offset()) {
-                <shed-ai-entry
-                  [entry]="e"
-                  [index]="$index + offset()"
-                  [workspace]="workspace()"
-                  [tab]="tabId()"
-                  [canChange]="canChange()"
-                  (act)="onUserAction($event)"
-                />
-              } @empty {
-                @if (loaded()) {
-                  <div class="empty">
-                    <shed-icon name="ai" [size]="28" />
-                    <p>{{ 'ai.emptySession' | t }}</p>
-                  </div>
-                } @else {
-                  <div class="empty">{{ 'common.loading' | t }}</div>
-                }
+              @if (follow.showJump(moreBelow()) && !(typing() && narrow())) {
+                <button class="jump" (click)="toLatest()" [shedTip]="'ai.toEnd' | t">
+                  <shed-icon name="arrow-down" [size]="18" />
+                </button>
               }
             </div>
           </div>
-          @if (!atBottom()) {
-            <button class="icon-btn jump" (click)="scrollDown(true)" [shedTip]="'ai.toEnd' | t">
-              <shed-icon name="arrow-down" [size]="18" />
-            </button>
-          }
         }
 
         <div class="bottom">
@@ -162,13 +197,33 @@ const PAGE = 150;
               }
             </div>
           }
-          @if (timers().length) {
-            <div class="timers">
-              @for (tm of timers(); track $index) {
-                <div class="timer small" tabindex="0" [shedTip]="timerTip(tm)">
-                  <shed-icon [name]="tm.kind === 'watch' ? 'eye' : 'clock'" [size]="14" />
-                  <span class="when">{{ timerLabel(tm, now()) }}</span>
-                  <span class="ellipsis grow">{{ tm.what }}</span>
+          @if (waitingCount()) {
+            <div class="waiting">
+              @if (waitingCount() > 1 || typing()) {
+                <button class="sumline small" (click)="openWaiting()" [attr.aria-expanded]="showWaiting()">
+                  <shed-icon [name]="showWaiting() ? 'chevron-down' : 'chevron-right'" [size]="14" />
+                  @if (runs().length) {
+                    <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                  } @else {
+                    <shed-icon name="clock" [size]="14" />
+                  }
+                  <span class="ellipsis grow">{{ summary() }}</span>
+                </button>
+              }
+              @if (showWaiting()) {
+                <div class="items">
+                  @for (r of runs(); track r.index) {
+                    <button class="item" (click)="openLive(r)">
+                      <shed-ai-run-card [entry]="r.tool" />
+                    </button>
+                  }
+                  @for (tm of timers(); track $index) {
+                    <div class="timer small" tabindex="0" [shedTip]="timerTip(tm)">
+                      <shed-icon [name]="tm.kind === 'watch' ? 'eye' : 'clock'" [size]="14" />
+                      <span class="when">{{ timerLabel(tm, now()) }}</span>
+                      <span class="ellipsis grow">{{ tm.what }}</span>
+                    </div>
+                  }
                 </div>
               }
             </div>
@@ -222,10 +277,13 @@ const PAGE = 150;
             [info]="info()"
             [working]="busy()"
             [canChange]="canChange()"
+            [settingsDanger]="a.mode === FULL_AUTO"
+            (settings)="openSettings()"
             [(editing)]="editing"
+            [(typing)]="typing"
           />
 
-          <div class="status small">
+          <div class="status small" [class.quiet]="!busy() && a.activity !== 'waiting' && !waitingHere()">
             @if (busy()) {
               <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
               <span class="ellipsis doing">{{ doing() }}</span>
@@ -233,6 +291,7 @@ const PAGE = 150;
               <span class="accent">{{ 'ai.waiting' | t }}</span>
             }
             <span class="grow"></span>
+            <span class="chips">
             <button class="chipbtn" [shedMenu]="modelMenu" [disabled]="!canChange()">{{ modelLabel() }}</button>
             @if (efforts().length) {
               <button class="chipbtn" [shedMenu]="effortMenu" [disabled]="!canChange()">{{ effortLabel() }}</button>
@@ -260,6 +319,7 @@ const PAGE = 150;
             >
               <shed-icon name="globe" />
             </button>
+            </span>
           </div>
         </div>
       </div>
@@ -377,8 +437,17 @@ const PAGE = 150;
       flex-direction: column;
       position: relative;
     }
+    .view {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
     .transcript {
       flex: 1;
+      outline: none;
+      overscroll-behavior: contain;
     }
     .inner {
       max-width: 860px;
@@ -391,24 +460,131 @@ const PAGE = 150;
       gap: 8px;
       margin-bottom: 8px;
     }
-    .jump {
+    /* Over the end of the conversation, at the side: kept clear of what is read at the end. */
+    .float {
       position: absolute;
-      right: 18px;
-      bottom: 210px;
-      background: var(--raised);
+      right: 14px;
+      bottom: 10px;
+      z-index: 4;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .float > * {
+      pointer-events: auto;
+    }
+    .nav {
+      display: flex;
+      flex-direction: column;
       border: 1px solid var(--divider);
-      box-shadow: var(--shadow);
+      border-radius: 20px;
+      background: color-mix(in srgb, var(--surface) 78%, transparent);
+      overflow: hidden;
+    }
+    .navbtn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border: 0;
+      background: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .navbtn:hover:not(:disabled) {
+      background: var(--hover);
+      color: var(--text);
+    }
+    .navbtn:disabled {
+      color: color-mix(in srgb, var(--text-dim) 40%, transparent);
+      cursor: default;
+    }
+    .jump {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      border: 0;
       border-radius: 50%;
-      z-index: 2;
+      background: var(--accent);
+      color: var(--accent-ink);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+    }
+    .inner.navpad {
+      padding-bottom: 96px;
+    }
+    @media (pointer: coarse) {
+      .navbtn {
+        width: 40px;
+        height: 44px;
+      }
+      .jump {
+        width: 44px;
+        height: 44px;
+      }
+      .inner.navpad {
+        padding-bottom: 108px;
+      }
     }
     .bottom {
       max-width: 860px;
       width: 100%;
       margin: 0 auto;
-      padding: 6px 12px calc(8px + env(safe-area-inset-bottom));
+      padding: 6px calc(12px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom))
+        calc(12px + env(safe-area-inset-left));
       display: flex;
       flex-direction: column;
       gap: 6px;
+    }
+    .waiting {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .sumline {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 2px 8px;
+      border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+      border-radius: var(--radius-sm);
+      background: none;
+      color: var(--text);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .sumline:hover {
+      background: var(--hover);
+    }
+    .items {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 38vh;
+      overflow: auto;
+    }
+    .item {
+      padding: 6px 8px;
+      border: 1px solid var(--divider);
+      border-left: 3px solid color-mix(in srgb, var(--accent) 60%, var(--divider));
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: inherit;
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .item:hover {
+      background: var(--hover);
     }
     .strip {
       display: flex;
@@ -418,16 +594,12 @@ const PAGE = 150;
       border-radius: var(--radius-sm);
       background: color-mix(in srgb, var(--info) 12%, transparent);
     }
-    .timers {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
     .timer {
       display: flex;
       align-items: center;
       gap: 6px;
       min-width: 0;
+      min-height: 28px;
       padding: 2px 8px;
       border-radius: var(--radius-sm);
       border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
@@ -516,12 +688,25 @@ const PAGE = 150;
         opacity: 1;
       }
     }
-    @media (max-width: 700px) {
-      .wide-only {
+    .chips {
+      display: contents;
+    }
+    @media (max-width: 699px) {
+      .wide-only,
+      .chips {
         display: none;
       }
       .inner {
-        padding: 8px 10px 20px;
+        padding: 8px 12px 20px 10px;
+      }
+      .status.quiet {
+        display: none;
+      }
+      .status {
+        min-height: 20px;
+      }
+      .head .review-label {
+        display: none;
       }
     }
   `,
@@ -538,6 +723,8 @@ export class AiTab {
   private readonly scroller = viewChild<ElementRef<HTMLElement>>('scroller');
   private readonly prompt = viewChild<AiPrompt>('prompt');
   private readonly live = inject(AiLive);
+  private readonly actions = inject(BenchActions);
+  protected readonly narrow = mediaSignal(NARROW);
 
   protected readonly PAGE = PAGE;
   protected readonly FULL_AUTO = FULL_AUTO;
@@ -561,7 +748,23 @@ export class AiTab {
   protected readonly paused = signal(false);
   protected readonly endedText = signal<string | null>(null);
   protected readonly shown = signal(PAGE);
-  protected readonly atBottom = signal(true);
+  /** Whether the conversation keeps to its end. */
+  protected readonly follow = new Follow();
+  /** There is more below what shows. */
+  protected readonly moreBelow = signal(false);
+  /** The conversation is longer than what shows. */
+  private readonly scrollable = signal(false);
+  /** The entry at the top of what shows, for the jumps between messages. */
+  private readonly atTop = signal<TopEntry | null>(null);
+  /** The prompt has the focus (on a phone: the keyboard is up). */
+  protected readonly typing = signal(false);
+  /** The list of what runs and waits above the prompt is open. */
+  private readonly waitingOpen = signal(false);
+  private fingerDown = false;
+  private dragging = false;
+  private inputAt = 0;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private measureFrame = 0;
   protected readonly sessionsOpen = signal(false);
   protected readonly reviewing = signal(false);
   protected readonly draftsOpen = signal(false);
@@ -572,6 +775,25 @@ export class AiTab {
 
   protected readonly now = this.live.now;
   protected readonly timers = computed(() => this.status().timers ?? []);
+  /** Sub-agents and background tasks still running. */
+  protected readonly runs = computed(() => liveRuns(this.entries()));
+  protected readonly waitingCount = computed(() => this.runs().length + this.timers().length);
+  protected readonly summary = computed(() => waitingSummary(this.runs(), this.timers()));
+  /** The list shows: one thing alone, or several opened; folded to its line while typing. */
+  protected readonly showWaiting = computed(
+    () => !this.typing() && (this.waitingCount() === 1 || this.waitingOpen()),
+  );
+  private readonly prompts = computed(() => promptIndices(this.entries()));
+  /** ▲ ▼ between your messages: when there are some to go to, and not while typing. */
+  protected readonly nav = computed(() => !this.typing() && this.scrollable() && this.prompts().length > 0);
+  protected readonly previousIndex = computed(() => {
+    const top = this.atTop();
+    return top ? previousPrompt(this.entries(), top.top, top.inside) : null;
+  });
+  protected readonly nextIndex = computed(() => {
+    const top = this.atTop();
+    return top ? nextPrompt(this.entries(), top.top) : null;
+  });
   /** When the runs going on started: what the clock counts besides timers. */
   private readonly starts = computed(() => runningStarts(this.entries()));
 
@@ -637,7 +859,8 @@ export class AiTab {
         this.paused.set(false);
         this.endedText.set(null);
         this.shown.set(PAGE);
-        this.atBottom.set(true);
+        this.follow.reset();
+        this.moreBelow.set(false);
       });
       const sub = this.store.socket.subscribe(ws, { type: 'Ai', content: { tab } }, {
         event: (e) => {
@@ -651,7 +874,8 @@ export class AiTab {
               if (e.type === 'AiTranscript') {
                 this.loaded.set(true);
                 this.paused.set(false);
-                if (this.atBottom() || before === 0) this.scrollDown(false);
+                if (before === 0 || this.follow.shouldScroll(true)) this.scrollToEnd(false);
+                else this.measureSoon();
               }
               break;
             }
@@ -674,7 +898,8 @@ export class AiTab {
       const el = this.scroller()?.nativeElement;
       if (!el || typeof ResizeObserver === 'undefined') return;
       const ro = new ResizeObserver(() => {
-        if (this.atBottom()) el.scrollTop = el.scrollHeight;
+        if (this.follow.shouldScroll(below(el) > 0)) el.scrollTop = el.scrollHeight;
+        this.measureSoon();
       });
       ro.observe(el);
       if (el.firstElementChild) ro.observe(el.firstElementChild);
@@ -712,11 +937,29 @@ export class AiTab {
     this.resub.update((n) => n + 1);
   }
 
+  /** A wheel or a key on the conversation: the user moves it. */
+  protected userInput(): void {
+    this.inputAt = Date.now();
+  }
+
+  protected finger(down: boolean): void {
+    this.fingerDown = down;
+    if (!down) this.settleSoon();
+  }
+
+  protected barDrag(on: boolean): void {
+    this.dragging = on;
+    if (on) this.follow.dragged();
+    else this.settleSoon();
+  }
+
   protected onScroll(): void {
     const el = this.scroller()?.nativeElement;
     if (!el) return;
-    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    if (bottom !== this.atBottom()) this.atBottom.set(bottom);
+    // Moved by hand (a finger, the wheel, keys, the scrollbar), not by following.
+    if (this.fingerDown || this.dragging || Date.now() - this.inputAt < 300) this.follow.dragged();
+    this.settleSoon();
+    this.measureSoon();
     if (el.scrollTop < 40 && this.hidden() > 0) {
       const height = el.scrollHeight;
       this.shown.update((n) => n + PAGE);
@@ -724,15 +967,118 @@ export class AiTab {
     }
   }
 
-  protected scrollDown(smooth: boolean): void {
+  /** Once the conversation stops moving: following again at its end, not elsewhere. */
+  private settleSoon(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      const el = this.scroller()?.nativeElement;
+      if (!el || this.fingerDown || this.dragging) return;
+      this.follow.settled(atEnd(el));
+    }, 160);
+  }
+
+  /** What shows, measured at the next frame: more below, the entry at the top. */
+  private measureSoon(): void {
+    cancelAnimationFrame(this.measureFrame);
+    this.measureFrame = requestAnimationFrame(() => {
+      const el = this.scroller()?.nativeElement;
+      if (!el) return;
+      this.moreBelow.set(below(el) > END_SLACK);
+      this.scrollable.set(el.scrollHeight > el.clientHeight + 4);
+      const top = el.getBoundingClientRect().top;
+      const boxes: EntryBox[] = [];
+      for (const n of Array.from(el.querySelectorAll<HTMLElement>('shed-ai-entry[data-i]'))) {
+        const r = n.getBoundingClientRect();
+        boxes.push({ index: Number(n.dataset['i']), top: r.top - top, bottom: r.bottom - top });
+        // Past the top: the rest are below it.
+        if (r.bottom - top > 8) break;
+      }
+      const at = topEntry(boxes, 0);
+      const old = this.atTop();
+      if (at?.top !== old?.top || at?.inside !== old?.inside) this.atTop.set(at);
+    });
+  }
+
+  /** To the latest entry, following it again (the ↓ button). */
+  protected toLatest(): void {
+    this.follow.toLatest();
+    this.scrollToEnd(true);
+  }
+
+  private scrollToEnd(smooth: boolean): void {
     // After the new entries are drawn (the frame after this one).
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         const el = this.scroller()?.nativeElement;
         if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-        this.atBottom.set(true);
+        this.measureSoon();
       }),
     );
+  }
+
+  protected previous(): void {
+    const i = this.previousIndex();
+    if (i === null) return;
+    this.follow.away();
+    this.goTo(i);
+  }
+
+  protected next(): void {
+    const i = this.nextIndex();
+    if (i === null) {
+      this.toLatest();
+      return;
+    }
+    this.follow.away();
+    this.goTo(i);
+  }
+
+  /** Scrolls an entry to the top, drawing earlier ones first if it is among them. */
+  private goTo(index: number): void {
+    if (index < this.offset()) this.shown.set(this.entries().length - index);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = this.scroller()?.nativeElement;
+        const target = el?.querySelector<HTMLElement>(`shed-ai-entry[data-i="${index}"]`);
+        if (!el || !target) return;
+        const y = el.scrollTop + target.getBoundingClientRect().top - el.getBoundingClientRect().top - 8;
+        el.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+      }),
+    );
+  }
+
+  /** The line over what waits: opens the list (and folds the prompt away while typing). */
+  protected openWaiting(): void {
+    if (this.typing()) {
+      this.waitingOpen.set(true);
+      (document.activeElement as HTMLElement | null)?.blur();
+      return;
+    }
+    this.waitingOpen.update((o) => !o);
+  }
+
+  /** A run's steps and report, from the strip above the prompt. */
+  protected openLive(r: LiveRun): void {
+    const tool = computed(() => {
+      const e = this.entries()[r.index];
+      return e?.type === 'Tool' ? e.content : r.tool;
+    });
+    openRun(this.dialogs, { tool, workspace: this.workspace(), tab: this.tabId(), live: this.live }, this.narrow());
+  }
+
+  /** The tab's settings as a sheet (narrow screens: the icon beside Send). */
+  protected openSettings(): void {
+    const data: SettingsSheetData = {
+      ai: this.ai,
+      info: this.info,
+      canChange: this.canChange,
+      home: this.home,
+      change: (c) => this.settings(c),
+      fullAuto: () => this.fullAuto(),
+      pickFolder: () => this.actions.pickFolder(this.workspace(), t('ai.folderAddTitle'), this.bench()),
+    };
+    void this.dialogs.open<SettingsSheetData, null>(AiSettingsSheet, data, { sheet: true });
   }
 
   protected onSessionOpened(): void {

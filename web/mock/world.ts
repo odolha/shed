@@ -43,6 +43,7 @@ const LOOKING = new Set<Call['type']>([
   'GitStatus',
   'GitDiff',
   'GitLog',
+  'GitBlame',
   'GitCommitFiles',
   'GitBranches',
   'BrowseFolders',
@@ -700,6 +701,10 @@ async function dispatch(call: Call): Promise<Reply> {
     case 'GitLog':
       projectTabOf(call.content.tab);
       return { type: 'Commits', content: project.gitLog(call.content.path, call.content.limit ?? 0) };
+    case 'GitBlame':
+      // The web app does not blame (yet): no lines.
+      projectTabOf(call.content.tab);
+      return { type: 'Blame', content: [] };
     case 'GitCommitFiles':
       projectTabOf(call.content.tab);
       return { type: 'CommitFiles', content: project.gitCommitFiles(call.content.hash) };

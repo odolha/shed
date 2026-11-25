@@ -8,6 +8,7 @@ import {
   inject,
   input,
   model,
+  output,
   signal,
   untracked,
   viewChild,
@@ -18,6 +19,7 @@ import { TPipe, t } from '../../i18n/i18n';
 import { Icon } from '../../ui/icon';
 import { Notices } from '../../ui/notices';
 import { Tooltip } from '../../ui/tooltip';
+import { Viewport } from '../../ui/viewport';
 import { dataUrl, readBase64, readPicture } from './pictures';
 import { withAttachedFiles } from './runs';
 
@@ -69,6 +71,7 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
     '(dragleave)': 'dragging.set(false)',
     '(drop)': 'onDrop($event)',
     '[class.dragging]': 'dragging()',
+    '[class.focused]': 'typing()',
   },
   template: `
     @if (editing() !== null) {
@@ -137,6 +140,8 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
         (input)="onInput($event)"
         (keydown)="onKey($event)"
         (paste)="onPaste($event)"
+        (focus)="typing.set(true)"
+        (blur)="typing.set(false)"
         [placeholder]="(working() ? 'ai.prompt.placeholderQueue' : 'ai.prompt.placeholder') | t"
         [attr.aria-label]="'ai.prompt.label' | t"
         [disabled]="!canChange()"
@@ -155,6 +160,14 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
           </button>
         }
         <span class="grow"></span>
+        <button
+          class="icon-btn settings"
+          [class.danger-text]="settingsDanger()"
+          (click)="settings.emit()"
+          [shedTip]="'ai.settings' | t"
+        >
+          <shed-icon name="sliders" [size]="18" />
+        </button>
         @if (editing() === null) {
           <button class="btn ghost" (click)="draft()" [disabled]="!canChange() || !text().trim()" [shedTip]="'ai.prompt.draftTip' | t">
             <shed-icon name="pencil" />
@@ -199,6 +212,7 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
       width: 100%;
       min-height: 40px;
       max-height: 40vh;
+      overscroll-behavior: contain;
       padding: 6px 8px;
       border: 0;
       outline: none;
@@ -325,6 +339,24 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
         display: none;
       }
     }
+    .settings {
+      display: none;
+    }
+    @media (max-width: 699px) {
+      .settings {
+        display: inline-flex;
+      }
+      /* A few lines; while typing, up to 45 % of what shows above the keyboard. */
+      .area {
+        max-height: calc(3 * 1.45em + 12px);
+      }
+      :host(.focused) .area {
+        max-height: calc(var(--vvh, 100dvh) * 0.45);
+      }
+      .box {
+        padding: 4px;
+      }
+    }
   `,
 })
 export class AiPrompt implements OnDestroy {
@@ -336,6 +368,12 @@ export class AiPrompt implements OnDestroy {
   readonly canChange = input(false);
   /** The entry index of a message being edited, or null. */
   readonly editing = model<number | null>(null);
+  /** The prompt has the focus. */
+  readonly typing = model(false);
+  /** The mode is Full Auto: the settings icon in the danger colour. */
+  readonly settingsDanger = input(false);
+  /** The settings icon (narrow screens) was pressed. */
+  readonly settings = output<void>();
 
   private readonly store = inject(WorkspacesStore);
   private readonly notices = inject(Notices);
@@ -369,6 +407,19 @@ export class AiPrompt implements OnDestroy {
   );
 
   constructor() {
+    // A phone's keyboard put away (the back gesture) leaves the prompt: it folds again.
+    const viewport = inject(Viewport);
+    let up = false;
+    effect(() => {
+      const now = viewport.keyboard();
+      untracked(() => {
+        const el = this.area()?.nativeElement;
+        if (up && !now && this.coarse && el && document.activeElement === el) el.blur();
+        up = now;
+        // The box grows or shrinks with the room it has.
+        queueMicrotask(() => this.autosize());
+      });
+    });
     // What was written and not sent comes back with the tab.
     effect(() => {
       const tab = this.tab();

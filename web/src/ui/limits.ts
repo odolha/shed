@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { Menu, MenuTrigger } from './menu';
 import type { LimitWindow, Limits } from '../api/gen/api';
 import { t } from '../i18n/i18n';
 import { Clock, ago, clock, span } from './time';
@@ -7,6 +8,8 @@ import { Tooltip } from './tooltip';
 interface Bar {
   key: string;
   label: string;
+  /** Its label in two or three letters, for the thin bars of narrow screens. */
+  short: string;
   used: number;
   pct: number;
   level: 'ok' | 'warn' | 'danger';
@@ -21,7 +24,7 @@ interface Bar {
 const FIVE_HOURS = 5 * 3600;
 const WEEK = 7 * 86400;
 
-export function limitBar(key: string, label: string, w: LimitWindow, length: number, now: number, seen: number): Bar {
+export function limitBar(key: string, label: string, w: LimitWindow, length: number, now: number, seen: number, short = label): Bar {
   const used = Math.max(0, Math.min(1, w.used));
   const remaining = Math.max(0, w.resets - now);
   const elapsed = w.resets ? Math.max(0, Math.min(1, 1 - remaining / length)) : null;
@@ -40,6 +43,7 @@ export function limitBar(key: string, label: string, w: LimitWindow, length: num
   return {
     key,
     label,
+    short,
     used,
     pct: Math.round(used * 100),
     level: used >= 0.9 ? 'danger' : used >= 0.7 ? 'warn' : 'ok',
@@ -50,12 +54,44 @@ export function limitBar(key: string, label: string, w: LimitWindow, length: num
   };
 }
 
-/** Claude's usage limits: the 5-hour window and the week, as small bars. */
+/**
+ * Claude's usage limits: the 5-hour window and the week, as small bars; on
+ * narrow screens (`compact`), two thin bars that open the details on a tap.
+ */
 @Component({
   selector: 'shed-limits',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [Tooltip],
+  imports: [Tooltip, Menu, MenuTrigger],
   template: `
+    @if (compact()) {
+      @if (bars().length) {
+        <button class="thin" [shedMenu]="details" [attr.aria-label]="summary()">
+          @for (b of bars(); track b.key) {
+            <span class="thin-row">
+              <span class="thin-label">{{ b.short }}</span>
+              <span class="bar"><span class="fill" [class]="b.level" [style.width.%]="b.pct"></span></span>
+            </span>
+          }
+        </button>
+        <shed-menu #details>
+          <div class="menu-label">{{ title }}</div>
+          @for (b of bars(); track b.key) {
+            <div class="detail">
+              <div class="top">
+                <span>{{ b.label }}</span><span class="pct">{{ b.pct }}%</span>
+              </div>
+              <div class="bar wide">
+                <div class="fill" [class]="b.level" [style.width.%]="b.pct"></div>
+                @if (b.pace !== null) {
+                  <div class="pace" [style.left.%]="b.pace * 100"></div>
+                }
+              </div>
+              <div class="tipline">{{ b.tip }}</div>
+            </div>
+          }
+        </shed-menu>
+      }
+    } @else {
     @for (b of bars(); track b.key) {
       <div class="limit" [shedTip]="b.tip" tabindex="0" [attr.aria-label]="b.tip">
         <div class="top">
@@ -69,6 +105,7 @@ export function limitBar(key: string, label: string, w: LimitWindow, length: num
         </div>
         <div class="left" [class.fast]="b.tooFast">{{ b.left }}</div>
       </div>
+    }
     }
   `,
   styles: `
@@ -123,10 +160,66 @@ export function limitBar(key: string, label: string, w: LimitWindow, length: num
     .left.fast {
       color: var(--warn);
     }
+    .thin {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 5px;
+      width: 64px;
+      min-height: 44px;
+      padding: 0 4px;
+      border: 0;
+      border-radius: var(--radius-sm);
+      background: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .thin:hover {
+      background: var(--hover);
+    }
+    .thin-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9.5px;
+      line-height: 1;
+    }
+    .thin-label {
+      width: 14px;
+      text-align: right;
+    }
+    .thin .bar {
+      flex: 1;
+      height: 3px;
+      margin: 0;
+      overflow: hidden;
+    }
+    .thin .fill {
+      display: block;
+    }
+    .detail {
+      padding: 6px 10px 8px;
+      font-size: 12px;
+      min-width: 220px;
+    }
+    .bar.wide {
+      height: 6px;
+      margin: 4px 0 6px;
+    }
+    .tipline {
+      color: var(--text-dim);
+      white-space: pre-line;
+      font-size: 11.5px;
+    }
   `,
 })
 export class LimitsBars {
   readonly limits = input<Limits | null | undefined>(null);
+  /** Two thin bars, the details on a tap (narrow screens). */
+  readonly compact = input(false);
+  protected readonly title = t('limits.title');
+  protected readonly summary = computed(() => this.bars().map((b) => `${b.label} ${b.pct}%`).join(', '));
   private readonly clockSvc = inject(Clock);
 
   protected readonly bars = computed<Bar[]>(() => {
@@ -134,8 +227,9 @@ export class LimitsBars {
     const now = this.clockSvc.now();
     if (!l) return [];
     const out: Bar[] = [];
-    if (l.fiveHour) out.push(limitBar('5h', t('limits.fiveHour'), l.fiveHour, FIVE_HOURS, now, l.seen ?? 0));
-    if (l.week) out.push(limitBar('week', t('limits.week'), l.week, WEEK, now, l.seen ?? 0));
+    if (l.fiveHour)
+      out.push(limitBar('5h', t('limits.fiveHour'), l.fiveHour, FIVE_HOURS, now, l.seen ?? 0, t('limits.short.fiveHour')));
+    if (l.week) out.push(limitBar('week', t('limits.week'), l.week, WEEK, now, l.seen ?? 0, t('limits.short.week')));
     return out;
   });
 }

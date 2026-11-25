@@ -43,6 +43,7 @@ import { BENCH_COLORS, BenchActions } from './bench-actions';
         }
         @if (hasAi()) {
           <shed-limits class="wide-only" [limits]="state()?.limits" />
+          <shed-limits class="narrow-only" [compact]="true" [limits]="state()?.limits" />
         }
         <button class="icon-btn" [shedMenu]="benchMenu" [shedTip]="'bench.menu' | t">
           <shed-icon name="more" [size]="18" />
@@ -322,8 +323,18 @@ import { BENCH_COLORS, BenchActions } from './bench-actions';
     .swatch:focus-visible {
       outline: 2px solid var(--text);
     }
-    @media (max-width: 700px) {
+    .narrow-only {
+      display: none;
+    }
+    @media (max-width: 699px) {
       .wide-only {
+        display: none;
+      }
+      .narrow-only {
+        display: flex;
+      }
+      /* The keyboard up: the tab bar stays, the bench's head goes. */
+      :host-context(.kb) .head {
         display: none;
       }
     }

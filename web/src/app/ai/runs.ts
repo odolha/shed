@@ -155,3 +155,47 @@ export function withAttachedFiles(text: string, paths: string[]): string {
   if (!paths.length) return text;
   return `${text}${text ? '\n\n' : ''}Attached files:\n${paths.map((p) => `- ${p}`).join('\n')}`;
 }
+
+/** What a sub-agent or background task is for: its description, without the tool's name in front. */
+export function runTitle(tool: AiTool): string {
+  const s = tool.summary || tool.name;
+  return isAgent(tool) ? s.replace(/^(Agent|Task):\s*/, '') || s : s;
+}
+
+/** A run's status line: its state and for how long, and its tool calls: `running 3 min · 4 tool calls`. */
+export function runStatus(tool: AiTool, run: AiRun, now = nowSecs()): string {
+  const parts = [runTime(run, now)];
+  if (isAgent(tool) && (run.tools ?? 0) > 0) parts.push(t('ai.run.tools', { n: run.tools ?? 0 }));
+  return parts.join(' · ');
+}
+
+/** What a run does now (its last step), while it runs; empty when nothing is known. */
+export function runStep(run: AiRun): string {
+  return runState(run) === 'running' && run.last && run.last !== 'Starting' ? run.last : '';
+}
+
+/** A run going on, with its entry's index. */
+export interface LiveRun {
+  index: number;
+  tool: AiTool;
+}
+
+/** Sub-agents and background tasks still running, in the conversation's order. */
+export function liveRuns(entries: AiEntry[]): LiveRun[] {
+  const out: LiveRun[] = [];
+  entries.forEach((e, index) => {
+    if (e?.type === 'Tool' && e.content.run && runState(e.content.run) === 'running') out.push({ index, tool: e.content });
+  });
+  return out;
+}
+
+/** The line over what waits above the prompt: `2 agents running · 1 background command · 1 timer`. */
+export function waitingSummary(runs: LiveRun[], timers: AiTimer[]): string {
+  const agents = runs.filter((r) => isAgent(r.tool)).length;
+  const commands = runs.length - agents;
+  const parts: string[] = [];
+  if (agents) parts.push(t('ai.strip.agents', { n: agents }));
+  if (commands) parts.push(t('ai.strip.commands', { n: commands }));
+  if (timers.length) parts.push(t('ai.strip.timers', { n: timers.length }));
+  return parts.join(' · ');
+}

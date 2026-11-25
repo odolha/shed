@@ -2,7 +2,22 @@ import { TestBed } from '@angular/core/testing';
 import type { AiEntry, AiRun, AiTimer, AiTool } from '../../api/gen/api';
 import { AiEntryView, noteIcon } from './entries';
 import { isPicture, mergedDraft } from './prompt';
-import { coarse, runLine, runningStarts, tickEvery, timerLabel, timerWhen, took, tokens, withAttachedFiles } from './runs';
+import {
+  coarse,
+  liveRuns,
+  runLine,
+  runStatus,
+  runStep,
+  runTitle,
+  runningStarts,
+  tickEvery,
+  timerLabel,
+  timerWhen,
+  took,
+  tokens,
+  waitingSummary,
+  withAttachedFiles,
+} from './runs';
 
 const NOW = 1_800_000_000;
 const agent = (run: AiRun): AiTool => ({ id: 'a1', name: 'Agent', summary: 'Agent: Look around', run });
@@ -126,10 +141,12 @@ describe('AiEntryView', () => {
     expect(el.textContent).not.toContain('good');
   });
 
-  it('shows a sub-agent with how it runs', () => {
-    const el = render({ type: 'Tool', content: agent({ state: 'running', started: Math.floor(Date.now() / 1000) - 5, last: 'Read a.rs', tools: 2 }) });
-    expect(el.textContent).toContain('Agent: Look around');
-    expect(el.textContent).toContain('Read a.rs · 2 tool calls');
+  it('shows a sub-agent as a card: what it is for, how it runs, its step on a line of its own', () => {
+    const el = render({ type: 'Tool', content: agent({ state: 'running', started: Math.floor(Date.now() / 1000) - 5, last: 'Read a.rs', tools: 2, agent: 'Explore' }) });
+    expect(el.querySelector('.title')?.textContent?.trim()).toBe('Look around');
+    expect(el.querySelector('.status')?.textContent).toContain('running 5 s · 2 tool calls');
+    expect(el.querySelector('.status')?.textContent).toContain('Explore');
+    expect(el.querySelector('.now')?.textContent?.trim()).toBe('Read a.rs');
   });
 });
 
@@ -139,5 +156,37 @@ describe('mergedDraft', () => {
     expect(mergedDraft('  \n', 'and the tests')).toBe('and the tests');
     expect(mergedDraft('Fix the build', 'and the tests')).toBe('Fix the build\n\nand the tests');
     expect(mergedDraft('Fix the build\n\n', 'and the tests')).toBe('Fix the build\n\nand the tests');
+  });
+});
+
+describe('runs above the prompt', () => {
+  const bg = (over: Partial<AiRun> = {}): AiTool => ({
+    id: 'b1',
+    name: 'Bash',
+    summary: '$ npm run dev',
+    run: { state: 'running', background: true, started: NOW - 240, last: 'Listening on :5173', ...over },
+  });
+  const entries = (tools: AiTool[]): AiEntry[] => tools.map((content) => ({ type: 'Tool', content }) as AiEntry);
+
+  it('says what a sub-agent is for, without the tool’s name', () => {
+    expect(runTitle(agent({ state: 'running' }))).toBe('Look around');
+    expect(runTitle(bg())).toBe('$ npm run dev');
+  });
+
+  it('gives its status and its current step apart', () => {
+    const a = agent({ state: 'running', started: NOW - 200, tools: 4, last: 'Read src/lib.rs' });
+    expect(runStatus(a, a.run!, NOW)).toBe('running 3 min · 4 tool calls');
+    expect(runStep(a.run!)).toBe('Read src/lib.rs');
+    expect(runStep({ state: 'running', last: 'Starting' })).toBe('');
+    expect(runStep({ state: 'done', last: 'Read src/lib.rs' })).toBe('');
+  });
+
+  it('lists what still runs, and sums it up', () => {
+    const list = entries([agent({ state: 'running' }), bg(), agent({ state: 'done' }), agent({ state: 'running' })]);
+    const live = liveRuns(list);
+    expect(live.map((r) => r.index)).toEqual([0, 1, 3]);
+    const timer: AiTimer = { kind: 'wakeup', what: 'Check CI', at: NOW + 60 } as AiTimer;
+    expect(waitingSummary(live, [timer])).toBe('2 agents running · 1 background command · 1 timer');
+    expect(waitingSummary([], [])).toBe('');
   });
 });

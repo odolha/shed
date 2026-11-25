@@ -14,6 +14,8 @@ const target = join(here, '../src/ui/icons.ts');
 const extra = {
   'chevron-down': '<path d="M6 9l6 6 6-6"/>',
   'chevron-right': '<path d="M9 6l6 6-6 6"/>',
+  'chevron-up': '<path d="M6 15l6-6 6 6"/>',
+  sliders: '<path d="M4 7h8"/><path d="M18 7h2"/><circle cx="15" cy="7" r="2.4"/><path d="M4 17h2"/><path d="M12 17h8"/><circle cx="9" cy="17" r="2.4"/>',
   'arrow-left': '<path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
