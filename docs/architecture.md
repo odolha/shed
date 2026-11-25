@@ -895,7 +895,13 @@ titles under a tab's own name, its previews, the selection). `Pegboard::sync`
 makes these again whenever the tree, the keeper's answer, the filter or the
 selection change, and only a bench that shows differently is drawn again; a
 change nothing shows draws no frame at all, and a hover draws one bench. Menus
-read the bench as it is when they open. The card previews are painted line by
+read the bench as it is when they open. A view with menus is a `MenuHost`
+(`menu.rs`: a slot for its `Menu`, and `menu_closed`). A `Menu` drills down: it
+keeps its top level and the path of levels gone into (a `More` makes its
+level when chosen), the lit row and what was typed, and draws one panel,
+deferred, where it first settled. Once drawn the panel takes the keyboard,
+remembering what had it, and gives it back as it closes (`close_then`),
+before the chosen item runs. The card previews are painted line by
 line rather than as an element per line. Bench windows work the same way: a
 `BenchWindow` keeps what it draws of `AppState` (`Shown`: the colours, the
 errors, and its shown tab's layout and views), its tab bar is a view of its own

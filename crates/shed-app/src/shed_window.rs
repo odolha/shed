@@ -185,8 +185,7 @@ impl ShedWindow {
                 if this.menu.is_some() {
                     let entries = this.switcher_entries(cx);
                     if let Some(menu) = &mut this.menu {
-                        menu.entries = entries;
-                        menu.subs.clear();
+                        menu.reset(entries);
                     }
                 }
                 cx.notify();

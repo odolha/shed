@@ -39,6 +39,7 @@ actions!(
         NextBlock,
         Quit,
         ToggleBookmarks,
+        TabMenu,
     ]
 );
 
@@ -85,6 +86,7 @@ pub const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("ctrl-shift-h", "hide_bench"),
     ("f2", "rename_tab"),
     ("shift-f2", "rename_bench"),
+    ("shift-f10", "tab_menu"),
     ("ctrl-shift-s", "setup"),
     ("ctrl-shift-m", "bookmarks"),
     ("super-space", "shed"),
@@ -141,6 +143,7 @@ pub const MAC_KEYS: &[(&str, &str)] = &[
     ("cmd-shift-h", "hide_bench"),
     ("f2", "rename_tab"),
     ("shift-f2", "rename_bench"),
+    ("shift-f10", "tab_menu"),
     ("cmd-shift-s", "setup"),
     ("cmd-shift-m", "bookmarks"),
     ("cmd-shift-space", "shed"),
@@ -213,6 +216,7 @@ pub fn binding(key: &str, action: &str) -> Result<Option<KeyBinding>, String> {
         "hide_bench" => KeyBinding::new(key, HideBench, w),
         "rename_tab" => KeyBinding::new(key, RenameTab, w),
         "rename_bench" => KeyBinding::new(key, RenameBench, w),
+        "tab_menu" => KeyBinding::new(key, TabMenu, w),
         "setup" => KeyBinding::new(key, ToggleSetup, w),
         "bookmarks" => KeyBinding::new(key, ToggleBookmarks, w),
         // "pegboard" from before Shed had its own window.

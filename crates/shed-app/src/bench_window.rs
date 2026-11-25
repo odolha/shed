@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, MouseButton,
     MouseDownEvent, MouseMoveEvent, Pixels, PromptLevel, SharedString, Subscription, WeakEntity, Window, canvas,
-    div, prelude::*, px, relative, svg,
+    div, point, prelude::*, px, relative, svg,
 };
 use shed_ai::Limits;
 use shed_model::{
@@ -1040,6 +1040,14 @@ impl BenchWindow {
             }
         };
         self.send(msg, cx);
+    }
+
+    /// The shown tab's menu, from the keyboard: under the tab.
+    fn open_tab_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab(cx).map(|t| t.id) else { return };
+        let under = self.bar.read(cx).layout.borrow().tabs.iter().find(|(t, ..)| *t == tab).map(|(.., b)| point(b.left(), b.bottom() + px(2.0)));
+        let entries = self.tab_menu(tab, cx);
+        self.open_menu(under.unwrap_or(point(px(16.0), px(40.0))), entries, cx);
     }
 
     fn tab_menu(&self, tab_id: TabId, cx: &Context<Self>) -> Vec<MenuEntry<Self>> {
@@ -2172,8 +2180,7 @@ impl Render for BenchWindow {
             .child(self.ctrl_wheel_zoom(cx))
             .capture_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
                 if this.menu.is_some() && e.keystroke.key == "escape" {
-                    this.menu = None;
-                    this.refocus(window, cx);
+                    this.close_menu(window, cx);
                     cx.stop_propagation();
                 } else if this.bookmarks_open && e.keystroke.key == "escape" {
                     this.close_bookmarks(cx);
@@ -2222,6 +2229,7 @@ impl Render for BenchWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &RenameBench, window, cx| this.start_edit(EditTarget::BenchName, window, cx)))
+            .on_action(cx.listener(|this, _: &TabMenu, _, cx| this.open_tab_menu(cx)))
             .on_action(cx.listener(|this, _: &ToggleSetup, window, cx| this.toggle_setup(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleBookmarks, _, cx| this.toggle_bookmarks(cx)))
             .on_action(cx.listener(|this, _: &ShowShed, _, cx| this.state.update(cx, |state, cx| state.show_shed(cx))))

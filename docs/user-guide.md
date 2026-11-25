@@ -228,6 +228,23 @@ large it is drawn is a setting (**Tab bar size** in Settings).
 A new tab or pane opens in the folder of the one you were in. (Set
 `new_pane_dir = "bench"` to use the bench's folder instead.)
 
+### Menus
+
+Every right-click menu, and the menus of buttons, is one panel that stays where
+it opened. An item with **›** opens its list in the panel's place, not beside
+it: **New Tab to the Right › AI** shows the AI tab's folders where the tab's
+menu was. Above a list opened this way, **‹ Back** goes up a level and the way
+there (`New Tab to the Right › AI`) goes back to any step of it. Long lists
+scroll, and the panel does not narrow as you go in and out.
+
+The menu takes the keyboard while it is open (nothing reaches the terminal):
+**↑ ↓** light an item, **Enter** chooses it (**→** too, for an item with ›),
+**←** goes back, **Esc** closes the whole menu from any level. Typing narrows the
+list shown to the items whose name has what you type (shown at the top);
+**Backspace** takes a letter off, then goes back. The mouse only lights an
+item; nothing opens until you click. **Shift+F10** opens the shown tab's menu
+from the keyboard.
+
 ### Bookmarks
 
 A bench keeps **bookmarks**: files (at a line), folders, and messages of its AI
@@ -349,9 +366,8 @@ is open, so "behind" stays true (`[git] fetch_minutes` in `shed.toml`; 0 turns i
 off). Click the branch for its menu: fetch, pull with rebase or with merge, push
 (and force-push, asking first), new branch, switch (or check out a remote
 branch), merge into the current branch, rebase onto another, delete (asking first),
-stash, pop the stash, and history. In this and every menu, an item with › opens
-its submenu beside it when the mouse is over it: on the right where there is
-room, else on the left, the menu itself staying where it is.
+stash, pop the stash, and history. An item with › opens its own list in the
+menu's place (see [Menus](#menus)).
 
 **Changes** (beside Files and Search) lists conflicted, staged and changed files.
 Each file has a box: ticked, it goes in the next commit (it is staged); click
@@ -1024,6 +1040,7 @@ and switches with it. The switch at the top right of the Shed window sets **Auto
 | Ctrl+Shift+E / Ctrl+Shift+O | Split right / split down |
 | Alt+arrows | Move between panes |
 | F2 / Shift+F2 | Rename tab / bench |
+| Shift+F10 | The shown tab's menu ([Menus](#menus)) |
 | Ctrl+Shift+S | Setup panel |
 | Ctrl+Shift+M | The bench's [bookmarks](#bookmarks) |
 | Ctrl+Shift+B (in a file) | Bookmark the cursor's line |
@@ -1066,7 +1083,7 @@ place in these.
 | Cmd+↑ / ↓ | Previous / next command or message |
 | Cmd+Q | Close Shed (as closing its window does) |
 
-Ctrl+R, the history keys and F2 are the same. Option types characters, as it
+Ctrl+R, the history keys, F2 and Shift+F10 are the same. Option types characters, as it
 does everywhere on a Mac; for shells' Alt keys (Alt+B, Alt+F) set
 `option_as_alt = true` under `[macos]`.
 
@@ -1728,7 +1745,7 @@ of a pipe: `cd app && npm run dev` restarts, `tail -f log | grep ERROR` restarts
 `scroll_page_up`, `scroll_page_down`, `logbook`, `search`, `new_tab`, `close_tab`,
 `close_pane`, `next_tab`, `prev_tab`, `split_right`, `split_down`, `focus_left`,
 `focus_right`, `focus_up`, `focus_down`, `new_bench`, `close_bench`, `hide_bench`, `rename_tab`,
-`rename_bench`, `setup`, `shed`, `activate_tab_1` … `activate_tab_9`,
+`rename_bench`, `tab_menu`, `setup`, `shed`, `activate_tab_1` … `activate_tab_9`,
 `focus_bench_1` … `focus_bench_9`. Keys are written like `ctrl-shift-t`,
 `alt-left`, `super-space`, `f2`.
 
