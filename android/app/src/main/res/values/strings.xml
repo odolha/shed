@@ -138,6 +138,9 @@
     <string name="terminal_waiting">Waiting for the screen…</string>
     <string name="terminal_ended">The pane is not reachable now.</string>
     <string name="terminal_no_pane">No pane in this tab.</string>
+    <string name="terminal_select_lines">Lines</string>
+    <string name="terminal_select_all">All</string>
+    <string name="terminal_select_done">Stop selecting</string>
     <string name="terminal_fit">Fit</string>
 
     <!-- Logbook -->
@@ -147,6 +150,12 @@
     <string name="logbook_scope_bench">This bench</string>
     <string name="logbook_scope_all">All</string>
     <string name="logbook_empty">No commands found.</string>
+    <string name="logbook_copy_command">Copy Command</string>
+    <string name="logbook_copy_folder">Copy Folder</string>
+    <string name="logbook_run">Run in a New Terminal…</string>
+    <string name="logbook_run_title">Run it again?</string>
+    <string name="logbook_run_text">“%1$s” runs in a new terminal tab, in %2$s.</string>
+    <string name="logbook_run_confirm">Run</string>
     <string name="logbook_exit">exit %1$d</string>
 
     <!-- Projects -->
@@ -154,6 +163,9 @@
     <string name="project_search">Search</string>
     <string name="project_quick_open">Quick Open</string>
     <string name="project_quick_open_hint">File name</string>
+    <string name="project_copy_path">Copy Path</string>
+    <string name="project_copy_relative">Copy Relative Path</string>
+    <string name="project_fold">Fold</string>
     <string name="project_binary">A binary file: not shown.</string>
     <string name="project_too_large">Too large to show here.</string>
     <string name="search_hint">Search in files</string>

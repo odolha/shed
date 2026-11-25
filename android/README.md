@@ -105,14 +105,18 @@ in one of two ways, never through Google:
 | `net/` | `ShedJson` (the JSON setup; entries, events and enum values a newer workspace sends read as unknown), `NexusHttp` (`/api/v1/…`, bearer token), `NexusSocket` (the `/api` WebSocket: requests by id, subscriptions as flows, reconnects) |
 | `data/` | The account (token sealed with a Keystore AES-GCM key) and the app's settings |
 | `push/` | How pushes come (`pushMode`: a ntfy topic or UnifiedPush), UnifiedPush registering, the endpoint to the nexus, notifications |
-| `ui/` | Compose screens: `Nav.kt` (routes, `shed://` links, live notifications as a snackbar; `LiveNotice.kt` their text), `workspaces/`, `bench/`, `ai/` (transcript, Markdown, prompt, sessions, drafts, review), `terminal/` (screen model and re-wrapping), `logbook/`, `project/`, `git/`, `devices/`, `settings/`, `common/` |
+| `ui/` | Compose screens: `Nav.kt` (routes, `shed://` links, live notifications as a snackbar; `LiveNotice.kt` their text), `workspaces/`, `bench/`, `ai/` (transcript, Markdown, prompt, sessions, drafts, review), `terminal/` (screen model, re-wrapping, selecting), `logbook/`, `project/`, `git/`, `devices/`, `settings/`, `common/` (scaffold, long-press menus, the lists' scrollbar) |
 | `ShedApp.kt`, `MainActivity.kt` | The session (connects in the foreground, rests a minute after), the lock |
 
 Tests (`app/src/test`) run on the JVM: JSON round-trips (and what a newer
 workspace may send), the socket against a fake nexus (MockWebServer), sub-agent
-and timer wording, terminal re-wrapping, the Markdown reader, text
+and timer wording, terminal re-wrapping and selecting, the Markdown reader, text
 ranges from the API (UTF-16 positions, used as Kotlin strings index them),
-the AI tab's following and jumps (`ui/ai/Follow.kt`) and its settings sheet.
+the AI tab's following and jumps (`ui/ai/Follow.kt`) and its settings sheet,
+the scrollbar's estimate (`ui/common/Scrollbar.kt`) and the long-press menus.
 `screens/` draws screens with Robolectric and Roborazzi at a phone's size,
-dark and light (the AI tab: opened, scrolled up, typing, limits, settings), as
-pictures to look at; nothing is compared, so they never fail on a pixel.
+dark and light (the AI tab: opened, scrolled up, typing, limits, settings,
+agents, the scrollbar, your message's menu; against a pretend nexus,
+`FakeNexus.kt`: the menus of benches, the logbook and files, and selecting in
+a terminal), as pictures to look at; nothing is compared, so they never fail
+on a pixel.

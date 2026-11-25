@@ -145,6 +145,28 @@ class NexusSocket(
         }
     }
 
+    /**
+     * Drops the connection and dials again at once, for a fresh welcome (the
+     * workspaces and their states, every subscription sent again); starts if
+     * stopped. Nothing once closed for good.
+     */
+    fun reconnect() {
+        val old = synchronized(lock) {
+            if (_connection.value is Connection.Closed) return
+            running = true
+            retryJob?.cancel()
+            retryJob = null
+            val old = socket
+            socket = null
+            welcomed = false
+            failPending(ApiError(ErrorCode.Offline, "connecting again"))
+            attempt = 0
+            open()
+            old
+        }
+        old?.close(1000, "again")
+    }
+
     /** Disconnects; subscriptions stay, to be sent again on `start`. */
     fun stop() {
         val ws = synchronized(lock) {

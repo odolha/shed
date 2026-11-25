@@ -1,5 +1,29 @@
 package dev.shed.ui.workspaces
 
+import androidx.annotation.StringRes
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import dev.shed.api.BenchOnly
+import dev.shed.api.BenchRef
+import dev.shed.api.LoadBench
+import dev.shed.api.RenameBench
+import dev.shed.net.Connection
+import dev.shed.ui.common.ChoiceMenu
+import dev.shed.ui.common.ConfirmDialog
+import dev.shed.ui.common.MenuChoice
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -72,12 +96,48 @@ import dev.shed.ui.common.rememberRunner
 import dev.shed.ui.common.tildePath
 import dev.shed.ui.theme.LocalShed
 
-/** Every workspace linked to the nexus, online or not, with its benches. */
+/** What a long press on a bench's row offers. */
+enum class BenchMenu(@StringRes override val label: Int) : MenuChoice {
+    Open(R.string.open),
+    Load(R.string.bench_load),
+    LoadStart(R.string.bench_load_start),
+    Rename(R.string.bench_rename),
+    Close(R.string.bench_close),
+    ;
+
+    override val icon: ImageVector get() = when (this) {
+        Open -> Icons.AutoMirrored.Filled.OpenInNew
+        Load -> Icons.Default.FolderOpen
+        LoadStart -> Icons.Default.PlayArrow
+        Rename -> Icons.Default.Edit
+        Close -> Icons.Default.Close
+    }
+    override val danger: Boolean get() = this == Close
+}
+
+/** A running bench's menu (Open, Rename…, Close…) or a closed one's (Open, Load, Load and Start, Rename…); view only: Open. */
+fun benchMenu(running: Boolean, canChange: Boolean): List<BenchMenu> = when {
+    !canChange -> listOf(BenchMenu.Open)
+    running -> listOf(BenchMenu.Open, BenchMenu.Rename, BenchMenu.Close)
+    else -> listOf(BenchMenu.Open, BenchMenu.Load, BenchMenu.LoadStart, BenchMenu.Rename)
+}
+
+/** Every workspace linked to the nexus, online or not, with its benches; pulling down connects again for a fresh look. */
 @Composable
 fun WorkspacesScreen(nav: NavController) {
     val socket = LocalSession.current.socket
     val workspaces by socket.workspaces.collectAsState()
     val states by socket.states.collectAsState()
+    val scope = rememberCoroutineScope()
+    var pulled by remember { mutableStateOf(false) }
+    fun refresh() {
+        pulled = true
+        scope.launch {
+            socket.reconnect()
+            withTimeoutOrNull(10_000) { socket.connection.first { it is Connection.Online || it is Connection.Closed } }
+            pulled = false
+        }
+    }
     ShedScaffold(
         title = stringResource(R.string.app_name),
         onBack = null,
@@ -90,14 +150,15 @@ fun WorkspacesScreen(nav: NavController) {
             }
         },
     ) { padding ->
-        if (workspaces.isEmpty()) {
-            EmptyNote(stringResource(R.string.workspaces_empty), Modifier.padding(padding))
-        } else {
+        PullToRefreshBox(isRefreshing = pulled, onRefresh = ::refresh, modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
-                Modifier.fillMaxSize().padding(padding),
+                Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                if (workspaces.isEmpty()) {
+                    item { EmptyNote(stringResource(R.string.workspaces_empty)) }
+                }
                 items(workspaces, key = { it.id }) { ws -> WorkspaceCard(nav, ws, states[ws.id]) }
             }
         }
@@ -112,7 +173,14 @@ private fun WorkspaceCard(nav: NavController, ws: WorkspaceInfo, state: Workspac
     val session = LocalSession.current
     var showClosed by rememberSaveable(ws.id) { mutableStateOf(false) }
     var newBench by rememberSaveable { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf<BenchRef?>(null) }
+    var renameFrom by remember { mutableStateOf("") }
+    var closing by remember { mutableStateOf<Bench?>(null) }
     val canChange = ws.online && ws.policy == Policy.Full
+    fun load(name: String, start: Boolean) = runner.run {
+        val reply = session.socket.call(ws.id, Call.LoadBench(LoadBench(name, start)))
+        if (reply is Reply.Bench) nav.navigate(Routes.bench(ws.id, reply.content))
+    }
     Card(colors = CardDefaults.cardColors(containerColor = shed.surface)) {
         Column(Modifier.padding(vertical = 8.dp)) {
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -160,7 +228,13 @@ private fun WorkspaceCard(nav: NavController, ws: WorkspaceInfo, state: Workspac
                     )
                 }
                 for (bench in state.benches) {
-                    BenchRow(bench, state.home ?: "") { nav.navigate(Routes.bench(ws.id, bench.id)) }
+                    BenchRow(bench, state.home ?: "", benchMenu(running = true, canChange), onClick = { nav.navigate(Routes.bench(ws.id, bench.id)) }) {
+                        when (it) {
+                            BenchMenu.Rename -> { renameFrom = bench.name; renaming = BenchRef.Running(bench.id) }
+                            BenchMenu.Close -> closing = bench
+                            else -> nav.navigate(Routes.bench(ws.id, bench.id))
+                        }
+                    }
                 }
                 if (state.closed.isNotEmpty()) {
                     TextButton(onClick = { showClosed = !showClosed }, modifier = Modifier.padding(horizontal = 4.dp)) {
@@ -170,7 +244,14 @@ private fun WorkspaceCard(nav: NavController, ws: WorkspaceInfo, state: Workspac
                     }
                     if (showClosed) {
                         for (closed in state.closed) {
-                            ClosedRow(closed, state.home ?: "") { nav.navigate(Routes.closed(ws.id, closed.name)) }
+                            ClosedRow(closed, state.home ?: "", benchMenu(running = false, canChange), onClick = { nav.navigate(Routes.closed(ws.id, closed.name)) }) {
+                                when (it) {
+                                    BenchMenu.Load -> load(closed.name, false)
+                                    BenchMenu.LoadStart -> load(closed.name, true)
+                                    BenchMenu.Rename -> { renameFrom = closed.name; renaming = BenchRef.Closed(closed.name) }
+                                    else -> nav.navigate(Routes.closed(ws.id, closed.name))
+                                }
+                            }
                         }
                     }
                 }
@@ -193,17 +274,52 @@ private fun WorkspaceCard(nav: NavController, ws: WorkspaceInfo, state: Workspac
             onDismiss = { newBench = false },
         )
     }
+    renaming?.let { ref ->
+        TextDialog(
+            title = stringResource(R.string.bench_rename),
+            initial = renameFrom,
+            confirm = stringResource(R.string.rename),
+            onConfirm = { runner.run { session.socket.call(ws.id, Call.RenameBench(RenameBench(ref, it))) } },
+            onDismiss = { renaming = null },
+        )
+    }
+    closing?.let { bench ->
+        ConfirmDialog(
+            title = stringResource(R.string.bench_close_title, bench.name),
+            text = stringResource(R.string.bench_close_text),
+            confirm = stringResource(R.string.bench_close),
+            onConfirm = { runner.run { session.socket.call(ws.id, Call.CloseBench(BenchOnly(bench.id))) } },
+            onDismiss = { closing = null },
+        )
+    }
+}
+
+/** A row's tap and long press (its menu, with a buzz). */
+@Composable
+private fun Modifier.rowPress(label: String, onClick: () -> Unit, onLongPress: () -> Unit): Modifier {
+    val haptics = LocalHapticFeedback.current
+    return combinedClickable(
+        onLongClickLabel = label,
+        onLongClick = {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            onLongPress()
+        },
+        onClick = onClick,
+    )
 }
 
 @Composable
-private fun BenchRow(bench: Bench, home: String, onClick: () -> Unit) {
+private fun BenchRow(bench: Bench, home: String, menu: List<BenchMenu>, onClick: () -> Unit, onMenu: (BenchMenu) -> Unit) {
     val shed = LocalShed.current
     val color = benchColor(bench.color)
     val (working, waiting) = aiCounts(bench)
+    var open by remember { mutableStateOf(false) }
+    Box {
+    ChoiceMenu(open, menu, onDismiss = { open = false }, onPick = onMenu)
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .rowPress(stringResource(R.string.more), onClick) { open = true }
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .height(androidx.compose.foundation.layout.IntrinsicSize.Min),
         verticalAlignment = Alignment.CenterVertically,
@@ -242,15 +358,19 @@ private fun BenchRow(bench: Bench, home: String, onClick: () -> Unit) {
             Chip(pluralStringResource(R.plurals.ai_working_count, working, working), shed.accent)
         }
     }
+    }
 }
 
 @Composable
-private fun ClosedRow(bench: ClosedBench, home: String, onClick: () -> Unit) {
+private fun ClosedRow(bench: ClosedBench, home: String, menu: List<BenchMenu>, onClick: () -> Unit, onMenu: (BenchMenu) -> Unit) {
     val shed = LocalShed.current
     val context = LocalContext.current
     val color = benchColor(bench.color)
+    var open by remember { mutableStateOf(false) }
+    Box {
+    ChoiceMenu(open, menu, onDismiss = { open = false }, onPick = onMenu)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 6.dp),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).rowPress(stringResource(R.string.more), onClick) { open = true }.padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Dot(color.copy(alpha = 0.6f))
@@ -265,6 +385,7 @@ private fun ClosedRow(bench: ClosedBench, home: String, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
     }
     VSpace(0)
 }

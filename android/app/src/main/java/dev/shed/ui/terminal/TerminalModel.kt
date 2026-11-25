@@ -217,6 +217,11 @@ object Rewrap {
     }
 
     /** Lines as a phone [width] cells wide shows them. */
-    fun rewrap(lines: List<ScreenLine>, width: Int): List<List<Span>> =
-        logical(lines).flatMap { wrap(trimEnd(it), width) }
+    fun rewrap(lines: List<ScreenLine>, width: Int): List<List<Span>> = rows(lines, width).map { it.spans }
+
+    /** Lines as a phone [width] cells wide shows them, each row saying whether the next goes on with its line. */
+    fun rows(lines: List<ScreenLine>, width: Int): List<TermRow> = logical(lines).flatMap { line ->
+        val parts = wrap(trimEnd(line), width)
+        parts.mapIndexed { i, part -> TermRow(part, wraps = i < parts.size - 1) }
+    }
 }

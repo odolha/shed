@@ -1,5 +1,20 @@
 package dev.shed.ui.project
 
+import androidx.annotation.StringRes
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import dev.shed.ui.common.ChoiceMenu
+import dev.shed.ui.common.ListScrollbar
+import dev.shed.ui.common.LocalSnackbar
+import dev.shed.ui.common.MenuChoice
+import dev.shed.ui.logbook.copy
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.activity.compose.BackHandler
@@ -135,7 +150,7 @@ fun ProjectScreen(nav: NavController, ws: String, bench: Bench, tab: ApiTab, pro
                     Tab(page == 1, { page = 1 }, text = { Text(stringResource(R.string.project_search)) })
                 }
                 if (page == 0) {
-                    FileTree(ws, tab.id, refresh.intValue) { file = it; line = 0 }
+                    FileTree(ws, tab.id, project.root, refresh.intValue) { file = it; line = 0 }
                 } else {
                     SearchPage(ws, tab.id) { path, at -> file = path; line = at }
                 }
@@ -149,8 +164,32 @@ fun ProjectScreen(nav: NavController, ws: String, bench: Bench, tab: ApiTab, pro
 
 private data class TreeRow(val path: String, val entry: FolderEntry, val depth: Int)
 
+/** What a long press on a file or folder in the tree offers. */
+enum class FileMenu(@StringRes override val label: Int) : MenuChoice {
+    Open(R.string.open),
+    Fold(R.string.project_fold),
+    CopyPath(R.string.project_copy_path),
+    CopyRelative(R.string.project_copy_relative),
+    ;
+
+    override val icon: ImageVector get() = when (this) {
+        Open -> Icons.AutoMirrored.Filled.OpenInNew
+        Fold -> Icons.Default.UnfoldLess
+        CopyPath -> Icons.Default.ContentCopy
+        CopyRelative -> Icons.Default.ContentCopy
+    }
+}
+
+/** A file's menu (Open, the paths); a folder's (Open or Fold, the paths). */
+fun fileMenu(dir: Boolean, expanded: Boolean): List<FileMenu> =
+    listOf(if (dir && expanded) FileMenu.Fold else FileMenu.Open, FileMenu.CopyPath, FileMenu.CopyRelative)
+
+/** A project's file by its path inside the project, as the workspace has it. */
+fun fullPath(root: String, path: String): String =
+    if (path.isEmpty()) root else root.trimEnd('/') + "/" + path.trimStart('/')
+
 @Composable
-private fun FileTree(ws: String, tab: String, version: Int, onOpen: (String) -> Unit) {
+private fun FileTree(ws: String, tab: String, root: String, version: Int, onOpen: (String) -> Unit) {
     val session = LocalSession.current
     val shed = LocalShed.current
     val context = LocalContext.current
@@ -172,7 +211,16 @@ private fun FileTree(ws: String, tab: String, version: Int, onOpen: (String) -> 
         load("")
         for (path in expanded.toList()) load(path)
     }
-    val root = folders[""] ?: return if (error != null) EmptyNote(error!!) else Loading()
+    val haptics = LocalHapticFeedback.current
+    val snackbar = LocalSnackbar.current
+    val scope = rememberCoroutineScope()
+    val copied = stringResource(R.string.copied)
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    fun copyText(text: String) {
+        copy(context, text)
+        scope.launch { snackbar.showSnackbar(copied) }
+    }
+    val top = folders[""] ?: return if (error != null) EmptyNote(error!!) else Loading()
     val rows = buildList {
         fun walk(path: String, entries: List<FolderEntry>, depth: Int) {
             for (e in entries) {
@@ -181,22 +229,32 @@ private fun FileTree(ws: String, tab: String, version: Int, onOpen: (String) -> 
                 if (e.dir && child in expanded) folders[child]?.let { walk(child, it, depth + 1) }
             }
         }
-        walk("", root, 0)
+        walk("", top, 0)
     }
     val wanted = expanded.filter { it !in folders }
     LaunchedEffect(wanted) { for (path in wanted) load(path) }
-    LazyColumn(Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    fun toggle(row: TreeRow) {
+        if (row.entry.dir) {
+            if (row.path in expanded) expanded.remove(row.path) else expanded.add(row.path)
+        } else {
+            onOpen(row.path)
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), state = listState) {
         items(rows, key = { it.path }) { row ->
+            Box {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clickable {
-                        if (row.entry.dir) {
-                            if (row.path in expanded) expanded.remove(row.path) else expanded.add(row.path)
-                        } else {
-                            onOpen(row.path)
-                        }
-                    }
+                    .combinedClickable(
+                        onLongClickLabel = stringResource(R.string.more),
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            menuFor = row.path
+                        },
+                    ) { toggle(row) }
                     .padding(start = (12 + row.depth * 16).dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -211,7 +269,17 @@ private fun FileTree(ws: String, tab: String, version: Int, onOpen: (String) -> 
                 HSpace(8)
                 Text(row.entry.name, color = if (dim) shed.textDim else shed.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            ChoiceMenu(menuFor == row.path, fileMenu(row.entry.dir, row.path in expanded), onDismiss = { menuFor = null }) {
+                when (it) {
+                    FileMenu.Open, FileMenu.Fold -> toggle(row)
+                    FileMenu.CopyPath -> copyText(fullPath(root, row.path))
+                    FileMenu.CopyRelative -> copyText(row.path)
+                }
+            }
+            }
         }
+    }
+    ListScrollbar(listState, Modifier.align(Alignment.TopEnd))
     }
 }
 
@@ -269,6 +337,7 @@ private fun FileViewer(ws: String, tab: String, path: String, line: Int, version
             LaunchedEffect(line) { if (line > 0) list.scrollToItem((line - 4).coerceAtLeast(0)) }
             val scroll = rememberScrollState()
             val gutter = (lines.size.toString().length * 8 + 8).dp
+            Box(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize().horizontalScroll(scroll)) {
                 LazyColumn(state = list, modifier = Modifier.fillMaxSize()) {
                     itemsIndexed(lines) { i, l ->
@@ -284,6 +353,8 @@ private fun FileViewer(ws: String, tab: String, path: String, line: Int, version
                         }
                     }
                 }
+            }
+            ListScrollbar(list, Modifier.align(Alignment.TopEnd))
             }
         }
     }

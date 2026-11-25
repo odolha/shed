@@ -188,6 +188,27 @@ class SocketTest {
     }
 
     @Test
+    fun reconnectDialsAgainForAFreshWelcome() = runBlocking {
+        val first = Fake()
+        val second = Fake()
+        server.enqueue(MockResponse().withWebSocketUpgrade(first))
+        server.enqueue(MockResponse().withWebSocketUpgrade(second))
+        val socket = socket()
+        socket.start()
+        withTimeout(5_000) { socket.connection.first { it is Connection.Online } }
+        assertTrue(first.next() is ClientFrame.Hello)
+
+        // Pulled down: a new connection, welcomed again, while the first is let go.
+        socket.reconnect()
+        assertTrue(socket.connection.value is Connection.Connecting)
+        assertTrue(second.next() is ClientFrame.Hello)
+        withTimeout(5_000) { socket.connection.first { it is Connection.Online } }
+        assertEquals("w1", socket.workspaces.value.single().id)
+        assertEquals(Reply.Text("pong w1"), withTimeout(5_000) { socket.call("w1", Call.Previews) })
+        socket.stop()
+    }
+
+    @Test
     fun goodbyeClosesForGood() = runBlocking {
         val fake = object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {

@@ -385,10 +385,12 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 shed-codegen`); the app reads it with the `Json` setup from that file's header
 (`net/ShedJson.kt`). The tests run on the JVM: JSON round-trips of frames, the
 WebSocket client against a fake nexus (OkHttp's MockWebServer), terminal
-re-wrapping, the Markdown reader, and the AI tab's scrolling, message jumps and
-settings sheet. Screenshot tests (`app/src/test/.../screens/`, Robolectric and
-Roborazzi, no emulator) draw screens at a phone's size, dark and light, as
-pictures to look at (nothing is compared): into `app/build/screenshots`, or
+re-wrapping and selecting, the Markdown reader, the scrollbar's estimate, the
+long-press menus, and the AI tab's scrolling, message jumps and settings sheet.
+Screenshot tests (`app/src/test/.../screens/`, Robolectric and Roborazzi, no
+emulator) draw screens at a phone's size, dark and light, as pictures to look
+at (nothing is compared); whole screens talk to a pretend nexus
+(`screens/FakeNexus.kt`, a real socket against MockWebServer): into `app/build/screenshots`, or
 `./gradlew testDebugUnitTest --tests 'dev.shed.screens.*'
 -Pshed.screenshots=/tmp/shed-android`. Robolectric fetches its Android jar
 from Maven Central on the first run. To try the app against a nexus on this

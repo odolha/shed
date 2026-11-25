@@ -1,5 +1,28 @@
 package dev.shed.ui.logbook
 
+import androidx.annotation.StringRes
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.FolderCopy
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import dev.shed.api.BenchRef
+import dev.shed.api.CommandTab
+import dev.shed.api.NewTab
+import dev.shed.api.NewTabKind
+import dev.shed.ui.Routes
+import dev.shed.ui.canChange
+import dev.shed.ui.common.ChoiceMenu
+import dev.shed.ui.common.ConfirmDialog
+import dev.shed.ui.common.ListScrollbar
+import dev.shed.ui.common.MenuChoice
+import dev.shed.ui.common.findTab
+import dev.shed.ui.common.rememberRunner
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.consumeWindowInsets
 import android.content.ClipData
@@ -57,6 +80,35 @@ import dev.shed.ui.workspaceState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** What a long press on a logbook entry offers. */
+enum class LogMenu(@StringRes override val label: Int) : MenuChoice {
+    CopyCommand(R.string.logbook_copy_command),
+    CopyFolder(R.string.logbook_copy_folder),
+    Run(R.string.logbook_run),
+    ;
+
+    override val icon: ImageVector get() = when (this) {
+        CopyCommand -> Icons.Default.ContentCopy
+        CopyFolder -> Icons.Default.FolderCopy
+        Run -> Icons.Default.PlayArrow
+    }
+}
+
+/** A logbook entry's menu: running it again only where you may change things, with a bench to run it in. */
+fun logMenu(canRun: Boolean): List<LogMenu> =
+    if (canRun) LogMenu.entries else listOf(LogMenu.CopyCommand, LogMenu.CopyFolder)
+
+/**
+ * The running bench to run an entry again in: its own, if it still runs,
+ * else the one the logbook was opened from; `null`: none.
+ */
+fun runBench(entry: LogEntry, from: String?, running: List<String>): String? =
+    entry.bench?.takeIf { it in running } ?: from?.takeIf { it in running }
+
+/** Running an entry again: a new terminal tab in its folder that runs it. */
+fun runAgain(entry: LogEntry, bench: String): Call =
+    Call.NewTab(NewTab(BenchRef.Running(bench), NewTabKind.Command(CommandTab(entry.cwd, entry.command))))
+
 /** The workspace's command history: this tab's, this bench's, or all. */
 @Composable
 fun LogbookScreen(nav: NavController, ws: String, tab: String?) {
@@ -65,12 +117,24 @@ fun LogbookScreen(nav: NavController, ws: String, tab: String?) {
     val shed = LocalShed.current
     val snackbar = LocalSnackbar.current
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
     val home = workspaceState(ws)?.home.orEmpty()
     var scope2 by rememberSaveable { mutableStateOf(if (tab != null) LogScope.Tab else LogScope.All) }
     var query by rememberSaveable { mutableStateOf("") }
     var entries by remember { mutableStateOf<List<LogEntry>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val copied = stringResource(R.string.copied)
+    val state = workspaceState(ws)
+    val fromBench = tab?.let { state?.findTab(it)?.first?.id }
+    val running = state?.benches.orEmpty().map { it.id }
+    val canChange = canChange(ws)
+    val runner = rememberRunner()
+    var menuFor by remember { mutableStateOf<LogEntry?>(null) }
+    var running1 by remember { mutableStateOf<Pair<LogEntry, String>?>(null) }
+    fun copyText(text: String) {
+        copy(context, text)
+        scope.launch { snackbar.showSnackbar(copied) }
+    }
     LaunchedEffect(scope2, query) {
         delay(250)
         error = null
@@ -105,15 +169,23 @@ fun LogbookScreen(nav: NavController, ws: String, tab: String?) {
             when {
                 list == null -> Loading()
                 list.isEmpty() -> EmptyNote(stringResource(R.string.logbook_empty))
-                else -> LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+                else -> Box(Modifier.fillMaxSize()) {
+                  val listState = rememberLazyListState()
+                  LazyColumn(state = listState, contentPadding = PaddingValues(vertical = 8.dp)) {
                     items(list) { entry ->
+                        val bench = if (canChange) runBench(entry, fromBench, running) else null
+                        Box {
                         Column(
                             Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    copy(context, entry.command)
-                                    scope.launch { snackbar.showSnackbar(copied) }
-                                }
+                                .combinedClickable(
+                                    onClickLabel = stringResource(R.string.logbook_copy_command),
+                                    onLongClickLabel = stringResource(R.string.more),
+                                    onLongClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        menuFor = entry
+                                    },
+                                ) { copyText(entry.command) }
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
                         ) {
                             Text(entry.command, fontFamily = Mono, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -135,11 +207,41 @@ fun LogbookScreen(nav: NavController, ws: String, tab: String?) {
                                 )
                             }
                         }
+                        ChoiceMenu(menuFor == entry, logMenu(bench != null), onDismiss = { menuFor = null }) {
+                            when (it) {
+                                LogMenu.CopyCommand -> copyText(entry.command)
+                                LogMenu.CopyFolder -> copyText(entry.cwd)
+                                LogMenu.Run -> bench?.let { b -> running1 = entry to b }
+                            }
+                        }
+                        }
                     }
+                  }
+                  ListScrollbar(listState, Modifier.align(Alignment.TopEnd))
                 }
             }
         }
     }
+    running1?.let { (entry, bench) ->
+        RunDialog(entry, home, onRun = {
+            runner.run {
+                val reply = session.socket.call(ws, runAgain(entry, bench))
+                if (reply is Reply.Tab) nav.navigate(Routes.tab(ws, reply.content))
+            }
+        }) { running1 = null }
+    }
+}
+
+@Composable
+private fun RunDialog(entry: LogEntry, home: String, onRun: () -> Unit, onDismiss: () -> Unit) {
+    ConfirmDialog(
+        title = stringResource(R.string.logbook_run_title),
+        text = stringResource(R.string.logbook_run_text, entry.command, tildePath(entry.cwd, home)),
+        confirm = stringResource(R.string.logbook_run_confirm),
+        danger = false,
+        onConfirm = onRun,
+        onDismiss = onDismiss,
+    )
 }
 
 fun copy(context: Context, text: String) {

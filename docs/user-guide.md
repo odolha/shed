@@ -1506,7 +1506,10 @@ Settings.
 
 - **Workspaces**: each linked computer, online or when it was last seen, with
   its benches (in their colours), how many AI tabs work or wait for you, and
-  your usage limits. Closed benches can be loaded from there.
+  your usage limits. Closed benches can be loaded from there. A long press on
+  a bench offers Open, Rename Bench… and Close Bench… (asks first); on a
+  closed one, Open, Load, Load and Start and Rename Bench…. Pull the list
+  down to connect again and see everything afresh.
 - **A bench**: its tabs in order, with tags; **New Tab** opens a terminal,
   project, AI or remote tab in a folder you pick (its full path shown, **..**
   going up); a long press renames or closes a tab (closing asks first), or
@@ -1548,14 +1551,22 @@ Settings.
   Revert…; on a session in the sessions list, Rename… and Delete Session…
   (asks first).
 - **Terminals** show the active pane's screen, its lines re-wrapped to the
-  phone; scrolling up fetches earlier lines. Type in the field (Enter sends) and
+  phone; scrolling up fetches earlier lines (a scrollbar shows while you
+  scroll; drag it to go far quickly). A long press selects the word there
+  (a path or an address stays whole), on the re-wrapped screen and on a
+  full-screen program's alike; drag the handles under its ends to select
+  more, **Lines** grows it to whole lines (a line the phone wrapped comes back
+  whole), **All** takes everything, **Copy** copies it, and a tap lets it go. Type in the field (Enter sends) and
   use the key bar for Esc, Tab, Ctrl, Alt and the arrows. For a full-screen
   program (vim, htop), **Take the size** makes the program draw for the phone
   while you look; leaving gives the size back. When the program asks for the
   mouse (htop, vim with `mouse=a`), a tap clicks there and dragging up or down
   turns the wheel.
-- **Logbook**, **project files** (tree, Quick Open, search, a file viewer with
-  colours) and **Git** (stage, unstage or discard by hunk, commit, history,
+- **Logbook** (tap a command to copy it; a long press offers Copy Command,
+  Copy Folder and **Run in a New Terminal…**, which asks, then opens a tab in
+  its folder that runs it), **project files** (tree, Quick Open, search, a
+  file viewer with colours; a long press on a file or folder offers Open,
+  Copy Path and Copy Relative Path) and **Git** (stage, unstage or discard by hunk, commit, history,
   branches, fetch, pull, push; pull down to look again, as in **Devices**).
 - **Devices**: everything signed in or paired, revoking (with a code), and
   **Approve a Workspace…** with the code it showed (see
