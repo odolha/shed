@@ -1,5 +1,11 @@
 package dev.shed.ui.terminal
 
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.exclude
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -11,7 +17,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -219,12 +224,18 @@ fun TerminalScreen(nav: NavController, ws: String, bench: Bench, tab: Tab) {
         }
         val vm: TerminalVm = viewModel(key = "term-${pane.id}") { TerminalVm(session.socket, ws, pane.id) }
         fun send(items: List<InputItem>) = runner.run { session.socket.call(ws, Call.Input(Input(pane.id, items))) }
-        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+        // The key bar pads the navigation bar itself (in its colour); the keyboard takes the rest.
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(top = padding.calculateTopPadding())
+                .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.navigationBars)),
+        ) {
             val onMouse: ((List<Mouse>) -> Unit)? = if (canChange) { m -> send(m.map { InputItem.Mouse(it) }) } else null
             TerminalView(vm, Modifier.weight(1f), takeSize, onMouse) { cols, rows ->
                 runner.run { session.socket.call(ws, Call.TakeSize(TakeSize(pane.id, cols.toUInt(), rows.toUInt()))) }
             }
-            if (canChange) InputBar(::send)
+            if (canChange) InputBar(::send) else Spacer(Modifier.navigationBarsPadding())
         }
         val paneId = pane.id
         DisposableEffect(paneId, takeSize) {

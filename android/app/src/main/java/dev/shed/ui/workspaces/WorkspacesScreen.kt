@@ -1,5 +1,6 @@
 package dev.shed.ui.workspaces
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -249,7 +250,7 @@ private fun ClosedRow(bench: ClosedBench, home: String, onClick: () -> Unit) {
     val context = LocalContext.current
     val color = benchColor(bench.color)
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 6.dp),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Dot(color.copy(alpha = 0.6f))

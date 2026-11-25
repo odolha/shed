@@ -1,5 +1,6 @@
 package dev.shed.ui.devices
 
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -84,6 +85,7 @@ fun DevicesScreen(nav: NavController) {
     var renaming by remember { mutableStateOf<Device?>(null) }
     var approving by remember { mutableStateOf<PendingPairing?>(null) }
     var rejecting by remember { mutableStateOf<PendingPairing?>(null) }
+    var pulled by remember { mutableStateOf(false) }
 
     LaunchedEffect(refresh) {
         try {
@@ -94,6 +96,8 @@ fun DevicesScreen(nav: NavController) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             error = errorText(context, e)
             if (devices == null) devices = emptyList()
+        } finally {
+            pulled = false
         }
     }
 
@@ -107,7 +111,9 @@ fun DevicesScreen(nav: NavController) {
             Loading(Modifier.padding(padding))
             return@ShedScaffold
         }
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 24.dp)) {
+        // Pulling down looks again (as Refresh does).
+        PullToRefreshBox(isRefreshing = pulled, onRefresh = { pulled = true; refresh++ }, modifier = Modifier.fillMaxSize().padding(padding)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
             error?.let { item { Text(it, color = shed.danger, modifier = Modifier.padding(16.dp)) } }
             item {
                 TextButton(onClick = { approving = PendingPairing(code = "", name = "", version = "", address = "", expires = 0u) }, modifier = Modifier.padding(horizontal = 8.dp)) {
@@ -201,6 +207,7 @@ fun DevicesScreen(nav: NavController) {
                     }
                 }
             }
+        }
         }
     }
 

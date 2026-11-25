@@ -1,5 +1,7 @@
 package dev.shed.ui.project
 
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -123,7 +125,7 @@ fun ProjectScreen(nav: NavController, ws: String, bench: Bench, tab: ApiTab, pro
             IconButton(onClick = { nav.navigate(Routes.git(ws, tab.id)) }) { Icon(Icons.Default.AccountTree, stringResource(R.string.git_title)) }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
             val open = file
             if (open != null) {
                 FileViewer(ws, tab.id, open, line, refresh.intValue)
@@ -394,7 +396,7 @@ private fun SearchPage(ws: String, tab: String, onOpen: (String, Int) -> Unit) {
                             addStyle(SpanStyle(background = shed.accent.copy(alpha = 0.3f)), r.first, r.last + 1)
                         }
                     }
-                    Row(Modifier.fillMaxWidth().clickable { onOpen(file.path, hit.line.toInt()) }.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { onOpen(file.path, hit.line.toInt()) }.padding(horizontal = 12.dp, vertical = 8.dp)) {
                         Text(hit.line.toString(), fontFamily = Mono, fontSize = 12.sp, color = shed.textDim, modifier = Modifier.width(44.dp))
                         Text(label, fontFamily = Mono, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.Unspecified)
                     }

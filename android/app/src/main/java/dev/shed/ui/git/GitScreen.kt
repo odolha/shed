@@ -1,5 +1,10 @@
 package dev.shed.ui.git
 
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -113,6 +118,7 @@ fun GitScreen(nav: NavController, ws: String, tab: String) {
     var status by remember { mutableStateOf<GitStatus?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var pulled by remember { mutableStateOf(false) }
 
     LaunchedEffect(refresh) {
         try {
@@ -121,6 +127,8 @@ fun GitScreen(nav: NavController, ws: String, tab: String) {
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             error = errorText(context, e)
+        } finally {
+            pulled = false
         }
     }
     LaunchedEffect(ws, tab) {
@@ -149,7 +157,7 @@ fun GitScreen(nav: NavController, ws: String, tab: String) {
         onBack = { nav.popBackStack() },
         actions = { IconButton(onClick = { refresh++ }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) } },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
             PrimaryTabRow(selectedTabIndex = page) {
                 Tab(page == 0, { page = 0 }, text = { Text(stringResource(R.string.git_changes)) })
                 Tab(page == 1, { page = 1 }, text = { Text(stringResource(R.string.git_history)) })
@@ -157,12 +165,15 @@ fun GitScreen(nav: NavController, ws: String, tab: String) {
             }
             error?.let { Text(it, color = LocalShed.current.danger, modifier = Modifier.padding(12.dp)) }
             val s = status
-            when {
-                s == null -> Loading()
-                !s.repo -> EmptyNote(stringResource(R.string.git_not_repo))
-                page == 0 -> Changes(ws, tab, s, canChange, busy, ::sync, refresh) { refresh++ }
-                page == 1 -> History(ws, tab, refresh)
-                else -> BranchesPage(ws, tab, canChange, refresh) { refresh++ }
+            // Pulling down looks again (as Refresh does).
+            PullToRefreshBox(isRefreshing = pulled, onRefresh = { pulled = true; refresh++ }, modifier = Modifier.fillMaxSize()) {
+                when {
+                    s == null -> Loading()
+                    !s.repo -> EmptyNote(stringResource(R.string.git_not_repo))
+                    page == 0 -> Changes(ws, tab, s, canChange, busy, ::sync, refresh) { refresh++ }
+                    page == 1 -> History(ws, tab, refresh)
+                    else -> BranchesPage(ws, tab, canChange, refresh) { refresh++ }
+                }
             }
         }
     }
@@ -232,6 +243,7 @@ private fun Changes(
                         value = message,
                         onValueChange = { message = it },
                         label = { Text(stringResource(R.string.git_message)) },
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
                     )

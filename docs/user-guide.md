@@ -1520,7 +1520,7 @@ Settings.
   turns the wheel.
 - **Logbook**, **project files** (tree, Quick Open, search, a file viewer with
   colours) and **Git** (stage, unstage or discard by hunk, commit, history,
-  branches, fetch, pull, push).
+  branches, fetch, pull, push; pull down to look again, as in **Devices**).
 - **Devices**: everything signed in or paired, revoking (with a code), and
   **Approve a Workspace…** with the code it showed (see
   [Linking a workspace](#linking-a-workspace)); **Reject…** on a waiting

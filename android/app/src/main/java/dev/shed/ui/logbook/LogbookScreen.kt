@@ -1,5 +1,7 @@
 package dev.shed.ui.logbook
 
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -82,7 +84,7 @@ fun LogbookScreen(nav: NavController, ws: String, tab: String?) {
         }
     }
     ShedScaffold(title = stringResource(R.string.logbook_title), onBack = { nav.popBackStack() }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
