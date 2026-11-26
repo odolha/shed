@@ -27,6 +27,8 @@ cargo build -p shed-app --no-default-features --features tui   # shed without wi
 cargo clippy -p shed-app --no-default-features --features tui --all-targets   # must stay clean too
 cd web && npm run build && npm test  # the web app (Angular, Node 24.15+); npm run mock + npm start to try it
 . tools/android-env.sh; cd android; ./gradlew assembleDebug testDebugUnitTest lintDebug   # the Android app
+tools/deploy-nexus.sh USER@HOST      # the user's: updates their nexus server over ssh (pull, build, install, restart; agents never run it)
+tools/android-install.sh             # builds the Android app and installs it on the phone over adb (--build-only for just the APK)
 tools/e2e.sh                         # end to end, isolated in /tmp/shed-e2e: nexus, keeper, link, web app in headless Chrome
 PATH=~/.nvm/versions/node/v24.15.0/bin:$PATH CARGO_TARGET_DIR=target/agent cargo build --release -p shed-nexus   # the nexus with the web app built in (release builds need Node 24.15+; never into target/release)
 ```

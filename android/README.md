@@ -34,7 +34,15 @@ A release build needs a keystore of your own and a `signingConfig`.
 
 ## Install on a phone
 
-Turn on developer options and USB debugging on the phone, plug it in, then:
+Turn on developer options and USB debugging on the phone, plug it in (or
+pair it over Wi-Fi, see the script's `--help`), then build and install in one
+go, again after every update (sign-in and settings stay):
+
+```sh
+tools/android-install.sh
+```
+
+or by hand:
 
 ```sh
 adb devices                                   # the phone should be listed

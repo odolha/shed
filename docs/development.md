@@ -24,6 +24,14 @@ sessions stop) and a new `shed`, from a process of its own, so running it in a
 Shed terminal is fine; its output goes to `~/.local/state/shed/reinstall.log`.
 Bench launchers point at the new binaries once Shed starts.
 
+**Update the rest the same way**: `tools/deploy-nexus.sh USER@HOST` updates a
+nexus server (it checks your commits are pushed, then over ssh runs
+`packaging/nexus/update.sh` there: pull, build, install, restart, and a server
+workspace's `shed`/`shedd` if it has one; see
+[Deploying a nexus](nexus-deploy.md#backups-and-upgrades)), and
+`tools/android-install.sh` builds the Android app and installs it on the phone
+over adb (`--build-only` for just the APK).
+
 **Run a separate Shed beside your own**: everything Shed uses can be pointed
 elsewhere, so a development build never touches your real benches, settings or
 launchers.

@@ -356,8 +356,24 @@ Back up `/var/lib/shed-nexus` (`nexus.db` with `sqlite3 nexus.db ".backup
 /path/to/nexus.db"` while it runs, and `vapid.key`; without the key, browsers
 and phones must subscribe to push again) and `/etc/shed-nexus*`.
 
-To upgrade, build the new version and run the script again (it installs the
-binary, refreshes the unit and restarts; the domain comes from the settings):
+To upgrade, from your computer (it checks your commits are pushed, then on the
+server pulls, builds, installs and restarts):
+
+```sh
+tools/deploy-nexus.sh root@nexus.example.com    # or SHED_NEXUS_SSH=root@… in your shell's profile
+```
+
+or on the server, `/root/shed/packaging/nexus/update.sh`: it pulls the
+checkout, builds `shed-nexus` from it, and runs `install.sh` with it. If the
+server also has a server workspace (`/usr/local/bin/shedd` and a user `shed`,
+or `WORKSPACE_USER`), it builds and installs its `shed` and `shedd` too, and
+asks before restarting that keeper (`-y` restarts without asking,
+`--no-restart` never, `--no-workspace` leaves it alone): a restart saves its
+benches but ends what runs in them, Claude Code sessions included.
+
+Step by step instead: build the new version and run the script again (it
+installs the binary, refreshes the unit and restarts; the domain comes from
+the settings):
 
 ```sh
 cargo install --locked --git https://github.com/odolha/shed shed-nexus
