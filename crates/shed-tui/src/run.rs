@@ -94,7 +94,11 @@ pub fn run(target: ShowTarget) -> anyhow::Result<()> {
 
 fn main_loop(app: &mut App, events: &mpsc::Receiver<Event>, target: ShowTarget) -> anyhow::Result<()> {
     let mut term = Terminal::new(CrosstermBackend::new(stdout())).context("opening the terminal")?;
-    term.clear()?;
+    // Not `term.clear()`: it asks the terminal where the cursor is, and the
+    // answer never comes back while the terminal-events thread holds
+    // crossterm's reader (start-up failed with "The cursor position could
+    // not be read"). A fresh alternate screen needs only clearing.
+    execute!(term.backend_mut(), terminal::Clear(terminal::ClearType::All))?;
     app.start(target);
     let mut last_draw = Instant::now() - FRAME;
     let mut shape: Option<CursorShape> = None;

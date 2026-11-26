@@ -965,7 +965,11 @@ has one owner and tests drive it without a terminal. `run.rs` connects it to
 the real terminal: raw mode, the alternate screen, mouse capture, bracketed
 paste, the kitty keyboard flags where the terminal has them; a thread each for
 the keeper, the terminal and the clock; a frame drawn at most every 16 ms
-while something changed.
+while something changed. The terminal's thread waits in crossterm's
+`event::read`, holding crossterm's reader, so nothing afterwards may ask the
+terminal and wait for its answer (a cursor-position query times out): the
+alternate screen is cleared with `Clear(All)`, not ratatui's `clear`, which
+asks where the cursor is.
 
 Opening a bench attaches to it (and detaches the one shown before); its panes'
 screens arrive as `Replay`, then live output, into `shed-emu` emulators.
