@@ -5,11 +5,15 @@
 # runs a server workspace (shed and shedd in /usr/local/bin), it builds those
 # too and, if asked, restarts that keeper. See docs/nexus-deploy.md.
 #
-# As root (or a user with sudo), on the server:
+# As root (or a user with sudo), on the server; install.sh links it as
+# shed-nexus-update (in /usr/local/sbin):
 #
-#   /root/shed/packaging/nexus/update.sh                 # asks before restarting the workspace's keeper
-#   /root/shed/packaging/nexus/update.sh -y              # restarts it without asking
-#   /root/shed/packaging/nexus/update.sh --no-workspace  # only the nexus
+#   shed-nexus-update                 # asks before restarting the workspace's keeper
+#   shed-nexus-update -y              # restarts it without asking
+#   shed-nexus-update --no-workspace  # only the nexus
+#
+# (The first time, before that link exists: git -C /root/shed pull, then
+# /root/shed/packaging/nexus/update.sh.)
 #
 # From your computer, tools/deploy-nexus.sh runs this over ssh.
 #
@@ -42,7 +46,8 @@ if [[ $EUID -ne 0 ]]; then
   exec sudo --preserve-env=CARGO_TARGET_DIR,WORKSPACE_USER "$0" "$@"
 fi
 
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Through the shed-nexus-update link too: where the script really is.
+here=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31mshed-nexus update: %s\033[0m\n' "$*" >&2; exit 1; }

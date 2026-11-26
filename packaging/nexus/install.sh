@@ -50,6 +50,7 @@ UNIT=/etc/systemd/system/shed-nexus.service
 SITE=/etc/nginx/sites-available/shed-nexus
 DATA=/var/lib/shed-nexus
 TARGET_BIN=/usr/local/bin/shed-nexus
+UPDATE_CMD=/usr/local/sbin/shed-nexus-update
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
@@ -150,6 +151,10 @@ else
   run install -m 0755 "$BIN" "$TARGET_BIN"
   note "from $BIN"
 fi
+
+say "the update command: $UPDATE_CMD"
+run ln -sfn "$here/update.sh" "$UPDATE_CMD"
+note "later, as root: shed-nexus-update (pulls $repo, builds, installs, restarts)"
 
 say "a user of its own: shed-nexus"
 if id -u shed-nexus >/dev/null 2>&1; then

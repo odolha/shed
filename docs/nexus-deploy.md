@@ -228,6 +228,8 @@ system it does not cover:
   missing.
 - **The binary**: `install -m 0755 ~/.cargo/bin/shed-nexus /usr/local/bin/`
   (each run, if it changed).
+- **The update command**: `shed-nexus-update` in `/usr/local/sbin`, a link to
+  `packaging/nexus/update.sh` in the checkout.
 - **The user**: `useradd --system --home-dir /var/lib/shed-nexus --shell
   /usr/sbin/nologin shed-nexus`. The nexus never runs as root. systemd makes
   `/var/lib/shed-nexus` (0700, owned by `shed-nexus`) when the service starts;
@@ -356,15 +358,23 @@ Back up `/var/lib/shed-nexus` (`nexus.db` with `sqlite3 nexus.db ".backup
 /path/to/nexus.db"` while it runs, and `vapid.key`; without the key, browsers
 and phones must subscribe to push again) and `/etc/shed-nexus*`.
 
-To upgrade, from your computer (it checks your commits are pushed, then on the
-server pulls, builds, installs and restarts):
+To upgrade, as root on the server:
+
+```sh
+shed-nexus-update
+```
+
+It pulls the checkout (`/root/shed`), builds `shed-nexus` from it, and runs
+`install.sh` with it. (`install.sh` makes that command, a link in
+`/usr/local/sbin` to `packaging/nexus/update.sh`; on a nexus set up before it
+existed, run `git -C /root/shed pull && /root/shed/packaging/nexus/update.sh`
+once.) Or from your computer, which checks your commits are pushed and runs it
+over ssh:
 
 ```sh
 tools/deploy-nexus.sh root@nexus.example.com    # or SHED_NEXUS_SSH=root@… in your shell's profile
 ```
-
-or on the server, `/root/shed/packaging/nexus/update.sh`: it pulls the
-checkout, builds `shed-nexus` from it, and runs `install.sh` with it. If the
+ If the
 server also has a server workspace (`/usr/local/bin/shedd` and a user `shed`,
 or `WORKSPACE_USER`), it builds and installs its `shed` and `shedd` too, and
 asks before restarting that keeper (`-y` restarts without asking,
