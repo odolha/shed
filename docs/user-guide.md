@@ -694,7 +694,10 @@ terminal of the bench.
   on the tab bar and in Shed. In the browser, Claude works in a tab group of its
   own. Steps read as "Browser: open https://…", "Browser: click". Needs the
   extension installed and signed in, and the browser open; when no Chrome or
-  Brave here has it, the strip says how to get it.
+  Brave here has it, the strip says how to get it. Only you connect it, and
+  never for long: after an hour (`[ai] browser_minutes`; the strip says until
+  when), and whenever Shed restarts or the bench closes, the tab lets go, and
+  you connect it again if you still want it.
 - **After a turn**, the files it changed are listed above the prompt: click one to
   see its diff in its project tab, ready to stage or throw away. When Claude keeps
   a task list, it shows there too.
@@ -1750,6 +1753,7 @@ taskbar_follows_workspace = false  # Cinnamon, GNOME: each workspace keeps its o
 command = "claude -p --no-session-persistence"   # request on stdin, prints a command; "" turns it off
 history = true                 # send the tab's recent commands along
 screen = true                  # send the text on the screen along
+browser_minutes = 60           # an AI tab connected to the browser lets go after this; 0: no limit
 
 [git]                          # Git in project tabs
 fetch_minutes = 5              # fetch this often while a project tab is open; 0: never

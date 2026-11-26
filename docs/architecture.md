@@ -465,8 +465,12 @@ session id of its own; its first prompt starts Claude Code with `--resume
 its id in `session` and clears `fork_of`, as for any new session.
 
 The browser (Claude in Chrome) belongs to at most one AI tab (`AiTab.browser`;
-`ai_settings` clears it on every other tab, `load_bench` on a bench loaded
-while another tab has it). Claude Code runs with `--no-chrome`, and the
+`ai_settings` clears it on every other tab). It is only ever connected by
+hand: never saved (`SavedAi.browser` is read from older files and ignored),
+so a restart of the keeper or a bench closed and opened lets go; and
+connecting sets `AiTab.browser_until` (`[ai] browser_minutes`, 60; only the
+keeper sets it, so no client can lengthen it), after which `browser_loop`
+lets go. Claude Code runs with `--no-chrome`, and the
 keeper adds Claude Code's own server for the extension (`claude
 --claude-in-chrome-mcp`, named `claude-in-chrome`) with a `control_request`
 `mcp_set_servers` when the tab is connected, and sets the servers back to none

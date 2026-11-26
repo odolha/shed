@@ -179,11 +179,14 @@ pub struct AiConfig {
     pub history: bool,
     /// Send the text on the pane's screen along (never for private tabs).
     pub screen: bool,
+    /// An AI tab connected to the browser (Claude in Chrome) is let go
+    /// after this many minutes; 0: only when disconnected or Shed restarts.
+    pub browser_minutes: u64,
 }
 
 impl Default for AiConfig {
     fn default() -> Self {
-        Self { command: "claude -p --no-session-persistence".into(), history: true, screen: true }
+        Self { command: "claude -p --no-session-persistence".into(), history: true, screen: true, browser_minutes: 60 }
     }
 }
 

@@ -362,7 +362,8 @@ pub struct AiTab {
     /// what was explained, and the explanation.
     pub explained: Vec<(String, String, String)>,
     /// Its Claude Code may use the browser (Claude in Chrome); at most one AI
-    /// tab at a time.
+    /// tab at a time. Only ever turned on by hand, never saved (a restart
+    /// lets go), and let go after `[ai] browser_minutes` (`browser_until`).
     pub browser: bool,
     /// The draft session shown (one with drafts and no Claude Code session
     /// yet), when `session` is `None`: its key.
@@ -374,6 +375,9 @@ pub struct AiTab {
     /// It shows that one's conversation; its first prompt starts Claude Code
     /// on a copy of it (`--fork-session`), the original left as it is.
     pub fork_of: Option<String>,
+    /// While connected to the browser: when the keeper lets go of it (Unix
+    /// seconds); `None` with no time limit. Set by the keeper only.
+    pub browser_until: Option<u64>,
 }
 
 /// A session Claude goes on with while the tab shows another.

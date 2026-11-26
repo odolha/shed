@@ -23,6 +23,11 @@ use tracing::{info, warn};
 
 use super::{ClientId, Keeper, State};
 
+/// Now, in Unix seconds.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
 /// Updates from a streaming answer are sent this often at most.
 const FLUSH_EVERY: Duration = Duration::from_millis(40);
 /// How often a background command's last line of output is read.
@@ -978,6 +983,30 @@ impl Keeper {
         });
     }
 
+    /// Lets go of the browser for AI tabs connected longer than `[ai]
+    /// browser_minutes` (checked every few seconds).
+    pub(crate) async fn browser_loop(self: Arc<Self>) {
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tick.tick().await;
+            let now = unix_now();
+            let expired: Vec<TabId> = {
+                let st = self.lock();
+                st.tree
+                    .benches
+                    .iter()
+                    .flat_map(|b| &b.tabs)
+                    .filter(|t| t.ai_info().is_some_and(|a| a.browser && a.browser_until.is_some_and(|u| u <= now)))
+                    .map(|t| t.id)
+                    .collect()
+            };
+            for tab in expired {
+                info!(%tab, "the browser's time is up: disconnecting the AI tab");
+                self.ai_edit_tab(tab, |ai| ai.browser = false);
+            }
+        }
+    }
+
     pub(super) fn ai_settings(&self, tab: TabId, new: AiTab) {
         self.ai_edit_tab(tab, |ai| {
             ai.add_dirs = new.add_dirs;
@@ -1078,12 +1107,22 @@ impl Keeper {
     /// tells the windows and saves soon.
     fn ai_edit_tab(&self, tab: TabId, edit: impl FnOnce(&mut AiTab)) {
         let mut st = self.lock();
+        let minutes = st.config.ai.browser_minutes;
         let Some(t) = st.tree.tab_mut(tab) else { return };
         let TabKind::Ai(ai) = &mut t.kind else { return };
         let old = ai.clone();
         edit(ai);
         if ai.mode.is_empty() {
             ai.mode = "default".into();
+        }
+        // Connected by hand just now: for `[ai] browser_minutes` at most.
+        if !ai.browser {
+            ai.browser_until = None;
+        } else if !old.browser {
+            ai.browser_until = (minutes > 0).then(|| unix_now() + minutes * 60);
+            info!(%tab, ?ai.browser_until, "an AI tab connected to the browser");
+        } else {
+            ai.browser_until = old.browser_until;
         }
         let ai = ai.clone();
         // One AI tab at a time uses the browser: connecting this one lets go
@@ -1095,6 +1134,7 @@ impl Keeper {
                     && o.browser
                 {
                     o.browser = false;
+                    o.browser_until = None;
                     let_go.push(other.id);
                 }
             }

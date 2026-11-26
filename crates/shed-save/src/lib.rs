@@ -222,8 +222,9 @@ pub struct SavedAi {
     /// Explanations of changes: key, hash and text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub explained: Vec<(String, String, String)>,
-    /// Connected to the browser (Claude in Chrome).
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// Read from files of earlier versions, never written: a connection to
+    /// the browser (Claude in Chrome) does not outlive the keeper.
+    #[serde(default, skip_serializing)]
     pub browser: bool,
     /// A fork not started yet: the session it copies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,7 +248,7 @@ impl SavedAi {
             unsent: a.unsent.clone(),
             viewed: a.viewed.clone(),
             explained: a.explained.clone(),
-            browser: a.browser,
+            browser: false,
             fork_of: a.fork_of.clone(),
         }
     }
@@ -280,8 +281,10 @@ impl SavedAi {
             unsent: self.unsent.clone(),
             viewed: self.viewed.clone(),
             explained: self.explained.clone(),
-            browser: self.browser,
+            // Never back on by itself: connecting to the browser is by hand.
+            browser: false,
             fork_of: self.fork_of.clone().filter(|_| self.session.is_none()),
+            browser_until: None,
         }
     }
 }
@@ -1178,6 +1181,25 @@ mod tests {
         let key = a.draft_session.clone().expect("a draft session for them");
         assert!(a.drafts.contains(&draft(&key, "from before")) && shed_model::AiTab::is_draft_key(&key));
         assert_eq!(a.draft_sessions()[0].title, "from before");
+    }
+
+    #[test]
+    fn the_browser_is_never_saved_nor_restored() {
+        let mut bench = sample();
+        let mut ai = Tab::ai("/tmp".into());
+        if let TabKind::Ai(a) = &mut ai.kind {
+            a.browser = true;
+            a.browser_until = Some(u64::MAX);
+        }
+        bench.tabs.push(ai);
+        let text = SavedBench::from_bench(&bench, |_| PaneExtras::default()).to_toml();
+        assert!(!text.contains("browser"), "{text}");
+        // Files of earlier versions said so: read, and left off.
+        let old = text.replace("[tabs.ai]\n", "[tabs.ai]\nbrowser = true\n");
+        assert_ne!(old, text);
+        let (back, _) = SavedBench::from_toml(&old).unwrap().to_bench().unwrap();
+        let a = back.tabs.last().and_then(|t| t.ai_info()).unwrap();
+        assert!(!a.browser && a.browser_until.is_none());
     }
 
     #[test]

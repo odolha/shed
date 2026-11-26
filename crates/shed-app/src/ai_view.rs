@@ -3899,6 +3899,11 @@ impl AiView {
             let names = self.browsers.join(" or ");
             (format!("Connected to your browser ({names}): Claude works in a tab group of its own there"), ui.ink(accent))
         };
+        // Until when (`[ai] browser_minutes`); a restart of Shed lets go too.
+        let text = match self.ai.browser_until {
+            Some(until) => format!("{text}. Until {}", local_time(until)),
+            None => format!("{text}. Until you disconnect, or Shed restarts"),
+        };
         Some(
             div()
                 .flex()

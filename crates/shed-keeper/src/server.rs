@@ -427,6 +427,7 @@ impl Keeper {
         let autosave = tokio::spawn(self.clone().autosave_loop());
         let ai_flush = tokio::spawn(self.clone().ai_flush_loop());
         let link = tokio::spawn(self.clone().link_loop());
+        let browser = tokio::spawn(self.clone().browser_loop());
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -446,6 +447,7 @@ impl Keeper {
         autosave.abort();
         ai_flush.abort();
         link.abort();
+        browser.abort();
         {
             let mut st = self.lock();
             st.ai.clear();
@@ -869,7 +871,7 @@ impl Keeper {
             ClientMsg::AiAnswer { tab, request, allow, always } => self.ai_answer(tab, request, allow, always),
             ClientMsg::AiOpenSession { tab, session } => self.ai_open_session(tab, session, false),
             ClientMsg::AiForkSession { tab, session } => self.ai_open_session(tab, Some(session), true),
-            ClientMsg::AiSettings { tab, settings } => self.ai_settings(tab, settings),
+            ClientMsg::AiSettings { tab, settings } => self.ai_settings(tab, *settings),
             ClientMsg::SetProject { tab, project } => {
                 let mut st = self.lock();
                 let Some(t) = st.tree.tab_mut(tab) else { return };
@@ -1630,17 +1632,6 @@ impl Keeper {
         let (mut bench, panes) = saved.to_bench()?;
         for tab in &mut bench.tabs {
             st.config.recolor_tags(&mut tab.tags);
-        }
-        // One AI tab at a time uses the browser: not this bench's, when
-        // another running tab has it (nor a second one of its own).
-        let mut taken = st.tree.benches.iter().flat_map(|b| &b.tabs).any(|t| t.ai_info().is_some_and(|a| a.browser));
-        for tab in &mut bench.tabs {
-            if let TabKind::Ai(a) = &mut tab.kind
-                && a.browser
-            {
-                a.browser = !taken;
-                taken = true;
-            }
         }
         let bench_cwd = bench.cwd.clone();
         let mut started = Vec::new();

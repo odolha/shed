@@ -88,7 +88,7 @@ for line in sys.stdin:
     let key = shed_model::AiTab::new_draft_key();
     ai.draft_session = Some(key.clone());
     ai.drafts = vec![shed_model::Draft { session: key.clone(), text: "ask about the cache later".into() }];
-    c.msg(ClientMsg::AiSettings { tab, settings: ai });
+    c.msg(ClientMsg::AiSettings { tab, settings: Box::new(ai) });
     tree_until(&mut c, "draft session", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.draft_session.as_ref() == Some(&key) && a.draft_sessions().len() == 1));
     c.msg(ClientMsg::AiOpenSession { tab, session: None });
     tree_until(&mut c, "left the draft session", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.draft_session.is_none()));
@@ -229,8 +229,18 @@ for line in sys.stdin:
     }
     let mut on = ai(&c, tab);
     on.browser = true;
-    c.msg(ClientMsg::AiSettings { tab, settings: on });
-    tree_until(&mut c, "connected", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.browser));
+    c.msg(ClientMsg::AiSettings { tab, settings: Box::new(on) });
+    let tree = tree_until(&mut c, "connected", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.browser));
+    // For an hour (`[ai] browser_minutes`), which no client can change.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let until = tree.tab(tab).and_then(|t| t.ai_info()).and_then(|a| a.browser_until).expect("a time limit");
+    assert!((now + 3590..=now + 3610).contains(&until), "{until} vs {now}");
+    let mut longer = ai(&c, tab);
+    longer.browser_until = Some(now + 86400);
+    longer.follow = !longer.follow;
+    c.msg(ClientMsg::AiSettings { tab, settings: Box::new(longer.clone()) });
+    let tree = tree_until(&mut c, "follow switched", |t| t.tab(tab).and_then(|t| t.ai_info()).is_some_and(|a| a.follow == longer.follow));
+    assert_eq!(tree.tab(tab).and_then(|t| t.ai_info()).and_then(|a| a.browser_until), Some(until));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !log().contains("mcp_set_servers claude-in-chrome:--claude-in-chrome-mcp") {
         assert!(std::time::Instant::now() < deadline, "the browser was not switched on: {}", log());
@@ -241,11 +251,12 @@ for line in sys.stdin:
     let other = tree.bench(bench).unwrap().tabs.iter().find(|t| t.ai_info().is_some() && t.id != tab).unwrap().id;
     let mut on = ai(&c, other);
     on.browser = true;
-    c.msg(ClientMsg::AiSettings { tab: other, settings: on });
-    tree_until(&mut c, "connection moved", |t| {
+    c.msg(ClientMsg::AiSettings { tab: other, settings: Box::new(on) });
+    let tree = tree_until(&mut c, "connection moved", |t| {
         let browser = |id| t.tab(id).and_then(|t| t.ai_info()).is_some_and(|a| a.browser);
         browser(other) && !browser(tab)
     });
+    assert_eq!(tree.tab(tab).and_then(|t| t.ai_info()).unwrap().browser_until, None, "let go: no time left either");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !log().lines().any(|l| l == "mcp_set_servers ") {
         assert!(std::time::Instant::now() < deadline, "the first tab kept the browser: {}", log());

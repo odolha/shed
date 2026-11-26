@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 60;
+pub const PROTOCOL_VERSION: u32 = 61;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -160,7 +160,7 @@ pub enum ClientMsg {
     /// Shows and continues another session, or (`None`) starts a new one.
     AiOpenSession { tab: TabId, session: Option<String> },
     /// Changes an AI tab's folders, model, mode, effort or following.
-    AiSettings { tab: TabId, settings: AiTab },
+    AiSettings { tab: TabId, settings: Box<AiTab> },
     /// Opens a terminal tab in `cwd` after the active one and runs `command` at its first prompt.
     NewCommandTab { bench: BenchId, cwd: PathBuf, command: String },
     /// Starts an AI tab's Claude Code ahead of its first prompt (the user

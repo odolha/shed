@@ -111,7 +111,7 @@ for line in sys.stdin:
     });
     let mut with_drafts = ai(&c, here);
     with_drafts.drafts = ["a", "b", "z"].iter().map(|s| Draft { session: s.to_string(), text: format!("later, for {s}") }).collect();
-    c.msg(ClientMsg::AiSettings { tab: here, settings: with_drafts });
+    c.msg(ClientMsg::AiSettings { tab: here, settings: Box::new(with_drafts) });
     tree_until(&mut c, "drafts", |t| t.tab(here).and_then(|t| t.ai_info()).is_some_and(|a| a.drafts.len() == 3));
 
     // `b` goes on from `a`: shown in the other tab, so `a` cannot go.
