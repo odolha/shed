@@ -8,7 +8,7 @@
 # (SHED_BIN=path/to/shed for a build elsewhere, its shedd beside it.)
 # Needs Xvfb (XVFB=/path/to/Xvfb when it is not on PATH; without root,
 # `apt-get download xvfb && dpkg-deb -x xvfb_*.deb dir` gives one), xrdb,
-# xwininfo, xwd, ffmpeg, and python3 with PIL.
+# xwininfo, xwd, ffmpeg, and python3 with PIL; kitty for the shed tui one.
 set -euo pipefail
 repo=$(pwd)
 demo=${DEMO:-/tmp/shed-demo}
@@ -150,6 +150,19 @@ xtype "$board" %0.3 @Control_L+Shift_L+f %0.4 boards %1.2 && grab "$board" find 
 xtype "$board" %0.3 @Alt_L+Right %0.4 @Control_L+r %1.5 && grab "$board" logbook && xtype "$board" @Escape || true
 # The board's README in its project tab's Markdown View (tab 3; Ctrl+P opens it).
 xtype "$board" %0.3 @Control_L+3 %1 @Control_L+p %0.5 README %0.5 @Return %3 && grab "$board" markdown || true
+# A tab's menu (Shift+F10), then New Tab to the Right › New AI Tab, opened in the
+# menu's place (typing narrows the list, Enter opens an item with ›).
+xtype "$board" %0.3 @Control_L+2 %1 @Shift_L+F10 %1.2 && grab "$board" tab-menu-full \
+  && xtype "$board" right %0.5 @Return %0.8 AI %0.5 @Return %1.2 && grab "$board" menu-drill-full && xtype "$board" @Escape %0.3 || true
+
+# shed tui, in a kitty of this display, showing the docs bench's AI tab
+# (skipped without kitty).
+if command -v kitty >/dev/null; then
+  (cd "$HOME/projects/docs" && setsid kitty --config NONE --class shed-tui-shot -o font_size=21 -o remember_window_size=no \
+    -o initial_window_width=2560 -o initial_window_height=1600 -o window_padding_width=8 \
+    -o background='#16181d' -o foreground='#d8dee9' "$shed" tui docs >"$demo/kitty.log" 2>&1 &)
+  tui=$(win shed-tui-shot); sleep 8; grab "$tui" tui
+fi
 
 mkdir -p docs/images
 python3 - "$demo" <<'PY'
@@ -158,9 +171,16 @@ from PIL import Image
 demo = sys.argv[1]
 def scaled(im, factor):
     return im.resize((int(im.width * factor), int(im.height * factor)), Image.LANCZOS)
-# (colours.png and tab-menu.png need right-clicks, which do not reach GPUI on
-# Xvfb: they stay as they were.)
-for name in ["shed", "bench", "shed-light", "project", "ai", "ai-agents", "review", "setup", "logbook", "find", "bookmarks", "markdown"]:
+# (colours.png needs a click, which does not reach GPUI on Xvfb: it
+# stays as it was.)
+# The menus: the corner of the bench window they open in.
+for name, box in [("tab-menu", (0, 0, 640, 340)), ("menu-drill", (0, 0, 640, 150))]:
+    path = f"{demo}/{name}-full.png"
+    if os.path.exists(path):
+        im = Image.open(path).convert("RGB")
+        im = scaled(im, 1280 / im.width)
+        im.crop(box).save(f"docs/images/{name}.png", optimize=True)
+for name in ["shed", "bench", "shed-light", "project", "ai", "ai-agents", "review", "setup", "logbook", "find", "bookmarks", "markdown", "tui"]:
     path = f"{demo}/{name}.png"
     if os.path.exists(path):
         im = Image.open(path).convert("RGB")

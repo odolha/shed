@@ -233,13 +233,27 @@ project and AI tabs and bookmarks, a made-up Claude Code session in the demo hom
 runs a separate Shed in it on a virtual X display of its own (Xvfb, at 2× density,
 with Mesa's software Vulkan), and writes the screenshots in `docs/images/`. Nothing
 shows on your screen and your input is untouched, so it can run while you work.
-Panels are opened with keys sent to that display only (`xtype.py`); the mouse does
-not reach GPUI there (Xvfb has no XInput pointer of its own), so the two menu
-screenshots (`colours.png`, `tab-menu.png`) are not retaken. Needs Xvfb (`XVFB=`
+Panels and menus are opened with keys sent to that display only (`xtype.py`;
+a tab's menu with Shift+F10, typing to narrow it); the mouse does not reach
+GPUI there (Xvfb has no XInput pointer of its own), so `colours.png`, which
+needs a click, is not retaken. `tui.png` is `shed tui` in a kitty on the same
+display (skipped without kitty). Needs Xvfb (`XVFB=`
 its path when not installed: `apt-get download xvfb` and `dpkg-deb -x` give one
 without root), `xrdb`, `xwininfo`, `xwd`, `ffmpeg` and Python's PIL. Run it from the
 repository root after `cargo build` (`SHED_BIN=` a `shed` built elsewhere, with its
-`shedd` beside it).
+`shedd` beside it). It rewrites every picture; commit only those that changed
+for a reason (clocks and timings in them differ on every run).
+
+The web app's (`docs/images/web/`): start the mock and the app (`npm run mock`
+and `npm start` in `web/`), then `node tools/screenshots/web.mjs` signs in to
+the mock in a headless Chrome of its own (`tools/e2e/cdp.mjs`) and takes the
+overview, an AI tab and a terminal at 1280×800, and the AI tab at a phone's
+size. The Android app's (`docs/images/android/`) come from its screen tests
+(`-Pshed.screenshots=DIR`, see [The Android app](#the-android-app)): `ai`,
+`ai-agent`, `ai-settings` and `terminal` are `ai-open-dark`,
+`ai-agent-sheet-dark`, `ai-settings-dark` and `terminal-select-dark` scaled to
+480 pixels wide, and `phone.png` three of them side by side, reduced to 256
+colours to keep them small.
 
 `cargo run -p shed-desktop --example icon_preview -- sheet.png [template.svg]` draws a
 sheet of the bench icon in every colour, at launcher and Dock sizes, on dark and
