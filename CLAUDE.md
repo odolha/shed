@@ -63,7 +63,9 @@ export SHED_RUNTIME_DIR=/tmp/shed-dev XDG_CONFIG_HOME=/tmp/shed-dev/config \
   a made-up Claude session) and retakes `docs/images/*.png` headless, on its own
   Xvfb display (`XVFB=~/.cache/shed-dev/xvfb/root/usr/bin/Xvfb` on this machine), so
   it is safe while the user works. Keys reach that display; mouse clicks do not.
-  Screenshots must not show usernames or hostnames.
+  Screenshots must not show usernames or hostnames. Web app shots:
+  `tools/screenshots/web.mjs` (its own headless Chrome against `web/mock/`);
+  Android ones come from the Robolectric screen tests (`docs/development.md`).
 - Logs: `$XDG_STATE_HOME/shed/shedd.log`; `SHED_LOG=debug`; `shedd --foreground`.
 - `shed tui` with the same env talks to the dev keeper; test it through
   `crates/shed-tui/tests/` (TestBackend), not in a terminal the user is using.
