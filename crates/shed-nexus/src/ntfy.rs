@@ -75,7 +75,7 @@ pub fn message(workspace: &str, name: &str, notification: &Notification) -> Mess
         NotificationKind::AiWaiting => ("4", "question"),
         NotificationKind::AiDone => ("3", "white_check_mark"),
         NotificationKind::CommandDone => ("3", "checkered_flag"),
-        NotificationKind::WorkspaceOffline => ("4", "warning"),
+        NotificationKind::WorkspaceOffline => ("2", "warning"),
     };
     let body = match (name.is_empty(), notification.body.is_empty()) {
         (false, false) => format!("{name} · {}", notification.body),
@@ -155,7 +155,7 @@ mod tests {
             present: false,
         };
         let m = message("w 1/x", "desk", &offline);
-        assert_eq!((m.priority, m.body.as_str(), m.click.as_deref()), ("4", "desk", Some("shed://w/w%201%2Fx")));
+        assert_eq!((m.priority, m.body.as_str(), m.click.as_deref()), ("2", "desk", Some("shed://w/w%201%2Fx")));
     }
 
     #[test]

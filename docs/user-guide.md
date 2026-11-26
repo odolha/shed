@@ -1634,6 +1634,9 @@ Settings.
   ntfy app (Settings → Notifications shows it, with **Copy**); with a nexus
   that has no topic, through UnifiedPush, where Settings shows whether the
   nexus pushes to this phone and turning notifications off tells it to stop.
+  How loud each is: Claude waiting is urgent (sound, pops up); a turn or a
+  command done is normal; a workspace gone offline is minor (silent, only in
+  the list). In the ntfy app or Android's settings for Shed you can change any.
   Tapping a notification opens its tab, even with the app closed. While you
   are at the workspace's computer (used it in the last five minutes, its
   `away_after_minutes`), nothing is pushed.

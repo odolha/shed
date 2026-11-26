@@ -1126,8 +1126,8 @@ With none in view it is pushed. **Phones**: with a ntfy topic
 (`push.ntfy_url`, or `SHED_NEXUS_NTFY_URL`, which wins; the token from
 `SHED_NEXUS_NTFY_TOKEN` as `Authorization: Bearer`) a plain POST to it
 (`ntfy.rs`): the text as the body (the workspace's name, the bench and tab),
-`Title`, `Priority` (4 for Claude waiting and a workspace offline, 3 for the
-rest), `Tags`, and `Click: shed://w/{workspace}/b/{bench}/t/{tab}` as far as
+`Title`, `Priority` (4 for Claude waiting, 3 for a turn or command done, 2 for
+a workspace offline), `Tags`, and `Click: shed://w/{workspace}/b/{bench}/t/{tab}` as far as
 known, which the Android app opens. The topic is shared, so it carries the
 kinds any signed-in phone wants (every kind with no phone); `PushInfo::ntfy_topic`
 tells the apps its URL (never the token). Without a topic, phones get Web Push
@@ -1136,7 +1136,10 @@ Push messages, to every subscription that wants that kind. The payload
 (`shed_api::http::PushPayload`: kind, title, body, workspace and its name,
 bench, tab, so a click opens `/w/{workspace}/b/{bench}/t/{tab}`) is encrypted
 for the device (RFC 8291, `aes128gcm`) and signed with the nexus's VAPID key
-(RFC 8292), made on first start (`vapid.key`, 0600). Browsers' push services
+(RFC 8292), made on first start (`vapid.key`, 0600), with `Urgency`
+(`push::urgency`: high for Claude waiting, low for a workspace offline, normal
+otherwise); the service worker shows a workspace offline `silent`, and the
+Android app's channel for it is of low importance (Claude waiting: high). Browsers' push services
 and UnifiedPush distributors (ntfy) take the same requests, so one path covers
 both. Subscriptions a push service no longer knows (404, 410) are dropped, and
 a device can drop its own (`push/unsubscribe`, keeping its choice of kinds;

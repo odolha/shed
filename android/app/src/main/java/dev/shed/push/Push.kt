@@ -78,7 +78,14 @@ object Push {
     /** Bumped when this phone's subscription at the nexus changed, for Settings to look again. */
     val changed = MutableStateFlow(0)
 
-    fun channelId(kind: NotificationKind) = "shed-" + kind.string
+    /** A channel's importance is fixed once made, so a new level needs a new id. */
+    fun channelId(kind: NotificationKind) = when (kind) {
+        NotificationKind.WorkspaceOffline -> "shed-workspaceOffline-low"
+        else -> "shed-" + kind.string
+    }
+
+    /** Channels made by earlier versions, at levels since changed. */
+    private val oldChannels = listOf("shed-workspaceOffline")
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -89,13 +96,14 @@ object Push {
             NotificationKind.WorkspaceOffline to R.string.channel_workspace_offline,
         )
         for ((kind, name) in channels) {
-            val importance = if (kind == NotificationKind.AiWaiting) {
-                NotificationManager.IMPORTANCE_HIGH
-            } else {
-                NotificationManager.IMPORTANCE_DEFAULT
+            val importance = when (kind) {
+                NotificationKind.AiWaiting -> NotificationManager.IMPORTANCE_HIGH
+                NotificationKind.WorkspaceOffline -> NotificationManager.IMPORTANCE_LOW
+                else -> NotificationManager.IMPORTANCE_DEFAULT
             }
             manager.createNotificationChannel(NotificationChannel(channelId(kind), context.getString(name), importance))
         }
+        oldChannels.forEach(manager::deleteNotificationChannel)
     }
 
     /** Distributors installed on the phone (ntfy and the like). */

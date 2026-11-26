@@ -156,13 +156,13 @@ async fn a_workspace_going_offline_follows_the_same_rule() {
     assert_eq!(frame.notification.title, "desk went offline");
     assert!(w.receiver.wait_for(1).await.is_empty());
 
-    // None in view: the topic, at a high priority, and the browser.
+    // None in view: the topic, at a low priority, and the browser.
     let w = world(true).await;
     drop(w.link);
     let hits = w.receiver.wait_for(2).await;
     let [ntfy] = &w.receiver.on("/alerts-shed")[..] else { panic!("one ntfy message: {hits:?}") };
     assert_eq!(ntfy.headers["title"], "desk went offline");
-    assert_eq!(ntfy.headers["priority"], "4");
+    assert_eq!(ntfy.headers["priority"], "2");
     assert_eq!(ntfy.headers["click"], format!("shed://w/{}", w.workspace));
     assert_eq!(w.receiver.on("/wp/browser").len(), 1);
     assert!(w.receiver.on("/wp/phone").is_empty());

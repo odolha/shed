@@ -50,6 +50,8 @@ self.addEventListener('push', (event) => {
       // One notification per tab and kind: a newer one replaces it.
       tag: `${kind}:${p.tab || p.workspace || ''}`,
       renotify: kind === 'aiWaiting',
+      // A workspace gone offline is minor: no sound, no buzz.
+      silent: kind === 'workspaceOffline',
       data: { url: urlFor(p) },
     }),
   );

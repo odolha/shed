@@ -201,7 +201,7 @@ impl Push {
         &self,
         sub: &PushSubscribe,
         payload: &[u8],
-        urgent: bool,
+        urgency: &'static str,
     ) -> anyhow::Result<axum::http::Request<Vec<u8>>> {
         let (public, auth) = keys(sub).map_err(|e| anyhow::anyhow!(e))?;
         let endpoint = sub.endpoint.parse().context("push endpoint")?;
@@ -210,12 +210,11 @@ impl Push {
             .with_vapid(&self.key, &self.subject)
             .build(payload.to_vec())
             .map_err(|e| anyhow::anyhow!("encrypting the push: {e}"))?;
-        let urgency = if urgent { "high" } else { "normal" };
         request.headers_mut().insert("Urgency", axum::http::HeaderValue::from_static(urgency));
         Ok(request)
     }
 
-    pub async fn deliver(&self, sub: &PushSubscribe, payload: &[u8], urgent: bool) -> Delivery {
+    pub async fn deliver(&self, sub: &PushSubscribe, payload: &[u8], urgency: &'static str) -> Delivery {
         // Names are checked by the client's resolver as it connects; an
         // address in the URL is not resolved, so it is checked here.
         if !self.allow_private
@@ -226,7 +225,7 @@ impl Push {
             tracing::warn!("push: an endpoint is not on a public address; not sending");
             return Delivery::Failed;
         }
-        let request = match self.request(sub, payload, urgent).and_then(|r| Ok(reqwest::Request::try_from(r)?)) {
+        let request = match self.request(sub, payload, urgency).and_then(|r| Ok(reqwest::Request::try_from(r)?)) {
             Ok(request) => request,
             Err(e) => {
                 tracing::warn!("push: {e:#}");
@@ -314,10 +313,10 @@ pub fn notify(app: &Arc<App>, workspace: &str, notification: Notification) {
             tab: notification.tab,
         };
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let urgent = notification.kind == NotificationKind::AiWaiting;
+        let urgency = urgency(notification.kind);
         for sub in subs {
             let target = PushSubscribe { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth };
-            if push.deliver(&target, &bytes, urgent).await == Delivery::Gone {
+            if push.deliver(&target, &bytes, urgency).await == Delivery::Gone {
                 tracing::info!("push: a device's subscription is gone; forgetting it");
                 let _ = app.store.remove_subscription(&sub.device);
             }
@@ -334,6 +333,16 @@ fn clip(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s.to_string(),
+    }
+}
+
+/// How soon a push service should deliver a kind (Web Push `Urgency`):
+/// Claude waiting at once, a workspace gone offline whenever convenient.
+pub fn urgency(kind: NotificationKind) -> &'static str {
+    match kind {
+        NotificationKind::AiWaiting => "high",
+        NotificationKind::AiDone | NotificationKind::CommandDone => "normal",
+        NotificationKind::WorkspaceOffline => "low",
     }
 }
 
@@ -356,9 +365,10 @@ mod tests {
             auth: URL_SAFE_NO_PAD.encode(auth),
         };
         assert!(push.check(&sub).is_ok());
-        let request = push.request(&sub, b"{\"title\":\"hi\"}", true).unwrap();
+        let request = push.request(&sub, b"{\"title\":\"hi\"}", urgency(NotificationKind::AiWaiting)).unwrap();
         assert_eq!(request.headers()["content-encoding"], "aes128gcm");
         assert_eq!(request.headers()["urgency"], "high");
+        assert_eq!(urgency(NotificationKind::WorkspaceOffline), "low");
         let vapid = request.headers()["authorization"].to_str().unwrap();
         assert!(vapid.starts_with("vapid t="), "{vapid}");
         assert!(vapid.contains(&format!("k={}", push.public_key())));
@@ -404,7 +414,7 @@ mod tests {
         assert!(lenient.check_address("http://127.0.0.1/x").await.is_ok());
         // Sending to an address inside is refused too, before connecting.
         let sub = PushSubscribe { endpoint: "https://127.0.0.1:1/x".into(), p256dh: String::new(), auth: String::new() };
-        assert_eq!(push.deliver(&sub, b"{}", false).await, Delivery::Failed);
+        assert_eq!(push.deliver(&sub, b"{}", "normal").await, Delivery::Failed);
     }
 
     #[tokio::test]
