@@ -248,6 +248,13 @@ class AiScreenshots {
 
     @Test fun typingLight() = shoot(ThemeChoice.Light, "typing") { type() }
 
+    /** A long prompt: the whole screen is the prompt, its end in sight. */
+    @Test fun typingLongDark() = shoot(ThemeChoice.Dark, "typing-long") {
+        val field = compose.onNode(hasSetTextAction())
+        field.performClick()
+        field.performTextInput((1..40).joinToString("\n") { "Line $it of a long message, so it wraps on a phone's narrow screen" })
+    }
+
     @Test fun limitsDark() = shoot(ThemeChoice.Dark, "limits") { compose.onNodeWithText("Working", substring = true).performClick() }
 
     @Test fun limitsLight() = shoot(ThemeChoice.Light, "limits") { compose.onNodeWithText("Working", substring = true).performClick() }

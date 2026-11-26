@@ -109,7 +109,7 @@ const PAGE = 150;
         </aside>
       }
 
-      <div class="convo">
+      <div class="convo" [class.full]="typing() && narrow()">
         @if (reviewing()) {
           <shed-ai-review
             [workspace]="workspace()"
@@ -700,6 +700,19 @@ const PAGE = 150;
         padding: 8px 12px 20px 10px;
       }
       .status.quiet {
+        display: none;
+      }
+      /* Typing on a phone: the prompt has the whole tab. The conversation
+         stays, at no height, so it comes back scrolled where it was. */
+      .convo.full .view {
+        flex: 0 0 0;
+        overflow: hidden;
+      }
+      .convo.full .bottom {
+        flex: 1;
+        min-height: 0;
+      }
+      .convo.full .bottom > :not(shed-ai-prompt) {
         display: none;
       }
       .status {

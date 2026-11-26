@@ -346,12 +346,25 @@ export function matchCommands(commands: AiCommand[], text: string): AiCommand[] 
       .settings {
         display: inline-flex;
       }
-      /* A few lines; while typing, up to 45 % of what shows above the keyboard. */
+      /* A few lines; while typing, all the room the tab gives it (it hides
+         the conversation then), the text scrolling inside. */
       .area {
         max-height: calc(3 * 1.45em + 12px);
       }
+      :host(.focused) {
+        flex: 1;
+        min-height: 0;
+      }
+      :host(.focused) .box {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
       :host(.focused) .area {
-        max-height: calc(var(--vvh, 100dvh) * 0.45);
+        flex: 1;
+        min-height: 0;
+        max-height: none;
       }
     }
     @media (pointer: coarse) {

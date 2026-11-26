@@ -21,7 +21,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -30,6 +29,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
@@ -103,6 +103,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -116,7 +117,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -370,8 +370,9 @@ fun AiScreen(nav: NavController, ws: String, tabId: String) {
 /**
  * The AI tab as drawn: the top bar, the status and limits, the conversation
  * (opening at its end), what waits in the background, and the prompt.
- * While you type, the status and the strip fold to a line each and the
- * prompt grows up to [PROMPT_SHARE] of the room above the keyboard.
+ * While you type, the prompt takes all the room under the top bar, above
+ * the keyboard (the conversation stays where it was, out of sight); putting
+ * the keyboard away brings it all back.
  */
 @Composable
 fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: String? = null, onMerged: () -> Unit = {}) {
@@ -415,17 +416,19 @@ fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: Strin
     ) { padding ->
         // The prompt pads the navigation bar itself (in its colour); the
         // keyboard takes the rest of the bottom.
-        BoxWithConstraints(
+        Box(
             Modifier
                 .fillMaxSize()
                 .padding(top = padding.calculateTopPadding())
                 .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.navigationBars)),
         ) {
-            val promptMax = maxHeight * PROMPT_SHARE
+            // Typing: the prompt has the whole room. The conversation stays
+            // composed (at no height), so it comes back scrolled where it was.
+            val full = typing && data.canChange
             Column(Modifier.fillMaxSize()) {
-                StatusLine(data.ai, data.status, data.limits, compact = typing)
+                if (!full) StatusLine(data.ai, data.status, data.limits, compact = false)
                 val list = data.entries
-                Box(Modifier.weight(1f)) {
+                Box(if (full) Modifier.height(0.dp).clipToBounds() else Modifier.weight(1f)) {
                     when {
                         list == null && data.ended -> EmptyNote(stringResource(R.string.ai_unavailable))
                         list == null -> Loading()
@@ -449,9 +452,9 @@ fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: Strin
                         }
                     }
                 }
-                BackgroundStrip(data.entries, data.status, now, folded = typing, onTimer = on.timer, onRun = { openRun = it })
+                if (!full) BackgroundStrip(data.entries, data.status, now, folded = false, onTimer = on.timer, onRun = { openRun = it })
                 if (data.canChange) {
-                    Prompt(data, on, promptMax, mergeIn, onMerged) { typing = it }
+                    Prompt(data, on, full, if (full) Modifier.weight(1f) else Modifier, mergeIn, onMerged) { typing = it }
                 } else {
                     Spacer(Modifier.navigationBarsPadding())
                 }
@@ -484,9 +487,6 @@ fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: Strin
         )
     }
 }
-
-/** How much of the room above the keyboard the prompt may take while you type. */
-const val PROMPT_SHARE = 0.45f
 
 /**
  * Working or waiting, since when; the cost and the context; the usage
@@ -789,11 +789,12 @@ private fun BackgroundStrip(
 private data class PromptFile(val key: Long, val name: String, val path: String? = null)
 
 /**
- * The prompt: **+** (attach, keep as a draft), the text (a few lines; while
- * focused, up to [maxHeight]), the settings sheet's icon, Send (or Stop).
+ * The prompt: **+** (attach, keep as a draft), the text (three lines at
+ * most; [full] while typing: all of the room [modifier] gives it, the text
+ * scrolling in it), the settings sheet's icon, Send (or Stop).
  */
 @Composable
-private fun Prompt(data: AiTabData, on: AiTabActions, maxHeight: Dp, mergeIn: String?, onMerged: () -> Unit, onTyping: (Boolean) -> Unit) {
+private fun Prompt(data: AiTabData, on: AiTabActions, full: Boolean, modifier: Modifier, mergeIn: String?, onMerged: () -> Unit, onTyping: (Boolean) -> Unit) {
     val shed = LocalShed.current
     val context = LocalContext.current
     val runner = rememberRunner()
@@ -907,7 +908,7 @@ private fun Prompt(data: AiTabData, on: AiTabActions, maxHeight: Dp, mergeIn: St
     }
 
     val working = ai.activity != AiActivity.Idle
-    Column(Modifier.fillMaxWidth().background(shed.surface).navigationBarsPadding()) {
+    Column(modifier.fillMaxWidth().background(shed.surface).navigationBarsPadding()) {
         val queued = ai.queued.orEmpty()
         queued.forEachIndexed { i, q ->
             Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -980,7 +981,9 @@ private fun Prompt(data: AiTabData, on: AiTabActions, maxHeight: Dp, mergeIn: St
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.Bottom) {
+        // While typing, the text has the whole width and the buttons go under
+        // it; the field keeps its place in the tree either way, so its focus.
+        val plusButton: @Composable () -> Unit = {
             Box(Modifier.padding(bottom = 4.dp)) {
                 IconButton(onClick = { plusMenu = true }) { Icon(Icons.Default.Add, stringResource(R.string.ai_prompt_more)) }
                 DropdownMenu(expanded = plusMenu, onDismissRequest = { plusMenu = false }) {
@@ -1009,24 +1012,8 @@ private fun Prompt(data: AiTabData, on: AiTabActions, maxHeight: Dp, mergeIn: St
                     }
                 }
             }
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it; typed = true },
-                placeholder = { Text(stringResource(if (working) R.string.ai_prompt_queue else R.string.ai_prompt), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                minLines = if (focused) 3 else 1,
-                maxLines = if (focused) Int.MAX_VALUE else 3,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 48.dp, max = if (focused) maxHeight.coerceAtLeast(120.dp) else Dp.Unspecified)
-                    .padding(vertical = 4.dp)
-                    .onFocusChanged {
-                        if (focused != it.isFocused) {
-                            focused = it.isFocused
-                            onTyping(it.isFocused)
-                        }
-                    },
-            )
+        }
+        val settingsButton: @Composable () -> Unit = {
             Box(Modifier.padding(bottom = 4.dp)) {
                 IconButton(onClick = { focusManager.clearFocus(); settings = true }) {
                     Icon(
@@ -1036,6 +1023,8 @@ private fun Prompt(data: AiTabData, on: AiTabActions, maxHeight: Dp, mergeIn: St
                     )
                 }
             }
+        }
+        val sendButton: @Composable () -> Unit = {
             Box(Modifier.padding(bottom = 4.dp)) {
                 if (working && text.isBlank() && attached.isEmpty() && files.isEmpty()) {
                     IconButton(onClick = { call(Call.AiStop(TabOnly(tabId))) }) {
@@ -1060,6 +1049,39 @@ private fun Prompt(data: AiTabData, on: AiTabActions, maxHeight: Dp, mergeIn: St
                         },
                     ) { Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.send), tint = if (canSend) shed.accent else shed.textDim) }
                 }
+            }
+        }
+        Row(Modifier.fillMaxWidth().then(if (full) Modifier.weight(1f) else Modifier).padding(horizontal = 4.dp), verticalAlignment = Alignment.Bottom) {
+            if (!full) plusButton()
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it; typed = true },
+                placeholder = { Text(stringResource(if (working) R.string.ai_prompt_queue else R.string.ai_prompt), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                minLines = 1,
+                maxLines = if (full) Int.MAX_VALUE else 3,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                modifier = Modifier
+                    .weight(1f)
+                    .then(if (full) Modifier.fillMaxHeight().padding(horizontal = 4.dp) else Modifier.heightIn(min = 48.dp))
+                    .padding(vertical = 4.dp)
+                    .onFocusChanged {
+                        if (focused != it.isFocused) {
+                            focused = it.isFocused
+                            onTyping(it.isFocused)
+                        }
+                    },
+            )
+            if (!full) {
+                settingsButton()
+                sendButton()
+            }
+        }
+        if (full) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                plusButton()
+                Spacer(Modifier.weight(1f))
+                settingsButton()
+                sendButton()
             }
         }
     }

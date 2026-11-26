@@ -1595,11 +1595,12 @@ On a phone (a screen narrower than 700 pixels) the web app makes room:
   folders Claude works in besides the tab's (**Add a Folder…**, × to drop
   one). The usage limits are two thin bars (5 hours, the week) in the bench's
   bar; tap them for the percentages and when each resets.
-- The prompt shows a few lines; while you type it grows, up to about half of
-  the room above the keyboard, the line of what runs and waits folds to one
-  line, and **▲ ▼** step aside. With the keyboard up, Shed's top bar and the
-  bench's bar make way for the conversation (the tabs stay); putting the
-  keyboard away folds the prompt again.
+- The prompt shows a few lines; while you type it takes the whole tab above
+  the keyboard (the conversation, what runs and waits and **▲ ▼** make way,
+  and the text scrolls in it, so all of a long message can be read and
+  edited). With the keyboard up, Shed's top bar and the bench's bar make way
+  too (the tabs stay); putting the keyboard away brings the conversation back
+  where it was, the prompt folded to a few lines.
 - Buttons and rows are at least finger-sized (small ones reach past their
   look), fields do not zoom the page, nothing scrolls sideways but code,
   terminals and the tab bar, and the screen keeps clear of a notch and the
@@ -1643,10 +1644,10 @@ Settings.
   scroll, a thin scrollbar shows at the right edge for a second; drag it to
   move through a long conversation quickly. Under the title, what Claude is doing, the cost, the context
   and your usage limits as two thin bars (5 hours, the week): tap them for the
-  percentages and when each resets. The prompt shows a few lines; while you
-  type it grows, up to about half of the room above the keyboard, and the
-  status and what waits in the background fold to a line each (tap the line to
-  see all); putting the keyboard away folds the prompt again. **+** beside it
+  percentages and when each resets. The prompt shows three lines; while you
+  type it takes the whole screen under the top bar, the text full width and
+  scrolling in it, with **+**, the settings and **Send** in a row under it;
+  putting the keyboard away brings the conversation back where it was. **+** beside it
   attaches a **File…** (the system's file picker: any
   file up to 16 MB, copied to the workspace, its path sent with the message for
   Claude to read), a **Picture…** or **Take a Photo…**, or keeps what you wrote
