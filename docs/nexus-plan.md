@@ -13,7 +13,12 @@ This document records the decisions, their reasons and the order of work.
 > (`shed-nexus`), the link (`shed-link`: `shed link`, `shed nexus
 > join/status/leave`, the keeper starting it, the link's state in the Shed
 > window), the web app (`web/`), the server workspace with `shed tui` and the
-> build without windows, and the Android app (`android/`). How it works now is
+> build without windows, and the Android app (`android/`). Built after it,
+> 2026-11-22 to 26: notifications shown live in an open app and pushed to
+> phones through a ntfy topic, held back while you are at the workspace;
+> Shed's desktop window showing other workspaces through the nexus; the web
+> app built into the nexus, set up by one script and updated by
+> `shed-nexus-update`. How it works now is
 > in [How Shed works](architecture.md#the-nexus), how to use it in the
 > [User Guide](user-guide.md#reaching-shed-from-elsewhere), how to host it in
 > [Deploying a nexus](nexus-deploy.md). What is still open is on the

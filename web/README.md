@@ -7,6 +7,8 @@ workspaces with their benches, AI tabs, terminals, projects and Git, the
 logbook, devices and notifications. Angular 22 (standalone components, signals,
 zoneless), with a small UI kit of its own; no other UI library.
 
+![The web app's overview, against the mock](../docs/images/web/overview.png)
+
 ## Develop
 
 Node 24.15 or newer (`.nvmrc`), or 22.22.3+.

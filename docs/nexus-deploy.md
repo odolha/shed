@@ -106,7 +106,9 @@ pushed. When none is, browsers get Web Push through their vendor's push
 service, with nothing to set up here, and phones get a message on a **ntfy
 topic** you run, read by the ntfy app (the same way other projects' alerts can
 come, one topic each: `alerts-shed`, `alerts-<project>`). Tapping one opens its
-tab in Shed's app (`shed://w/…/b/…/t/…`).
+tab in Shed's app (`shed://w/…/b/…/t/…`). Nothing is pushed for a workspace
+someone is using at its computer (its `[nexus] away_after_minutes`, 5 by
+default; see the [user guide](user-guide.md#notifications)).
 
 Install the ntfy server (see ntfy's documentation for its package repository),
 then in `/etc/ntfy/server.yml`:
@@ -152,8 +154,9 @@ systemctl restart shed-nexus
 (`http://127.0.0.1:2586/alerts-shed` works too, with ntfy on the same machine).
 The nexus POSTs each notification to the topic with `Authorization: Bearer`
 and the token: the text in the body (workspace, bench and tab), `Title`,
-`Priority` (4 when Claude waits for an answer or a workspace went offline, 3
-otherwise), `Tags`, and `Click` with the tab's link. Failures are logged
+`Priority` (4 when Claude waits for an answer, 3 for a turn or a command
+done, 2 when a workspace went offline, so that one is silent), `Tags`, and
+`Click` with the tab's link. Failures are logged
 (`ntfy: http 403`). The topic is shared by every phone, so it carries the kinds
 any signed-in phone has on in Shed's settings (all, before a phone chooses).
 The message text is not encrypted, which is why the topic belongs on a ntfy
@@ -352,6 +355,10 @@ shed@server.example.com`) use the same keeper, so they show up there as
 benches of their own. To reach it from the web and Android apps too, `shed nexus join
 https://nexus.example.com` links the workspace as in [6](#6-linking-workspaces).
 
+On the nexus's own server, `shed-nexus-update` updates this workspace's
+`shed` and `shedd` along with the nexus (see
+[Backups and upgrades](#backups-and-upgrades)).
+
 ## Backups and upgrades
 
 Back up `/var/lib/shed-nexus` (`nexus.db` with `sqlite3 nexus.db ".backup
@@ -374,8 +381,8 @@ over ssh:
 ```sh
 tools/deploy-nexus.sh root@nexus.example.com    # or SHED_NEXUS_SSH=root@… in your shell's profile
 ```
- If the
-server also has a server workspace (`/usr/local/bin/shedd` and a user `shed`,
+
+If the server also has a server workspace (`/usr/local/bin/shedd` and a user `shed`,
 or `WORKSPACE_USER`), it builds and installs its `shed` and `shedd` too, and
 asks before restarting that keeper (`-y` restarts without asking,
 `--no-restart` never, `--no-workspace` leaves it alone): a restart saves its

@@ -6,7 +6,10 @@ settings file. Screenshots come from a demo setup (`tools/screenshots/`).
 - [The idea](#the-idea)
 - [The Shed window](#the-shed-window)
 - [A bench's window](#a-benchs-window)
+  - [Menus](#menus)
+  - [Bookmarks](#bookmarks)
 - [Project tabs](#project-tabs)
+  - [Links](#links)
 - [AI tabs](#ai-tabs)
 - [Remote tabs](#remote-tabs)
 - [Opening, hiding, closing](#opening-hiding-closing)
@@ -18,13 +21,17 @@ settings file. Screenshots come from a demo setup (`tools/screenshots/`).
 - [Colours and appearance](#colours-and-appearance)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Shed in a terminal (shed tui)](#shed-in-a-terminal-shed-tui)
-- [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere)
+- [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere): the nexus
+  - [Linking a workspace](#linking-a-workspace)
+  - [Notifications](#notifications)
+  - [Other workspaces in this window](#other-workspaces-in-this-window)
 - [Shed in a browser](#shed-in-a-browser)
 - [Shed on your phone](#shed-on-your-phone)
 - [A workspace on a server](#a-workspace-on-a-server)
 - [The `shed` command](#the-shed-command)
 - [Settings: shed.toml](#settings-shedtoml)
 - [Where things are kept](#where-things-are-kept)
+- [Updating](#updating)
 - [Troubleshooting](#troubleshooting)
 
 ## The idea
@@ -81,6 +88,12 @@ Run `shed`, or pick Shed from your application menu.
 
 ![The Shed window](images/shed.png)
 
+Along the top: the workspace switcher (**This PC ▾**, see
+[Other workspaces in this window](#other-workspaces-in-this-window)), the
+link to a nexus when there is one (**Linked**, see
+[Linking a workspace](#linking-a-workspace)), **Settings**, the two views and
+the light/dark switch.
+
 Every bench is listed by name, with its state and its tabs. The state is a
 coloured badge beside the name: green **Open**, amber **Hidden** ("running without
 a window"), grey **Closed** (with when it was saved). Each tab is a card with a live
@@ -133,12 +146,10 @@ over the bench. Shed remembers the choice (`compact_pegboard` in `shed.toml`).
   stops (Shed asks first, and its teardown runs); it starts again when that bench
   opens. A closed bench's tab moved into a running one starts as opening would
   start it.
-- Right-click a card for its menu:
-
-![A tab's menu](images/tab-menu.png)
-
-**Setup…** opens the tab's [Setup](#setup-startup-teardown-and-aliases) right in
-Shed.
+- Right-click a card for its menu: go to the tab (or open the bench at it),
+  rename it, its tags, **Private**, **Move to Bench**, **Close Tab…**, and for
+  a remote tab **Reconnect**. **Setup…** opens the tab's
+  [Setup](#setup-startup-teardown-and-aliases) right in Shed.
 
 **Closed benches** are managed the same way: rename, recolour or badge them; add,
 rename, tag, reorder or remove their tabs; change their setup and aliases. Each
@@ -231,11 +242,17 @@ A new tab or pane opens in the folder of the one you were in. (Set
 ### Menus
 
 Every right-click menu, and the menus of buttons, is one panel that stays where
-it opened. An item with **›** opens its list in the panel's place, not beside
-it: **New Tab to the Right › AI** shows the AI tab's folders where the tab's
+it opened.
+
+![A tab's menu in a bench's window](images/tab-menu.png)
+
+An item with **›** opens its list in the panel's place, not beside
+it: **New Tab to the Right › New AI Tab** shows the AI tab's folders where the tab's
 menu was. Above a list opened this way, **‹ Back** goes up a level and the way
-there (`New Tab to the Right › AI`) goes back to any step of it. Long lists
+there (`New Tab to the Right › New AI Tab`) goes back to any step of it. Long lists
 scroll, and the panel does not narrow as you go in and out.
+
+![The same menu after New Tab to the Right › New AI Tab: the folders, with the way back above](images/menu-drill.png)
 
 The menu takes the keyboard while it is open (nothing reaches the terminal):
 **↑ ↓** light an item, **Enter** chooses it (**→** too, for an item with ›),
@@ -1139,6 +1156,8 @@ panes and splits, AI tabs, project tabs with Git, and the logbook. Pictures
 are described rather than shown; files are edited in `$EDITOR`; there are no
 drag and drop, launchers or desktop notifications.
 
+![shed tui showing an AI tab: the conversation, work Claude left going on in the background above the prompt, and the usage limits](images/tui.png)
+
 **Benches.** The first screen lists every bench, running or closed, with its
 tabs, as the Shed window does; the selected one's screen shows on the right
 when there is room. Enter opens a bench (a closed one loads), `L` loads it
@@ -1307,12 +1326,8 @@ desktop_clients = false             # true: Shed on your other computers can sho
 away_after_minutes = 5              # push to phones only once nobody used this computer this long; 0: always
 ```
 
-While you are at a workspace its notifications stay off your phone: they are
-pushed only once nobody has used the computer for `away_after_minutes` (no
-key, click or mouse move where the desktop tells: X11, GNOME and KDE on
-Wayland, macOS; elsewhere, and on a server, keys and clicks in Shed's windows
-and `shed tui`). What you type from the phone or a browser does not count.
-Apps in view still show them.
+While you are at a workspace its notifications stay off your phone (see
+[Notifications](#notifications)).
 
 The pairing's token is not in `shed.toml` (which backups copy): it is in
 `~/.local/share/shed/nexus.json`, readable only by you, with the nexus it belongs
@@ -1327,6 +1342,42 @@ apps, covers only that tab's folder, even when the repository is larger. A
 view-only workspace shows everything in the apps but offers no changes, and
 does not let them browse the machine's folders. Whoever runs the nexus can see
 and type into what it relays, so host it yourself.
+
+### Notifications
+
+A linked workspace tells the nexus about four things, never from a private
+tab. Each can be turned on or off in the web app's and the Android app's
+Settings, and each comes at its own level:
+
+| Notification | When | Level |
+| --- | --- | --- |
+| **Claude waits for an answer** | An AI tab asks for a permission or asks you something | High: sound, pops up |
+| **Claude finished** | An AI tab's turn is over (work it left going on in the background brings another only when Claude's next turn on it ends) | Normal |
+| **A command finished** | A command that ran a minute or more ends, in a terminal or remote tab | Normal |
+| **A workspace went offline** | Its link to the nexus is gone (said by the nexus) | Low: silent, only in the list |
+
+Where they show:
+
+- **On the computer itself**, Shed's own desktop notifications say when
+  Claude finishes or waits while you are not looking at its tab (see
+  [AI tabs](#ai-tabs)); a click goes to the tab.
+- **In an app in view**: while Shed in a browser (shown and focused) or the
+  Android app (in front) is open, nothing is pushed to any of your devices; the
+  open app shows the notification itself, as a toast or a banner with
+  **Open** (none for the tab you are already on).
+- **Pushed**, when no Shed app is in view: to browsers through Web Push, by
+  way of the browser's own push service (**Turn On** in the web app's
+  Settings); to phones through a ntfy topic your nexus publishes to, or
+  UnifiedPush when it has none, never through Google (see
+  [Shed on your phone](#shed-on-your-phone)).
+- **Not while you are at the workspace**: a notification is pushed only once
+  nobody has used that computer for `[nexus] away_after_minutes` (5; 0 pushes
+  always). Used means a key, click or mouse move where the desktop tells (X11,
+  GNOME and KDE on Wayland, macOS); elsewhere, and on a server, keys and
+  clicks in Shed's windows and `shed tui`. What you type from the phone or a
+  browser does not count. Apps in view still show them.
+
+Tapping or clicking a notification opens its tab, in the app it reached.
 
 ### Other workspaces in this window
 
@@ -1444,6 +1495,8 @@ The web app is served by the nexus, at its address
 [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere) says; it shows
 every workspace linked there.
 
+![The web app's overview: each workspace with its benches and tabs, and the usage limits](images/web/overview.png)
+
 What the web app shows:
 
 - **Workspaces**: each linked workspace with its benches as cards in their
@@ -1527,7 +1580,12 @@ What the web app shows:
   any of your devices; the open app shows the notification itself, here as a
   toast at the bottom (**Open** goes to its tab; none for the tab you are
   already on). Only when no Shed app is in view does it come as a browser or
-  phone notification.
+  phone notification, and not while you are at that workspace's computer (see
+  [Notifications](#notifications)).
+
+![An AI tab in the web app: a sub-agent and a background command as cards, what waits folded above the prompt](images/web/ai.png)
+
+![A terminal tab in the web app: two panes, each re-flowed to its width](images/web/terminal.png)
 
 On a phone (a screen narrower than 700 pixels) the web app makes room:
 
@@ -1548,6 +1606,8 @@ On a phone (a screen narrower than 700 pixels) the web app makes room:
   home bar. A long press opens what a right-click does on a computer (a tab's
   menu, a session's), on iPhone too.
 
+<img src="images/web/phone-ai.png" alt="The web app's AI tab on a phone" width="300">
+
 **Add to Home Screen** installs it as an app (on iPhone, needed for
 notifications). Private tabs are listed, never shown: what is in them stays on
 their workspace.
@@ -1560,6 +1620,8 @@ Build and install it as [android/README.md](../android/README.md) says, then
 sign in with the nexus's address (`https://nexus.example.com`), your user name,
 password and a code from your authenticator. Fingerprint unlock is in its
 Settings.
+
+<img src="images/android/ai.png" alt="An AI tab on the phone" width="200"> <img src="images/android/ai-agent.png" alt="A sub-agent's sheet: what it was asked, its steps" width="200"> <img src="images/android/ai-settings.png" alt="The AI tab's settings sheet: model, effort, mode, follow, browser, folders" width="200"> <img src="images/android/terminal.png" alt="A terminal on the phone, re-wrapped, with text selected" width="200">
 
 - **Workspaces**: each linked computer, online or when it was last seen, with
   its benches (in their colours), how many AI tabs work or wait for you, and
@@ -1642,7 +1704,7 @@ Settings.
   the list). In the ntfy app or Android's settings for Shed you can change any.
   Tapping a notification opens its tab, even with the app closed. While you
   are at the workspace's computer (used it in the last five minutes, its
-  `away_after_minutes`), nothing is pushed.
+  `away_after_minutes`), nothing is pushed (see [Notifications](#notifications)).
 
 Private tabs show as private: what is in them never leaves the computer. A
 workspace that allows viewing only shows everything and offers no changes.
@@ -1679,7 +1741,7 @@ same keeper, so they show up there as benches of their own.
 | `shed hide NAME` | Hides a running bench: closes its window, keeps it running |
 | `shed list` | Lists benches: open, hidden and closed |
 | `shed save NAME [--as COPY]` | Saves a bench now; `--as` saves a copy, handy as a template |
-| `shed delete NAME` | Deletes a bench |
+| `shed delete NAME [--yes]` | Deletes a bench (after asking, unless `--yes`) |
 | `shed setup [--edit]` | Shows (or edits) this tab's startup and teardown |
 | `shed alias [add NAME CMD \| rm NAME] [--bench\|--global\|--shell]` | Lists or changes aliases |
 | `shed project [DIR] [--bench NAME]` | Opens a folder (by default the Git repository you are in) as a project tab |
@@ -1687,13 +1749,14 @@ same keeper, so they show up there as benches of their own.
 | `shed browser setup` | Registers Shed's browser extension, so links bring their open tab forward |
 | `shed remote new HOST [--bench NAME] [--join ID]` | Opens a remote tab: a shell on HOST that outlives the bench, or joins one HOST keeps |
 | `shed remote list HOST` | Lists the shells HOST keeps (ID, folder, program, PCs showing it) |
-| `shed tag add LABEL [--color C] [--tint]` | Tags this tab |
+| `shed tag add LABEL [--color C] [--tint]`, `remove LABEL`, `list` | Tags this tab, takes a tag off, lists its tags |
 | `shed log [QUERY] [--scope local\|bench\|global] [--tag T]` | Lists commands from the logbook |
 | `shed status` | Shows whether the keeper runs and what it holds |
 | `shed stop` | Saves everything and stops the keeper, and every program in it |
 | `shed backup [list \| restore NAME]` | Backs up your setup now, lists the backups, or puts one back (see [Backups](#backups)) |
 | `shed init bash`, `shed init zsh` | Prints the shell integration, for a shell Shed did not start |
-| `shed nexus join URL [--name N]`, `status`, `leave` | Links this machine to a nexus, says how the link is doing, or unlinks it (see [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere)) |
+| `shed nexus join URL [--name N]`, `status`, `leave` | Links this machine to a nexus, says how the link is doing, or unlinks it (see [Linking a workspace](#linking-a-workspace)) |
+| `shed nexus signin [URL]`, `signout` | Signs this desktop in to a nexus, to show other workspaces in Shed's window, or out again (see [Other workspaces in this window](#other-workspaces-in-this-window)) |
 | `shed tui [BENCH]` | Shed in this terminal (see [Shed in a terminal](#shed-in-a-terminal-shed-tui)); a build without windows runs it for plain `shed` |
 
 ## Settings: shed.toml
@@ -1748,6 +1811,13 @@ open_only = false              # the Shed window lists open benches only (the to
 
 [desktop]
 taskbar_follows_workspace = false  # Cinnamon, GNOME: each workspace keeps its own pinned benches
+
+[nexus]                        # the link to a nexus: see "Linking a workspace"
+url = ""                       # set by `shed nexus join`
+enabled = true                 # false keeps the pairing but does not link
+control = "full"               # or "view": the apps look, change nothing
+desktop_clients = false        # Shed on your other computers may show this one
+away_after_minutes = 5         # push to phones only once nobody used this computer this long
 
 [ai]                           # the "> request" prompt
 command = "claude -p --no-session-persistence"   # request on stdin, prints a command; "" turns it off
@@ -1844,6 +1914,27 @@ shed backup restore 2026-11-12
 A restore puts that backup's files back, after backing up what is there now (a
 `…-before-restore` backup), so it can be undone. Benches saved since then and not
 in the backup stay as they are.
+
+## Updating
+
+Each part is updated where it runs. From a checkout of Shed's repository
+(`git pull` first), it is one command each:
+
+| What | How |
+| --- | --- |
+| Shed on this computer (Linux) | `tools/reinstall.sh`: builds `shed` and `shedd` in release into `~/.cargo/bin`, then offers to restart Shed (benches are saved first; what runs in them stops, Claude Code sessions too). Safe to run from a Shed terminal. Installed with `cargo install` or a package instead: install the new version the same way, then `shed stop` |
+| Shed on a Mac | `packaging/macos/bundle.sh` again, and copy `Shed.app` over the old one; then `shed stop` |
+| A nexus, and a server workspace beside it | `shed-nexus-update` as root on the server, or `tools/deploy-nexus.sh root@nexus.example.com` from your computer (see [Deploying a nexus](nexus-deploy.md#backups-and-upgrades)) |
+| The web app | Comes with the nexus: reload the page |
+| The Android app | `tools/android-install.sh`, with the phone on USB or paired over Wi-Fi (see [android/README.md](../android/README.md#install-on-a-phone)); its sign-in and settings stay |
+| Remote tabs' servers | Nothing: Shed copies its new `shedd` there the next time a remote tab connects; the shells there keep running under the keeper that holds them |
+
+After an update the keeper still running is the old one: `shed stop` stops it
+(benches are saved first) and the next `shed` starts the new one; `shed`
+offers to do that when it finds the old one. Shed's windows and `shed tui` refuse a keeper of another version and
+say so, and showing [another workspace](#other-workspaces-in-this-window) in
+Shed's window needs the same version there. Workspaces linked to a nexus
+reconnect by themselves after it restarts.
 
 ## Troubleshooting
 

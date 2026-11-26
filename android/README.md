@@ -8,6 +8,8 @@ files, sessions, drafts, review), terminals, the logbook, project files,
 search and Git. Native Kotlin with Jetpack Compose; no Google Play Services, so
 it builds from source and suits F-Droid.
 
+![An AI tab, a sub-agent's steps and a terminal on the phone (drawn by the screen tests)](../docs/images/android/phone.png)
+
 ## Build
 
 Nothing system-wide is needed: `tools/android-env.sh` points `JAVA_HOME` and
@@ -77,8 +79,9 @@ but offers no changes.
 While the app is in the foreground it tells the nexus so (`Visible`); while
 it, or Shed in a browser, is in front of you, notifications come over the
 connection and show as a banner at the bottom (**Open** goes to the tab),
-and nothing is pushed. Only when no Shed app is in view does the nexus push,
-in one of two ways, never through Google:
+and nothing is pushed. Only when no Shed app is in view, and nobody has used
+the workspace's computer for its `[nexus] away_after_minutes` (5), does the
+nexus push, in one of two ways, never through Google:
 
 - **A ntfy topic** (the usual way, with a ntfy server you run; see
   "Notifications on the phone with ntfy" in
@@ -97,7 +100,10 @@ in one of two ways, never through Google:
   sees only ciphertext. In Shed: **Settings → Notifications**, turn on Push
   notifications, pick ntfy if asked, then choose which kinds you want: Claude
   waits for an answer, Claude finished a turn, a long command finished, a
-  workspace went offline. Each has its own Android notification channel.
+  workspace went offline. Each has its own Android notification channel, at
+  its level: Claude waiting high (sound, pops up), a turn or command done
+  default, a workspace offline low (silent, only in the list); change any in
+  Android's settings for Shed.
   Settings shows whether the nexus pushes to this phone; turning push off
   unregisters from the distributor and tells the nexus
   (`POST /api/v1/push/unsubscribe`). Without a distributor installed, Settings

@@ -1,6 +1,6 @@
 # Roadmap
 
-What is still open, as of 2026-11-20. Shed as it is now is described in the
+What is still open, as of 2026-11-26. Shed as it is now is described in the
 [User Guide](user-guide.md) and [How Shed works](architecture.md); how it got
 here, and why, is in [History](history/README.md).
 
@@ -21,8 +21,10 @@ them). Still open:
   sign-ins, pairings and revocations; the workspace does not yet log each
   remote action with the device that sent it.
 - **Packaging the server side**: a static `shed` (built without windows) and
-  `shedd` for servers, the nexus with its web app built in or packaged beside
-  it, and a signed Android release (now: debug builds only; F-Droid later).
+  `shedd` for servers, packages for them and for the nexus (now: built from a
+  checkout, the web app built into the nexus, set up by `install.sh` and
+  updated by `shed-nexus-update`), and a signed Android release (now: debug
+  builds only, installed with `tools/android-install.sh`; F-Droid later).
 - **Editing files from the apps** beyond writing a small text file whole,
   through `shed-text` as the editor does.
 - **Other workspaces in the desktop app: the last gaps.** Shed's window
@@ -33,8 +35,8 @@ them). Still open:
 - **Bookmarks in the web and Android apps**: a bench's bookmarks (files,
   folders, AI messages) are in the desktop app and `shed tui` only; the nexus
   API's state does not carry them yet.
-- **Settings and themes from the apps**, **more than one user** on a nexus, and
-  **Claude in Chrome** controlled from them (now: shown, not controlled).
+- **Settings and themes from the apps**, and **more than one user** on a
+  nexus.
 
 ## Projects and Git
 
@@ -80,6 +82,6 @@ them). Still open:
 
 ## Docs
 
-- **The two menu screenshots** (`colours.png`, `tab-menu.png`) predate the new
-  tabs: the headless screenshot script cannot click (Xvfb has no XInput
-  pointer for GPUI).
+- **The colour picker's screenshot** (`colours.png`) is older than the rest:
+  the headless screenshot script cannot click (Xvfb has no XInput pointer for
+  GPUI), and the picker has no key to open it.
