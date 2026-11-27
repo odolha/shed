@@ -30,6 +30,7 @@ use web_push_native::p256::PublicKey;
 use web_push_native::{Auth, WebPushBuilder};
 
 use crate::App;
+use crate::store::Subscription;
 
 pub struct Push {
     key: ES256KeyPair,
@@ -290,7 +291,9 @@ pub fn notify(app: &Arc<App>, workspace: &str, notification: Notification) {
                 Err(e) => tracing::warn!("ntfy: {e:#}"),
             }
         }
-        let Some(push) = &app.push else { return };
+        if app.push.is_none() {
+            return;
+        }
         let subs = match app.store.subscriptions(notification.kind) {
             Ok(subs) => subs,
             Err(e) => {
@@ -300,28 +303,36 @@ pub fn notify(app: &Arc<App>, workspace: &str, notification: Notification) {
         };
         let phones_by_ntfy = app.ntfy.is_some();
         let subs: Vec<_> = subs.into_iter().filter(|s| !(phones_by_ntfy && s.kind == DeviceKind::Phone)).collect();
-        if subs.is_empty() {
-            return;
-        }
-        let payload = Payload {
-            kind: notification.kind,
-            title: notification.title,
-            body: notification.body,
-            workspace,
-            workspace_name: name,
-            bench: notification.bench,
-            tab: notification.tab,
-        };
-        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let urgency = urgency(notification.kind);
-        for sub in subs {
-            let target = PushSubscribe { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth };
-            if push.deliver(&target, &bytes, urgency).await == Delivery::Gone {
-                tracing::info!("push: a device's subscription is gone; forgetting it");
-                let _ = app.store.remove_subscription(&sub.device);
-            }
-        }
+        deliver_all(&app, subs, &notification, &workspace, name).await;
     });
+}
+
+/// Pushes `notification` (from `workspace`, named `name`; none for a
+/// security alert) to each of `subs` by Web Push, forgetting those the push
+/// service no longer knows.
+pub async fn deliver_all(app: &App, subs: Vec<Subscription>, notification: &Notification, workspace: &str, name: String) {
+    let Some(push) = &app.push else { return };
+    if subs.is_empty() {
+        return;
+    }
+    let payload = Payload {
+        kind: notification.kind,
+        title: notification.title.clone(),
+        body: notification.body.clone(),
+        workspace: workspace.to_string(),
+        workspace_name: name,
+        bench: notification.bench.clone(),
+        tab: notification.tab.clone(),
+    };
+    let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+    let urgency = urgency(notification.kind);
+    for sub in subs {
+        let target = PushSubscribe { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth };
+        if push.deliver(&target, &bytes, urgency).await == Delivery::Gone {
+            tracing::info!("push: a device's subscription is gone; forgetting it");
+            let _ = app.store.remove_subscription(&sub.device);
+        }
+    }
 }
 
 /// A notification's title and body, at most (in characters).
@@ -329,7 +340,7 @@ pub const TITLE_MAX: usize = 120;
 pub const BODY_MAX: usize = 500;
 
 /// At most `max` characters.
-fn clip(s: &str, max: usize) -> String {
+pub fn clip(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s.to_string(),
@@ -337,10 +348,11 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 /// How soon a push service should deliver a kind (Web Push `Urgency`):
-/// Claude waiting at once, a workspace gone offline whenever convenient.
+/// Claude waiting and security alerts at once, a workspace gone offline
+/// whenever convenient.
 pub fn urgency(kind: NotificationKind) -> &'static str {
     match kind {
-        NotificationKind::AiWaiting => "high",
+        NotificationKind::AiWaiting | NotificationKind::Security => "high",
         NotificationKind::AiDone | NotificationKind::CommandDone => "normal",
         NotificationKind::WorkspaceOffline => "low",
     }

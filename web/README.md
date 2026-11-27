@@ -38,7 +38,10 @@ from its row. Its switches:
 Notifications follow the nexus's rule: an AI tab that starts waiting or
 finishes a turn is sent live (a toast) while the page is in view; otherwise the
 mock logs what it would push. Typing `notify` in the mock's terminal sends a
-test one.
+test one. Security alerts (`security`, from the nexus itself: a sign-in, a
+pairing, the password changed…) have no workspace: their toast and the
+service worker's notification open `/devices`, and Settings shows them as
+always on.
 
 To use a real nexus instead, point `proxy.conf.json` at it (HTTPS: `"secure": true`).
 
@@ -73,7 +76,7 @@ year and revalidates the rest. See
 | `src/app/ai/` | AI tabs: conversation (following its end, `follow.ts`), Markdown, permissions and questions, sub-agents and what waits, prompt, the settings sheet, sessions, review |
 | `src/app/terminal/` | Terminals from the screen's text: re-wrapping, keys, key bar |
 | `src/app/logbook/`, `project/`, `git/` | The logbook; project tabs; Git |
-| `src/app/setup/`, `login/`, `devices/`, `settings/` | The account, devices and pairing, push |
+| `src/app/setup/`, `login/`, `devices/`, `settings/` | The account, devices (with when a sign-in ends) and pairing, push |
 | `public/` | Service worker (push, notification clicks), manifest, icons |
 | `mock/` | The pretend nexus |
 

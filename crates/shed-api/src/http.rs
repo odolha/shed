@@ -140,8 +140,9 @@ pub struct SignedIn {
     /// setup and when new ones are made.
     #[serde(default)]
     pub recovery_codes: Vec<String>,
-    /// For a desktop: when its token stops working (Unix seconds), unless
-    /// it signs in again before.
+    /// For a desktop or a phone: when its token stops working (Unix
+    /// seconds) at the latest, unless it signs in again before. A phone's
+    /// may end sooner, after the nexus's `phone_idle_days` without use.
     #[serde(default)]
     pub expires: Option<u32>,
 }
@@ -167,6 +168,12 @@ pub struct Device {
     /// Connected now.
     #[serde(default)]
     pub online: bool,
+    /// When its sign-in ends (Unix seconds), for a phone or a desktop: a
+    /// desktop's some days after signing in; a phone's after some days
+    /// unused, or at the latest some days after signing in (using it moves
+    /// the first). None: until revoked (a workspace), or for a browser.
+    #[serde(default)]
+    pub expires: Option<u32>,
 }
 
 #[typeshare]
@@ -312,7 +319,9 @@ pub struct PushInfo {
 
 /// What a push carries, once decrypted: a workspace's `Notification` with
 /// the workspace it came from, added by the nexus. A connector opens
-/// `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given).
+/// `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given);
+/// a `Security` one, from the nexus itself, has no workspace (empty) and
+/// opens the Devices (`/devices`).
 #[typeshare]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

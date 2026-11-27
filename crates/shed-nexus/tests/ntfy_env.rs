@@ -23,6 +23,10 @@ async fn the_env_names_the_topic_and_its_token() {
     let nexus = start_with(|c| c.push.ntfy_url = Some(format!("{}/alerts-toml", receiver.base))).await;
     let mut account = set_up(&nexus).await;
     let (_, token) = pair(&nexus, &mut account, "desk").await;
+    // The pairing was a security alert, to the topic.
+    let alerts = receiver.wait_for(1).await;
+    assert_eq!(alerts[0].headers["click"], "shed://devices");
+    receiver.clear();
     let mut link = link(&nexus, &token).await;
     let info: PushInfo = nexus.get("/api/v1/push", &account.browser).await;
     assert_eq!(info.ntfy_topic.as_deref(), Some(topic.as_str()), "the topic, without its token");

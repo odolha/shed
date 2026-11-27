@@ -76,6 +76,7 @@ pub fn message(workspace: &str, name: &str, notification: &Notification) -> Mess
         NotificationKind::AiDone => ("3", "white_check_mark"),
         NotificationKind::CommandDone => ("3", "checkered_flag"),
         NotificationKind::WorkspaceOffline => ("2", "warning"),
+        NotificationKind::Security => ("4", "lock"),
     };
     let body = match (name.is_empty(), notification.body.is_empty()) {
         (false, false) => format!("{name} · {}", notification.body),
@@ -85,6 +86,21 @@ pub fn message(workspace: &str, name: &str, notification: &Notification) -> Mess
     };
     Message { title: notification.title.clone(), body, priority, tags, click: Some(link(workspace, notification)) }
 }
+
+/// The ntfy message for a security alert from the nexus: priority 5 (max)
+/// when `urgent`, else 4; a tap opens the Android app's Devices.
+pub fn alert_message(notification: &Notification, urgent: bool) -> Message {
+    Message {
+        title: notification.title.clone(),
+        body: if notification.body.is_empty() { notification.title.clone() } else { notification.body.clone() },
+        priority: if urgent { "5" } else { "4" },
+        tags: "lock",
+        click: Some(DEVICES_LINK.to_string()),
+    }
+}
+
+/// The Android app's Devices screen, where a device can be revoked.
+pub const DEVICES_LINK: &str = "shed://devices";
 
 /// The Android app's deep link to where it happened: `shed://w/<workspace>`,
 /// with `/b/<bench>` and `/t/<tab>` as far as they are known.
@@ -156,6 +172,22 @@ mod tests {
         };
         let m = message("w 1/x", "desk", &offline);
         assert_eq!((m.priority, m.body.as_str(), m.click.as_deref()), ("2", "desk", Some("shed://w/w%201%2Fx")));
+    }
+
+    #[test]
+    fn alerts_are_urgent_and_open_the_devices() {
+        let alert = Notification {
+            kind: NotificationKind::Security,
+            title: "New sign-in: Pixel".into(),
+            body: "A phone from 203.0.113.5".into(),
+            bench: None,
+            tab: None,
+            present: false,
+        };
+        let m = alert_message(&alert, true);
+        assert_eq!((m.priority, m.tags, m.click.as_deref()), ("5", "lock", Some("shed://devices")));
+        assert_eq!(m.body, "A phone from 203.0.113.5");
+        assert_eq!(alert_message(&alert, false).priority, "4");
     }
 
     #[test]

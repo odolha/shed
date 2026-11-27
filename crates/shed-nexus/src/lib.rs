@@ -5,6 +5,7 @@
 //! (live to apps in view, else pushed) and serves the web app. See `docs/architecture.md` ("The
 //! nexus") and `docs/nexus-plan.md`.
 
+pub mod alert;
 pub mod auth;
 pub mod config;
 pub mod geo;
@@ -49,6 +50,8 @@ pub struct App {
     argon: Arc<tokio::sync::Semaphore>,
     /// The web app's files.
     web: web::WebSource,
+    /// How often lockout alerts go.
+    alerts: alert::Throttle,
 }
 
 /// Argon2 runs at once, at most.
@@ -238,6 +241,12 @@ pub async fn start(config: Config) -> anyhow::Result<Server> {
         let _ = std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700));
     }
     let store = Store::open(&data.join("nexus.db"))?;
+    store.set_phone_idle(config.phone_idle_days as u64 * 86400);
+    // Phones signed in with an older nexus never ended: from now on they do.
+    let given = store.give_phones_ends(now(), config.phone_days)?;
+    if given > 0 {
+        tracing::info!("{given} phone sign-in(s) from before sign-ins ended now end in {} days at the latest", config.phone_days);
+    }
     #[cfg(unix)]
     for name in ["nexus.db", "nexus.db-wal", "nexus.db-shm"] {
         use std::os::unix::fs::PermissionsExt;
@@ -301,6 +310,7 @@ pub async fn start(config: Config) -> anyhow::Result<Server> {
         store,
         setup: Mutex::new(setup),
         web,
+        alerts: alert::Throttle::default(),
         config,
     });
 

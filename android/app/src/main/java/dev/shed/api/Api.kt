@@ -834,7 +834,12 @@ data class Device (
 	/// The device asking.
 	val current: Boolean? = null,
 	/// Connected now.
-	val online: Boolean? = null
+	val online: Boolean? = null,
+	/// When its sign-in ends (Unix seconds), for a phone or a desktop: a
+	/// desktop's some days after signing in; a phone's after some days
+	/// unused, or at the latest some days after signing in (using it moves
+	/// the first). None: until revoked (a workspace), or for a browser.
+	val expires: UInt? = null
 )
 
 /// The device signing in.
@@ -1379,6 +1384,13 @@ enum class NotificationKind(val string: String) {
 	/// A workspace went offline (sent by the nexus itself).
 	@SerialName("workspaceOffline")
 	WorkspaceOffline("workspaceOffline"),
+	/// Something about the account (sent by the nexus itself): a sign-in, a
+	/// workspace paired, the password changed, a device revoked, an address
+	/// locked out. Always pushed, to every device but the one that did it,
+	/// whatever `PushPrefs` say and whether or not an app is in view; its
+	/// `NotificationFrame::workspace` is empty, and it opens the Devices.
+	@SerialName("security")
+	Security("security"),
 }
 
 /// Something that happened in a workspace that the user may want to hear
@@ -1537,7 +1549,9 @@ data class PushInfo (
 
 /// What a push carries, once decrypted: a workspace's `Notification` with
 /// the workspace it came from, added by the nexus. A connector opens
-/// `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given).
+/// `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given);
+/// a `Security` one, from the nexus itself, has no workspace (empty) and
+/// opens the Devices (`/devices`).
 @Serializable
 data class PushPayload (
 	val kind: NotificationKind,
@@ -2193,8 +2207,9 @@ data class SignedIn (
 	/// Single-use codes to sign in without the authenticator; only given at
 	/// setup and when new ones are made.
 	val recoveryCodes: List<String>? = null,
-	/// For a desktop: when its token stops working (Unix seconds), unless
-	/// it signs in again before.
+	/// For a desktop or a phone: when its token stops working (Unix
+	/// seconds) at the latest, unless it signs in again before. A phone's
+	/// may end sooner, after the nexus's `phone_idle_days` without use.
 	val expires: UInt? = null
 )
 

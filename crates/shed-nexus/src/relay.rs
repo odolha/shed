@@ -506,6 +506,22 @@ impl Hub {
         true
     }
 
+    /// Sends a notification live to every connector, in view or not, but
+    /// those of device `except` (a security alert).
+    pub fn notify_all_but(&self, frame: NotificationFrame, except: Option<&str>) {
+        let text = Utf8Bytes::from(RawServerFrame::Notification(frame).to_text());
+        for connector in self.lock().connectors.values() {
+            if Some(connector.device.as_str()) != except {
+                connector.out.send(text.clone());
+            }
+        }
+    }
+
+    /// Devices with a connection in view (being used).
+    pub fn visible_devices(&self) -> HashSet<String> {
+        self.lock().connectors.values().filter(|c| c.visible).map(|c| c.device.clone()).collect()
+    }
+
     /// Sends a frame to every connector.
     fn broadcast(&self, frame: RawServerFrame) {
         let text = Utf8Bytes::from(frame.to_text());
@@ -690,9 +706,15 @@ pub fn background(app: &Arc<App>) -> Vec<JoinHandle<()>> {
                     tracing::error!("cleaning up: {e:#}");
                 }
                 app.guard.prune();
+                // A phone in front of someone is being used: its sign-in
+                // does not run out unused while it stays connected.
+                for device in app.hub.visible_devices() {
+                    let _ = app.store.touch_used(&device, now());
+                }
                 for device in app.hub.connected_devices() {
                     if !app.store.device_valid(&device, now()).unwrap_or(true) {
-                        app.hub.close_device(&device, ApiError::new(ErrorCode::Unauthorized, "signed out"));
+                        let message = crate::http::ended_message(&app, app.store.device_ended(&device, now()).ok().flatten());
+                        app.hub.close_device(&device, ApiError::new(ErrorCode::Unauthorized, message));
                     }
                 }
             }
@@ -896,7 +918,10 @@ async fn run_link(app: Arc<App>, mut socket: WebSocket, device: DeviceRow) {
             Incoming::Text(text) => match RawLinkFrame::parse(text) {
                 Ok(frame) => {
                     if let Some(notification) = app.hub.link_frame(&workspace, conn, frame) {
-                        if app.guard.take_for("notify", &workspace, NOTIFY_PER_MINUTE, NOTIFY_BURST) {
+                        if notification.kind == NotificationKind::Security {
+                            // Only the nexus itself raises those.
+                            tracing::warn!("workspace {:?} sent a security alert; dropped", device.name);
+                        } else if app.guard.take_for("notify", &workspace, NOTIFY_PER_MINUTE, NOTIFY_BURST) {
                             crate::push::notify(&app, &workspace, notification);
                         } else {
                             tracing::debug!("workspace {:?} sends too many notifications; one dropped", device.name);

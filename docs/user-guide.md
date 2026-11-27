@@ -1288,7 +1288,21 @@ seconds, SHA-1), type the code it shows, and keep the recovery codes (each
 signs you in once if the authenticator is lost). Authy's 7- or 8-digit codes
 work too, wherever a code is asked for: type them all, or their last 6 digits.
 **Signing in**, in the web app or the Android app, always asks for the user
-name, the password and a code.
+name, the password and a code. How long a sign-in lasts (the nexus's
+settings, in [Deploying a nexus](nexus-deploy.md#settings)):
+
+| Signed in | Ends |
+| --- | --- |
+| A browser | 7 days after signing in (`session_days`) |
+| Shed's desktop app | 30 days after signing in (`desktop_days`) |
+| A phone | after 7 days unused (`phone_idle_days`; using the app starts the days again), and in any case 60 days after signing in (`phone_days`) |
+| A workspace | when you revoke it |
+
+The Devices list (web app and Android app) says when each phone's and
+desktop's sign-in ends. A phone whose sign-in ended goes back to its
+sign-in, saying why ("not used for 7 days", "the sign-in is older than 60
+days"), with the nexus's address and your user name filled in. Phones signed
+in before the nexus knew these limits count from its update.
 
 ### Linking a workspace
 
@@ -1346,7 +1360,8 @@ and type into what it relays, so host it yourself.
 ### Notifications
 
 A linked workspace tells the nexus about four things, never from a private
-tab. Each can be turned on or off in the web app's and the Android app's
+tab, and the nexus itself about your account (security alerts). Each but the
+security alerts can be turned on or off in the web app's and the Android app's
 Settings, and each comes at its own level:
 
 | Notification | When | Level |
@@ -1355,6 +1370,14 @@ Settings, and each comes at its own level:
 | **Claude finished** | An AI tab's turn is over (work it left going on in the background brings another only when Claude's next turn on it ends) | Normal |
 | **A command finished** | A command that ran a minute or more ends, in a terminal or remote tab | Normal |
 | **A workspace went offline** | Its link to the nexus is gone (said by the nexus) | Low: silent, only in the list |
+| **Security alerts** | Said by the nexus: a sign-in (browser, phone or desktop, its name, address and country), a workspace paired, the password changed, a device revoked, an address locked out after failed sign-ins | High; highest for a sign-in from an address not seen before, the password changed and a lockout |
+
+Security alerts cannot be turned off. They go to every device but the one
+that caused them, both inside an app in view and pushed, even while you are
+at a workspace; a lockout is told at most once an hour per address (and a few
+an hour in all). Tapping one opens **Devices**, where a device you do not know
+can be revoked (then change the password). With a ntfy topic, the phone that
+signed in sees its own sign-in there too (the topic is shared).
 
 Where they show:
 
@@ -1377,7 +1400,8 @@ Where they show:
   clicks in Shed's windows and `shed tui`. What you type from the phone or a
   browser does not count. Apps in view still show them.
 
-Tapping or clicking a notification opens its tab, in the app it reached.
+Tapping or clicking a notification opens its tab, in the app it reached (a
+security alert, Devices).
 
 ### Other workspaces in this window
 

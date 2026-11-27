@@ -392,6 +392,12 @@ pub enum NotificationKind {
     CommandDone,
     /// A workspace went offline (sent by the nexus itself).
     WorkspaceOffline,
+    /// Something about the account (sent by the nexus itself): a sign-in, a
+    /// workspace paired, the password changed, a device revoked, an address
+    /// locked out. Always pushed, to every device but the one that did it,
+    /// whatever `PushPrefs` say and whether or not an app is in view; its
+    /// `NotificationFrame::workspace` is empty, and it opens the Devices.
+    Security,
 }
 
 #[cfg(test)]

@@ -155,10 +155,13 @@ systemctl restart shed-nexus
 The nexus POSTs each notification to the topic with `Authorization: Bearer`
 and the token: the text in the body (workspace, bench and tab), `Title`,
 `Priority` (4 when Claude waits for an answer, 3 for a turn or a command
-done, 2 when a workspace went offline, so that one is silent), `Tags`, and
-`Click` with the tab's link. Failures are logged
+done, 2 when a workspace went offline, so that one is silent; security alerts
+5 for a sign-in from a new address, the password changed or an address locked
+out, else 4), `Tags`, and `Click` with the tab's link (`shed://devices` for a
+security alert). Failures are logged
 (`ntfy: http 403`). The topic is shared by every phone, so it carries the kinds
-any signed-in phone has on in Shed's settings (all, before a phone chooses).
+any signed-in phone has on in Shed's settings (all, before a phone chooses),
+and security alerts always.
 The message text is not encrypted, which is why the topic belongs on a ntfy
 you run, closed to others. Try it:
 
@@ -293,6 +296,16 @@ Limits worth knowing (all in the sample):
   device, apart from sign-ins.
 - `max_connections` and `header_timeout_secs`: connections at once, and how
   long a client may take to send a request's headers.
+- How long sign-ins last: `session_days` (a browser, 7), `desktop_days`
+  (Shed's desktop app, 30), and for phones `phone_idle_days` (7 days unused;
+  0 for no such limit) and `phone_days` (60 days after signing in, however
+  used). A new `phone_days` applies to sign-ins from then on; phones signed in
+  before this nexus knew these limits get them from its first start after the
+  update.
+- Security alerts (a sign-in, a pairing, the password changed, a device
+  revoked, an address locked out after `[login] max_failures`) go to every
+  device and the ntfy topic, whatever is chosen in the apps; lockouts at
+  most once per address an hour.
 - Push endpoints must be on public addresses (`[push] allow_private_endpoints`
   for a ntfy on your network); `[push] ntfy_url` is a ntfy topic for phones
   ([5](#5-notifications-on-the-phone-with-ntfy-optional)).

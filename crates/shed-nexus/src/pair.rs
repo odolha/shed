@@ -158,6 +158,19 @@ pub async fn approve(
     }
     let address = client.address();
     app.store.audit("pair-approve", client.audit(&address, Some(&caller.device), &name), now())?;
+    let by = app.store.device(&caller.device)?.map(|d| d.name).unwrap_or_default();
+    let body = format!(
+        "Approved on {by}, from {}. The workspace asked from {}. Not you? Revoke it in Devices.",
+        crate::alert::place(&address, client.country.as_deref()),
+        crate::alert::place(&pairing.address, pairing.country.as_deref())
+    );
+    let alert = crate::alert::Alert {
+        title: format!("Workspace paired: {name}"),
+        body,
+        urgent: false,
+        except: Some(caller.device.clone()),
+    };
+    crate::alert::send(&app, alert);
     Ok(Json(Empty {}))
 }
 

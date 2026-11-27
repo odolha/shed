@@ -294,6 +294,17 @@ impl Guard {
         inner.known.insert(address_key(ip), Instant::now());
     }
 
+    /// Whether `ip`'s address signed in, or a device was seen from it, in
+    /// the last while (`KNOWN_FOR`).
+    pub fn knows(&self, ip: IpAddr) -> bool {
+        self.lock().known.get(&address_key(ip)).is_some_and(|at| at.elapsed() < KNOWN_FOR)
+    }
+
+    /// Whether `ip`'s address is locked out now.
+    pub fn locked(&self, ip: IpAddr) -> bool {
+        self.lock().failures.get(&address_key(ip)).is_some_and(|f| f.locked(Instant::now()))
+    }
+
     /// Starts an anonymous attempt from `ip` (a sign-in, a setup code): it
     /// counts as a failure until `succeeded`. While the nexus is slowed
     /// down, waits for its turn first.

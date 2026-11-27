@@ -690,6 +690,13 @@ export interface Device {
 	current?: boolean;
 	/** Connected now. */
 	online?: boolean;
+	/**
+	 * When its sign-in ends (Unix seconds), for a phone or a desktop: a
+	 * desktop's some days after signing in; a phone's after some days
+	 * unused, or at the latest some days after signing in (using it moves
+	 * the first). None: until revoked (a workspace), or for a browser.
+	 */
+	expires?: number | null;
 }
 
 /** The device signing in. */
@@ -1113,7 +1120,15 @@ export type NotificationKind =
 	/** A command that ran long finished. */
 	| "commandDone"
 	/** A workspace went offline (sent by the nexus itself). */
-	| "workspaceOffline";
+	| "workspaceOffline"
+	/**
+	 * Something about the account (sent by the nexus itself): a sign-in, a
+	 * workspace paired, the password changed, a device revoked, an address
+	 * locked out. Always pushed, to every device but the one that did it,
+	 * whatever `PushPrefs` say and whether or not an app is in view; its
+	 * `NotificationFrame::workspace` is empty, and it opens the Devices.
+	 */
+	| "security";
 
 /**
  * Something that happened in a workspace that the user may want to hear
@@ -1267,7 +1282,9 @@ export interface PushInfo {
 /**
  * What a push carries, once decrypted: a workspace's `Notification` with
  * the workspace it came from, added by the nexus. A connector opens
- * `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given).
+ * `/w/{workspace}/b/{bench}/t/{tab}` from it (as far as those are given);
+ * a `Security` one, from the nexus itself, has no workspace (empty) and
+ * opens the Devices (`/devices`).
  */
 export interface PushPayload {
 	kind: NotificationKind;
@@ -1736,8 +1753,9 @@ export interface SignedIn {
 	 */
 	recoveryCodes?: string[];
 	/**
-	 * For a desktop: when its token stops working (Unix seconds), unless
-	 * it signs in again before.
+	 * For a desktop or a phone: when its token stops working (Unix
+	 * seconds) at the latest, unless it signs in again before. A phone's
+	 * may end sooner, after the nexus's `phone_idle_days` without use.
 	 */
 	expires?: number | null;
 }

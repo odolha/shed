@@ -19,7 +19,8 @@ use shed_api::http::*;
 use shed_api::{API_VERSION, ApiError, ErrorCode};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::store::AuditInfo;
+use crate::alert::{self, Alert};
+use crate::store::{AuditInfo, Ended};
 use crate::{App, PendingSetup, auth, now, pair, relay};
 
 pub const COOKIE: &str = "shed_session";
@@ -236,7 +237,12 @@ impl FromRequestParts<Arc<App>> for Caller {
 pub fn authenticate(app: &App, headers: &HeaderMap, method: &Method) -> Result<Caller, Failure> {
     let unauthorized = || Failure::new(ErrorCode::Unauthorized, "not signed in");
     if let Some(token) = bearer(headers) {
-        let device = app.store.device_by_token(&auth::hash_token(token), now())?.ok_or_else(unauthorized)?;
+        let hash = auth::hash_token(token);
+        let Some(device) = app.store.device_by_token(&hash, now())? else {
+            // Say why, so the app can tell its user.
+            let ended = app.store.token_ended(&hash, now())?;
+            return Err(Failure::new(ErrorCode::Unauthorized, ended_message(app, ended)));
+        };
         if !matches!(device.kind, DeviceKind::Phone | DeviceKind::Desktop) {
             return Err(unauthorized());
         }
@@ -252,6 +258,22 @@ pub fn authenticate(app: &App, headers: &HeaderMap, method: &Method) -> Result<C
         }
     }
     Ok(Caller { device: session.device, session: Some(hash) })
+}
+
+/// What a device whose sign-in ended is told: `signed out: not used for 7
+/// days` and the like.
+pub fn ended_message(app: &App, ended: Option<(DeviceKind, Ended)>) -> String {
+    let Some((kind, why)) = ended else { return "not signed in".into() };
+    match why {
+        Ended::Idle => format!("signed out: not used for {} days", app.config.phone_idle_days),
+        Ended::Age => {
+            let days = if kind == DeviceKind::Desktop { app.config.desktop_days } else { app.config.phone_days };
+            format!("signed out: the sign-in is older than {days} days")
+        }
+        Ended::Revoked => "signed out: this device was revoked".into(),
+        Ended::Password => "signed out: the password was changed".into(),
+        Ended::SignedOut => "signed out".into(),
+    }
 }
 
 pub fn bearer(headers: &HeaderMap) -> Option<&str> {
@@ -385,11 +407,15 @@ fn sign_in(app: &App, client: &Client, username: &str, device: &DeviceHello) -> 
             let hash = auth::hash_token(&token);
             body.device = app.store.add_device(kind, &name, Some(&hash), &address, country, now())?;
             // A desktop's token (it may open tunnels) ends some days after
-            // this sign-in; signing in again gives a new one.
+            // this sign-in; a phone's too, and sooner when unused. Signing
+            // in again gives a new one.
             if kind == DeviceKind::Desktop {
                 let expires = now() + app.config.desktop_days as u64 * 86400;
                 app.store.set_device_expires(&body.device, Some(expires))?;
                 body.expires = Some(expires as u32);
+            } else {
+                app.store.start_phone(&body.device, now(), app.config.phone_days)?;
+                body.expires = Some((now() + app.config.phone_days as u64 * 86400) as u32);
             }
             body.token = Some(token);
             Ok(SignedInAnswer { body, cookie: None })
@@ -487,6 +513,14 @@ async fn login(State(app): State<Arc<App>>, client: Client, Body(req): Body<Logi
     let address = client.address();
     let wrong = |detail: &str| -> Result<SignedInAnswer, Failure> {
         app.store.audit("login-failed", client.audit(&address, None, detail), now())?;
+        if app.guard.locked(client.ip) && app.alerts.allow(client.ip, std::time::Instant::now()) {
+            let place = alert::place(&address, client.country.as_deref());
+            let body = format!(
+                "Too many failed sign-ins from {place}: locked out for {} minutes. If that was not you, someone may have your password.",
+                app.config.login.lockout_minutes.max(1)
+            );
+            alert::send(&app, Alert { title: "Sign-ins locked out".into(), body, urgent: true, except: None });
+        }
         Err(Failure::new(ErrorCode::Unauthorized, "wrong user name, password or code"))
     };
 
@@ -513,9 +547,12 @@ async fn login(State(app): State<Arc<App>>, client: Client, Body(req): Body<Logi
     if !second {
         return wrong("wrong or reused code");
     }
+    let familiar = app.guard.knows(client.ip);
     app.guard.succeeded(client.ip);
     let answer = sign_in(&app, &client, &account.username, &req.device)?;
     app.store.audit("login", client.audit(&address, Some(&answer.body.device), detail), now())?;
+    let name = valid_name(&req.device.name).unwrap_or_else(|_| "unnamed".to_string());
+    alert::send(&app, alert::signed_in(&client, req.device.kind, &name, &answer.body.device, familiar));
     Ok(answer)
 }
 
@@ -531,7 +568,7 @@ async fn session(State(app): State<Arc<App>>, headers: HeaderMap, caller: Caller
 }
 
 async fn logout(State(app): State<Arc<App>>, client: Client, caller: Caller) -> Result<Response, Failure> {
-    app.store.revoke_device(&caller.device)?;
+    app.store.revoke_device(&caller.device, Ended::SignedOut)?;
     app.hub.close_device(&caller.device, ApiError::new(ErrorCode::Unauthorized, "signed out"));
     let address = client.address();
     app.store.audit("logout", client.audit(&address, Some(&caller.device), ""), now())?;
@@ -545,11 +582,13 @@ async fn logout(State(app): State<Arc<App>>, client: Client, caller: Caller) -> 
 async fn devices(State(app): State<Arc<App>>, caller: Caller) -> Answer<Vec<Device>> {
     let online = app.hub.connected_devices();
     let rows = app.store.devices(now())?;
+    let idle = app.store.phone_idle();
     Ok(Json(
         rows.into_iter()
             .map(|d| Device {
                 current: d.id == caller.device,
                 online: online.contains(&d.id),
+                expires: d.ends(idle).map(|e| e as u32),
                 id: d.id,
                 kind: d.kind,
                 name: d.name,
@@ -566,11 +605,26 @@ async fn revoke(State(app): State<Arc<App>>, client: Client, caller: Caller, Bod
     fresh_totp(&app, &caller, &req.totp)?;
     let device = app.store.device(&req.device)?.filter(|d| !d.revoked);
     let Some(device) = device else { return Err(Failure::new(ErrorCode::NotFound, "no such device")) };
-    app.store.revoke_device(&device.id)?;
-    app.hub.close_device(&device.id, ApiError::new(ErrorCode::Unauthorized, "this device was revoked"));
+    app.store.revoke_device(&device.id, Ended::Revoked)?;
+    app.hub.close_device(&device.id, ApiError::new(ErrorCode::Unauthorized, "signed out: this device was revoked"));
     let address = client.address();
     let detail = format!("{} ({})", device.name, crate::store::kind_str(device.kind));
     app.store.audit("revoke", client.audit(&address, Some(&caller.device), &detail), now())?;
+    let by = app.store.device(&caller.device)?.map(|d| d.name).unwrap_or_default();
+    alert::send(
+        &app,
+        Alert {
+            title: format!("Revoked: {}", device.name),
+            body: format!(
+                "{} ({}) was revoked on {by}, from {}.",
+                device.name,
+                alert::kind_name(device.kind),
+                alert::place(&address, client.country.as_deref())
+            ),
+            urgent: false,
+            except: Some(caller.device.clone()),
+        },
+    );
     if device.kind == DeviceKind::Workspace {
         app.hub.forget(&device.id);
         relay::announce(&app);
@@ -623,10 +677,17 @@ async fn password(
     let new = req.new;
     let hash = argon(&app, move || auth::hash_password(&new)).await??;
     app.store.set_password(&hash)?;
-    for id in app.store.revoke_people_devices_but(&caller.device)? {
-        app.hub.close_device(&id, ApiError::new(ErrorCode::Unauthorized, "the password changed"));
-    }
+    // Told before the others are signed out, so they hear of it.
     let address = client.address();
+    let by = app.store.device(&caller.device)?.map(|d| d.name).unwrap_or_default();
+    let body = format!(
+        "Changed on {by}, from {}. Every other browser, phone and desktop was signed out. If that was not you, sign in with a recovery code and change it back.",
+        alert::place(&address, client.country.as_deref())
+    );
+    alert::send(&app, Alert { title: "The password was changed".into(), body, urgent: true, except: Some(caller.device.clone()) });
+    for id in app.store.revoke_people_devices_but(&caller.device)? {
+        app.hub.close_device(&id, ApiError::new(ErrorCode::Unauthorized, "signed out: the password was changed"));
+    }
     app.store.audit("password", client.audit(&address, Some(&caller.device), ""), now())?;
     Ok(Json(Empty {}))
 }

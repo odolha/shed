@@ -23,6 +23,11 @@ session_days = 7
 # keepers); signing in again, with a code from the authenticator, renews it.
 desktop_days = 30
 
+# A phone's sign-in ends after this many days unused (0: no such limit), and
+# in any case this many days after signing in. Signing in again starts anew.
+phone_idle_days = 7
+phone_days = 60
+
 # Behind a reverse proxy that sets X-Forwarded-For (nginx, see
 # docs/nexus-deploy.md): believe that header from the proxies below, and take
 # the client to be the right-most address in it that is not one of them.

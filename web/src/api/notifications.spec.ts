@@ -12,6 +12,11 @@ const waiting = (bench: string | null, tab: string | null): NotificationFrame =>
   notification: { kind: 'aiWaiting', title: 'Claude waits for an answer', body: 'api · claude', bench, tab },
 });
 
+const alert: NotificationFrame = {
+  workspace: '',
+  notification: { kind: 'security', title: 'New sign-in: Pixel', body: 'A phone from 203.0.113.5' },
+};
+
 describe('notificationToast', () => {
   it('opens the tab, as far as it is known', () => {
     expect(notificationLink(waiting('b1', 't1'))).toBe('/w/w1/b/b1/t/t1');
@@ -29,6 +34,14 @@ describe('notificationToast', () => {
     const offline: NotificationFrame = { workspace: 'w1', notification: { kind: 'workspaceOffline', title: 'devbox went offline', body: '' } };
     expect(notificationToast(offline, [devbox]).detail).toBe('devbox');
     expect(notificationToast(waiting('b1', 't1'), []).detail).toBe('api · claude');
+  });
+
+  it('opens the Devices for a security alert', () => {
+    expect(notificationToast(alert, [devbox])).toEqual({
+      title: 'New sign-in: Pixel',
+      detail: 'A phone from 203.0.113.5',
+      link: '/devices',
+    });
   });
 });
 
@@ -68,6 +81,12 @@ describe('LiveNotifications', () => {
     url = '/w/w1/b/b1/t/t1';
     listener({ type: 'Notification', content: waiting('b1', 't1') });
     expect(TestBed.inject(Notices).list()).toEqual([]);
+  });
+
+  it('always shows a security alert, even on the Devices', () => {
+    url = '/devices';
+    listener({ type: 'Notification', content: alert });
+    expect(TestBed.inject(Notices).list()[0]).toMatchObject({ text: 'New sign-in: Pixel', link: '/devices' });
   });
 
   it('keeps the workspaces’ names as they change', () => {

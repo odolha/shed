@@ -48,6 +48,13 @@ export function rejectBody(p: PendingPairing): PairReject | null {
   return p.id ? { id: p.id } : null;
 }
 
+/** When a device's sign-in ends, said as from `now` ('' when it does not). */
+export function signInEnds(expires: number | null | undefined, now: number): string {
+  if (!expires) return '';
+  const left = expires - now;
+  return left > 0 ? t('devices.signInEnds', { span: span(left) }) : t('devices.signInEnded');
+}
+
 function where(address: string | undefined, country: string | null | undefined): string {
   return [address, country].filter(Boolean).join(' · ');
 }
@@ -128,7 +135,12 @@ function where(address: string | undefined, country: string | null | undefined):
                   · {{ w }}
                 }
               </span>
-              <span class="dim small">{{ 'devices.added' | t: { at: (d.created | clock) } }}</span>
+              <span class="dim small">
+                {{ 'devices.added' | t: { at: (d.created | clock) } }}
+                @if (ends(d); as e) {
+                  · <span [shedTip]="d.expires | clock">{{ e }}</span>
+                }
+              </span>
             </div>
             <button class="icon-btn" [shedMenu]="m" [attr.aria-label]="'common.more' | t">
               <shed-icon name="more" />
@@ -309,6 +321,10 @@ export class DevicesPage implements OnInit {
   protected deviceName(id: string | null | undefined): string {
     if (!id) return '';
     return this.names().get(id) ?? id;
+  }
+
+  protected ends(d: Device): string {
+    return signInEnds(d.expires, this.clock.now());
   }
 
   protected expiresIn(p: PendingPairing): string {

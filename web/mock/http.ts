@@ -47,7 +47,7 @@ export function setOnSessionEnd(fn: (token: string) => void): void {
 
 const t0 = now();
 const devices: Device[] = [
-  { id: 'd-phone', kind: 'phone', name: 'Pixel 8', created: t0 - 40 * 86400, seen: t0 - 1800, address: '203.0.113.24', country: 'NL', current: false, online: false },
+  { id: 'd-phone', kind: 'phone', name: 'Pixel 8', created: t0 - 40 * 86400, seen: t0 - 1800, address: '203.0.113.24', country: 'NL', current: false, online: false, expires: t0 - 1800 + 7 * 86400 },
   { id: 'ws-devbox', kind: 'workspace', name: 'devbox', created: t0 - 60 * 86400, seen: t0, address: '198.51.100.7', country: 'NL', current: false, online: true },
   { id: 'ws-laptop', kind: 'workspace', name: 'laptop', created: t0 - 20 * 86400, seen: t0 - 7200, address: '203.0.113.80', country: 'DE', current: false, online: false },
 ];

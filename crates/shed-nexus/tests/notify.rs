@@ -44,6 +44,11 @@ async fn world(ntfy: bool) -> World {
     let _: serde_json::Value = nexus.post("/api/v1/push/subscribe", &subscription(&receiver, "/wp/phone"), &phone).await;
     let info: PushInfo = nexus.get("/api/v1/push", &phone).await;
     assert_eq!(info.ntfy_topic, ntfy.then_some(topic));
+    // The pairing and the phone's sign-in were security alerts, on the
+    // topic if there is one (nothing was subscribed to Web Push yet).
+    let alerts = receiver.wait_for(if ntfy { 2 } else { 0 }).await;
+    assert!(alerts.iter().all(|h| h.path == "/alerts-shed"), "{alerts:?}");
+    receiver.clear();
     let Auth::Bearer(token) = &phone else { unreachable!() };
     let (app, _) = connector(&nexus, token).await;
     World { nexus, receiver, workspace, link, phone, app }

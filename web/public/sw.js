@@ -3,7 +3,9 @@
 //
 // A push's payload is a `PushPayload` (crates/shed-api/src/http.rs: kind,
 // title, body, workspace, workspaceName, bench, tab), the workspace's
-// `Notification` with the workspace's id and name added by the nexus.
+// `Notification` with the workspace's id and name added by the nexus. A
+// `security` one comes from the nexus itself (a sign-in, the password
+// changed…): it has no workspace and opens the Devices.
 
 /* eslint-env serviceworker */
 
@@ -29,8 +31,9 @@ function readPayload(data) {
   }
 }
 
-/** Where a notification leads: its tab when all is known, else the overview. */
+/** Where a notification leads: its tab when all is known, else the overview; a security alert to the Devices. */
 function urlFor(p) {
+  if (p.kind === 'security') return '/devices';
   const seg = (s) => encodeURIComponent(String(s));
   if (p.workspace && p.bench && p.tab) return `/w/${seg(p.workspace)}/b/${seg(p.bench)}/t/${seg(p.tab)}`;
   if (p.workspace && p.bench) return `/w/${seg(p.workspace)}/b/${seg(p.bench)}`;
@@ -42,14 +45,17 @@ self.addEventListener('push', (event) => {
   const p = readPayload(event.data);
   const title = typeof p.title === 'string' && p.title ? p.title : 'Shed';
   const kind = typeof p.kind === 'string' ? p.kind : 'shed';
+  const security = kind === 'security';
   event.waitUntil(
     self.registration.showNotification(title, {
       body: typeof p.body === 'string' ? p.body : '',
       icon: '/icons/shed-192.png',
       badge: '/icons/shed-badge-96.png',
-      // One notification per tab and kind: a newer one replaces it.
-      tag: `${kind}:${p.tab || p.workspace || ''}`,
-      renotify: kind === 'aiWaiting',
+      // One notification per tab and kind: a newer one replaces it. Each
+      // security alert stays, until dealt with.
+      tag: security ? `security:${Date.now()}` : `${kind}:${p.tab || p.workspace || ''}`,
+      renotify: kind === 'aiWaiting' || security,
+      requireInteraction: security,
       // A workspace gone offline is minor: no sound, no buzz.
       silent: kind === 'workspaceOffline',
       data: { url: urlFor(p) },

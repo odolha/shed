@@ -68,6 +68,14 @@ const WEB_VERSION = '0.1.0';
                 </span>
               </label>
             }
+            <!-- Security alerts come from the nexus and cannot be turned off. -->
+            <label class="check">
+              <input type="checkbox" checked disabled />
+              <span class="col tight">
+                <span>{{ 'push.kind.security' | t }}</span>
+                <span class="dim small">{{ 'push.kindHint.security' | t }}</span>
+              </span>
+            </label>
           </fieldset>
         }
       </section>

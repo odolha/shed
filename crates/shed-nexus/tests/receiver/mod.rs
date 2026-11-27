@@ -44,6 +44,11 @@ impl Receiver {
         self.hits.lock().unwrap().clone()
     }
 
+    /// Forgets what came so far.
+    pub fn clear(&self) {
+        self.hits.lock().unwrap().clear();
+    }
+
     pub fn on(&self, path: &str) -> Vec<Hit> {
         self.hits().into_iter().filter(|h| h.path == path).collect()
     }

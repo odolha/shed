@@ -11,8 +11,9 @@ import type { NotificationFrame, WorkspaceInfo } from './gen/api';
 import { NexusSocket } from './socket';
 import { Notices } from '../ui/notices';
 
-/** Where a notification leads: its tab, as far as it is known. */
+/** Where a notification leads: its tab, as far as it is known; a security alert to the Devices. */
 export function notificationLink(frame: NotificationFrame): string {
+  if (frame.notification.kind === 'security') return '/devices';
   const seg = (s: string) => encodeURIComponent(s);
   const { bench, tab } = frame.notification;
   let link = `/w/${seg(frame.workspace)}`;
@@ -49,8 +50,8 @@ export class LiveNotifications {
 
   show(frame: NotificationFrame): void {
     const toast = notificationToast(frame, this.workspaces);
-    // Already looking at it: nothing to say.
-    if (this.router.url === toast.link) return;
+    // Already looking at it: nothing to say (a security alert always is).
+    if (this.router.url === toast.link && frame.notification.kind !== 'security') return;
     this.notices.notification(toast.title, toast.detail, toast.link);
   }
 }

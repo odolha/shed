@@ -1033,11 +1033,29 @@ flowchart LR
   `SameSite=Strict`) and a CSRF token it sends in `X-Shed-Csrf` with every
   change (after a reload, `GET /api/v1/session` gives it again); a phone gets
   a device token for `Authorization: Bearer`, and so does Shed's desktop
-  app, whose token ends `desktop_days` (30) after that sign-in
-  (`devices.expires`, `SignedIn::expires`; past it the token is refused,
-  connections close and the minute's cleanup revokes the device). Changing
-  the password revokes every browser, phone and desktop but the current
-  one. Tokens are
+  app. How long each lasts:
+
+  | Signed in | Ends | Setting |
+  | --- | --- | --- |
+  | A browser | 7 days after signing in | `session_days` |
+  | Shed's desktop app | 30 days after signing in | `desktop_days` |
+  | A phone | 7 days unused, and 60 days after signing in however used | `phone_idle_days` (0: no idle limit), `phone_days` |
+  | A workspace (paired) | when revoked | |
+
+  A token's end is `devices.expires` (`SignedIn::expires`, `Device::expires`
+  in the Devices); a phone's idle limit counts from `devices.used`, the last
+  call or connection with its token (`Store::touch_device`, written at most
+  once a minute unless the address changes, so requests do not each write
+  the database; a connection in view counts as use, at the minute's
+  cleanup). Past either, the token is refused, connections close
+  (`Goodbye`, `Unauthorized`) and the minute's cleanup revokes the device.
+  Phones signed in with an older nexus get their end from the first start
+  that knows them (`Store::give_phones_ends`), not at once. A device whose
+  sign-in ended keeps its token's hash with why (`devices.ended`: unused,
+  too old, revoked, the password changed, signed out), so a refused token is
+  told why in the error's message (`signed out: not used for 7 days`),
+  which the Android app shows at its sign-in. Changing the password revokes
+  every browser, phone and desktop but the current one. Tokens are
   256 random bits; the database keeps their SHA-256 only. The guard
   (`auth::Guard`) counts by address, an IPv4 address or an IPv6 /64. A sign-in
   or setup attempt counts as a failure from when it starts until it succeeds
@@ -1053,6 +1071,21 @@ flowchart LR
   elsewhere never block them. Pairing requests have a rate of their own. The
   guard's maps are bounded (the oldest entries go). Every sign-in, failure,
   pairing, revocation and password change goes into the audit log.
+- **Security alerts** (`alert.rs`, `NotificationKind::Security`) are the
+  nexus's own notifications: a sign-in (which kind, the device's name, its
+  address and country), a workspace's pairing approved, the password
+  changed, a device revoked, and an address locked out after failed sign-ins
+  (at most once per address an hour, and five an hour in all, so an attack
+  cannot flood the phone). They go to every device but the one that caused
+  it, live to every connection (in view or not) and pushed too, whatever the
+  device's chosen kinds and whatever the `present` rule; their recipients
+  are found before the change, so the devices a password change signs out
+  still hear of it. A ntfy topic is shared by all phones, so the phone that
+  caused one sees it there too. Most urgent (ntfy priority 5) for a sign-in
+  from an address not seen before (`Guard::knows`), the password changed and
+  a lockout; else 4; Web Push `Urgency: high`. They carry no workspace (an
+  empty `workspace`) and open the Devices (`/devices`, `shed://devices`). A
+  link's `Notify` of that kind is dropped: only the nexus raises them.
 - **Pairing**: a workspace asks (`pair/start`) and gets a code to show
   (`K7QF-2M9D`) and a secret to poll with; it is gone after ten minutes. The
   signed-in user types the code (the list of waiting requests leaves codes
@@ -1122,7 +1155,7 @@ is renamed.
 **Notifications.** A link's `Notify` (at most 30 a minute per workspace,
 title and body cut short), and a workspace offline for two minutes
 (`push.offline_after_secs`), go live when an app is in view, and are pushed
-only when none is. Each `/api` connection says whether it is in view with
+only when none is (security alerts, above, are always both). Each `/api` connection says whether it is in view with
 `ClientFrame::Visible` (the web app: the page shown and focused; the Android
 app: in the foreground), not in view until it says so. While any one is, the
 notification goes to every connector as `ServerFrame::Notification` (workspace
@@ -1164,7 +1197,7 @@ The modules: `config.rs` (`nexus.toml`), `store.rs` (the database and its
 numbered migrations), `auth.rs` (tokens, passwords, TOTP, recovery codes,
 lockouts), `http.rs` (routes, errors as `ApiError` with a matching status, who
 is calling, headers), `web.rs` (the web app's files), `pair.rs`, `relay.rs`,
-`raw.rs`, `push.rs`, `ntfy.rs`, `geo.rs`. Deploying it is described in
+`raw.rs`, `push.rs`, `ntfy.rs`, `alert.rs`, `geo.rs`. Deploying it is described in
 [Deploying a nexus](nexus-deploy.md).
 
 The web app is built into the binary: `build.rs` builds `web/` (in `OUT_DIR`,
