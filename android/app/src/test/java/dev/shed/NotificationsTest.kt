@@ -8,6 +8,7 @@ import dev.shed.api.PushInfo
 import dev.shed.api.PushPrefs
 import dev.shed.api.WorkspaceInfo
 import dev.shed.net.ShedJson
+import dev.shed.push.Push
 import dev.shed.push.PushMode
 import dev.shed.push.leaveUnifiedPush
 import dev.shed.push.pushMode
@@ -62,5 +63,17 @@ class NotificationsTest {
         assertFalse(showsTab("git/{ws}/{tab}", "w1", "t1", "w1", "t1"))
         assertFalse(showsTab("ai/{ws}/{tab}", "w2", "t1", "w1", "t1"))
         assertFalse(showsTab("workspaces", "", "", "w1", null))
+    }
+
+    @Test
+    fun securityAlertsComeFromTheNexusAndOpenTheDevices() {
+        // As the nexus sends one: no workspace.
+        val frame = ShedJson.decodeFromString(
+            NotificationFrame.serializer(),
+            """{"workspace":"","notification":{"kind":"security","title":"New sign-in: Pixel","body":"A phone from 203.0.113.5"}}""",
+        )
+        assertEquals(NotificationKind.Security, frame.notification.kind)
+        assertEquals("New sign-in: Pixel\nA phone from 203.0.113.5", liveNoticeText(frame, emptyList()))
+        assertEquals("shed-security-high", Push.channelId(NotificationKind.Security))
     }
 }

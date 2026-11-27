@@ -29,6 +29,8 @@ class Empty
 class NexusHttp(
     private val client: OkHttpClient,
     private val base: String,
+    /** Waits until requests may go (the app lock: none while locked). */
+    private val ready: suspend () -> Unit = {},
     private val token: () -> String?,
 ) {
     suspend fun <T> get(path: String, answer: KSerializer<T>): T =
@@ -51,6 +53,7 @@ class NexusHttp(
     }
 
     private suspend fun <T> send(request: Request, answer: KSerializer<T>): T {
+        ready()
         val response = client.newCall(request).await()
         response.use {
             val text = it.body?.string().orEmpty()

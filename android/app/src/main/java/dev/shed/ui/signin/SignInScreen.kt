@@ -35,6 +35,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import dev.shed.MainActivity
 import dev.shed.R
 import dev.shed.api.DeviceHello
 import dev.shed.api.DeviceKind
@@ -58,7 +59,9 @@ fun SignInScreen() {
     val shed = LocalShed.current
     val scope = rememberCoroutineScope()
     var nexus by rememberSaveable { mutableStateOf(app.accounts.lastNexus()) }
-    var username by rememberSaveable { mutableStateOf("") }
+    var username by rememberSaveable { mutableStateOf(app.accounts.lastUser()) }
+    // Why the nexus signed this phone out, if it did (until signed in again).
+    val signedOut = remember { app.accounts.signedOutWhy() }
     var password by rememberSaveable { mutableStateOf("") }
     var totp by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -82,6 +85,7 @@ fun SignInScreen() {
                 val token = signed.token ?: throw ApiException.of(ErrorCode.Failed, "no device token")
                 app.accounts.rememberNexus(url)
                 app.signedIn(Account(url, signed.username, signed.device, token))
+                (context as? MainActivity)?.protectSignIn()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 error = errorText(context, e)
@@ -104,6 +108,14 @@ fun SignInScreen() {
     ) {
         Image(painterResource(R.drawable.ic_launcher_foreground), null, Modifier.size(120.dp))
         Text(stringResource(R.string.signin_title), style = MaterialTheme.typography.headlineSmall)
+        signedOut?.let {
+            Text(
+                stringResource(R.string.signin_signed_out, it),
+                color = shed.danger,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.widthIn(max = 420.dp),
+            )
+        }
         Text(
             stringResource(R.string.signin_intro),
             style = MaterialTheme.typography.bodyMedium,

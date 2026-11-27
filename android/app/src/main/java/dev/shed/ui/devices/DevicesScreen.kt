@@ -196,6 +196,13 @@ fun DevicesScreen(nav: NavController) {
                                 color = shed.textDim,
                                 style = MaterialTheme.typography.bodySmall,
                             )
+                            device.expires?.let { ends ->
+                                Text(
+                                    signInEnds(context, ends.toLong()),
+                                    color = shed.textDim,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                         }
                         IconButton(onClick = { renaming = device }) { Icon(Icons.Default.Edit, stringResource(R.string.rename)) }
                         if (device.current != true) {
@@ -331,4 +338,14 @@ private fun PairDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
+}
+
+/** "Sign-in ends in 6d 23h (27 Nov 2026, 14:00)", or that it ended. */
+fun signInEnds(context: android.content.Context, ends: Long, now: Long = dev.shed.ui.common.nowSeconds()): String {
+    val left = ends - now
+    return if (left > 0) {
+        context.getString(R.string.devices_ends, dev.shed.ui.common.span(left), dev.shed.ui.common.clock(ends))
+    } else {
+        context.getString(R.string.devices_ended)
+    }
 }

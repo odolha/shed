@@ -251,8 +251,9 @@ overview, an AI tab and a terminal at 1280×800, and the AI tab at a phone's
 size. The Android app's (`docs/images/android/`) come from its screen tests
 (`-Pshed.screenshots=DIR`, see [The Android app](#the-android-app)): `ai`,
 `ai-agent`, `ai-settings` and `terminal` are `ai-open-dark`,
-`ai-agent-sheet-dark`, `ai-settings-dark` and `terminal-select-dark` scaled to
-480 pixels wide, and `phone.png` three of them side by side, reduced to 256
+`ai-agent-sheet-dark`, `ai-settings-dark` and `terminal-select-dark` (and
+`lock`, `settings-lock` and `devices`: `lock-dark`, `settings-lock-dark` and
+`devices-dark`) scaled to 480 pixels wide, and `phone.png` three of them side by side, reduced to 256
 colours to keep them small.
 
 `cargo run -p shed-desktop --example icon_preview -- sheet.png [template.svg]` draws a

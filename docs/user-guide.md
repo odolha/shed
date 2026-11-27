@@ -1643,8 +1643,23 @@ The Android app shows and drives your workspaces from anywhere, through your
 nexus (see [Reaching Shed from elsewhere](#reaching-shed-from-elsewhere)).
 Build and install it as [android/README.md](../android/README.md) says, then
 sign in with the nexus's address (`https://nexus.example.com`), your user name,
-password and a code from your authenticator. Fingerprint unlock is in its
-Settings.
+password and a code from your authenticator.
+
+**The lock.** The app asks for your fingerprint, face or the phone's screen
+lock (PIN, pattern, password) when it starts, and when it was in the
+background longer than **Settings → Lock when away**: Immediately, 1, 5 (the
+default) or 15 minutes. Until then nothing of your workspaces is shown or
+fetched, and the task switcher shows no picture of it. Its sign-in is kept
+under a key that works only just after you unlock, so a copy of the phone's
+files is no use to anyone. Notifications still come while it is locked;
+tapping one asks to unlock, then opens it. **Off…** explains what it means
+(anyone holding your unlocked phone could type into your workspaces' shells)
+and asks for an unlock first. A phone with no screen lock cannot lock: Settings
+says so, and the app works without. Removing the phone's screen lock later
+signs the app out (Android drops the key with it). Screenshots inside the app
+still work.
+
+<img src="images/android/lock.png" alt="Shed locked on the phone" width="200"> <img src="images/android/settings-lock.png" alt="Settings: security alerts always on, and when the app locks" width="200"> <img src="images/android/devices.png" alt="Devices, with when each sign-in ends" width="200">
 
 <img src="images/android/ai.png" alt="An AI tab on the phone" width="200"> <img src="images/android/ai-agent.png" alt="A sub-agent's sheet: what it was asked, its steps" width="200"> <img src="images/android/ai-settings.png" alt="The AI tab's settings sheet: model, effort, mode, follow, browser, folders" width="200"> <img src="images/android/terminal.png" alt="A terminal on the phone, re-wrapped, with text selected" width="200">
 
@@ -1712,12 +1727,15 @@ Settings.
   file viewer with colours; a long press on a file or folder offers Open,
   Copy Path and Copy Relative Path) and **Git** (stage, unstage or discard by hunk, commit, history,
   branches, fetch, pull, push; pull down to look again, as in **Devices**).
-- **Devices**: everything signed in or paired, revoking (with a code), and
+- **Devices**: everything signed in or paired (with when a phone's or
+  desktop's sign-in ends), revoking (with a code), and
   **Approve a Workspace…** with the code it showed (see
   [Linking a workspace](#linking-a-workspace)); **Reject…** on a waiting
   request you did not make.
 - **Notifications**: Claude waiting for you, a turn done, a long command
-  finished, a workspace gone offline, each on or off. While the app (or Shed
+  finished, a workspace gone offline, each on or off; security alerts, always
+  on (see [Notifications](#notifications)), on a channel of their own at high
+  importance. While the app (or Shed
   in a browser) is in front of you they show inside it, as a banner at the
   bottom with **Open**. Otherwise they come through ntfy, never through Google:
   usually a ntfy topic your nexus publishes to, which you subscribe to in the

@@ -58,7 +58,11 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 2. In the app: the nexus address (`https://nexus.example.com`), user name,
    password and a code from the authenticator (or a recovery code). The phone
    becomes a device of the account and gets a device token, kept encrypted with
-   a key in the Android Keystore. Plain `http://` is accepted only for
+   a key in the Android Keystore that works only just after the phone is
+   unlocked (while the app lock is on). The sign-in ends after the nexus's
+   `phone_idle_days` (7) unused, and `phone_days` (60) after signing in; the
+   app then goes back to its sign-in saying why, with the address and user
+   name kept. Plain `http://` is accepted only for
    `10.0.2.2` and `localhost` (an emulator or `adb reverse` reaching a nexus on
    your computer during development).
 3. Link a workspace: on the computer, `shed nexus join https://nexus.example.com`
@@ -66,8 +70,13 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
    Workspace…**, type that code, give the workspace a name and a fresh
    authenticator code. See
    [Linking a workspace](../docs/user-guide.md#linking-a-workspace).
-4. **Settings → Unlock with fingerprint or screen lock** asks for it whenever
-   the app comes back. **Sign Out…** revokes this phone's token at the nexus and
+4. **The lock**: the app asks for the fingerprint, face or screen lock when
+   it starts and after **Settings → Lock when away** in the background
+   (Immediately, 1, 5 by default, or 15 minutes; **Off…** asks for an unlock
+   and says what it means). Nothing of the workspaces is shown or fetched
+   until then; the task switcher shows no picture of the app; notifications
+   still come, and tapping one asks to unlock first. Without a screen lock on
+   the phone it cannot lock, and Settings says so. **Sign Out…** revokes this phone's token at the nexus and
    forgets it here. Devices lists every device; revoking one asks for a code.
    A pairing request you did not make: **Reject…** on its row.
 
@@ -103,7 +112,11 @@ nexus push, in one of two ways, never through Google:
   workspace went offline. Each has its own Android notification channel, at
   its level: Claude waiting high (sound, pops up), a turn or command done
   default, a workspace offline low (silent, only in the list); change any in
-  Android's settings for Shed.
+  Android's settings for Shed. **Security alerts** from the nexus (a sign-in,
+  a pairing, the password changed, a device revoked, an address locked out)
+  cannot be turned off: a channel of their own at high importance, sent even
+  while an app is in view or you are at a workspace; tapping one opens
+  Devices (`shed://devices`).
   Settings shows whether the nexus pushes to this phone; turning push off
   unregisters from the distributor and tells the nexus
   (`POST /api/v1/push/unsubscribe`). Without a distributor installed, Settings
@@ -117,20 +130,24 @@ nexus push, in one of two ways, never through Google:
 | --- | --- |
 | `api/Api.kt` | The API's types, generated from `crates/shed-api` (`cargo run -p shed-codegen`); never edited by hand |
 | `net/` | `ShedJson` (the JSON setup; entries, events and enum values a newer workspace sends read as unknown), `NexusHttp` (`/api/v1/…`, bearer token), `NexusSocket` (the `/api` WebSocket: requests by id, subscriptions as flows, reconnects) |
-| `data/` | The account (token sealed with a Keystore AES-GCM key) and the app's settings |
+| `data/` | The account (token sealed with a Keystore AES-GCM key, one that needs an unlock while the lock is on; older tokens moved under it at the first unlock) and the app's settings |
+| `lock/` | The app lock: when it locks (`AppLock`, `LockAfter`) |
 | `push/` | How pushes come (`pushMode`: a ntfy topic or UnifiedPush), UnifiedPush registering, the endpoint to the nexus, notifications |
 | `ui/` | Compose screens: `Nav.kt` (routes, `shed://` links, live notifications as a snackbar; `LiveNotice.kt` their text), `workspaces/`, `bench/`, `ai/` (transcript, Markdown, prompt, sessions, drafts, review), `terminal/` (screen model, re-wrapping, selecting), `logbook/`, `project/`, `git/`, `devices/`, `settings/`, `common/` (scaffold, long-press menus, the lists' scrollbar) |
-| `ShedApp.kt`, `MainActivity.kt` | The session (connects in the foreground, rests a minute after), the lock |
+| `ShedApp.kt`, `MainActivity.kt` | The session (connects in the foreground and unlocked, rests a minute after), the lock (`ui/lock/LockScreen.kt`), hiding from the task switcher |
 
 Tests (`app/src/test`) run on the JVM: JSON round-trips (and what a newer
 workspace may send), the socket against a fake nexus (MockWebServer), sub-agent
 and timer wording, terminal re-wrapping and selecting, the Markdown reader, text
 ranges from the API (UTF-16 positions, used as Kotlin strings index them),
 the AI tab's following and jumps (`ui/ai/Follow.kt`) and its settings sheet,
-the scrollbar's estimate (`ui/common/Scrollbar.kt`) and the long-press menus.
+the scrollbar's estimate (`ui/common/Scrollbar.kt`), the long-press menus,
+when the app locks (`LockTest`) and which key keeps the token, moving an older
+one (`AccountStoreTest`, Robolectric with pretend keys).
 `screens/` draws screens with Robolectric and Roborazzi at a phone's size,
 dark and light (the AI tab: opened, scrolled up, typing, limits, settings,
 agents, the scrollbar, your message's menu; against a pretend nexus,
-`FakeNexus.kt`: the menus of benches, the logbook and files, and selecting in
-a terminal), as pictures to look at; nothing is compared, so they never fail
+`FakeNexus.kt`, which also answers HTTP routes: the menus of benches, the
+logbook and files, selecting in a terminal, the Devices with when sign-ins
+end; and the lock screen and the lock's settings), as pictures to look at; nothing is compared, so they never fail
 on a pixel.

@@ -57,6 +57,10 @@
     <string name="signin_not_set_up">This nexus has no account yet: set it up in its web app first.</string>
     <string name="lock_title">Unlock Shed</string>
     <string name="lock_unlock">Unlock</string>
+    <string name="lock_text">Shed is locked. Unlock with your fingerprint, face or screen lock to see your workspaces.</string>
+    <string name="lock_protect_title">Keep the sign-in under the screen lock</string>
+    <string name="signin_signed_out">Signed out: %1$s. Sign in again.</string>
+    <string name="signed_out_key_lost">the phone’s screen lock was removed, and with it the key the sign-in was kept under</string>
 
     <!-- Workspaces -->
     <string name="workspaces_empty">No workspaces yet. On a computer with Shed, run “shed nexus join” with your nexus’s address, then approve it under Devices.</string>
@@ -346,6 +350,8 @@
     <string name="devices_desktops">Shed desktops</string>
     <string name="devices_this">This phone</string>
     <string name="devices_seen">seen %1$s</string>
+    <string name="devices_ends">sign-in ends in %1$s (%2$s)</string>
+    <string name="devices_ended">sign-in ended</string>
     <string name="devices_rename">Rename Device</string>
     <string name="devices_revoke">Revoke…</string>
     <string name="devices_revoke_title">Revoke “%1$s”?</string>
@@ -381,9 +387,21 @@
     <string name="channel_ai_done">Claude finished a turn</string>
     <string name="channel_command_done">A long command finished</string>
     <string name="channel_workspace_offline">A workspace went offline</string>
+    <string name="channel_security">Security alerts</string>
+    <string name="push_security_always">A sign-in, a workspace paired, the password changed, a device revoked, an address locked out. Always on: they come even while you are at a workspace, and tapping one opens Devices.</string>
     <string name="settings_security">Security</string>
-    <string name="settings_biometric">Unlock with fingerprint or screen lock</string>
-    <string name="settings_biometric_none">This phone has no fingerprint or screen lock set up.</string>
+    <string name="lock_after">Lock when away</string>
+    <string name="lock_immediately">Immediately</string>
+    <string name="lock_1_min">1 min</string>
+    <string name="lock_5_min">5 min</string>
+    <string name="lock_15_min">15 min</string>
+    <string name="lock_off">Off…</string>
+    <string name="lock_explain">Shed asks for your fingerprint, face or screen lock when it starts, and when it was in the background this long. Its sign-in is kept under a key that works only just after an unlock, so a copy of the phone’s files cannot use it. Notifications still come while it is locked; tapping one asks to unlock first.</string>
+    <string name="lock_is_off">The lock is off: anyone holding your unlocked phone can open Shed and type into your workspaces’ shells, and the sign-in is kept without the screen lock’s protection.</string>
+    <string name="lock_none">This phone has no screen lock, so Shed cannot lock itself and keeps its sign-in without one. Set a PIN, pattern or password in Android’s settings (a fingerprint too, if you like): Shed then locks from its next start.</string>
+    <string name="lock_off_title">Turn the lock off?</string>
+    <string name="lock_off_text">Without it, anyone holding your unlocked phone can open Shed and type into your workspaces’ shells, and the sign-in is kept without the screen lock’s protection. Turning it off asks for an unlock first.</string>
+    <string name="lock_off_confirm">Turn Off</string>
     <string name="settings_theme">Theme</string>
     <string name="theme_dark">Dark</string>
     <string name="theme_light">Light</string>

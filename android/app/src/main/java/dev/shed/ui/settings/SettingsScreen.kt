@@ -4,7 +4,9 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -41,6 +43,7 @@ import dev.shed.api.NotificationKind
 import dev.shed.api.PushInfo
 import dev.shed.api.PushPrefs
 import dev.shed.data.ThemeChoice
+import dev.shed.lock.LockAfter
 import dev.shed.net.Empty
 import dev.shed.push.Push
 import dev.shed.push.PushMode
@@ -69,7 +72,8 @@ fun SettingsScreen(nav: NavController) {
     val runner = rememberRunner()
     val scope = rememberCoroutineScope()
     val theme by app.theme.collectAsState()
-    var lock by remember { mutableStateOf(app.settings.biometricLock) }
+    var lockAfter by remember { mutableStateOf(app.settings.lockAfter) }
+    var confirmOff by remember { mutableStateOf(false) }
     var pushOn by remember { mutableStateOf(app.settings.pushEnabled) }
     var info by remember { mutableStateOf<PushInfo?>(null) }
     var pushError by remember { mutableStateOf<String?>(null) }
@@ -183,6 +187,7 @@ fun SettingsScreen(nav: NavController) {
                     if (pushOn) kindSwitches()
                 }
             }
+            SecurityAlertsRow()
             Text(
                 stringResource(R.string.push_live),
                 color = shed.textDim,
@@ -192,18 +197,17 @@ fun SettingsScreen(nav: NavController) {
             pushError?.let { Text(it, color = shed.danger, modifier = Modifier.padding(horizontal = 16.dp)) }
 
             SectionTitle(stringResource(R.string.settings_security))
-            if (activity?.canUnlock() == true) {
-                SwitchRow(stringResource(R.string.settings_biometric), lock) { on ->
-                    activity.authenticate { ok ->
-                        if (ok) {
-                            app.settings.biometricLock = on
-                            lock = on
-                        }
+            LockSettings(
+                canLock = app.canUnlock(),
+                chosen = lockAfter,
+                onChoose = { after ->
+                    when {
+                        after == lockAfter -> {}
+                        after == LockAfter.Off -> confirmOff = true
+                        else -> activity?.setLockAfter(after) { ok -> if (ok) lockAfter = after }
                     }
-                }
-            } else {
-                Text(stringResource(R.string.settings_biometric_none), color = shed.textDim, modifier = Modifier.padding(horizontal = 16.dp))
-            }
+                },
+            )
 
             SectionTitle(stringResource(R.string.settings_theme))
             Row(Modifier.padding(horizontal = 16.dp)) {
@@ -235,6 +239,15 @@ fun SettingsScreen(nav: NavController) {
             }
         }
     }
+    if (confirmOff) {
+        ConfirmDialog(
+            title = stringResource(R.string.lock_off_title),
+            text = stringResource(R.string.lock_off_text),
+            confirm = stringResource(R.string.lock_off_confirm),
+            onConfirm = { activity?.setLockAfter(LockAfter.Off) { ok -> if (ok) lockAfter = LockAfter.Off } },
+            onDismiss = { confirmOff = false },
+        )
+    }
     if (signingOut) {
         ConfirmDialog(
             title = stringResource(R.string.sign_out_title),
@@ -244,6 +257,53 @@ fun SettingsScreen(nav: NavController) {
             onDismiss = { signingOut = false },
         )
     }
+}
+
+/** Security alerts from the nexus: always on, said so. */
+@Composable
+fun SecurityAlertsRow() {
+    val shed = LocalShed.current
+    Row(
+        Modifier.fillMaxWidth().padding(start = 32.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(R.string.channel_security), style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(R.string.push_security_always), color = shed.textDim, style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(checked = true, onCheckedChange = null, enabled = false)
+    }
+}
+
+/**
+ * When the app locks: after how long away (or never), with what that means.
+ * Without a screen lock on the phone it cannot lock, and says so.
+ */
+@Composable
+fun LockSettings(canLock: Boolean, chosen: LockAfter, onChoose: (LockAfter) -> Unit) {
+    val shed = LocalShed.current
+    if (!canLock) {
+        Text(stringResource(R.string.lock_none), color = shed.textDim, modifier = Modifier.padding(horizontal = 16.dp))
+        return
+    }
+    Text(stringResource(R.string.lock_after), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 16.dp))
+    FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for ((after, label) in listOf(
+            LockAfter.Immediately to R.string.lock_immediately,
+            LockAfter.OneMinute to R.string.lock_1_min,
+            LockAfter.FiveMinutes to R.string.lock_5_min,
+            LockAfter.FifteenMinutes to R.string.lock_15_min,
+            LockAfter.Off to R.string.lock_off,
+        )) {
+            FilterChip(chosen == after, { onChoose(after) }, { Text(stringResource(label)) })
+        }
+    }
+    Text(
+        stringResource(if (chosen == LockAfter.Off) R.string.lock_is_off else R.string.lock_explain),
+        color = if (chosen == LockAfter.Off) shed.danger else shed.textDim,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+    )
 }
 
 @Composable

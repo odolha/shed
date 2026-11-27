@@ -38,6 +38,9 @@ fun shedLink(workspace: String, bench: String? = null, tab: String? = null): Uri
     return text.toUri()
 }
 
+/** The Devices screen, where a security alert leads (a device can be revoked there). */
+val DEVICES_LINK: Uri = "shed://devices".toUri()
+
 /** How this phone hears about things while no Shed app is in view. */
 sealed interface PushMode {
     /** The nexus publishes to a ntfy topic: subscribe to it in the ntfy app. No UnifiedPush then. */
@@ -81,6 +84,7 @@ object Push {
     /** A channel's importance is fixed once made, so a new level needs a new id. */
     fun channelId(kind: NotificationKind) = when (kind) {
         NotificationKind.WorkspaceOffline -> "shed-workspaceOffline-low"
+        NotificationKind.Security -> "shed-security-high"
         else -> "shed-" + kind.string
     }
 
@@ -94,10 +98,11 @@ object Push {
             NotificationKind.AiDone to R.string.channel_ai_done,
             NotificationKind.CommandDone to R.string.channel_command_done,
             NotificationKind.WorkspaceOffline to R.string.channel_workspace_offline,
+            NotificationKind.Security to R.string.channel_security,
         )
         for ((kind, name) in channels) {
             val importance = when (kind) {
-                NotificationKind.AiWaiting -> NotificationManager.IMPORTANCE_HIGH
+                NotificationKind.AiWaiting, NotificationKind.Security -> NotificationManager.IMPORTANCE_HIGH
                 NotificationKind.WorkspaceOffline -> NotificationManager.IMPORTANCE_LOW
                 else -> NotificationManager.IMPORTANCE_DEFAULT
             }
@@ -150,6 +155,7 @@ object Push {
         runCatching { UnifiedPush.unregister(context) }
         context.shed.settings.pushEnabled = false
         context.shed.settings.pushEndpoint = null
+        context.shed.settings.pendingEndpoint = null
     }
 
     /**
@@ -170,7 +176,11 @@ object Push {
         }
     }
 
-    /** The distributor gave an endpoint: hands it to the nexus. */
+    /**
+     * The distributor gave an endpoint: hands it to the nexus. While the app
+     * is locked (or not yet unlocked since it started) its token cannot be
+     * read: the endpoint waits, and goes once unlocked ([sendPendingEndpoint]).
+     */
     fun newEndpoint(context: Context, endpoint: PushEndpoint) {
         val app = context.shed
         val keys = endpoint.pubKeySet ?: run {
@@ -178,15 +188,24 @@ object Push {
             return
         }
         app.settings.pushEndpoint = endpoint.url
+        app.settings.pendingEndpoint = listOf(endpoint.url, keys.pubKey, keys.auth).joinToString(" ")
+        sendPendingEndpoint(context)
+    }
+
+    /** Sends the endpoint that waits, if any, once there is a session (unlocked). */
+    fun sendPendingEndpoint(context: Context) {
+        val app = context.shed
+        val parts = app.settings.pendingEndpoint?.split(" ")?.takeIf { it.size == 3 } ?: return
         val session = app.session.value ?: return
         app.scope.launch {
             runCatching {
                 session.http.post(
                     "/push/subscribe",
-                    PushSubscribe(endpoint.url, keys.pubKey, keys.auth),
+                    PushSubscribe(parts[0], parts[1], parts[2]),
                     PushSubscribe.serializer(),
                     Empty.serializer(),
                 )
+                app.settings.pendingEndpoint = null
                 changed.value++
             }.onFailure { Log.w(TAG, "subscribe failed: ${it.message}") }
         }
@@ -205,11 +224,13 @@ object Push {
         ) {
             return
         }
-        val intent = Intent(Intent.ACTION_VIEW, shedLink(payload.workspace, payload.bench, payload.tab), context, MainActivity::class.java)
+        val security = payload.kind == NotificationKind.Security
+        val link = if (security) DEVICES_LINK else shedLink(payload.workspace, payload.bench, payload.tab)
+        val intent = Intent(Intent.ACTION_VIEW, link, context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val tap = PendingIntent.getActivity(
             context,
-            (payload.workspace + payload.bench + payload.tab).hashCode(),
+            if (security) payload.title.hashCode() else (payload.workspace + payload.bench + payload.tab).hashCode(),
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -221,9 +242,17 @@ object Push {
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(tap)
             .setAutoCancel(true)
-            .setCategory(if (payload.kind == NotificationKind.AiWaiting) NotificationCompat.CATEGORY_REMINDER else NotificationCompat.CATEGORY_STATUS)
+            .setCategory(
+                when (payload.kind) {
+                    NotificationKind.AiWaiting -> NotificationCompat.CATEGORY_REMINDER
+                    NotificationKind.Security -> NotificationCompat.CATEGORY_ERROR
+                    else -> NotificationCompat.CATEGORY_STATUS
+                },
+            )
+            .setPriority(if (security) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
             .build()
-        val id = (payload.kind.string + payload.workspace + payload.tab).hashCode()
+        // Each security alert stays (another does not replace it).
+        val id = if (security) (payload.title + payload.body).hashCode() else (payload.kind.string + payload.workspace + payload.tab).hashCode()
         NotificationManagerCompat.from(context).notify(id, notification)
     }
 }

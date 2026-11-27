@@ -1465,7 +1465,27 @@ while the app is in the foreground and a minute after, and says `Visible`
 (true from `ON_START`, false from `ON_STOP`); live notifications become a
 snackbar in `Nav` whose Open follows the tab's `shed://` link, and otherwise
 notifications come by push. The device token is sealed with an AES-GCM key kept in the Android
-Keystore. Terminals arrive as `Screen` events: the app keeps the rows, joins
+Keystore (`data/Account.kt`): while the app lock is on, a key that works only
+for 30 seconds after the phone's own unlock (a strong biometric or the screen
+credential; `setUserAuthenticationParameters`), so the token is read just after
+the lock's prompt and a copy of the app's files is useless without the phone
+unlocked; with the lock off, or no screen lock, a key without that condition.
+A token kept the older way moves under the locked key at the first unlock;
+one whose key Android dropped (the screen lock removed) signs the phone out,
+keeping the address and user name. **The lock** (`lock/AppLock.kt`) locks at a
+cold start and after the app was in the background `LockAfter` (Immediately,
+1, 5 or 15 minutes, on `elapsedRealtime`; leaving for the prompt's own PIN
+screen does not count). Locked, the account is not read at all after a cold
+start; later, the screens stay composed (a photo being picked comes back to
+them) but draw nothing and say nothing to accessibility under the opaque lock
+screen, the socket stops and `NexusHttp` waits for the unlock, so nothing is
+fetched. Notifications keep coming while locked: ntfy and the UnifiedPush
+distributor deliver without the token (the connector library decrypts with
+its own keys); only a new UnifiedPush endpoint needs the token, and it waits
+(`Settings.pendingEndpoint`) until the unlock. The task switcher shows no
+picture of the app while the lock is on (`setRecentsScreenshotEnabled(false)`
+on Android 13 and later; before, `FLAG_SECURE` while the app is not in front,
+so screenshots in the app still work). Terminals arrive as `Screen` events: the app keeps the rows, joins
 those that wrap and cuts them again to the phone's width (the alternate screen
 is shown as a grid, fitted or panned). Push is the nexus's ntfy topic when it
 has one (`PushInfo::ntfy_topic`: Settings tells the user to subscribe to it in

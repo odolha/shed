@@ -287,7 +287,9 @@ class NexusSocket(
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
             if (response?.code == 401) {
-                closed(webSocket, ApiError(ErrorCode.Unauthorized, "not signed in"))
+                // The nexus says why (`signed out: not used for 7 days`).
+                val said = runCatching { response.body?.string()?.let { ShedJson.decodeFromString(ApiError.serializer(), it) } }.getOrNull()
+                closed(webSocket, said?.takeIf { it.code == ErrorCode.Unauthorized } ?: ApiError(ErrorCode.Unauthorized, "not signed in"))
             } else {
                 lost(webSocket, t.message ?: t.javaClass.simpleName)
             }

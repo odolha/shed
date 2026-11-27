@@ -23,6 +23,8 @@ import dev.shed.Session
 import dev.shed.api.Policy
 import dev.shed.api.WorkspaceInfo
 import dev.shed.api.WorkspaceState
+import dev.shed.api.NotificationKind
+import dev.shed.push.DEVICES_LINK
 import dev.shed.push.shedLink
 import dev.shed.shed
 import dev.shed.ui.common.LocalSnackbar
@@ -131,11 +133,12 @@ private fun LiveNotifications(session: Session, nav: NavHostController) {
             if (!inView) return@collect
             val entry = nav.currentBackStackEntry
             val n = frame.notification
-            if (showsTab(entry?.destination?.route, entry?.arg("ws"), entry?.arg("tab"), frame.workspace, n.tab)) return@collect
+            val security = n.kind == NotificationKind.Security
+            if (!security && showsTab(entry?.destination?.route, entry?.arg("ws"), entry?.arg("tab"), frame.workspace, n.tab)) return@collect
             val text = liveNoticeText(frame, session.socket.workspaces.value)
             launch {
                 val result = snackbar.showSnackbar(text, actionLabel = openLabel, withDismissAction = true, duration = SnackbarDuration.Long)
-                if (result == SnackbarResult.ActionPerformed) open(nav, shedLink(frame.workspace, n.bench, n.tab))
+                if (result == SnackbarResult.ActionPerformed) open(nav, if (security) DEVICES_LINK else shedLink(frame.workspace, n.bench, n.tab))
             }
         }
     }
@@ -144,8 +147,13 @@ private fun LiveNotifications(session: Session, nav: NavHostController) {
 private fun androidx.navigation.NavBackStackEntry.arg(name: String): String =
     arguments?.getString(name).orEmpty()
 
-/** Opens a `shed://w/{workspace}/b/{bench}/t/{tab}` link (bench and tab optional). */
+/** Opens a `shed://w/{workspace}/b/{bench}/t/{tab}` link (bench and tab optional), or `shed://devices`. */
 fun open(nav: NavHostController, uri: Uri) {
+    if (isDevicesLink(uri)) {
+        nav.popBackStack(Routes.WORKSPACES, inclusive = false)
+        nav.navigate(Routes.DEVICES)
+        return
+    }
     val target = parseLink(uri) ?: return
     nav.popBackStack(Routes.WORKSPACES, inclusive = false)
     when {
@@ -156,6 +164,9 @@ fun open(nav: NavHostController, uri: Uri) {
         target.bench != null -> nav.navigate(Routes.bench(target.workspace, target.bench))
     }
 }
+
+/** `shed://devices`: where a security alert leads. */
+fun isDevicesLink(uri: Uri): Boolean = uri.scheme == "shed" && uri.host == "devices"
 
 data class LinkTarget(val workspace: String, val bench: String?, val tab: String?)
 
