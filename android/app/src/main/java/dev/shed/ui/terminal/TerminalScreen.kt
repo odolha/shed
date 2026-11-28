@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -247,12 +246,14 @@ fun TerminalScreen(nav: NavController, ws: String, bench: Bench, tab: Tab) {
         }
         val vm: TerminalVm = viewModel(key = "term-${pane.id}") { TerminalVm(session.socket, ws, pane.id) }
         fun send(items: List<InputItem>) = runner.run { session.socket.call(ws, Call.Input(Input(pane.id, items))) }
-        // The key bar pads the navigation bar itself (in its colour); the keyboard takes the rest.
+        // The key bar pads the navigation bar itself (in its colour); with the
+        // keyboard up this pads all of it, and the key bar's padding comes to
+        // nothing (consumed), so nothing is counted twice or left out.
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(top = padding.calculateTopPadding())
-                .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.navigationBars)),
+                .windowInsetsPadding(WindowInsets.ime),
         ) {
             val onMouse: ((List<Mouse>) -> Unit)? = if (canChange) { m -> send(m.map { InputItem.Mouse(it) }) } else null
             TerminalView(vm, Modifier.weight(1f), takeSize, onMouse) { cols, rows ->

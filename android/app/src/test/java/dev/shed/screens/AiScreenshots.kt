@@ -255,6 +255,40 @@ class AiScreenshots {
         field.performTextInput((1..40).joinToString("\n") { "Line $it of a long message, so it wraps on a phone's narrow screen" })
     }
 
+    /** Typing with the keyboard up (insets as a phone gives them): the buttons stay above it. */
+    @Test fun typingKeyboardDark() {
+        var view: android.view.View? = null
+        compose.setContent {
+            view = androidx.compose.ui.platform.LocalView.current
+            Tab(ThemeChoice.Dark)
+        }
+        compose.waitForIdle()
+        val root = view!!.rootView
+        compose.runOnUiThread {
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows((view!!.context as android.app.Activity).window, false)
+        }
+        val field = compose.onNode(hasSetTextAction())
+        field.performClick()
+        field.performTextInput((1..12).joinToString("\n") { "Line $it of a message typed with the keyboard up" })
+        compose.runOnUiThread {
+
+            val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                .setInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars(), androidx.core.graphics.Insets.of(0, 60, 0, 0))
+                .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), true)
+                .setInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars(), androidx.core.graphics.Insets.of(0, 0, 0, 48))
+                .setVisible(androidx.core.view.WindowInsetsCompat.Type.navigationBars(), true)
+                .setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(), androidx.core.graphics.Insets.of(0, 0, 0, 1100))
+                .setVisible(androidx.core.view.WindowInsetsCompat.Type.ime(), true)
+                .build()
+            androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root, insets)
+        }
+        compose.waitForIdle()
+        captureScreenRoboImage(screenshot("ai-typing-keyboard-dark"))
+        // Send sits wholly above the keyboard (1100 px from the bottom).
+        val send = compose.onNode(hasContentDescription("Send")).fetchSemanticsNode().boundsInWindow
+        assert(send.bottom <= root.height - 1100) { "Send at ${send.bottom}, the keyboard from ${root.height - 1100}" }
+    }
+
     @Test fun limitsDark() = shoot(ThemeChoice.Dark, "limits") { compose.onNodeWithText("Working", substring = true).performClick() }
 
     @Test fun limitsLight() = shoot(ThemeChoice.Light, "limits") { compose.onNodeWithText("Working", substring = true).performClick() }

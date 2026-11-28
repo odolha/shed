@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -414,13 +413,16 @@ fun AiTabView(data: AiTabData, on: AiTabActions, now: () -> Long, mergeIn: Strin
             }
         },
     ) { padding ->
-        // The prompt pads the navigation bar itself (in its colour); the
-        // keyboard takes the rest of the bottom.
+        // The prompt pads the navigation bar itself (in its colour). With the
+        // keyboard up, this pads all of it and the prompt's padding (the
+        // navigation bar, already counted in) comes to nothing: insets are
+        // consumed, so excluding the bar here would leave the bottom that
+        // much under the keyboard.
         Box(
             Modifier
                 .fillMaxSize()
                 .padding(top = padding.calculateTopPadding())
-                .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.navigationBars)),
+                .windowInsetsPadding(WindowInsets.ime),
         ) {
             // Typing: the prompt has the whole room. The conversation stays
             // composed (at no height), so it comes back scrolled where it was.
