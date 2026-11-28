@@ -859,6 +859,9 @@ impl Pegboard {
             })
             .icon("private"),
         );
+        if entry.status != Status::Closed {
+            entries.push(menu_item("Duplicate Tab", move |this, _, cx| this.send(ClientMsg::DuplicateTab { tab: tab_id, after: true }, cx)).icon("copy"));
+        }
         entries.push(more("Move to Bench", move |this: &mut Self, cx| this.move_menu(tab_id, cx)).icon("bench"));
         entries.push(MenuEntry::Separator);
         let close = if entry.status == Status::Closed { "Remove Tab…" } else { "Close Tab…" };

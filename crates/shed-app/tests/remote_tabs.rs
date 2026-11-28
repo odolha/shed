@@ -180,6 +180,24 @@ fn two_tabs_share_a_remote_shell() {
     let there = book.search(shed_logbook::Scope::Global, here, "shared-", None, 10).unwrap();
     assert_eq!(there.len(), 1, "recorded on the server");
 
+    // A duplicate is a shell of its own on the same host, beside it.
+    c.msg(ClientMsg::DuplicateTab { tab: first_tab, after: true });
+    let tree = tree_until(&mut c, "a duplicate", |t| t.bench(bench).is_some_and(|b| b.tabs.iter().filter(|t| t.remote_info().is_some()).count() == 2));
+    let tabs = &tree.bench(bench).unwrap().tabs;
+    let at = tabs.iter().position(|t| t.id == first_tab).unwrap();
+    let dup = tabs[at + 1].clone();
+    let own = dup.remote_info().expect("a remote tab");
+    assert_eq!(own.host, "srv");
+    assert_ne!(own.id, id);
+    let dup_pane = dup.panes[0].id;
+    c.seen(dup_pane, "\x1bc");
+    c.input(dup_pane, "echo own-${kept:-none}\r");
+    c.output_until(dup_pane, "own-none");
+    server.shells_until("a shell for the duplicate", |s| s.len() == 2 && s.contains(&(own.id.clone(), 1)));
+    c.msg(ClientMsg::EndRemoteTab { tab: dup.id });
+    tree_until(&mut c, "the duplicate gone", |t| t.tab(dup.id).is_none());
+    server.shells_until("ended the duplicate's shell", |s| s == [(id.clone(), 1)]);
+
     // Ending it ends it on the server, and the tab goes.
     c.msg(ClientMsg::EndRemoteTab { tab: first_tab });
     tree_until(&mut c, "the first tab gone", |t| t.tab(first_tab).is_none());

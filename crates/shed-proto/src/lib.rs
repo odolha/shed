@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use shed_model::{AiTab, Aliases, Bench, BenchColor, BenchId, PaneId, PaneNode, PaneSetup, Project, Shed, SplitDir, TabId, Tag, WindowPlace};
 
 /// Bumped on any incompatible change; a window refuses a keeper with another version.
-pub const PROTOCOL_VERSION: u32 = 61;
+pub const PROTOCOL_VERSION: u32 = 62;
 
 /// Frames larger than this are a protocol error, not a reason to allocate.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -243,6 +243,13 @@ pub enum ClientMsg {
     /// How long nobody has used this workspace; answered with
     /// `KeeperMsg::Presence`.
     AskPresence,
+    /// A copy of a running bench's tab just before or after it, in its
+    /// group; it becomes the shown tab. A terminal tab's panes are fresh
+    /// shells laid out the same, each where the original's is, with its
+    /// setup (nothing started); a project tab opens the same files; an AI
+    /// tab has the same settings and forks the conversation shown; a
+    /// remote tab is a new shell on the same host.
+    DuplicateTab { tab: TabId, after: bool },
 }
 
 /// A kind of tab to open, and where it works.

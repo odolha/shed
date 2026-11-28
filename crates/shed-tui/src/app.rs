@@ -795,6 +795,7 @@ impl App {
         }
         items.push((Item::new("Bookmarks…").hint("C-b b"), |app, _| app.bookmarks_menu()));
         items.push((Item::new("New Tab…").hint("C-b t"), |app, _| app.new_tab_menu()));
+        items.push((Item::new("Duplicate Tab").hint("a copy to the right"), |app, tab| app.send(ClientMsg::DuplicateTab { tab, after: true })));
         items.push((Item::new("Rename Tab…").hint("C-b ,"), |app, _| app.rename_tab()));
         items.push((Item::new("Move Tab Left").hint("C-b <"), |app, _| app.move_tab_by(-1)));
         items.push((Item::new("Move Tab Right").hint("C-b >"), |app, _| app.move_tab_by(1)));

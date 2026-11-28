@@ -80,7 +80,8 @@ cargo clippy --workspace --all-targets
   checks that a replayed emulator matches the original.
 - `crates/shed-keeper/tests/` drives an in-process keeper over its socket.
 - `crates/shed-app/tests/` runs whole flows with real bash: the logbook, saving and
-  loading, setup and teardown, aliases, closing Shed. `tests/zsh.rs` does the same
+  loading, setup and teardown, aliases, closing Shed, duplicating tabs
+  (`duplicate.rs`). `tests/zsh.rs` does the same
   with zsh when there is one (`zsh` on `PATH`, or `SHED_TEST_ZSH=/path/to/zsh`), and
   is skipped otherwise. `ai_tabs.rs`, `ai_questions.rs` and `ai_agents.rs` run AI
   tabs against a stand-in `claude` (a script named by `SHED_CLAUDE` that answers

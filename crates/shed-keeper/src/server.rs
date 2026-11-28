@@ -754,6 +754,7 @@ impl Keeper {
                 let Some(bench) = self.lock().tree.bench_of_tab(tab) else { return };
                 self.new_tab(client, bench, cwd, Some((tab, after)));
             }
+            ClientMsg::DuplicateTab { tab, after } => self.duplicate_tab(client, tab, after),
             ClientMsg::NewTabNextToOfKind { tab, after, kind } => {
                 let Some(bench) = self.lock().tree.bench_of_tab(tab) else { return };
                 let next_to = Some((tab, after));
@@ -1321,6 +1322,65 @@ impl Keeper {
             return self.lock().send(client, KeeperMsg::Error(format!("{} is not a folder", folder.display())));
         }
         self.add_paneless_tab(client, bench, Tab::ai(folder), next_to, "opened an AI tab".into());
+    }
+
+    /// A copy of `tab` just before or after it, in its group, shown
+    /// (`Tab::duplicate`). Its shells start as a quiet load starts them:
+    /// in their folders, nothing run (a remote tab's connects, to a shell
+    /// of its own on the same host).
+    fn duplicate_tab(self: &Arc<Self>, client: ClientId, tab: TabId, after: bool) {
+        let mut st = self.lock();
+        let Some(bench) = st.tree.bench_of_tab(tab) else { return };
+        let Some(original) = st.tree.tab(tab) else { return };
+        let mut copy = original.duplicate();
+        if !copy.has_panes() {
+            drop(st);
+            return self.add_paneless_tab(client, bench, copy, Some((tab, after)), "duplicated a tab".into());
+        }
+        // A remote tab's panes that join its shell join the copy's instead.
+        let connect = match &copy.kind {
+            TabKind::Remote(r) => match &self.cfg.shed_bin {
+                Some(shed) => Some(remote_command(shed, &r.host, &r.id)),
+                None => return st.send(client, KeeperMsg::Error("the shed program was not found next to shedd".into())),
+            },
+            _ => None,
+        };
+        let bench_cwd = st.tree.bench(bench).map(|b| b.cwd.clone()).unwrap_or_else(|| self.cfg.home.clone());
+        let mut started = Vec::new();
+        for pane in &mut copy.panes {
+            let mut after_prompt = VecDeque::new();
+            if let Some(command) = &connect
+                && pane.setup.startup.first().is_some_and(|c| c.contains(" remote connect "))
+            {
+                pane.setup.startup = vec![command.clone()];
+                after_prompt.push_back((command.clone(), true));
+            }
+            let cwd = [Some(pane.cwd.clone()), pane.setup.start_in.clone(), Some(bench_cwd.clone())]
+                .into_iter()
+                .flatten()
+                .find(|d| d.is_dir())
+                .unwrap_or_else(|| self.cfg.home.clone());
+            let spec = PaneSpec { id: pane.id, cwd, cols: pane.cols, rows: pane.rows, restore: None, after_prompt };
+            match self.spawn_pane_spec(&mut st, bench, copy.id, spec) {
+                Ok(spawned) => {
+                    started.push(pane.id);
+                    pane.cwd = spawned.cwd;
+                }
+                Err(e) => {
+                    st.hang_up(&started);
+                    return st.send(client, KeeperMsg::Error(format!("cannot start a shell: {e}")));
+                }
+            }
+        }
+        let id = copy.id;
+        let b = st.tree.bench_mut(bench).unwrap();
+        b.tabs.push(copy);
+        st.tree.move_tab_next_to(id, tab, after);
+        self.sync_alias_files(&mut st);
+        st.broadcast_tree();
+        st.send(client, KeeperMsg::Done("duplicated a tab".into()));
+        drop(st);
+        self.save_soon.notify_one();
     }
 
     /// Puts a tab without panes (a project, an AI tab) in a bench, shown:
@@ -2478,7 +2538,7 @@ impl Keeper {
             }
             None => tab_id.to_string(),
         };
-        let command = format!("'{}' remote connect '{host}' {id}", shed.display());
+        let command = remote_command(&shed, &host, &id);
         let mut spec = PaneSpec::fresh(cwd);
         spec.after_prompt.push_back((command.clone(), true));
         match self.spawn_pane_spec(&mut st, bench, tab_id, spec) {
@@ -3031,6 +3091,11 @@ fn apply_theme(st: &mut State) {
     for rt in st.panes.values_mut() {
         rt.emu.set_palette(palette.clone());
     }
+}
+
+/// What a remote tab's pane runs to join the shell `id` on `host`.
+fn remote_command(shed: &Path, host: &str, id: &str) -> String {
+    format!("'{}' remote connect '{host}' {id}", shed.display())
 }
 
 /// Takes a tab without panes (a project tab) out of the tree, and its bench

@@ -610,6 +610,64 @@ impl Tab {
         }
     }
 
+    /// A copy of the tab to open beside it, under new ids: its name, tags,
+    /// privacy, aliases and zoom, and by kind what it is, but nothing of
+    /// what goes on in it. A terminal tab's panes are laid out the same,
+    /// each in the folder the original's is in now and with its setup
+    /// (startup waiting for a pane of this tab waits for its copy), without
+    /// titles, programs or held startup. A project tab has the same folder
+    /// and files open. An AI tab has the same folders and settings and
+    /// forks the conversation shown (`fork_of`), without drafts, queued or
+    /// unsent messages, review marks or the browser. A remote tab's copy is
+    /// a shell of its own on the same host (its `id` is the new tab's).
+    pub fn duplicate(&self) -> Tab {
+        let id = TabId::new();
+        let ids: BTreeMap<PaneId, PaneId> = self.panes.iter().map(|p| (p.id, PaneId::new())).collect();
+        let new_id = |p: PaneId| ids.get(&p).copied().unwrap_or(p);
+        let panes = self
+            .panes
+            .iter()
+            .map(|p| {
+                let mut pane = Pane::new(new_id(p.id), p.cwd.clone());
+                (pane.cols, pane.rows) = (p.cols, p.rows);
+                pane.setup = p.setup.clone();
+                pane.setup.after = p.setup.after.iter().map(|d| new_id(*d)).collect();
+                pane
+            })
+            .collect();
+        let kind = match &self.kind {
+            TabKind::Terminal => TabKind::Terminal,
+            TabKind::Project(p) => TabKind::Project(p.clone()),
+            TabKind::Ai(a) => TabKind::Ai(Box::new(AiTab {
+                folder: a.folder.clone(),
+                add_dirs: a.add_dirs.clone(),
+                model: a.model.clone(),
+                mode: a.mode.clone(),
+                effort: a.effort.clone(),
+                follow: a.follow,
+                // An unstarted fork's copy forks the same session.
+                fork_of: a.session.clone().or_else(|| a.fork_of.clone()),
+                ..Default::default()
+            })),
+            TabKind::Remote(r) => TabKind::Remote(RemoteTab { host: r.host.clone(), id: id.to_string() }),
+        };
+        Tab {
+            id,
+            name: self.name.clone(),
+            tags: self.tags.clone(),
+            auto_tags: self.auto_tags.clone(),
+            private: self.private,
+            // A tab without panes names one that does not exist: so does its copy.
+            layout: if self.has_panes() { self.layout.map_ids(&new_id) } else { PaneNode::Leaf(PaneId::new()) },
+            active_pane: if self.has_panes() { new_id(self.active_pane) } else { PaneId::new() },
+            panes,
+            aliases: self.aliases.clone(),
+            zoom: self.zoom,
+            kind,
+            divider: TabDivider::None,
+        }
+    }
+
     /// The conversation this tab shows, if it is an AI tab.
     pub fn ai_info(&self) -> Option<&AiTab> {
         match &self.kind {
@@ -832,6 +890,16 @@ impl PaneNode {
         }
     }
 
+    /// The same tree with each pane's id put through `id`.
+    pub fn map_ids(&self, id: &impl Fn(PaneId) -> PaneId) -> PaneNode {
+        match self {
+            PaneNode::Leaf(p) => PaneNode::Leaf(id(*p)),
+            PaneNode::Split { dir, ratio, first, second } => {
+                PaneNode::Split { dir: *dir, ratio: *ratio, first: Box::new(first.map_ids(id)), second: Box::new(second.map_ids(id)) }
+            }
+        }
+    }
+
     pub fn first(&self) -> PaneId {
         match self {
             PaneNode::Leaf(id) => *id,
@@ -1039,6 +1107,41 @@ mod tests {
             links: Vec::new(),
             bookmarks: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_duplicate_has_new_ids_and_waits_for_its_own_panes() {
+        let (a, b) = (pane(), pane());
+        let (aid, bid) = (a.id, b.id);
+        let elsewhere = PaneId::new();
+        let mut tab = Tab::with_pane(a);
+        let mut b = b;
+        b.title = Some("vim".into());
+        b.tool = Some(Tool { argv: vec!["vim".into()] });
+        b.setup.after = vec![aid, elsewhere];
+        tab.split(aid, b, SplitDir::Down);
+        tab.active_pane = aid;
+        let copy = tab.duplicate();
+        assert_ne!(copy.id, tab.id);
+        let leaves = copy.layout.leaves();
+        assert_eq!(leaves.len(), 2);
+        assert!(!leaves.contains(&aid) && !leaves.contains(&bid));
+        assert_eq!(copy.active_pane, leaves[0]);
+        let second = copy.pane(leaves[1]).unwrap();
+        assert_eq!((&second.title, &second.tool), (&None, &None));
+        // Waiting for a pane of the tab: for its copy; for another tab's: the same.
+        assert_eq!(second.setup.after, [leaves[0], elsewhere]);
+
+        let mut ai = Tab::ai("/".into());
+        if let TabKind::Ai(x) = &mut ai.kind {
+            x.session = Some("s".into());
+            x.browser = true;
+            x.unsent = "draft".into();
+        }
+        let x = ai.duplicate();
+        let x = x.ai_info().unwrap();
+        assert_eq!((x.session.as_deref(), x.fork_of.as_deref(), x.browser, x.unsent.as_str()), (None, Some("s"), false, ""));
+        assert_eq!(x.mode, "auto");
     }
 
     #[test]

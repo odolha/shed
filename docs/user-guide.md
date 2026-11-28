@@ -147,8 +147,9 @@ over the bench. Shed remembers the choice (`compact_pegboard` in `shed.toml`).
   opens. A closed bench's tab moved into a running one starts as opening would
   start it.
 - Right-click a card for its menu: go to the tab (or open the bench at it),
-  rename it, its tags, **Private**, **Move to Bench**, **Close Tab…**, and for
-  a remote tab **Reconnect**. **Setup…** opens the tab's
+  rename it, its tags, **Private**, **Duplicate Tab** (a running bench's: the
+  copy opens to its right, see [Duplicate a tab](#a-benchs-window)), **Move to Bench**,
+  **Close Tab…**, and for a remote tab **Reconnect**. **Setup…** opens the tab's
   [Setup](#setup-startup-teardown-and-aliases) right in Shed.
 
 **Closed benches** are managed the same way: rename, recolour or badge them; add,
@@ -207,6 +208,20 @@ large it is drawn is a setting (**Tab bar size** in Settings).
   (the actions over the usage limits and links); otherwise on three (the
   actions; the usage limits; the links, wrapping if need be), so the tabs get
   the width.
+- **Duplicate a tab**: a tab's right-click menu has **Duplicate Tab to the
+  Left** and **Duplicate Tab to the Right**. The copy opens just before or
+  after that tab, in its group, and is shown; it has the tab's name, tags,
+  **Private**, aliases and zoom. A terminal tab's copy is split the same way,
+  each pane a new shell in the folder that pane is in now, with its setup
+  (startup, teardown, Starts after); nothing runs in it: not the startup, not
+  what runs in the original, and no scrollback comes with it. A project tab's
+  copy has the same folder and the same files open. An AI tab's copy works in
+  the same folders with the same model, mode, effort and **Follow**, and shows
+  the conversation as a [fork](#ai-tabs): what you send next goes to a copy of
+  it, the original left as it is (a new conversation if the original had none
+  yet); its prompt starts empty, nothing is queued, and it is not connected to
+  the browser. A remote tab's copy is a new shell on the same server, not the
+  same shell.
 - **Groups**: tabs can be put in groups, set apart by a wider gap with a faint
   line in it; a group goes onto the next row whole (it wraps inside only when it
   alone is wider than the bar), and can start a row of its own. Groups have no
@@ -226,7 +241,7 @@ large it is drawn is a setting (**Tab bar size** in Settings).
 - **Splits**: Ctrl+Shift+E splits right, Ctrl+Shift+O splits down; drag the line
   between panes to resize; Alt+arrows move between panes.
 - **Right-click** a pane for copy, paste, split and close; a tab for a new tab
-  beside it, rename, tags, groups, setup, private, **Move to Bench** and close; between tabs for their
+  beside it, a copy of it beside it, rename, tags, groups, setup, private, **Move to Bench** and close; between tabs for their
   group; the bench's name (right of the tab bar) for rename,
   badge, colours, **Appearance** (Auto, Light or Dark, for all of Shed), Show Shed
   and Close Bench.
@@ -1186,7 +1201,7 @@ sends Ctrl+B itself. `Ctrl+B ?` lists all keys.
 | `C-b ,` / `C-b $` | Rename the tab / the bench |
 | `C-b <` / `C-b >` | Move the tab left / right (to another bench: `C-b m`) |
 | `C-b &` | Close the tab (asks; a remote tab can be let go or ended) |
-| `C-b m` | Everything for this tab and its bench, as a menu (a remote tab's: **Reconnect** too) |
+| `C-b m` | Everything for this tab and its bench, as a menu (**Duplicate Tab**: a copy to its right; a remote tab's: **Reconnect** too) |
 | `C-b %` / `C-b "` | Split right / down |
 | `C-b` arrows, `C-b o` | Focus the pane that way / the next pane |
 | `C-b x` | Close the pane (asks) |

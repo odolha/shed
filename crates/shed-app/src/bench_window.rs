@@ -1056,6 +1056,9 @@ impl BenchWindow {
             // Any kind of tab, as the New Tab button's menu offers them.
             more("New Tab to the Left", move |_: &mut Self, _| Self::new_tab_menu(Some((tab_id, false)))).icon("tab-new"),
             more("New Tab to the Right", move |_: &mut Self, _| Self::new_tab_menu(Some((tab_id, true)))).icon("tab-new"),
+            // The same tab again: its layout, folders and settings, nothing running.
+            item("Duplicate Tab to the Left", move |this, _, cx| this.send(ClientMsg::DuplicateTab { tab: tab_id, after: false }, cx)).icon("copy"),
+            item("Duplicate Tab to the Right", move |this, _, cx| this.send(ClientMsg::DuplicateTab { tab: tab_id, after: true }, cx)).icon("copy"),
             MenuEntry::Separator,
             item("Rename Tab…", move |this, window, cx| this.start_edit(EditTarget::TabName(tab_id), window, cx)).icon("pencil"),
             // The tags Shed knows, to pick from; or a new one.

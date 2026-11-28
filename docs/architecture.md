@@ -806,7 +806,13 @@ meanwhile stay after). A new tab beside one (`NewTabNextTo` for a terminal,
 `NewTabNextToOfKind` for any kind: terminal, project, AI or remote, as
 `NewTabKind` says) opens in that tab's group, as a moved tab would land there;
 the window's New Tab menu and a tab's New Tab to the Left and Right are one
-list (`BenchWindow::new_tab_menu`, given where the tab goes). The tab bar notes where each tab
+list (`BenchWindow::new_tab_menu`, given where the tab goes). A copy of a
+running tab (`DuplicateTab`) lands the same way: `Tab::duplicate` makes it
+under new ids (a terminal tab's layout and per pane its folder and setup, a
+`Starts after` on a pane of the tab pointing at its copy; a project tab's
+files; an AI tab's settings, forking the session shown through `fork_of`; a
+remote tab's host, under the new tab's shell id), and the keeper starts its
+panes as a quiet load does, nothing typed but a remote pane's connect. The tab bar notes where each tab
 was laid out (`BarLayout`, from the groups' `on_children_prepainted`), and goes
 by that for where a dragged tab would drop (`DropAt`), which group a
 right-click is for, the lines it paints between groups sharing a row, and how

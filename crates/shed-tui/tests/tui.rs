@@ -201,6 +201,28 @@ fn a_bench_a_new_tab_and_a_command_echoed() {
 }
 
 #[test]
+fn the_tab_menu_duplicates_a_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut h = Harness::new(dir.path());
+    h.app.start(ShowTarget::NewBench { name: Some("dup".into()), cwd: Some(work.clone()) });
+    h.until("the bench", |a| a.screen == Screen::Bench && tabs(a) == 1);
+    h.key(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Char('%'), KeyModifiers::NONE);
+    h.until("the split", |a| a.active_tab().is_some_and(|t| t.panes.len() == 2));
+    let first = h.app.active_tab().unwrap().id;
+
+    // C-b m, then the item by name: a copy to the right, shown, split the same.
+    h.key(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Char('m'), KeyModifiers::NONE);
+    h.type_text("duplicate\n");
+    h.until("the copy", |a| tabs(a) == 2);
+    h.until("the copy, shown", |a| a.active_tab().is_some_and(|t| t.id != first && t.panes.len() == 2));
+    assert_eq!(h.app.current_bench().unwrap().tabs[0].id, first);
+}
+
+#[test]
 fn a_project_tab_lists_files_and_opens_one_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let work = dir.path().join("proj");
